@@ -143,13 +143,14 @@ A last line is offered for removal only when it is the start of the next record 
 
 ### The lock file
 
-While Gantry has the log open it keeps `gantry-audit.jsonl.lock` beside it, holding its process ID.
+While Gantry has the log open it keeps `gantry-audit.jsonl.lock` beside it. The lock names its holder (process ID, host name, and the process space it runs in) and a counter the holder rewrites every 5 seconds.
 
 - `audit repair --yes` refuses while the lock file exists.
-- A second `gantry serve` on the same log refuses to start while the process named in the lock file runs.
-- After `kill -9` or a crash, the next `gantry serve` takes the lock over once that process is gone. For a repair, delete the lock file once Gantry is surely stopped, then run the repair again.
-- Two containers sharing one audit folder both run as process 1 and cannot tell each other apart. Give each its own audit path.
-- On Windows, Gantry asks `tasklist` whether the process named in the lock file runs.
+- A second `gantry serve` on the same machine refuses at once while the process the lock names runs, and takes the lock over at once when that process is gone. On Windows, Gantry asks `tasklist` whether it runs.
+- A holder in another container or on another machine, sharing the folder over NFS or SMB, cannot be seen. Gantry counts it as running while its lock keeps changing, and as gone once the lock has not changed for 30 seconds. It times this on its own clock: modification times on a share come from the file server's clock, which another machine cannot trust.
+- So the new Gantry of a rollout waits up to 40 seconds for the old one to stop, says what it waits for, and continues the same chain. If the old one is still writing after that, it refuses to start and names the holder.
+- A Gantry that cannot rewrite its lock for 15 seconds (the share is unreachable), or finds that another Gantry took it over, refuses every request until it is started again. Two writers never append to one chain.
+- After `kill -9` or a crash, the lock stays. For a repair, delete it once Gantry is surely stopped, then run the repair again.
 
 ## Size
 
