@@ -65,6 +65,7 @@ See [Translation](/routing/translation/).
 | `kind` | string | required | One of the kinds above. |
 | `url` | string | required | The base URL. See [How the URL is built](#how-the-url-is-built). Optional for `bedrock`. |
 | `key_env` | string | required | The name of the environment variable that holds the provider key. Not allowed on `bedrock`. Optional on a local `openai` provider with `allow_private: true`. |
+| `key_file` | string | none | Instead of `key_env`: the path of a file that holds the provider key. Not allowed on `bedrock`. See [Provider keys](#provider-keys). |
 | `models` | list | required | The exact model names this provider serves. Not empty, no `"*"`. |
 | `allow_private` | bool | `false` | Lets `url` point at this machine or a private network. |
 | `retries` | integer | `0` | 0 to 5. See [Retries and fallbacks](/routing/retries-and-fallbacks/). |
@@ -100,6 +101,18 @@ Write the vendor's documented base URL as it is, or the part before `/v1`. Both 
 
 `key_env` names the variable that holds the key. The key itself never goes in the policy file. `gantry serve` refuses to start while a `key_env` variable is unset or empty.
 
+To rotate a key without a restart, use `key_file` instead of `key_env`:
+
+```yaml
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_file: /run/secrets/openai.key
+    models: [gpt-4o]
+```
+
+Gantry reads the file at start, and refuses to start while it is missing or empty. It then checks the file once a second: a new key in it is used within 2 seconds, without a restart and without a new policy version. A request already sent keeps the key it was sent with. A file that becomes missing or empty is reported, and the key in use is kept. Write the file by renaming a new one over it, so Gantry never reads half a key. Changing the `key_file` path itself needs a restart.
+
 <Aside type="caution">
 Do not name a provider key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be a Gantry key.
 </Aside>
@@ -125,7 +138,7 @@ The `limit` query parameter takes 1 to 1000.
 
 - **Body.** Byte for byte, except a translated request, a request to Bedrock or Vertex AI's Claude, a masked request, and a request for an alias, whose `model` is replaced with the deployment's.
 - **Path and query.** The route, and only the query parameters it allows: `beta=true` or `beta=false` on the messages routes, none on chat, Responses and embeddings. Any other is refused by name with `unknown_query`.
-- **Headers.** The caller's, except hop-by-hop headers, `Host`, `Cookie`, any header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), any `x-amz*` header, and any header that carries the caller's Gantry key.
+- **Headers.** The caller's, except hop-by-hop headers, `Host`, `Cookie`, any header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), any `x-amz*` header, proxy and CDN headers (`x-forwarded-*`, `forwarded`, `via`, `x-real-ip`, `true-client-ip`, `cf-*`, `cdn-loop`), and any header that carries the caller's Gantry key.
 - **Credentials.** The provider key in the header its kind expects, the AWS signature for Bedrock, or nothing for a local `openai` provider without `key_env`.
 
 The provider's answer, errors and streamed events included, returns unchanged except for hop-by-hop headers, with `X-Gantry-Decision` and `Server-Timing: gantry;dur=<ms>` added. Bedrock and translated answers are converted.

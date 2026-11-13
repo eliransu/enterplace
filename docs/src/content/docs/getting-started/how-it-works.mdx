@@ -57,7 +57,7 @@ Every response carries `X-Gantry-Decision` with the decision ID. Every refusal r
 
 The request body is forwarded byte for byte, except where the policy changes it: a guardrail that masks, a request translated for a provider that opts in, and the body Amazon Bedrock expects. Gantry never drops or rewrites an unknown field silently. An unknown query parameter is refused by name.
 
-Credentials are swapped, not passed through. Gantry removes every request header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), every `x-amz*` header, and any header carrying the caller's Gantry key, then adds the provider's key.
+Credentials are swapped, not passed through. Gantry removes every request header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), every `x-amz*` header, proxy and CDN headers that carry the caller's address, and any header carrying the caller's Gantry key, then adds the provider's key.
 
 The provider's answer, streamed or not, including the provider's own errors, comes back as sent, with `X-Gantry-Decision` added.
 

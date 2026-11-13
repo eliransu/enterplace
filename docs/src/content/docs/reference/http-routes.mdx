@@ -86,6 +86,7 @@ Both with the same value is accepted. Different values, an empty one beside the 
 | Header | Why |
 |---|---|
 | Any name containing `authorization`, `key`, `token`, `secret`, `organization` or `project`, except `idempotency-key` | Credentials and account selection are Gantry's |
+| `x-forwarded-*`, `forwarded`, `via`, `x-real-ip`, `true-client-ip`, `cf-*`, `cdn-loop` | The caller's address stays with Gantry, and providers behind a CDN refuse its headers |
 | Any name starting with `x-amz` | AWS headers are Gantry's to sign and set |
 | Any header carrying the caller's Gantry key in its name or value | The caller's key never reaches a provider |
 | `Cookie` | Means nothing to a provider |

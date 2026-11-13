@@ -860,3 +860,142 @@ async fn an_admin_issues_a_key_with_an_expiry_and_a_budget() -> TestResult {
     }
     Ok(())
 }
+
+/// A provider that answers with the Authorization header it was sent, so a test sees which key Gantry used.
+async fn echo_provider() -> Result<u16, Error> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(|headers: axum::http::HeaderMap| async move {
+            let auth = headers
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            axum::response::Response::new(Body::from(auth))
+        }),
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok(port)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_file_is_read_at_start_and_a_new_key_in_it_is_used_within_two_seconds() -> TestResult
+{
+    let port = echo_provider().await?;
+    let dir = dir("key-file")?;
+    let (policy, keys_path, key) = (
+        dir.join("gantry.policy.yaml"),
+        dir.join("gantry.keys.yaml"),
+        dir.join("provider.key"),
+    );
+    let text = self::policy(port).replace(
+        "key_env: MOCK_PROVIDER_KEY",
+        &format!("key_file: {}", key.display()),
+    );
+    std::fs::write(&policy, &text)?;
+    std::fs::write(&keys_path, keys())?;
+
+    // A key file that is missing or empty stops the start, and the message names the file.
+    for content in [None, Some("  \n")] {
+        if let Some(content) = content {
+            std::fs::write(&key, content)?;
+        }
+        let err = match gantry_server::governed(&policy, None, &|_| None) {
+            Ok(_) => return Err("started without a provider key".into()),
+            Err(err) => err,
+        };
+        assert!(
+            err.contains(&key.display().to_string()) && err.contains("provider \"mock\""),
+            "{err}"
+        );
+    }
+
+    save(&key, "key-one\n")?;
+    let gw = gantry_server::governed(&policy, None, &|_| None)?;
+    gw.reloader.watch();
+    let (status, body) = answer(&gw.router, chat(MAYA, "model-a", false)?).await?;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "Bearer key-one"));
+
+    // A new key in the file is used without a restart, while the policy and keys files stay as they are.
+    let policy_before = sha256_hex(&std::fs::read(&policy)?);
+    save(&key, "key-two\n")?;
+    let start = Instant::now();
+    loop {
+        let (status, body) = answer(&gw.router, chat(MAYA, "model-a", false)?).await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if body == "Bearer key-two" {
+            break;
+        }
+        assert_eq!(body, "Bearer key-one");
+        if start.elapsed() > Duration::from_secs(2) {
+            return Err("the new key was not used within 2 seconds".into());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(policy_before, sha256_hex(&std::fs::read(&policy)?));
+
+    // An emptied key file is not used: Gantry keeps the key it has and says why.
+    save(&key, "")?;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let (status, body) = answer(&gw.router, chat(MAYA, "model-a", false)?).await?;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "Bearer key-two"));
+    // The key is never written to the audit log.
+    let log = std::fs::read_to_string(dir.join("gantry-audit.jsonl"))?;
+    assert!(!log.contains("key-one") && !log.contains("key-two"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_keys_file_or_a_policy_that_is_not_yaml_keeps_the_last_good_version()
+-> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    let s = setup("last-good").await?;
+    let check = || s.gw.reloader.check(Trigger::FileChange);
+    let ok = |model: &'static str| chat(MAYA, model, false);
+
+    // Without the keys file, every key would be unknown: the keys in use stay.
+    std::fs::set_permissions(&s.keys, std::fs::Permissions::from_mode(0o000))?;
+    // Root reads any file, so the check only means something when the mode keeps this process out.
+    if std::fs::read(&s.keys).is_err() {
+        let Reload::Rejected(problems) = check() else {
+            return Err("an unreadable keys file was accepted".into());
+        };
+        assert!(
+            problems.join("\n").contains("gantry.keys.yaml"),
+            "{problems:?}"
+        );
+        assert_eq!(
+            answer(&s.gw.router, ok("model-b")?).await?.0,
+            StatusCode::OK
+        );
+    }
+    std::fs::set_permissions(&s.keys, std::fs::Permissions::from_mode(0o600))?;
+
+    let not_yaml = "version: 1\nproviders: [\n  - name: {\n";
+    std::fs::write(&s.policy, not_yaml)?;
+    let Reload::Rejected(problems) = check() else {
+        return Err("a policy that is not YAML was accepted".into());
+    };
+    assert!(
+        problems.join("\n").contains("gantry.policy.yaml"),
+        "{problems:?}"
+    );
+    assert_eq!(
+        answer(&s.gw.router, ok("model-b")?).await?.0,
+        StatusCode::OK
+    );
+    let all = records(&s.audit)?;
+    let rejected = events(&all, "config_rejected");
+    assert!(
+        rejected
+            .iter()
+            .any(|r| r["policy_sha256"] == sha256_hex(not_yaml.as_bytes())),
+        "{rejected:?}"
+    );
+    Ok(())
+}

@@ -482,6 +482,17 @@ async fn a_gantry_key_or_an_account_choice_reaches_the_provider_in_no_header_and
         .header("openai-organization", "org-of-the-callers-choice")
         .header("openai-project", "proj-of-the-callers-choice")
         .header("x-request-id", "kept-1")
+        // Proxy and CDN headers carry the caller's address and loop markers: a provider has no use for either, and
+        // one behind Cloudflare refuses a request that carries Cloudflare's own (error 1000).
+        .header("x-forwarded-for", "203.0.113.7")
+        .header("x-forwarded-proto", "https")
+        .header("x-real-ip", "203.0.113.7")
+        .header("true-client-ip", "203.0.113.7")
+        .header("forwarded", "for=203.0.113.7")
+        .header("via", "1.1 edge")
+        .header("cf-connecting-ip", "203.0.113.7")
+        .header("cf-ray", "8a1b2c3d4e5f")
+        .header("cdn-loop", "cloudflare")
         .body(Body::from(r#"{"model":"m","messages":[]}"#))?;
     let (status, _, _) = answer(&app, request).await?;
     assert_eq!(status, StatusCode::OK);
@@ -510,6 +521,26 @@ async fn a_gantry_key_or_an_account_choice_reaches_the_provider_in_no_header_and
     assert_eq!(
         headers.get("idempotency-key").and_then(|v| v.to_str().ok()),
         Some("retry-7")
+    );
+    for name in [
+        "x-forwarded-for",
+        "x-forwarded-proto",
+        "x-real-ip",
+        "true-client-ip",
+        "forwarded",
+        "via",
+        "cf-connecting-ip",
+        "cf-ray",
+        "cdn-loop",
+    ] {
+        assert!(
+            headers.get(name).is_none(),
+            "{name} reached the provider: {sent}"
+        );
+    }
+    assert!(
+        !sent.contains("203.0.113.7"),
+        "the caller's address reached the provider: {sent}"
     );
     Ok(())
 }
@@ -781,5 +812,80 @@ async fn a_body_larger_than_one_callers_share_is_refused_for_good() -> TestResul
         .await?;
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     assert!(!response.headers().contains_key(header::RETRY_AFTER));
+    Ok(())
+}
+
+/// A full disk: on Linux `/dev/full` takes the open and fails every write with "no space left on device".
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_full_disk_refuses_every_request_and_forwards_nothing() -> TestResult {
+    let (upstream, provider) = provider().await?;
+    let dir = files("disk-full", upstream)?;
+    let full = std::fs::OpenOptions::new().write(true).open("/dev/full")?;
+    let app = start(&dir, AuditLog::from_file(full)?)?;
+    for _ in 0..2 {
+        let (status, _, body) = answer(&app, chat(OMER, "any-model")?).await?;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        let json: serde_json::Value = serde_json::from_str(&body)?;
+        assert_eq!(json["error"]["code"], "audit_unavailable");
+    }
+    assert_eq!(provider.hits.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn removing_the_audit_folder_while_running_refuses_every_request() -> TestResult {
+    let (upstream, provider) = provider().await?;
+    let dir = files("folder-gone", upstream)?;
+    let log = dir.join("audit").join("gantry-audit.jsonl");
+    std::fs::create_dir_all(log.parent().ok_or("no folder")?)?;
+    let app = start(&dir, AuditLog::open(&log)?)?;
+    assert_eq!(
+        answer(&app, chat(OMER, "any-model")?).await?.0,
+        StatusCode::OK
+    );
+
+    std::fs::remove_dir_all(log.parent().ok_or("no folder")?)?;
+    for _ in 0..2 {
+        let (status, _, body) = answer(&app, chat(OMER, "any-model")?).await?;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        let json: serde_json::Value = serde_json::from_str(&body)?;
+        assert_eq!(json["error"]["code"], "audit_unavailable");
+    }
+    // Only the request made before the folder went.
+    assert_eq!(provider.hits.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_unreachable_provider_is_a_whole_refusal_with_a_record_and_no_usage() -> TestResult {
+    // A port that was just free and is closed again refuses connections.
+    let down = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await?
+        .local_addr()?;
+    let dir = files("provider-down", down)?;
+    let audit = dir.join("gantry-audit.jsonl");
+    let app = start(&dir, AuditLog::open(&audit)?)?;
+    let (status, decision, body) = answer(&app, chat(OMER, "any-model")?).await?;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    // The whole body is one refusal: nothing of an answer came before it.
+    let json: serde_json::Value = serde_json::from_str(&body)?;
+    assert_eq!(json["error"]["code"], "upstream_unreachable");
+    assert!(!body.contains(&down.to_string()), "{body}");
+    let text = std::fs::read_to_string(&audit)?;
+    let decided: Vec<serde_json::Value> = text
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()?;
+    let request = decided
+        .iter()
+        .find(|r| r["id"] == decision.as_str() && r.get("event").is_none())
+        .ok_or("no request record")?;
+    assert_eq!(request["verdict"], "allow");
+    assert!(
+        !decided.iter().any(|r| r["event"] == "usage"),
+        "a request that got no answer has no usage record: {text}"
+    );
     Ok(())
 }

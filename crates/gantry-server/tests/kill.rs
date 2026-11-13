@@ -504,6 +504,47 @@ async fn the_switch_file_is_private_and_one_the_gateway_cannot_read_stops_everyo
     }
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_switch_file_whose_permissions_keep_the_gateway_out_stops_everyone() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    let (policy, dir) = setup("no-permission").await?;
+    let a = node(&policy)?;
+    let on = r#"{"scope":"person","value":"maya.cohen","reason":"r"}"#;
+    assert_eq!(
+        answer(&a, admin("POST", "/admin/kills", ADMIN, on)?)
+            .await?
+            .0,
+        StatusCode::CREATED
+    );
+    let file = dir.join("gantry.kills.json");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000))?;
+    // Root reads any file, so the check only means something when the mode keeps this process out.
+    if std::fs::read(&file).is_ok() {
+        return Ok(());
+    }
+    let start = Instant::now();
+    let result = loop {
+        let (status, body) = answer(&a, chat(OMER, "model-a")?).await?;
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            break if body["error"]["code"] == "kills_unreadable" {
+                Ok(())
+            } else {
+                Err(format!("wrong code: {body}").into())
+            };
+        }
+        if status != StatusCode::OK || start.elapsed() > Duration::from_secs(3) {
+            break Err(format!(
+                "a switch file it cannot open did not stop requests: {status} {body}"
+            )
+            .into());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
+    result
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_key_revoking_itself_removes_only_itself_when_another_shares_its_prefix() -> TestResult {
     // QA14-16 (LG4): self-revoke names the key by its whole hash, so a key whose hash starts with the same 8 hex

@@ -155,12 +155,27 @@ fn write(path: &Path, kills: &[Kill]) -> Result<(), String> {
     })
 }
 
-type Stamp = Option<(u64, Option<SystemTime>)>;
+type Stamp = Option<(u64, Option<SystemTime>, i64)>;
 
+/// The change time counts too: a chmod that locks the gateway out changes neither size nor modified time, and must
+/// still be noticed so every request is refused.
 fn stamp(path: &Path) -> Stamp {
     std::fs::metadata(path)
         .ok()
-        .map(|m| (m.len(), m.modified().ok()))
+        .map(|m| (m.len(), m.modified().ok(), changed(&m)))
+}
+
+#[cfg(unix)]
+fn changed(m: &std::fs::Metadata) -> i64 {
+    use std::os::unix::fs::MetadataExt;
+    m.ctime()
+        .saturating_mul(1_000_000_000)
+        .saturating_add(m.ctime_nsec())
+}
+
+#[cfg(not(unix))]
+fn changed(_: &std::fs::Metadata) -> i64 {
+    0
 }
 
 struct Cached {

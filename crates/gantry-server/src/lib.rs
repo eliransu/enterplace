@@ -2540,6 +2540,11 @@ async fn send(
                 // AWS headers are Gantry's to sign and set: a caller's would sit beside the signature and could
                 // choose account options at Bedrock.
                 name.starts_with("x-amz")
+                    // Proxy and CDN headers: the caller's address stays here, and a provider behind Cloudflare
+                    // refuses a request that carries Cloudflare's own headers (error 1000).
+                    || name.starts_with("cf-")
+                    || name.starts_with("x-forwarded-")
+                    || ["forwarded", "via", "cdn-loop", "x-real-ip", "true-client-ip"].contains(&name)
                     // Any header named for a credential, whatever the provider calls it. An idempotency key is not one.
                     || name != "idempotency-key"
                     && [

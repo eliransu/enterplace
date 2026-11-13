@@ -22,7 +22,7 @@ use gantry_core::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::{Audit, Config, Live, ProviderRoute, Secret, Snapshot, Timeouts, build};
+use crate::{Audit, Config, Live, ProviderRoute, Secret, Snapshot, Timeouts, build, key_header};
 
 /// What made Gantry look at the files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +63,9 @@ struct Current {
     prints: Prints,
     /// The files rejected since the version in use was loaded, so each pair is recorded once and not every second.
     rejected: HashMap<Prints, Vec<String>>,
+    /// Hashes of the providers' key files as last read. A key file's path needs a restart to change, so the list
+    /// keeps its order for the life of the process.
+    key_prints: Vec<Option<String>>,
 }
 
 /// Watches the files and swaps the version in use. One per served policy file.
@@ -156,6 +159,34 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
+/// The provider key in a `key_file`, trimmed. A missing or empty file is an error that names the file.
+fn read_key_file(provider: &str, path: &Path) -> Result<Secret, String> {
+    let text = std::fs::read_to_string(path).map_err(|err| {
+        format!(
+            "the key for provider \"{provider}\" cannot be read from {}: {err}. The policy file says it is in that file: put the key there.",
+            path.display()
+        )
+    })?;
+    let key = text.trim();
+    if key.is_empty() {
+        return Err(format!(
+            "the key file of provider \"{provider}\", {}, is empty. Put the provider key in it.",
+            path.display()
+        ));
+    }
+    Ok(Secret::new(key))
+}
+
+/// The hash of each provider's key file, so a change shows without keeping the keys themselves.
+fn key_prints(loaded: &Loaded) -> Vec<Option<String>> {
+    loaded
+        .providers
+        .iter()
+        .filter_map(|p| p.key_file.as_deref())
+        .map(|path| std::fs::read(path).ok().map(|bytes| sha256_hex(&bytes)))
+        .collect()
+}
+
 /// Starts serving from the files: checks them, opens and verifies the audit log, records the version Gantry starts
 /// with, and builds the router. `provider_key` gives the value of an environment variable, so tests need not set any.
 pub fn governed(
@@ -188,6 +219,8 @@ pub fn governed(
                 session_token: set("AWS_SESSION_TOKEN").map(|t| t.trim().to_string()),
             };
             (None, Some(credentials))
+        } else if let Some(path) = &provider.key_file {
+            (Some(read_key_file(&provider.name, path)?), None)
         } else if provider.key_env.is_empty() {
             // `gantry check` allows this only for a model server on this machine or a private network.
             (None, None)
@@ -278,6 +311,7 @@ pub fn governed(
             live: live.clone(),
             log: log.clone(),
             current: Mutex::new(Current {
+                key_prints: key_prints(&loaded),
                 loaded: loaded.clone(),
                 prints,
                 rejected: HashMap::new(),
@@ -358,6 +392,11 @@ impl Reloader {
             Ok(current) => current,
             Err(poisoned) => poisoned.into_inner(),
         };
+        let keys_now = key_prints(&current.loaded);
+        if keys_now != current.key_prints {
+            self.rotate(&current.loaded);
+            current.key_prints = keys_now;
+        }
         let (policy, keys) = (read(&self.policy_path), read(&self.keys_path));
         let print = |file: &Result<Option<Vec<u8>>, String>| match file {
             Ok(bytes) => bytes.as_deref().map(sha256_hex),
@@ -515,6 +554,56 @@ impl Reloader {
         current.rejected.clear();
         self.show(None);
         Reload::Loaded
+    }
+
+    /// Reads the key files again and puts their keys in place, leaving the rest of the version in use as it is.
+    /// A request already sent keeps the key it was sent with. A file that cannot be used keeps the key in use.
+    fn rotate(&self, loaded: &Loaded) {
+        let old = match self.live.read() {
+            Ok(version) => version.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        let mut providers = old.providers.clone();
+        let mut changed = false;
+        for upstream in &mut providers {
+            let Some(path) = loaded
+                .providers
+                .iter()
+                .find(|p| p.name == upstream.name)
+                .and_then(|p| p.key_file.as_deref())
+            else {
+                continue;
+            };
+            let key = read_key_file(&upstream.name, path)
+                .and_then(|key| key_header(upstream.kind, &key).map_err(|err| err.to_string()));
+            match key {
+                Ok(key) if upstream.key.as_ref() != Some(&key) => {
+                    upstream.key = Some(key);
+                    changed = true;
+                    println!(
+                        "gantry: provider \"{}\" now uses the key in {}.",
+                        upstream.name,
+                        path.display()
+                    );
+                }
+                Ok(_) => {}
+                Err(err) => eprintln!("gantry: {err} Gantry keeps the key it has."),
+            }
+        }
+        if !changed {
+            return;
+        }
+        let version = Arc::new(Snapshot {
+            policy: old.policy.clone(),
+            providers,
+            aliases: old.aliases.clone(),
+            policy_sha256: old.policy_sha256.clone(),
+            keys_sha256: old.keys_sha256.clone(),
+        });
+        match self.live.write() {
+            Ok(mut live) => *live = version,
+            Err(poisoned) => *poisoned.into_inner() = version,
+        }
     }
 
     fn reject(

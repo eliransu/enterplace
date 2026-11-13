@@ -1,0 +1,196 @@
+---
+title: Migrate from Bifrost
+description: Map Bifrost virtual keys, budgets, rate limits, providers and fallbacks to a Gantry policy and keys, and move clients over step by step.
+sidebar:
+  order: 2
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+This page maps each Bifrost concept to its Gantry equivalent and walks through moving a gateway over. You end with a `gantry.policy.yaml` that passes `gantry check`, one Gantry key per virtual key, and clients pointed at Gantry.
+
+Gantry has no importer for Bifrost. You write the policy by hand from your `config.json`, which for most setups is one provider block and one rule per team.
+
+## What maps
+
+| Bifrost | Gantry |
+|---|---|
+| Virtual key (`sk-bf-*`), sent as `x-bf-vk` or `Authorization: Bearer` | A [Gantry key](/governance/keys/) (`gantry_...`), sent as `Authorization: Bearer` or `x-api-key`. Each key has a name and a team. |
+| `client.enforce_auth_on_inference` | Always on. A request without a known Gantry key is refused before its body is read. |
+| Virtual key `is_active: false` | Revoke the key with the console, the [admin API](/reference/admin-api/), or by removing its line from `gantry.keys.yaml`. |
+| Virtual key `expires_at` | `gantry key new --expires <date>` |
+| Team | The key's `--team`. Rules match on it with `principals: { team: ... }`. |
+| Customer | No equivalent. Gantry has one level of grouping, the team. |
+| `provider_configs[].allowed_models` | The rule's `models:` list, narrowed per key with `--models`. |
+| `allow_all_providers: true` | `models: ["*"]` on the rule. |
+| Budget on a virtual key | `gantry key new --budget <usd>/<day\|month>` |
+| Budget on a team | `budget: { usd: ..., per: day \| month }` on a `{ team: ... }` rule. It counts the whole team. |
+| `request_max_limit` with `request_reset_duration: 1m` | `rate: { rpm: ... }` on a rule. It counts each person. |
+| `token_max_limit` with `token_reset_duration: 1m` | `rate: { tpm: ... }` on a rule (each person), or `--tpm` on a key. |
+| `providers.<name>.keys[].value: env.NAME` | `key_env: NAME` on a provider. Gantry holds one key per provider. |
+| `keys[].models` | The provider's `models:` list. A model is listed by one provider only. |
+| `keys[].weight` across providers | An [alias](/routing/aliases/) with `deployments` and `weight`. |
+| `network_config` retries | The provider's `retries` (0 to 5). |
+| `fallbacks` in the request body | The provider's `fallback`, or an alias's deployments. See [Retries and fallbacks](/routing/retries-and-fallbacks/). |
+| `provider/model` names such as `openai/gpt-4o-mini` | Bare model names. To keep clients that send the prefixed name, add an alias with that name. |
+| Governance plugin | Built in. The [policy file](/governance/policy/) holds the rules, and every decision is in the audit log. |
+| Logging plugin, `logs.db` | The [audit log](/governance/audit-log/): a hash-chained file of JSON lines with who, which model, the verdict, tokens and cost. It holds no prompt or answer text. |
+| Telemetry, `/metrics` | `gantry serve --metrics <address>` serves Prometheus metrics on an address of its own. See [Observability](/operations/observability/). |
+| `semantic_cache` plugin | `cache: { ttl_seconds: N }` on a rule. Gantry's cache serves only a byte-identical request. See [Caching](/routing/caching/). |
+| `/api/governance/virtual-keys` | The [admin API](/reference/admin-api/) at `/admin/keys`, or `gantry key new`. |
+| Default port `8080`, `POST /v1/chat/completions` | The same: Gantry listens on `127.0.0.1:8080` by default and serves `/v1/chat/completions`. |
+
+## Example
+
+This Bifrost `config.json` serves two models through one virtual key with a monthly budget and a rate limit:
+
+```json title="config.json"
+{
+  "providers": {
+    "openai": {
+      "keys": [
+        { "name": "openai-primary", "value": "env.OPENAI_API_KEY", "models": ["gpt-4o-mini"], "weight": 1.0 }
+      ]
+    },
+    "anthropic": {
+      "keys": [
+        { "name": "anthropic-primary", "value": "env.ANTHROPIC_API_KEY", "models": ["claude-sonnet-4-5"], "weight": 1.0 }
+      ]
+    }
+  },
+  "governance": {
+    "virtual_keys": [
+      {
+        "id": "vk-eng",
+        "name": "Engineering",
+        "value": "sk-bf-*",
+        "is_active": true,
+        "provider_configs": [
+          { "provider": "openai", "weight": 1.0, "allowed_models": ["gpt-4o-mini"], "key_ids": ["openai-primary"] },
+          { "provider": "anthropic", "weight": 1.0, "allowed_models": ["claude-sonnet-4-5"], "key_ids": ["anthropic-primary"] }
+        ],
+        "rate_limit_id": "rl-eng"
+      }
+    ],
+    "budgets": [
+      { "id": "budget-eng", "virtual_key_id": "vk-eng", "max_limit": 100.00, "reset_duration": "1M" }
+    ],
+    "rate_limits": [
+      { "id": "rl-eng", "token_max_limit": 50000, "token_reset_duration": "1m", "request_max_limit": 100, "request_reset_duration": "1m" }
+    ]
+  }
+}
+```
+
+The Gantry policy that does the same:
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-4o-mini]
+    retries: 2
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_PROVIDER_KEY
+    models: [claude-sonnet-4-5]
+    retries: 2
+aliases:
+  # Clients that still send Bifrost's provider/model names keep working.
+  - name: openai/gpt-4o-mini
+    deployments:
+      - { provider: openai, model: gpt-4o-mini }
+  - name: anthropic/claude-sonnet-4-5
+    deployments:
+      - { provider: anthropic, model: claude-sonnet-4-5 }
+rules:
+  - name: team-eng
+    principals: { team: eng }
+    models: [gpt-4o-mini, claude-sonnet-4-5, openai/gpt-4o-mini, anthropic/claude-sonnet-4-5]
+    rate: { rpm: 100, tpm: 50000 }
+  - name: everyone-else
+    principals: { any: true }
+    models: []
+```
+
+The virtual key's budget moves to the key itself:
+
+```bash
+gantry key new engineering --team eng --budget 100/month
+```
+
+The rule's `rate` counts each person, so with one key per person it limits each key as Bifrost's virtual key limit did.
+
+<Aside type="tip">
+Give provider keys variable names of their own, such as `ANTHROPIC_PROVIDER_KEY`. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which through Gantry is a Gantry key.
+</Aside>
+
+## Migrate step by step
+
+<Steps>
+
+1. List what your Bifrost gateway holds: the `providers` block of `config.json`, and every virtual key, team, budget and rate limit (from `config.json` or `GET /api/governance/virtual-keys`, `/teams` and `/customers`).
+
+2. Write one Gantry provider per Bifrost provider. Set `key_env` to the variable that holds its key, and list the models it serves under `models`.
+
+3. Write one rule per team, with the models its virtual keys allow. Put a team budget on the rule, and a per-minute `rate` if the team has one. End with a `{ any: true }` rule that allows `[]`, so a caller no rule names gets a clear refusal.
+
+4. Check the policy.
+
+   ```bash
+   gantry check gantry.policy.yaml
+   ```
+
+5. Issue one Gantry key per virtual key, in the folder that holds the policy. Carry over the budget, expiry and models of each.
+
+   ```bash
+   gantry key new engineering --team eng --budget 100/month --expires 2027-01-01 --models gpt-4o-mini
+   ```
+
+   Bifrost's key values cannot be reused. Send each printed key to its owner through your secret manager, or let developers get their own with `gantry login`.
+
+6. Start Gantry with the provider keys in its environment.
+
+   ```bash
+   OPENAI_PROVIDER_KEY=sk-... ANTHROPIC_PROVIDER_KEY=sk-ant-... gantry serve gantry.policy.yaml
+   ```
+
+7. Point each client at Gantry: the same base URL shape (`http://<host>:8080/v1`), with the Gantry key in place of the virtual key. Replace an `x-bf-vk` header with `Authorization: Bearer gantry_...`.
+
+8. Send a test request per team, then read the records with `gantry audit verify gantry-audit.jsonl` and the console. Turn the Bifrost gateway off when traffic has moved.
+
+</Steps>
+
+## What has no equivalent
+
+| Bifrost | In Gantry |
+|---|---|
+| Customers above teams | One level: the team. Put a customer's budget on each of its teams' rules, or give the customer one team. |
+| Several budgets on one key or team, all checked | One budget per rule and one per key. Both apply to a request. |
+| Reset durations other than a day or a month (`1h`, `1w`, `1Q`, `1Y`) | `per: day` or `per: month`, starting at midnight UTC and on the first of the month. |
+| Rate limits over a period other than a minute | Requests and tokens per sliding minute only. |
+| A requests-per-minute limit on one key | A rule's `rate: { rpm: N }` limits each person. A key carries `--tpm` only. |
+| Several keys for one provider, weighted | One key per provider. To spread load across accounts, define one provider per account and an alias over them. |
+| `fallbacks` in the request body | Gantry does not read it. It is forwarded to the provider with the rest of the body, so remove it from requests. Fallbacks are set in the policy. |
+| Budget overrides | Raise the budget in the policy or issue the key again. Both take effect without a restart. |
+| Semantic (embedding) cache | Byte-identical cache only. |
+| Request and answer content in logs | Gantry never records prompt or answer text. |
+| `otel`, `maxim`, `datadog` plugins, custom plugins | Ship the audit log with Vector, Fluent Bit or the OpenTelemetry Collector. See [Observability](/operations/observability/). |
+| `vault.<path>` key references | `key_env` or `key_file`. |
+
+<Aside type="note">
+Bifrost's configuration was read from its public documentation on 2026-11-13 ([virtual keys](https://docs.getbifrost.ai/features/governance/virtual-keys), [budgets and limits](https://docs.getbifrost.ai/features/governance/budget-and-limits), [routing](https://docs.getbifrost.ai/features/governance/routing), [providers in config.json](https://docs.getbifrost.ai/deployment-guides/config-json/providers), [plugins](https://docs.getbifrost.ai/deployment-guides/config-json/plugins)). It was not tested against a running Bifrost.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Gantry, LiteLLM and Bifrost" href="/migrate/comparison/" description="What each gateway does and does better." />
+	<LinkCard title="Policy file" href="/governance/policy/" description="Every key the policy uses." />
+	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue, limit and revoke Gantry keys." />
+	<LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" description="Who a limit counts and how." />
+</CardGrid>

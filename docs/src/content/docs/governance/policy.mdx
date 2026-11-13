@@ -118,6 +118,7 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `kind` | string | required | `openai`, `anthropic`, `azure`, `bedrock`, `gemini`, `vertex` or `vertex_anthropic`. |
 | `url` | string | required | Base URL, `http://` or `https://`, no query, fragment or login. May carry the vendor's path, such as `https://api.groq.com/openai/v1`. Not used by `bedrock`. |
 | `key_env` | string | required | Name of the environment variable holding the provider key. Optional for an `openai` provider with `allow_private: true`. Not used by `bedrock`, which signs with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. |
+| `key_file` | string | none | Instead of `key_env`: the path of a file holding the provider key. Read at start and again within 2 seconds of a change, without a restart. A relative path is read from where Gantry runs. Not used by `bedrock`. |
 | `models` | list | required | Exact model names this provider serves. Not empty, no `"*"`. A model may be listed by one provider only. |
 | `retries` | integer | `0` | 0 to 5. Retries after a connection failure, timeout, 429 or 5xx, before any byte reaches the caller. |
 | `fallback` | string | none | Another provider of the same API to try after the retries fail. |
@@ -192,9 +193,9 @@ Rules, guardrails, budgets, rate limits, caches, prices, keys, and a provider's 
 These need a restart, and a change to one of them is rejected with that reason:
 
 - the audit log path,
-- a provider's `name`, `kind`, `url`, `key_env`, `allow_private`, `region` or `api_version`,
+- a provider's `name`, `kind`, `url`, `key_env`, `key_file`, `allow_private`, `region` or `api_version`,
 - adding or removing a provider,
-- a new provider key value (it lives in an environment variable).
+- a new provider key value in a `key_env` variable. A new key in a `key_file` is used without a restart: see [Provider keys](/providers/overview/#provider-keys).
 
 `GET /healthz` names the hashes in use and those of a rejected version still on disk:
 

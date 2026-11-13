@@ -25,6 +25,7 @@ const KNOWN: &[&str] = &[
     "name",
     "url",
     "key_env",
+    "key_file",
     "kind",
     "allow_private",
     "principals",
@@ -198,6 +199,9 @@ struct ProviderFile {
     // Bedrock reads the AWS variables instead. Every other kind needs one.
     #[serde(default)]
     key_env: Option<String>,
+    // Instead of key_env, for a key that changes while Gantry runs: the file is read again once a second.
+    #[serde(default)]
+    key_file: Option<String>,
     #[serde(default)]
     allow_private: bool,
     #[serde(default)]
@@ -773,6 +777,9 @@ pub struct Provider {
     /// Name of the environment variable that holds the provider key. The key itself is never in a file.
     /// Empty for bedrock, which reads AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN.
     pub key_env: String,
+    /// A file that holds the provider key, in place of `key_env`. Gantry reads it at start and again whenever it
+    /// changes, so the key can be rotated without a restart. A relative path is read from where Gantry runs.
+    pub key_file: Option<PathBuf>,
     pub allow_private: bool,
     /// The name the provider knows each model by: the Azure deployment or the Bedrock model ID.
     pub upstream_models: BTreeMap<String, String>,
@@ -1840,6 +1847,25 @@ fn providers(
             }
             None => String::new(),
         };
+        if let Some(path) = &entry.key_file {
+            if bedrock {
+                errors.push(format!(
+                    "{}: a bedrock provider takes no key_file. Gantry signs its requests with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, for temporary credentials, AWS_SESSION_TOKEN from its environment. Remove the line.",
+                    at("key_file")
+                ));
+            } else if entry.key_env.is_some() {
+                errors.push(format!(
+                    "{}: provider \"{}\" takes key_env or key_file, not both. Keep the one that holds its key and remove the other.",
+                    at("key_file"),
+                    entry.name
+                ));
+            } else if path.trim().is_empty() {
+                errors.push(format!(
+                    "{}: key_file is the path of a file that holds the provider key, for example /run/secrets/openai.key. The key itself never goes in this file.",
+                    at("key_file")
+                ));
+            }
+        }
         match (&entry.key_env, bedrock) {
             (Some(_), true) => errors.push(format!(
                 "{}: a bedrock provider takes no key_env. Gantry signs its requests with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, for temporary credentials, AWS_SESSION_TOKEN from its environment. Remove the line.",
@@ -1857,8 +1883,9 @@ fn providers(
             }
             // A model server on this machine or a private network, such as Ollama or vLLM, often takes no key.
             (None, false) if entry.allow_private && kind == Some(Kind::OpenAi) => {}
+            (None, false) if entry.key_file.is_some() => {}
             (None, false) => errors.push(format!(
-                "{}:{line}: provider \"{}\" has no key_env. Add the name of the environment variable that holds its key, for example `key_env: OPENAI_API_KEY`. A model server of kind openai on this machine with `allow_private: true` may leave it out.",
+                "{}:{line}: provider \"{}\" has no key_env. Add the name of the environment variable that holds its key, for example `key_env: OPENAI_API_KEY`, or `key_file:` with the path of a file that holds it. A model server of kind openai on this machine with `allow_private: true` may leave it out.",
                 file.display(),
                 entry.name
             )),
@@ -1960,6 +1987,7 @@ fn providers(
                 models,
                 url,
                 key_env: entry.key_env.clone().unwrap_or_default(),
+                key_file: entry.key_file.as_ref().map(PathBuf::from),
                 allow_private: entry.allow_private,
                 upstream_models,
                 api_version: entry.api_version.clone(),
@@ -2218,6 +2246,18 @@ pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
             ),
             ("url", provider.url.clone(), now.url.clone()),
             ("key_env", provider.key_env.clone(), now.key_env.clone()),
+            (
+                "key_file",
+                provider
+                    .key_file
+                    .as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                now.key_file
+                    .as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+            ),
             (
                 "api_version",
                 provider.api_version.clone().unwrap_or_default(),
@@ -3078,6 +3118,34 @@ rules:
     }
 
     #[test]
+    fn a_provider_key_may_come_from_a_file() -> TestResult {
+        let text = MORE.replace(
+            "    key_env: GROQ_API_KEY\n",
+            "    key_file: secrets/groq.key\n",
+        );
+        let loaded = check("key-file", &text, None)?.map_err(|e| e.join("\n"))?;
+        let groq = loaded
+            .providers
+            .iter()
+            .find(|p| p.name == "groq")
+            .ok_or("groq")?;
+        assert_eq!(groq.key_env, "");
+        assert_eq!(
+            groq.key_file.as_deref(),
+            Some(Path::new("secrets/groq.key"))
+        );
+        // Moving the key to another file needs a restart, as changing key_env does.
+        let moved = text.replace("secrets/groq.key", "other.key");
+        let new = check("key-file-moved", &moved, None)?.map_err(|e| e.join("\n"))?;
+        let reasons = needs_restart(&loaded, &new).join("\n");
+        assert!(
+            reasons.contains("the key_file of provider \"groq\""),
+            "{reasons}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn a_url_may_have_a_path_and_the_route_follows_it() {
         for good in [
             "http://127.0.0.1:9000",
@@ -3179,6 +3247,21 @@ rules:
                 "    region: us-east-1\n",
                 "    region: us-east-1\n    key_env: AWS_KEY\n",
                 "a bedrock provider takes no key_env",
+            ),
+            (
+                "    region: us-east-1\n",
+                "    region: us-east-1\n    key_file: aws.key\n",
+                "a bedrock provider takes no key_file",
+            ),
+            (
+                "    key_env: GROQ_API_KEY\n",
+                "    key_env: GROQ_API_KEY\n    key_file: groq.key\n",
+                "takes key_env or key_file, not both",
+            ),
+            (
+                "    key_env: GROQ_API_KEY\n",
+                "    key_file: \"\"\n",
+                "key_file is the path of a file that holds the provider key",
             ),
             (
                 "    models: [llama-4]\n",
