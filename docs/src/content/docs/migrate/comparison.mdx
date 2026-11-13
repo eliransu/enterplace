@@ -48,7 +48,7 @@ Gantry is much younger than both and does less. It covers fewer providers and AP
 - **Speed of forwarding with features on.** About 1 ms added at p50 in the review's Docker setup, with routing, budgets and logging.
 - **Governance objects in open source.** Customers, teams and virtual keys with budgets and rate limits, and immediate key deactivation through its API.
 - **More APIs.** It translated `/anthropic/v1/messages` and `/v1/responses` to a chat-only server. Gantry refuses a messages or Responses request to a provider that does not speak it, except messages to a chat provider that opts in with `accept_messages`.
-- **MCP gateway**, with tool filtering per virtual key, deny by default. Gantry has nothing for MCP.
+- **MCP gateway breadth.** Tool filtering per virtual key, deny by default. Gantry's [MCP gateway](/governance/mcp-gateway/) filters tools per rule, deny by default, and relays tools only: no resources, prompts or server-to-client requests.
 - **Response headers** naming the provider and resolved model, and a latency split per request in its log.
 - **Coding-agent guides** for 13 tools, and a device product for laptops (enterprise).
 

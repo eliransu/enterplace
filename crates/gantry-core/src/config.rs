@@ -100,14 +100,14 @@ const KNOWN: &[&str] = &[
     "context_window_fallback",
     "content_policy_fallback",
     "tpm",
+    "mcp",
+    "tools",
 ];
 /// Keys whose value is a map whose keys the user chooses: model names, or header names under `headers_env`.
 /// Those names are not Gantry keys, so the unknown-key scan never reads them.
 const FREE_MAPS: &[&str] = &["deployments", "model_ids", "headers_env"];
 /// The most retries a provider may ask for. Each one can wait the whole first-byte timeout.
 pub const MAX_RETRIES: u32 = 5;
-/// Words the designs show in a rule that this version does not enforce. Accepting them silently would be a lie.
-const NOT_ENFORCED: &[&str] = &["tools"];
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -125,6 +125,8 @@ struct PolicyFile {
     console: Option<ConsoleFile>,
     #[serde(default)]
     aliases: Vec<AliasFile>,
+    #[serde(default)]
+    mcp: Vec<crate::mcp::ServerFile>,
 }
 
 #[derive(Deserialize)]
@@ -240,6 +242,8 @@ struct RuleFile {
     cache: Option<CacheFile>,
     #[serde(default)]
     buffer_stream: bool,
+    #[serde(default)]
+    tools: Vec<String>,
 }
 
 // Numbers are read wide and checked by hand, so a wrong one gets a message with the fix, not a parser's.
@@ -814,6 +818,8 @@ pub struct Loaded {
     pub sso: Option<Sso>,
     /// Model names callers send that Gantry serves from one or more deployments.
     pub aliases: Vec<Alias>,
+    /// Upstream MCP servers whose tools Gantry serves at `/mcp`.
+    pub mcp: Vec<crate::mcp::Server>,
 }
 
 /// "1 provider: openai at https://api.openai.com", for messages.
@@ -1050,12 +1056,6 @@ fn unknown_keys(file: &Path, text: &str, errors: &mut Vec<String>) -> bool {
                 // What follows on this line and under it are names the user chose, not keys.
                 in_map = Some(depth);
                 break;
-            } else if NOT_ENFORCED.contains(&key) {
-                errors.push(format!(
-                    "{at}: \"{key}\" is not enforced by this version of Gantry. Remove the line: a policy file must not promise what Gantry does not do yet."
-                ));
-                // What is written inside it goes with the line.
-                break;
             } else if !KNOWN.contains(&key) {
                 errors.push(unknown_key(&at, key));
             }
@@ -1104,7 +1104,7 @@ fn rule_lines(text: &str) -> (Vec<usize>, usize) {
     (lines, text.lines().count() + 1)
 }
 
-fn line_of_key(text: &str, key: &str, from: usize, to: usize) -> usize {
+pub(crate) fn line_of_key(text: &str, key: &str, from: usize, to: usize) -> usize {
     text.lines()
         .enumerate()
         .skip(from.saturating_sub(1))
@@ -1120,7 +1120,7 @@ fn line_of_key(text: &str, key: &str, from: usize, to: usize) -> usize {
 
 /// Whether a provider URL points at this machine or a private network, judged by what is written.
 // ponytail: a public name that resolves to a private address is not caught here. That check belongs at connect time (package 1.2).
-fn is_private(url: &str) -> bool {
+pub(crate) fn is_private(url: &str) -> bool {
     let authority = url
         .split("://")
         .nth(1)
@@ -1222,6 +1222,7 @@ fn policy_rules(
             Models::Only(rule.models.clone())
         };
         let limits = limits(rule, &at, errors);
+        crate::mcp::check_tools(&at("tools"), &rule.tools, &parsed.mcp, errors);
         rules.push(Rule {
             name: rule.name.clone(),
             line,
@@ -1229,13 +1230,14 @@ fn policy_rules(
             models,
             guardrails: Vec::new(),
             limits,
+            tools: rule.tools.clone(),
         });
     }
     rules
 }
 
 /// The line of each item of a top-level list such as `guardrails:`. Same rule as `rule_lines`.
-fn list_lines(text: &str, list: &str) -> Vec<usize> {
+pub(crate) fn list_lines(text: &str, list: &str) -> Vec<usize> {
     let mut lines = Vec::new();
     let mut inside = false;
     let mut indent = None;
@@ -2198,6 +2200,7 @@ pub fn load_texts(
     );
     let sso = console_sso(policy_path, policy_text, &parsed, &mut errors);
     let aliases = aliases(policy_path, policy_text, &parsed, &providers, &mut errors);
+    let mcp = crate::mcp::servers(policy_path, policy_text, &parsed.mcp, &mut errors);
     let audit_path = match &parsed.audit {
         Some(audit) => audit.path.clone(),
         None => policy_path.with_file_name("gantry-audit.jsonl"),
@@ -2214,6 +2217,7 @@ pub fn load_texts(
             keys_file_found: true,
             sso,
             aliases,
+            mcp,
         }),
         _ => Err(errors),
     }
@@ -2229,6 +2233,12 @@ pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
             old.audit_path.display(),
             new.audit_path.display()
         ));
+    }
+    // Each server's credentials are read from the environment at start, like a provider key.
+    if old.mcp != new.mcp {
+        reasons.push(
+            "the mcp servers changed. Their credentials are read at start: restart Gantry to apply it. A rule's tools may change without one.".to_string(),
+        );
     }
     for provider in &old.providers {
         let Some(now) = new.providers.iter().find(|p| p.name == provider.name) else {
@@ -2443,21 +2453,60 @@ rules:
     }
 
     #[test]
-    fn a_key_that_is_designed_but_not_enforced_is_refused_as_such() -> TestResult {
-        let text = errors(check(
-            "tools",
-            &GOOD.replace(
+    fn mcp_servers_and_rule_tools_load() -> TestResult {
+        let text = format!(
+            "{}{}",
+            GOOD.replace(
                 "    models: [gpt-4o-mini]\n",
-                "    models: [gpt-4o-mini]\n    tools: { allow: [search] }\n",
+                "    models: [gpt-4o-mini]\n    tools: [github.create_issue, docs.*]\n",
             ),
-            None,
-        )?)?;
-        assert!(text.contains("gantry.policy.yaml:13"), "{text}");
-        assert!(
-            text.contains("\"tools\" is not enforced by this version"),
-            "{text}"
+            "mcp:
+  - name: github
+    url: https://mcp.example.com/github/
+    headers_env: { Authorization: GITHUB_MCP_TOKEN }
+  - name: docs
+    url: http://127.0.0.1:9000/mcp
+    allow_private: true
+"
         );
-        assert!(!text.contains("Did you mean"), "{text}");
+        let loaded = check("mcp-good", &text, None)?.map_err(|e| e.join("\n"))?;
+        assert_eq!(loaded.mcp.len(), 2);
+        assert_eq!(loaded.mcp[0].url, "https://mcp.example.com/github");
+        assert_eq!(
+            loaded.mcp[0].headers_env,
+            [("Authorization".to_string(), "GITHUB_MCP_TOKEN".to_string())]
+        );
+        let rules = loaded.policy.rule_list();
+        assert_eq!(rules[0].tools, ["github.create_issue", "docs.*"]);
+        // A rule that says nothing about tools allows none.
+        assert!(rules[1].tools.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_mistakes_are_named_with_their_line() -> TestResult {
+        let text = format!(
+            "{}{}",
+            GOOD.replace(
+                "    models: [gpt-4o-mini]\n",
+                "    models: [gpt-4o-mini]\n    tools: [gitlab.create_issue, search]\n",
+            ),
+            "mcp:
+  - name: git.hub
+    url: http://10.0.0.5/mcp
+    headers_env: { Authorization: Bearer abc }
+"
+        );
+        let text = errors(check("mcp-bad", &text, None)?)?;
+        for expected in [
+            "gantry.policy.yaml:13: tool \"gitlab.create_issue\" is on MCP server \"gitlab\", which is not defined under mcp. The MCP servers are: git.hub.",
+            "gantry.policy.yaml:13: tool \"search\" names no server.",
+            "gantry.policy.yaml:18: an MCP server name uses letters",
+            "gantry.policy.yaml:19: the MCP server url points at this machine or a private network",
+            "gantry.policy.yaml:20: headers_env gives header Authorization the value \"Bearer abc\"",
+        ] {
+            assert!(text.contains(expected), "missing {expected}:\n{text}");
+        }
         Ok(())
     }
 

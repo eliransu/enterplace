@@ -112,6 +112,8 @@ pub struct Rule {
     /// Run in this order on every request the rule allows, before it is recorded and sent.
     pub guardrails: Vec<Guardrail>,
     pub limits: Limits,
+    /// MCP tools the rule allows, as `<server>.<tool>`, `<server>.*` or `*`. Empty allows none.
+    pub tools: Vec<String>,
 }
 
 impl Rule {
@@ -206,6 +208,7 @@ impl Policy {
             models,
             guardrails: Vec::new(),
             limits: Limits::default(),
+            tools: Vec::new(),
         });
         self
     }

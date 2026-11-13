@@ -410,14 +410,14 @@ fn key_new_never_replaces_a_keys_file_it_cannot_read() -> TestResult {
 }
 
 #[test]
-fn check_lists_every_unknown_and_unenforced_key_at_once() -> TestResult {
+fn check_lists_every_unknown_key_at_once() -> TestResult {
     let dir = workdir("many")?;
     let policy = path(&dir, "gantry.policy.yaml");
     std::fs::write(
         &policy,
         POLICY.replace(
             "    models: [model-a]",
-            "    modles: [model-a]\n    tools: { allow: [x] }\n    principls: { taem: x }",
+            "    modles: [model-a]\n    colour: blue\n    principls: { taem: x }",
         ),
     )?;
     let out = gantry(&["check", &policy], &[])?;
@@ -425,17 +425,13 @@ fn check_lists_every_unknown_and_unenforced_key_at_once() -> TestResult {
     let stderr = String::from_utf8(out.stderr)?;
     for expected in [
         "\"modles\"",
-        "\"tools\" is not enforced",
+        "\"colour\"",
         "\"principls\"",
         "\"taem\"",
         "4 problems",
     ] {
         assert!(stderr.contains(expected), "missing {expected}: {stderr}");
     }
-    assert!(
-        !stderr.contains("\"allow\"") || stderr.contains("5 problem"),
-        "{stderr}"
-    );
     Ok(())
 }
 
@@ -478,16 +474,13 @@ fn a_quoted_key_is_judged_like_an_unquoted_one() -> TestResult {
     let policy = path(&dir, "gantry.policy.yaml");
     std::fs::write(
         &policy,
-        POLICY.replace(
-            "    models: [model-a]",
-            "    models: [model-a]\n    \"tools\": { allow: [x] }",
-        ),
+        POLICY.replace("    models: [model-a]", "    \"modles\": [model-a]"),
     )?;
     let out = gantry(&["check", &policy], &[])?;
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8(out.stderr)?;
     assert!(
-        stderr.contains("\"tools\" is not enforced") && !stderr.contains("Did you mean"),
+        stderr.contains("\"modles\"") && stderr.contains("Did you mean \"models\"?"),
         "{stderr}"
     );
     Ok(())

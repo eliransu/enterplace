@@ -24,6 +24,7 @@ Gantry serves the OpenAI and Anthropic routes your clients already call, plus a 
 | `POST` | `/v1/messages` | yes | yes | Anthropic messages (Claude Code) |
 | `POST` | `/v1/messages/count_tokens` | yes | yes | Anthropic token counting |
 | `GET` | `/v1/models` | yes | yes | The models the caller's rule allows |
+| `POST` | `/mcp` | yes | `tools/call` and refusals | The [MCP gateway](/governance/mcp-gateway/), when the policy lists `mcp:` servers |
 | `GET` | `/healthz` | no | no | Health check |
 | `HEAD` | `/api/hello` | no | no | Claude Code's startup probe. Answers 200 and reaches no provider |
 | `GET`, `POST` | `/console/...` | session | sign-ins and changes | The [admin console](/operations/console/) |
