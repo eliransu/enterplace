@@ -1,17 +1,20 @@
 ---
 title: Several replicas with a store
-description: Point two or more Gantry processes at one Postgres database so they share keys, kill switches and budgets, and act as one gateway.
+description: Point two or more Gantry processes at one Postgres database so they share keys, kill switches, budgets, rate limits, cooldowns and console sessions, and act as one gateway.
 sidebar:
   order: 2
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Without a store, each Gantry process keeps its keys in a file, its kill switches beside it, and its spend in memory. That is right for one process. To run two or more behind a load balancer, give them one Postgres database: the store. They then act as one gateway.
+Without a store, each Gantry process keeps its keys in a file, its kill switches beside it, and its spend, rate limits and console sessions in memory. That is right for one process. To run two or more behind a load balancer, give them one Postgres database: the store. They then act as one gateway.
 
 - A key issued on any replica is accepted by all within 2 seconds. A revoked key is refused by all within 2 seconds.
 - A kill switch set on any replica stops traffic on all within 1 second.
 - A budget is enforced once across all replicas: what they charge together never passes it by more than one request's estimate.
+- A rate limit (`rpm`, `tpm`) is enforced once across all replicas: together they never admit more than the limit in any 60 seconds.
+- A deployment of an alias that fails on one replica is passed over by all within about a second.
+- A console sign-in on one replica is good on all. Signing out, or removing the person, ends it on all.
 
 ## When to use it
 
@@ -91,8 +94,9 @@ This copies every key of the file, and the kill switches in `gantry.kills.json` 
 | Keys: name, team, the SHA-256 of the key, admin, expiry, budget, models, tpm. Never a key itself. | The policy. It stays a file, reviewed in git, and every replica reads its own copy. |
 | Kill switches, with their reason, who set them and when. | Prompts and answers. Gantry never stores them, here or anywhere. |
 | Spend and reservations, per team, person and key, per day and month. | The audit log. Each replica keeps its own hash-chained file. |
-| | Rate limits (`rpm`, `tpm`) and the answer cache. They are counted per replica. |
-| | Console sessions. A sign-in is good on the replica that made it. |
+| Rate-limit leases: how much of each `rpm` and `tpm` each replica took, for the last minute. | The answer cache. Each replica keeps its own (see below). |
+| Cooldowns of alias deployments that failed, until when. | Requests in flight per deployment, for `least_busy`. Each replica counts its own. |
+| Console sessions: the SHA-256 of the session ID, who it is for, and when it ends. Never the ID itself. | A single sign-on sign-in in progress. Its callback must reach the replica that started it. |
 
 Spend in the store counts requests under a budget (a rule's or a key's). Requests without a budget never reach the database, so their cost is in the audit log and in each replica's memory only.
 
@@ -102,13 +106,35 @@ Keys and kill switches are read from memory, as without a store. Each replica po
 
 A request under a budget reserves the most it could cost with one atomic statement, which fails when the reservation would pass the budget. Two replicas reserving at the same moment are ordered by Postgres, so they cannot both pass. When the answer ends, a second statement replaces the reservation with what the request cost. A request with no budget makes no database call. In tests against a local Postgres, a budgeted request took about 0.3 ms longer than the same request without a budget.
 
+### Rate limits
+
+Rate limits are leased, so most requests make no database call. A replica takes a slice of a limit from Postgres in one atomic statement, admits requests from that slice in memory for one second, and gives back what it did not use. A slice is a twentieth of the limit, or what one request needs if that is more. Postgres takes a slice only if it fits the limit with every slice taken in the last minute, and counts each slice until half a second after its replica stopped using it. So:
+
+- **Overshoot: none.** All replicas together never admit more than `rpm` requests, or `tpm` tokens as estimated at admission, in any 60 seconds. Tests hold three replicas to this under a burst of three times the limit.
+- **Cost.** A slice taken and not used blocks the other replicas until it is given back, up to 1.5 seconds. Near the limit a replica can be refused while another holds part of the minute; it is never let past it.
+- **Database calls.** About one per slice: at the limit's pace, one every three seconds per replica, person (`rpm`) and team, person or key (`tpm`). What requests give back is written twice a second, in one statement.
+
+`tpm` with a store counts a request's tokens when it is admitted, the most it could use, and corrects them to what the provider reported when its answer ends. Without a store, a request holds its tokens until its answer ends.
+
+### Cooldowns
+
+When a deployment of an alias fails, the replica passes it over at once and writes until when to the store. The other replicas read the store's cooldowns with keys and kill switches, every 500 ms, and pass the deployment over until then. The replica it failed on probes it when the time is up, as described in [Aliases](/routing/aliases/#behavior); an answer from it on any replica ends the cooldown on all. A normal answer makes no database call.
+
+### Console sessions
+
+A console session is a row in the store, read on every console page. A session opened on one replica is found by all, and signing out deletes the row, so the session ends on every replica at once. Removing an admin key or a person's single sign-on access ends their sessions on every replica as it already did on one: the key is gone from every replica within 2 seconds, and the policy is read on each page. A row holds the SHA-256 of the session ID, so reading the database does not let anyone sign in. Sessions in the store rather than signed cookies: no signing key to share between replicas, and a sign-out takes effect at once, with no list of ended sessions to keep. Console pages are not on the request path, so the lookup adds nothing to API requests.
+
+### The answer cache
+
+The answer cache stays per replica, on purpose. A shared cache would keep answers in Postgres, and Gantry never stores prompt or answer text. A hit from memory takes microseconds; one from Postgres would take a round trip, about 0.3 ms against a local database and more over a network. With N replicas, an answer is cached on each replica the request reaches, so the first identical request on each still goes to the provider. Each hit follows the same rules on every replica.
+
 ## Several replicas
 
 Run every replica with the same policy and the same `DATABASE_URL`, each with its own volume for its audit log. On Kubernetes that is a StatefulSet (a volume per pod) rather than the single-replica chart: see [Kubernetes](/operations/kubernetes/). Put a load balancer in front, with its health check on `GET /healthz`.
 
 - Each replica's audit log is a chain of its own. Verify each with `gantry audit verify`, and ship each to your SIEM.
 - A replica that restarts reads the keys and switches from the store, and spend is in the store: nothing is lost.
-- Console single sign-on: the identity provider's callback must reach the replica that started the sign-in. Use session affinity on `/console`.
+- Console single sign-on: the identity provider's callback must reach the replica that started the sign-in, which sealed its state with a key of its own. Use session affinity on `/console/sso/`. Once signed in, the session is good on every replica.
 
 ## When Postgres is down
 
@@ -117,9 +143,12 @@ Gantry fails closed for spend and stays up for everything else:
 - **Known keys keep working** from memory. A key issued or revoked during the outage cannot be: the command says the store cannot be reached, and nothing is changed.
 - **Kill switches keep their last state.** A new switch cannot be set until the store is back.
 - **A request under a budget is refused** with `503` and the code [`store_unavailable`](/reference/refusal-codes/#store_unavailable): Gantry cannot reserve its cost, and it never lets it through unchecked. Requests without a budget are served.
+- **A request under `rpm` or `tpm` is refused** the same way once its replica's slice is spent or its second is over: counted per replica, the replicas could admit the limit each.
+- **The console signs no one in.** A session cannot be looked up, and it may have ended on another replica. A sign-out during the outage is retried for 10 minutes, so the session does not come back with the database.
+- **Cooldowns keep their last state.** A deployment that fails on a replica is still passed over there; the others learn of it when the store is back.
 - **What requests cost** while the database comes and goes is retried for 10 minutes. A reservation that is never settled keeps counting against its budget until the period ends: an outage can make a budget stricter, never looser.
 
-Each replica writes one line to stderr when the store goes away and one when it is back. Budgeted requests are served again within a second of the database answering.
+Each replica writes one line to stderr when the store goes away and one when it is back. Budgeted and rate-limited requests are served again within a second of the database answering.
 
 <Aside type="caution">
 A replica that dies with requests in flight leaves their reservations held until the budget's period ends (the next UTC day or month). Size budgets with that in mind, or raise one by hand if a crash holds too much of it.

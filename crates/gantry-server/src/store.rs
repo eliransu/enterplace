@@ -5,11 +5,15 @@
 //! in force. Only a request under a budget reaches the database: one atomic statement reserves its estimate, and
 //! one more settles it when the answer ends.
 //!
+//! Rate limits are leased: a gateway takes a slice of a minute's allowance in one atomic statement, spends it from
+//! memory for a second, and gives back what it did not use. Deployment cooldowns are written when a deployment
+//! fails and read with the poll. Console sessions are rows, looked up on each console page.
+//!
 //! Every change is one statement, never a transaction: the one connection is shared by every request, and a
 //! statement sent by another request while a transaction is open would become part of it.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     future::Future,
     io,
     pin::Pin,
@@ -18,15 +22,16 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     task::{Context, Poll},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use gantry_core::{
     config::KeyEntry,
+    id,
     keyfile::{self, Revoked},
     kill::Kill,
     policy::{Budget, Period},
-    store::{Bucket, Change, Pending, Reserve, Store},
+    store::{Bucket, Change, LEASE, Lease, Pending, Reserve, Store},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::{
@@ -86,7 +91,22 @@ CREATE TABLE gantry_spend (
 );
 CREATE TABLE gantry_versions (name text PRIMARY KEY, version bigint NOT NULL);
 INSERT INTO gantry_versions VALUES ('keys', 0), ('kills', 0);
+", "
+CREATE TABLE gantry_rate_grants (
+    id bigserial PRIMARY KEY,
+    scope text NOT NULL,
+    until timestamptz NOT NULL,
+    n bigint NOT NULL
+);
+CREATE INDEX gantry_rate_grants_scope ON gantry_rate_grants (scope, until);
+CREATE TABLE gantry_cooldowns (deployment text PRIMARY KEY, until timestamptz NOT NULL);
+CREATE TABLE gantry_sessions (sha256 text PRIMARY KEY, who text NOT NULL, expires timestamptz NOT NULL);
+INSERT INTO gantry_versions VALUES ('cooldowns', 0);
 "];
+
+/// How much longer than its [`LEASE`] the store counts a grant in the minute, in milliseconds: a gateway's clock
+/// and the database's may drift apart a little within one second, and a lease is spent by the gateway's.
+const LEASE_MARGIN_MS: u64 = 500;
 
 /// The store, with the runtime its connection and poller run on. Its own runtime, so the command line (which
 /// blocks) and the server (which awaits) can both call it, and a busy server does not delay the poll.
@@ -118,12 +138,15 @@ struct Inner {
     /// The variable that holds the connection string, for messages.
     env: String,
     client: RwLock<Option<Arc<Client>>>,
-    /// The versions of keys and kill switches last read.
-    seen: Mutex<Option<(i64, i64)>>,
+    /// The versions of keys, kill switches and cooldowns last read.
+    seen: Mutex<Option<(i64, i64, i64)>>,
     /// One refresh at a time: a slow one finishing after a newer one would put older keys back for a poll.
     refreshing: tokio::sync::Mutex<()>,
     keys: RwLock<String>,
     kills: RwLock<Arc<Vec<Kill>>>,
+    cooling: RwLock<Arc<HashMap<String, Instant>>>,
+    /// What gateways give back of their rate-limit grants, by grant, until the next poll writes it.
+    returns: Mutex<HashMap<i64, i64>>,
     /// Set while the database cannot be reached, so the outage is reported once and its end once.
     down: AtomicBool,
 }
@@ -166,6 +189,8 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         refreshing: tokio::sync::Mutex::new(()),
         keys: RwLock::new(String::new()),
         kills: RwLock::new(Arc::new(Vec::new())),
+        cooling: RwLock::default(),
+        returns: Mutex::default(),
         down: AtomicBool::new(false),
     });
     let store = PgStore {
@@ -193,6 +218,7 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
                 return;
             };
             inner.poll().await;
+            inner.flush_returns().await;
         }
     });
     Ok(Arc::new(store))
@@ -641,19 +667,22 @@ impl Inner {
                 .and_then(|row| row.try_get::<_, i64>(1).ok())
                 .unwrap_or(0)
         };
-        let now = (version("keys"), version("kills"));
+        let now = (version("keys"), version("kills"), version("cooldowns"));
         let seen = *self
             .seen
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if seen.is_none_or(|(keys, _)| keys != now.0) {
+        if seen.is_none_or(|(keys, _, _)| keys != now.0) {
             write(
                 &self.keys,
                 keyfile::keys_text(&self.read_keys(&client).await?),
             );
         }
-        if seen.is_none_or(|(_, kills)| kills != now.1) {
+        if seen.is_none_or(|(_, kills, _)| kills != now.1) {
             write(&self.kills, Arc::new(self.read_kills(&client).await?));
+        }
+        if seen.is_none_or(|(_, _, cooldowns)| cooldowns != now.2) {
+            write(&self.cooling, Arc::new(self.read_cooling(&client).await?));
         }
         *self
             .seen
@@ -708,6 +737,112 @@ impl Inner {
             .await
             .map_err(|err| err.to_string())?;
         rows.iter().map(kill_of).collect()
+    }
+
+    /// Deployments cooling down, with the time left read from the database's clock, so the gateways' clocks
+    /// need not agree.
+    async fn read_cooling(&self, client: &Client) -> Result<HashMap<String, Instant>, String> {
+        let rows = client
+            .query(
+                "SELECT deployment, extract(epoch FROM until - clock_timestamp())::float8 FROM gantry_cooldowns \
+                 WHERE until > clock_timestamp()",
+                &[],
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+        let now = Instant::now();
+        let mut cooling = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let field = |err: tokio_postgres::Error| err.to_string();
+            let left: f64 = row.try_get(1).map_err(field)?;
+            cooling.insert(
+                row.try_get(0).map_err(field)?,
+                now + Duration::try_from_secs_f64(left).unwrap_or_default(),
+            );
+        }
+        Ok(cooling)
+    }
+
+    /// One lease, in one round trip. Several statements in one simple query run as one transaction, each with a
+    /// fresh snapshot: the advisory lock orders the gateways leasing one scope, and the sum after it sees every
+    /// grant committed before. The text is built here because a simple query takes no parameters: the scope goes in
+    /// as hex and every other value is a number.
+    async fn lease(&self, scope: &str, need: u64, want: u64, limit: u64) -> Result<Lease, String> {
+        let client = self.client()?;
+        let hash = id::sha256(scope.as_bytes());
+        let lock = i64::from_be_bytes([
+            hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7],
+        ]);
+        let scope = format!(
+            "convert_from(decode('{}', 'hex'), 'UTF8')",
+            id::hex(scope.as_bytes())
+        );
+        let number = |n: u64| i64::try_from(n).unwrap_or(i64::MAX);
+        let (need, want, limit) = (number(need), number(want), number(limit));
+        let hold = u64::try_from(LEASE.as_millis()).unwrap_or(1000) + LEASE_MARGIN_MS;
+        // A request admitted under a grant is admitted at most a lease after it, and the grant is counted until
+        // then and a margin more. So the grants counted from a minute before now hold every request admitted in the
+        // last minute, and a new grant is taken only if they and it fit the limit.
+        let sql = format!(
+            "SELECT pg_advisory_xact_lock({lock}); \
+             DELETE FROM gantry_rate_grants WHERE scope = {scope} AND until < clock_timestamp() - interval '61 seconds'; \
+             WITH used AS (SELECT coalesce(sum(n), 0) AS n, min(until) AS first FROM gantry_rate_grants \
+               WHERE scope = {scope} AND until >= clock_timestamp() - interval '60 seconds'), \
+             got AS (INSERT INTO gantry_rate_grants (scope, until, n) \
+               SELECT {scope}, clock_timestamp() + interval '{hold} milliseconds', least({want}, {limit} - used.n) \
+               FROM used WHERE used.n + {need} <= {limit} RETURNING id, n) \
+             SELECT (SELECT id FROM got), (SELECT n FROM got), \
+               (SELECT ceil(extract(epoch FROM first + interval '60 seconds' - clock_timestamp()))::bigint FROM used)"
+        );
+        let answers = client
+            .simple_query(&sql)
+            .await
+            .map_err(|err| err.to_string())?;
+        let row = answers
+            .iter()
+            .rev()
+            .find_map(|answer| match answer {
+                tokio_postgres::SimpleQueryMessage::Row(row) => Some(row),
+                _ => None,
+            })
+            .ok_or("the lease statement returned no row")?;
+        let number = |at: usize| row.get(at).and_then(|v| v.parse::<i64>().ok());
+        Ok(match (number(0), number(1)) {
+            (Some(grant), Some(n)) => Lease::Granted {
+                grant,
+                n: u64::try_from(n).unwrap_or(0),
+            },
+            _ => Lease::Over {
+                wait: number(2).map_or(1, |w| u64::try_from(w).unwrap_or(1).max(1)),
+            },
+        })
+    }
+
+    /// Writes what was given back since the last poll. Lost if the database is away: a grant then counts in full
+    /// until it leaves the minute, which errs on the side of the limit.
+    async fn flush_returns(&self) {
+        let returns = std::mem::take(
+            &mut *self
+                .returns
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if returns.is_empty() {
+            return;
+        }
+        let Ok(client) = self.client() else {
+            return;
+        };
+        let (grants, given): (Vec<i64>, Vec<i64>) = returns.into_iter().unzip();
+        let _ = tokio::time::timeout(
+            WAIT,
+            client.query_typed(
+                "UPDATE gantry_rate_grants AS g SET n = greatest(g.n - r.given, 0) \
+                 FROM unnest($1::int8[], $2::int8[]) AS r(id, given) WHERE g.id = r.id",
+                &[(&grants, Type::INT8_ARRAY), (&given, Type::INT8_ARRAY)],
+            ),
+        )
+        .await;
     }
 
     async fn reserve(&self, bucket: &Bucket, usd: f64, limit: f64) -> Result<Reserve, String> {
@@ -897,6 +1032,51 @@ impl PgStore {
             .map_err(|_| "the store stopped before it answered".to_string())?
     }
 
+    /// Runs `work` on the store's runtime, given up after [`WAIT`], for a caller on the request path to await.
+    fn ask<T: Send + 'static>(
+        &self,
+        work: impl Future<Output = Result<T, String>> + Send + 'static,
+    ) -> Pending<T> {
+        let task = self.handle.spawn(async move {
+            tokio::time::timeout(WAIT, work)
+                .await
+                .unwrap_or_else(|_| Err(format!("no answer within {} seconds", WAIT.as_secs())))
+        });
+        Box::pin(async move {
+            task.await
+                .map_err(|_| "the store stopped before it answered".to_string())?
+        })
+    }
+
+    /// Runs `work` on the store's runtime without waiting for it, tried again each second while the database is
+    /// away, for up to [`SETTLE_FOR`].
+    fn retried<F>(&self, what: &'static str, work: impl Fn(Arc<Inner>) -> F + Send + 'static)
+    where
+        F: Future<Output = Result<(), String>> + Send,
+    {
+        let inner = self.inner.clone();
+        self.handle.spawn(async move {
+            let started = tokio::time::Instant::now();
+            loop {
+                // ponytail: an answer lost after the statement committed makes the retry apply it twice. Rare (the
+                // connection must drop in that instant); an idempotency key per request fixes it if it shows.
+                let err = match tokio::time::timeout(WAIT, work(inner.clone())).await {
+                    Ok(Ok(())) => return,
+                    Ok(Err(err)) => err,
+                    Err(_) => format!("no answer within {} seconds", WAIT.as_secs()),
+                };
+                if started.elapsed() >= SETTLE_FOR {
+                    eprintln!(
+                        "gantry: {what} could not be written to the store for {} minutes ({err}). It is dropped.",
+                        SETTLE_FOR.as_secs() / 60
+                    );
+                    return;
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        });
+    }
+
     /// A change: one statement, then the keys and switches read again, so this gateway applies it at once.
     fn change<T: Send + 'static>(
         &self,
@@ -1047,40 +1227,141 @@ impl Store for PgStore {
 
     fn reserve(&self, bucket: Bucket, usd: f64, limit: f64) -> Pending<Reserve> {
         let inner = self.inner.clone();
-        let task = self.handle.spawn(async move {
-            tokio::time::timeout(WAIT, inner.reserve(&bucket, usd, limit))
-                .await
-                .unwrap_or_else(|_| Err(format!("no answer within {} seconds", WAIT.as_secs())))
-        });
-        Box::pin(async move {
-            task.await
-                .map_err(|_| "the store stopped before it answered".to_string())?
-        })
+        self.ask(async move { inner.reserve(&bucket, usd, limit).await })
     }
 
     fn settle(&self, changes: Vec<Change>) {
         if changes.is_empty() {
             return;
         }
+        let changes = Arc::new(changes);
+        // A hold never given back keeps counting against its budget until the period ends.
+        self.retried("spend", move |inner| {
+            let changes = changes.clone();
+            async move { inner.settle(&changes).await }
+        });
+    }
+
+    fn lease(&self, scope: String, need: u64, want: u64, limit: u64) -> Pending<Lease> {
+        let inner = self.inner.clone();
+        self.ask(async move { inner.lease(&scope, need, want, limit).await })
+    }
+
+    fn give_back(&self, grant: i64, n: i64) {
+        *self
+            .inner
+            .returns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(grant)
+            .or_default() += n;
+    }
+
+    fn cooling(&self) -> Arc<HashMap<String, Instant>> {
+        read(&self.inner.cooling)
+    }
+
+    fn cooled(&self, deployment: &str, cooldown: Duration) {
+        let deployment = deployment.to_string();
+        let ms = i64::try_from(cooldown.as_millis()).unwrap_or(i64::MAX);
+        // Not retried: the deployment is passed over here at once, and a cooldown written late is worth little.
         let inner = self.inner.clone();
         self.handle.spawn(async move {
-            let started = tokio::time::Instant::now();
-            loop {
-                // ponytail: an answer lost after the statement committed makes the retry apply it twice. Rare (the
-                // connection must drop in that instant); an idempotency key per request fixes it if it shows.
-                let err = match tokio::time::timeout(WAIT, inner.settle(&changes)).await {
-                    Ok(Ok(())) => return,
-                    Ok(Err(err)) => err,
-                    Err(_) => format!("no answer within {} seconds", WAIT.as_secs()),
-                };
-                if started.elapsed() >= SETTLE_FOR {
-                    eprintln!(
-                        "gantry: spend could not be written to the store for {} minutes ({err}). It is dropped; the requests' holds keep counting against their budgets until the period ends.",
-                        SETTLE_FOR.as_secs() / 60
-                    );
-                    return;
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
+            let Ok(client) = inner.client() else {
+                return;
+            };
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.execute(
+                    "WITH up AS (INSERT INTO gantry_cooldowns AS c VALUES ($1, clock_timestamp() + $2 * interval '1 millisecond') \
+                       ON CONFLICT (deployment) DO UPDATE SET until = greatest(c.until, excluded.until)) \
+                     UPDATE gantry_versions SET version = version + 1 WHERE name = 'cooldowns'",
+                    &[&deployment, &(ms as f64)],
+                ),
+            )
+            .await;
+        });
+    }
+
+    fn warmed(&self, deployment: &str) {
+        if !read(&self.inner.cooling).contains_key(deployment) {
+            return;
+        }
+        {
+            let mut cooling = self
+                .inner
+                .cooling
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !cooling.contains_key(deployment) {
+                return;
+            }
+            Arc::make_mut(&mut cooling).remove(deployment);
+        }
+        let deployment = deployment.to_string();
+        let inner = self.inner.clone();
+        self.handle.spawn(async move {
+            let Ok(client) = inner.client() else {
+                return;
+            };
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.execute(
+                    "WITH gone AS (DELETE FROM gantry_cooldowns WHERE deployment = $1 RETURNING 1) \
+                     UPDATE gantry_versions SET version = version + 1 WHERE name = 'cooldowns' AND EXISTS (SELECT 1 FROM gone)",
+                    &[&deployment],
+                ),
+            )
+            .await;
+        });
+    }
+
+    fn open_session(&self, id_sha256: String, who: String, ttl: Duration) -> Pending<()> {
+        let inner = self.inner.clone();
+        let seconds = ttl.as_secs_f64();
+        self.ask(async move {
+            inner
+                .client()?
+                .execute(
+                    "WITH old AS (DELETE FROM gantry_sessions WHERE expires < now()) \
+                     INSERT INTO gantry_sessions VALUES ($1, $2, now() + $3 * interval '1 second')",
+                    &[&id_sha256, &who, &seconds],
+                )
+                .await
+                .map(|_| ())
+                .map_err(|err| err.to_string())
+        })
+    }
+
+    fn session(&self, id_sha256: String) -> Pending<Option<String>> {
+        let inner = self.inner.clone();
+        self.ask(async move {
+            let row = inner
+                .client()?
+                .query_opt(
+                    "SELECT who FROM gantry_sessions WHERE sha256 = $1 AND expires > now()",
+                    &[&id_sha256],
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+            row.map(|row| row.try_get(0).map_err(|err| err.to_string()))
+                .transpose()
+        })
+    }
+
+    fn end_session(&self, id_sha256: String) {
+        self.retried("a console sign-out", move |inner| {
+            let id_sha256 = id_sha256.clone();
+            async move {
+                inner
+                    .client()?
+                    .execute(
+                        "DELETE FROM gantry_sessions WHERE sha256 = $1",
+                        &[&id_sha256],
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_err(|err| err.to_string())
             }
         });
     }

@@ -109,12 +109,40 @@ struct Session {
     expires: Instant,
 }
 
+/// Who a session is for, as the store keeps it.
+fn who_text(who: &Who) -> String {
+    match who {
+        Who::Key(sha) => format!("key {sha}"),
+        Who::Sso { email, read_only } => {
+            format!("sso {} {email}", if *read_only { "read" } else { "admin" })
+        }
+        Who::Account(account) => format!("account {account}"),
+    }
+}
+
+fn who_of(text: &str) -> Option<Who> {
+    let (kind, rest) = text.split_once(' ')?;
+    Some(match kind {
+        "key" => Who::Key(rest.to_string()),
+        "sso" => {
+            let (role, email) = rest.split_once(' ')?;
+            Who::Sso {
+                email: email.to_string(),
+                read_only: role != "admin",
+            }
+        }
+        "account" => Who::Account(rest.to_string()),
+        _ => return None,
+    })
+}
+
 /// The outcome of the last "Verify chain now", and when it ran.
 type Verified = (Instant, Result<(u64, String), String>);
 
 struct Inner {
     config: ConsoleConfig,
-    // ponytail: sessions live in memory, so a restart signs everyone out and each node has its own. A store comes with more than one node.
+    /// Sessions without a store. With one (`store:` in the policy), sessions are rows in it, so a sign-in is good on
+    /// every gateway and a sign-out ends it on all at once; a restart then signs no one out.
     sessions: Mutex<HashMap<String, Session>>,
     /// Seals the state cookie of a started sign-in and derives its nonce and PKCE verifier, so starting a sign-in
     /// keeps nothing on the server and a flood of starts fills nothing. None when the system gave no randomness.
@@ -564,15 +592,19 @@ impl Console {
     /// marked admin ends its sessions at once.
     async fn admin(&self, headers: &HeaderMap) -> Option<Admin> {
         let id = cookie_value(headers, COOKIE)?;
-        let who = {
-            let mut sessions = self.sessions();
-            match sessions.get(&id) {
-                Some(s) if s.expires > Instant::now() => s.who.clone(),
-                Some(_) => {
-                    sessions.remove(&id);
-                    return None;
+        let who = match self.store() {
+            // A store that cannot be reached signs no one in: the session may have ended on another gateway.
+            Some(store) => who_of(&store.session(id::sha256_hex(id.as_bytes())).await.ok()??)?,
+            None => {
+                let mut sessions = self.sessions();
+                match sessions.get(&id) {
+                    Some(s) if s.expires > Instant::now() => s.who.clone(),
+                    Some(_) => {
+                        sessions.remove(&id);
+                        return None;
+                    }
+                    None => return None,
                 }
-                None => return None,
             }
         };
         let admin = match who {
@@ -607,9 +639,23 @@ impl Console {
             },
         };
         if admin.is_none() {
-            self.sessions().remove(&id);
+            self.end_session(&id);
         }
         admin
+    }
+
+    /// The store the console's keys are served from, which holds its sessions too.
+    fn store(&self) -> Option<Arc<dyn gantry_core::store::Store>> {
+        gantry_core::store::attached(&self.config().keys)
+    }
+
+    fn end_session(&self, id: &str) {
+        match self.store() {
+            Some(store) => store.end_session(id::sha256_hex(id.as_bytes())),
+            None => {
+                self.sessions().remove(id);
+            }
+        }
     }
 
     /// `console.sso` from the policy file as it is now. `Err` when the file has problems: no one signs in through it then.
@@ -696,9 +742,21 @@ impl Console {
         (per_minute(&self.0.starts) == FLOOD).then_some(FLOOD)
     }
 
-    /// Opens a session and returns its ID, or `None` when the system gave no randomness.
-    fn open_session(&self, who: Who) -> Option<String> {
-        let session = random_hex()?;
+    /// Opens a session and returns its ID, or what to tell the person when it could not be opened.
+    async fn open_session(&self, who: Who) -> Result<String, String> {
+        let session = random_hex().ok_or(NO_RANDOM)?;
+        if let Some(store) = self.store() {
+            // The store keeps the ID's hash: whoever reads the database cannot sign in with it.
+            store
+                .open_session(id::sha256_hex(session.as_bytes()), who_text(&who), SESSION)
+                .await
+                .map_err(|err| {
+                    html::esc(&format!(
+                        "The session could not be saved in the store ({err}), so you are not signed in. Ask your Gantry admin to check the Postgres database the policy's store: names, then sign in again."
+                    ))
+                })?;
+            return Ok(session);
+        }
         let mut sessions = self.sessions();
         let now = Instant::now();
         sessions.retain(|_, s| s.expires > now);
@@ -709,7 +767,7 @@ impl Console {
                 expires: now + SESSION,
             },
         );
-        Some(session)
+        Ok(session)
     }
 
     fn verified(&self) -> Option<Verified> {
@@ -792,11 +850,14 @@ impl Console {
                 pages::sign_in("", NOT_RECORDED, self.sso_on()),
             );
         }
-        let Some(session) = self.open_session(Who::Account(account.to_string())) else {
-            return page(
-                StatusCode::SERVICE_UNAVAILABLE,
-                pages::sign_in("", NO_RANDOM, self.sso_on()),
-            );
+        let session = match self.open_session(Who::Account(account.to_string())).await {
+            Ok(session) => session,
+            Err(err) => {
+                return page(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    pages::sign_in("", &err, self.sso_on()),
+                );
+            }
         };
         let mut response = redirect("/console/audit");
         set_cookie(&mut response, &session_cookie(&session, headers, uri, tls));
@@ -886,11 +947,14 @@ async fn sign_in(
             pages::sign_in("", NOT_RECORDED, console.sso_on()),
         );
     }
-    let Some(session) = console.open_session(Who::Key(entry.sha256)) else {
-        return page(
-            StatusCode::SERVICE_UNAVAILABLE,
-            pages::sign_in("", NO_RANDOM, console.sso_on()),
-        );
+    let session = match console.open_session(Who::Key(entry.sha256)).await {
+        Ok(session) => session,
+        Err(err) => {
+            return page(
+                StatusCode::SERVICE_UNAVAILABLE,
+                pages::sign_in("", &err, console.sso_on()),
+            );
+        }
     };
     let mut response = redirect("/console/audit");
     set_cookie(
@@ -1205,11 +1269,14 @@ async fn sso_callback(
                     pages::sign_in("", NOT_RECORDED, true),
                 );
             }
-            let Some(session) = console.open_session(Who::Sso { email, read_only }) else {
-                return page(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    pages::sign_in("", NO_RANDOM, true),
-                );
+            let session = match console.open_session(Who::Sso { email, read_only }).await {
+                Ok(session) => session,
+                Err(err) => {
+                    return page(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        pages::sign_in("", &err, true),
+                    );
+                }
             };
             // A page, not a redirect: the browser arrived from the provider's site, and would not send a
             // SameSite=Strict cookie on a redirect that follows. The refresh starts from this site, so it does.
@@ -1591,7 +1658,7 @@ async fn sign_out(State(console): State<Console>, headers: HeaderMap) -> Respons
         let _ = record(&console, &act, None, None).await;
     }
     if let Some(id) = cookie_value(&headers, COOKIE) {
-        console.sessions().remove(&id);
+        console.end_session(&id);
     }
     let mut response = redirect("/console/sign-in");
     response.headers_mut().insert(
@@ -2147,6 +2214,26 @@ async fn setup_done(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn who_a_session_is_for_reads_back_as_written() {
+        for who in [
+            Who::Key("ab12".into()),
+            Who::Sso {
+                email: "maya@acme.com".into(),
+                read_only: true,
+            },
+            Who::Sso {
+                email: "lee@acme.com".into(),
+                read_only: false,
+            },
+            Who::Account("acct 7".into()),
+        ] {
+            let text = who_text(&who);
+            assert_eq!(who_of(&text).map(|w| who_text(&w)), Some(text));
+        }
+        assert!(who_of("root everything").is_none());
+    }
 
     #[test]
     fn a_sealed_state_cookie_expires_and_only_fits_its_own_state() {

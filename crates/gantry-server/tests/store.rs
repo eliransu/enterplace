@@ -80,13 +80,16 @@ fn key_value(config: &tokio_postgres::Config, port: Option<u16>, database: &str)
     )
 }
 
-/// A provider whose every answer used 3 output tokens.
+/// A provider whose every answer used 3 output tokens. Model `slow` answers after a second.
 async fn provider() -> Result<u16, Error> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
     let app = Router::new().route(
         "/v1/chat/completions",
-        post(|_: Bytes| async move {
+        post(|body: Bytes| async move {
+            if body.windows(6).any(|w| w == b"\"slow\"") {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
             axum::response::Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
@@ -102,7 +105,9 @@ async fn provider() -> Result<u16, Error> {
 }
 
 /// Model m costs $0.001 an output token: a request with max_tokens 3 reserves, and costs, $0.003. Team payments
-/// may spend $0.01 a day on it: three requests fit, a fourth would pass the budget.
+/// may spend $0.01 a day on it: three requests fit, a fourth would pass the budget. Team rated may send 30
+/// requests a minute, team tokens 300 tokens a minute, and team paired sends to an alias whose first deployment
+/// is on a provider that refuses every connection.
 fn policy(port: u16) -> String {
     format!(
         "version: 1
@@ -113,7 +118,19 @@ providers:
     url: http://127.0.0.1:{port}
     allow_private: true
     key_env: MOCK_KEY
-    models: [m, free]
+    models: [m, free, slow]
+  - name: dead
+    kind: openai
+    url: http://127.0.0.1:{dead}
+    allow_private: true
+    key_env: MOCK_KEY
+    models: [gone]
+aliases:
+  - name: pair
+    cooldown_seconds: 30
+    deployments:
+      - {{ provider: dead, model: gone }}
+      - {{ provider: mock, model: free }}
 prices:
   m: {{ input: 0, output: 1000 }}
 rules:
@@ -128,8 +145,29 @@ rules:
     principals: {{ team: roomy }}
     models: [m]
     budget: {{ usd: 1000, per: day }}
-"
+  - name: rated
+    principals: {{ team: rated }}
+    models: [free]
+    rate: {{ rpm: 30 }}
+  - name: tokens
+    principals: {{ team: tokens }}
+    models: [slow]
+    rate: {{ tpm: 300 }}
+  - name: paired
+    principals: {{ team: paired }}
+    models: [pair]
+",
+        dead = DEAD.get_or_init(closed_port)
     )
+}
+
+/// A port nothing listens on, so a connection to it is refused at once.
+static DEAD: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+
+fn closed_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|l| l.local_addr())
+        .map_or(9, |a| a.port())
 }
 
 fn dir(name: &str) -> Result<PathBuf, Error> {
@@ -453,6 +491,7 @@ async fn with_postgres_down_known_keys_work_and_budgeted_requests_are_refused() 
     add_key(&a, "ops", "ops", ADMIN, true)?;
     add_key(&a, "maya", "ops", MAYA, false)?;
     add_key(&a, "pat", "payments", PAT, false)?;
+    add_key(&a, "lee", "rated", LEE, false)?;
     let (status, body) = answer(
         &a.router,
         request(
@@ -498,6 +537,17 @@ async fn with_postgres_down_known_keys_work_and_budgeted_requests_are_refused() 
     }
     // Known keys keep working from memory, and the kill switch keeps its last state.
     tokio::time::sleep(Duration::from_secs(1)).await;
+    // A request under a rate limit every replica shares cannot be counted, so it is refused as a budgeted one is.
+    let (status, body) = answer(
+        &a.router,
+        request("POST", "/v1/chat/completions", LEE, FREE)?,
+    )
+    .await?;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::SERVICE_UNAVAILABLE, "store_unavailable"),
+        "{body}"
+    );
     let (status, body) = answer(
         &a.router,
         request("POST", "/v1/chat/completions", ADMIN, FREE)?,
@@ -798,5 +848,252 @@ async fn a_unix_socket_connects_without_tls_whatever_sslmode_says() -> TestResul
         assert_eq!(status, StatusCode::OK, "{name}: {body}");
     }
     let _ = std::fs::remove_dir_all(&folder);
+    Ok(())
+}
+
+/// Sends `n` requests at once, spread over `gateways` in turn, and counts those admitted. Every other answer must
+/// be a `rate_limited` refusal with a Retry-After.
+async fn burst(gateways: &[&Governed], key: &str, body: &str, n: usize) -> Result<usize, Error> {
+    let mut tasks = Vec::new();
+    for i in 0..n {
+        let app = gateways[i % gateways.len()].router.clone();
+        let request = request("POST", "/v1/chat/completions", key, body)?;
+        tasks.push(tokio::spawn(async move {
+            let response = app.oneshot(request).await.map_err(|e| e.to_string())?;
+            let status = response.status();
+            let retry = response.headers().contains_key(header::RETRY_AFTER);
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .map_err(|e| e.to_string())?
+                .to_bytes();
+            Ok::<_, String>((
+                status,
+                retry,
+                serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
+            ))
+        }));
+    }
+    let mut admitted = 0;
+    for task in tasks {
+        let (status, retry, body) = task.await??;
+        match status {
+            StatusCode::OK => admitted += 1,
+            StatusCode::TOO_MANY_REQUESTS => {
+                assert_eq!(code(&body), "rate_limited", "{body}");
+                assert!(retry, "a refusal that would fit later says when: {body}");
+            }
+            other => return Err(format!("unexpected {other}: {body}").into()),
+        }
+    }
+    Ok(admitted)
+}
+
+/// Three gateways on one database, each with the person's key.
+fn three(
+    test: &str,
+    url: &str,
+    port: u16,
+    keys: &[(&str, &str, &str)],
+) -> Result<[Governed; 3], Error> {
+    let a = gateway(&dir(&format!("{test}-a"))?, url, port)?;
+    for (name, team, key) in keys {
+        add_key(&a, name, team, key, false)?;
+    }
+    let b = gateway(&dir(&format!("{test}-b"))?, url, port)?;
+    let c = gateway(&dir(&format!("{test}-c"))?, url, port)?;
+    Ok([a, b, c])
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn three_gateways_never_admit_more_than_one_rpm_between_them() -> TestResult {
+    let Some(url) = database("rpm").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let [a, b, c] = three("rpm", &url, port, &[("pat", "rated", PAT)])?;
+    // 90 requests at once from one person, 30 through each gateway, under an rpm of 30. Counted per gateway, each
+    // would admit 30: 90 in all.
+    let admitted = burst(&[&a, &b, &c], PAT, FREE, 90).await?;
+    eprintln!("three gateways admitted {admitted} of 90 under rpm 30");
+    assert!(
+        admitted <= 30,
+        "{admitted} admitted: more than the rpm of 30"
+    );
+    // A slice a gateway leased and has not used yet waits for its lease to end before another gateway may have it.
+    assert!(
+        admitted >= 27,
+        "only {admitted} admitted: the leases held back too much"
+    );
+    // A second burst inside the same minute is refused on every gateway.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let later = burst(&[&a, &b, &c], PAT, FREE, 9).await?;
+    assert!(
+        admitted + later <= 30,
+        "{admitted} then {later}: more than 30 in one minute"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn three_gateways_never_admit_more_than_one_tpm_between_them() -> TestResult {
+    let Some(url) = database("tpm").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let [a, b, c] = three("tpm", &url, port, &[("lee", "tokens", LEE)])?;
+    // Each request could use 46 / 3 rounded up, 16, plus its max_tokens of 20: 36 tokens. 300 a minute fit 8 of
+    // them. The answers take a second, so none gives back what it did not use during the burst.
+    let body = r#"{"model":"slow","max_tokens":20,"messages":[]}"#;
+    let admitted = burst(&[&a, &b, &c], LEE, body, 30).await?;
+    eprintln!("three gateways admitted {admitted} of 30 under tpm 300");
+    assert!(admitted <= 8, "{admitted} admitted: more than 300 tokens");
+    assert!(
+        admitted >= 7,
+        "only {admitted} admitted: the leases held back too much"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deployment_that_failed_on_one_gateway_is_passed_over_by_the_others() -> TestResult {
+    let Some(url) = database("cooldown").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let [a, b, _c] = three("cooldown", &url, port, &[("maya", "paired", MAYA)])?;
+    // Round robin over two deployments: one of two requests through a goes to the dead one first, which fails it.
+    for _ in 0..2 {
+        let (status, body) = answer(
+            &a.router,
+            request(
+                "POST",
+                "/v1/chat/completions",
+                MAYA,
+                r#"{"model":"pair","messages":[]}"#,
+            )?,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    // b never failed it itself, and still passes it over: each of its requests goes to the live one first.
+    for _ in 0..4 {
+        let (status, body) = answer(
+            &b.router,
+            request(
+                "POST",
+                "/v1/chat/completions",
+                MAYA,
+                r#"{"model":"pair","messages":[]}"#,
+            )?,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let log = std::fs::read_to_string(dir_of(&b).join("gantry-audit.jsonl"))?;
+    let decisions = log.lines().filter(|l| l.contains("\"deployment\"")).count();
+    assert_eq!(decisions, 4, "{log}");
+    assert!(
+        !log.contains("dead/gone"),
+        "b sent to the deployment a found dead: {log}"
+    );
+    Ok(())
+}
+
+fn dir_of(gw: &Governed) -> PathBuf {
+    gw.loaded
+        .audit_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+}
+
+/// The console session cookie a response sets, as `gantry_console=<id>`.
+fn session_cookie(response: &axum::response::Response) -> Option<String> {
+    response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("gantry_console=") && !v.starts_with("gantry_console=;"))
+        .and_then(|v| v.split(';').next())
+        .map(str::to_string)
+}
+
+async fn console_page(gw: &Governed, cookie: &str) -> Result<StatusCode, Error> {
+    let response = gw
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/console/audit")
+                .header(header::HOST, "gantry.test")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())?,
+        )
+        .await?;
+    Ok(response.status())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_console_sign_in_on_one_gateway_is_good_on_all_and_a_sign_out_ends_it_everywhere()
+-> TestResult {
+    let Some(url) = database("sessions").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let a = gateway(&dir("sessions-a")?, &url, port)?;
+    add_key(&a, "ops", "ops", ADMIN, true)?;
+    let b = gateway(&dir("sessions-b")?, &url, port)?;
+    let response = a
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/console/sign-in")
+                .header(header::HOST, "gantry.test")
+                .header(header::ORIGIN, "http://gantry.test")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("key={ADMIN}")))?,
+        )
+        .await?;
+    let cookie = session_cookie(&response).ok_or("the sign-in set no session cookie")?;
+    assert_eq!(console_page(&a, &cookie).await?, StatusCode::OK);
+    assert_eq!(
+        console_page(&b, &cookie).await?,
+        StatusCode::OK,
+        "b does not know a's session"
+    );
+    assert_ne!(
+        console_page(&b, "gantry_console=00ff").await?,
+        StatusCode::OK,
+        "a made-up session is refused"
+    );
+
+    let response = a
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/console/sign-out")
+                .header(header::HOST, "gantry.test")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert!(response.status().is_redirection());
+    let start = Instant::now();
+    while console_page(&b, &cookie).await? == StatusCode::OK {
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "b still serves a session signed out on a"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_ne!(console_page(&a, &cookie).await?, StatusCode::OK);
     Ok(())
 }

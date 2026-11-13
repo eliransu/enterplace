@@ -16,7 +16,7 @@ Gantry is much younger than both and does less. It covers fewer providers and AP
 | | Gantry 0.0.1 | LiteLLM v1.109.1 | Bifrost v2.5.1 |
 |---|---|---|---|
 | Language | Rust | Python, routing moving to Rust | Go |
-| Storage | Files | Postgres for keys and budgets | SQLite or Postgres |
+| Storage | Files for one process; Postgres (optional) for keys, kill switches, budgets, rate limits, cooldowns and console sessions shared by several | Postgres for keys and budgets, Redis for shared limits | SQLite or Postgres |
 | Image, user | A single static binary in an image built `FROM scratch`, uid 65532 | 1.33 GB, root | 286 MB, uid 1000 |
 | Memory, measured | 3.4 MiB idle | 628 to 922 MiB | 219 to 442 MiB |
 | Identity per request | Gantry key per person or workload | Virtual key | Virtual key |
@@ -32,14 +32,15 @@ Gantry is much younger than both and does less. It covers fewer providers and AP
 | Developer sign-in for coding tools | `gantry login`: SSO in the browser, personal key named by the email, expiry from policy, recorded; `gantry logout` revokes it | UI login, keys copied by hand | Enterprise |
 | Kill switch | Person, team, key, model or everyone; reason required and shown to the caller; within 1 second on every node sharing the files; recorded | No (block a key or team by API) | No |
 | Metrics | Prometheus `/metrics` on its own address, off by default; audit log as JSONL for any log shipper | Prometheus, many callbacks | Prometheus, OpenTelemetry |
-| Multi-node | No | Yes, Redis for shared limits | Enterprise clustering |
+| Multi-node | Yes, with a Postgres store: keys, kill switches, budgets, `rpm` and `tpm` (leased, never over the limit), cooldowns and console sessions shared; the answer cache and each audit chain per replica. No Redis. | Yes, Redis for shared limits | Enterprise clustering |
 
 ## What LiteLLM does better
 
 - **Providers.** Over 140 providers, with translation between their APIs. Gantry has no Cohere, no Bedrock models other than Claude, and no batch or files routes.
 - **Spend control breadth.** Budgets per key, team and organization. Gantry has budgets per team, person or key, and none per organization or tag.
 - **Time to a first request.** 8 seconds from `docker run` with a five-line config and no database, measured in the review. Gantry's image answers its first governed request within a second of `docker run`, but needs a policy file and a key first.
-- **Routing breadth.** More routing strategies (latency and cost based), and cooldowns shared across instances through Redis. Gantry keeps cooldowns per process.
+- **Routing breadth.** More routing strategies (latency and cost based). Both share cooldowns across instances, LiteLLM through Redis, Gantry through its Postgres store.
+- **Shared cache.** A cache shared by every instance through Redis. Gantry's answer cache is per replica, since it never writes answers to its database.
 - **Admin UI and client guides.** A fuller admin UI, and guides for more coding agents, Gemini CLI among them. Gantry has a small console (audit log, people and keys, policy, spend) and no Gemini CLI guide.
 - **Fails closed on a database outage** by default, as Gantry does on an audit failure.
 

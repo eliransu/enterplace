@@ -19,6 +19,9 @@ use gantry_core::config::{Alias, Balance};
 pub(crate) struct Pool {
     deployments: Mutex<HashMap<String, Deployed>>,
     turns: Mutex<HashMap<String, u64>>,
+    /// With a store, a deployment that fails here is passed over by every gateway, and one that failed on another
+    /// gateway is passed over here.
+    store: Option<Arc<dyn gantry_core::store::Store>>,
 }
 
 /// A deployment's circuit: closed (no failure since the last answer), open (cooling down), or half open (the
@@ -61,10 +64,18 @@ impl Drop for Busy {
 }
 
 impl Pool {
+    pub(crate) fn new(store: Option<Arc<dyn gantry_core::store::Store>>) -> Self {
+        Pool {
+            store,
+            ..Pool::default()
+        }
+    }
+
     /// The order to try `alias`'s deployments in: `eligible` holds the positions of those that can take this request.
     /// The balance picks the first; the rest follow in the alias's order. Deployments cooling down go last, so a
     /// request still goes somewhere when all have failed lately.
     pub(crate) fn order(&self, alias: &Alias, eligible: &[usize], now: Instant) -> Vec<usize> {
+        let shared = self.store.as_ref().map(|store| store.cooling());
         let mut deployments = locked(&self.deployments);
         // One half-open deployment at most is probed by this request, and it is tried first.
         let mut probe = None;
@@ -72,7 +83,17 @@ impl Pool {
             let Some(d) = alias.deployments.get(*i) else {
                 return false;
             };
-            let Some(s) = deployments.get_mut(&label(&d.provider, &d.model)) else {
+            let name = label(&d.provider, &d.model);
+            // Cooling down after a failure on another gateway. Its circuit here is closed, so once that is over
+            // it is used as before, not probed: the gateway it failed on probes it.
+            if shared
+                .as_ref()
+                .and_then(|shared| shared.get(&name))
+                .is_some_and(|until| *until > now)
+            {
+                return true;
+            }
+            let Some(s) = deployments.get_mut(&name) else {
                 return false;
             };
             match s.cool_until {
@@ -161,6 +182,9 @@ impl Pool {
         state.base = cooldown;
         state.cool_until = Some(Instant::now() + cooldown * factor);
         state.probe_since = None;
+        if let Some(store) = &self.store {
+            store.cooled(deployment, cooldown * factor);
+        }
     }
 
     /// A deployment answered: its circuit closes and its backoff starts over.
@@ -169,6 +193,10 @@ impl Pool {
             state.cool_until = None;
             state.failures = 0;
             state.probe_since = None;
+        }
+        // Writes only when the deployment is cooling down on the store's list, so a normal answer costs nothing.
+        if let Some(store) = &self.store {
+            store.warmed(deployment);
         }
     }
 }

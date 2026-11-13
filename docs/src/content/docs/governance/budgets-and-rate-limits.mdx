@@ -95,6 +95,8 @@ Every model a budgeted rule reaches must have a price. `gantry check` refuses a 
 
 **`rpm`** allows each person at most that many requests in any 60 seconds. A request answered from the cache does not count.
 
+**Several replicas.** With a [store](/operations/store/#rate-limits), `rpm` and `tpm` count across every replica: together they never admit more than the limit in any 60 seconds. Each replica leases slices of the limit from Postgres and admits from them in memory, so most requests make no database call. If the store cannot be reached, a request under `rpm` or `tpm` is refused with `store_unavailable` (503), as a budgeted one is.
+
 **`tpm`** reserves tokens as budgets reserve dollars: a request holds the most it could use (a token per three bytes of body, plus its `max_tokens` or the model's `max_output`) until its answer ends, then counts what the provider reported, prompt, answer and cache tokens included. Images, audio, moderations and rerank count their prompt only.
 
 | Over the limit | Response |
@@ -120,7 +122,7 @@ The record of a refusal by a limit names it in `limit`, for example `{"kind": "t
 Claude Code reads `x-should-retry` and does not retry a budget refusal. See [Refusal codes](/reference/refusal-codes/).
 
 <Aside type="note">
-Without a store, spend, reservations and rate-limit windows live in the memory of one Gantry process. Rate-limit windows start empty after a restart; spend is read back from the audit log. With a [store](/operations/store/), budgets are reserved and settled in Postgres, so every replica enforces one budget; if the store cannot be reached, budgeted requests are refused with `store_unavailable`.
+Without a store, spend, reservations and rate-limit windows live in the memory of one Gantry process. Rate-limit windows start empty after a restart; spend is read back from the audit log. With a [store](/operations/store/), budgets are reserved and settled in Postgres and rate limits are leased from it, so every replica enforces one budget and one limit; if the store cannot be reached, requests under a budget, `rpm` or `tpm` are refused with `store_unavailable`.
 </Aside>
 
 ## Related

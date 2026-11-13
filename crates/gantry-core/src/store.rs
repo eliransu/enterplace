@@ -1,5 +1,5 @@
-//! The store: what several gateways share while they run (keys, kill switches, spend), so two or more processes
-//! act as one gateway. The policy stays a file, reviewed in git. Postgres is the one backend today; the interface
+//! The store: what several gateways share while they run (keys, kill switches, spend, rate limits, deployment
+//! cooldowns and console sessions), so two or more processes act as one gateway. The policy stays a file, reviewed in git. Postgres is the one backend today; the interface
 //! names no database, so another (D1 or Durable Objects on Cloudflare) can be added behind it.
 
 use std::{
@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex, Weak},
+    time::{Duration, Instant},
 };
 
 use crate::{config::KeyEntry, keyfile::Revoked, kill::Kill, policy::Period};
@@ -41,6 +42,20 @@ pub enum Reserve {
     },
 }
 
+/// What a lease on a rate limit found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lease {
+    /// `n` of the limit, at least what was needed, for this gateway to spend within [`LEASE`]. `grant` names it,
+    /// to give back what was not used.
+    Granted { grant: i64, n: u64 },
+    /// The limit is reached: seconds until the oldest slice leaves the minute.
+    Over { wait: u64 },
+}
+
+/// How long a gateway may spend a lease. The store counts it in the minute for half a second longer, so a lease
+/// spent at its last moment is still counted.
+pub const LEASE: Duration = Duration::from_secs(1);
+
 /// Shared state. Reads come from memory, refreshed in the background, so a request never waits on the database
 /// for a key or a kill switch, and a database that is down leaves the last state in force.
 pub trait Store: Send + Sync + std::fmt::Debug {
@@ -61,6 +76,23 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     /// Applies what requests cost and gives back what they held. Does not wait: it is retried while the database
     /// is away, and a hold that is never given back keeps counting, which errs on the side of the budget.
     fn settle(&self, changes: Vec<Change>);
+    /// Takes at least `need` and at most `want` of `limit` per minute for `scope`, in one atomic step: no two
+    /// gateways together are granted more than `limit` in any minute. `Err` when the database cannot be reached.
+    fn lease(&self, scope: String, need: u64, want: u64, limit: u64) -> Pending<Lease>;
+    /// Gives `n` of a grant back (a negative `n` takes more). Does not wait: gathered and written twice a second.
+    fn give_back(&self, grant: i64, n: i64);
+    /// Deployments that failed on any gateway, and until when they cool down. From memory, polled.
+    fn cooling(&self) -> Arc<std::collections::HashMap<String, Instant>>;
+    /// A deployment failed here: every gateway passes it over for `cooldown`. Does not wait.
+    fn cooled(&self, deployment: &str, cooldown: Duration);
+    /// A deployment that was cooling down answered: every gateway may use it again. Does not wait.
+    fn warmed(&self, deployment: &str);
+    /// Opens a console session, by the SHA-256 of its ID, for `who`, ending after `ttl`.
+    fn open_session(&self, id_sha256: String, who: String, ttl: Duration) -> Pending<()>;
+    /// Who a console session is for, or `None` when it is unknown, ended or expired.
+    fn session(&self, id_sha256: String) -> Pending<Option<String>>;
+    /// Ends a console session on every gateway. Does not wait: retried while the database is away.
+    fn end_session(&self, id_sha256: String);
 }
 
 // Every reader and writer of the keys file (the command line, the admin API, the console) names it by its path, so

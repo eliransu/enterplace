@@ -523,7 +523,7 @@ fn build(
                 gantry_core::kill::path_beside(r.keys_path()),
             ))
         }),
-        pool: Arc::default(),
+        pool: Arc::new(alias::Pool::new(config.store.clone())),
         health: config.extension.health.clone(),
     };
     let metrics = Router::new()

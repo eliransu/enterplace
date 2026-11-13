@@ -162,7 +162,7 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
         .query_one("SELECT max(version) FROM gantry_schema", &[])
         .await?
         .try_get(0)?;
-    assert_eq!(core, 1);
+    assert_eq!(core, 2);
 
     // Its own connection, so a transaction is safe on it.
     let tx = client.transaction().await?;

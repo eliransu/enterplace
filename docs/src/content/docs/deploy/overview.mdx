@@ -94,7 +94,7 @@ Cloud Run and Container Apps run one replica: neither can give each replica a vo
 
 - Gantry reads and verifies the whole audit log at every start, so a start takes longer as the log grows. Start a new chain when it gets large: see [Running in production](/operations/operations/#start-a-new-chain).
 - A request under a budget makes one database round trip to reserve its cost and one to settle it. A request with no budget makes none. Put Postgres in the same region as the gateways.
-- Rate limits (`rpm`, `tpm`) and the answer cache are counted per replica. Console sign-ins are good on the replica that made them, so the load balancer needs session affinity when there is more than one replica.
+- Rate limits (`rpm`, `tpm`), cooldowns and console sessions are shared through the store. The answer cache is per replica. A single sign-on callback must reach the replica that started the sign-in, so the load balancer needs session affinity for single sign-on when there is more than one replica. See [the store](/operations/store/).
 
 ## Next
 

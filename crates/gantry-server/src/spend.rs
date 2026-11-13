@@ -24,7 +24,7 @@ use gantry_core::{
     audit::{self, AuditLog},
     id::sha256,
     policy::{Budget, Period, Principal, Rule, Who},
-    store::{Bucket as Counter, Change, Reserve, Store},
+    store::{Bucket as Counter, Change, LEASE, Lease, Reserve, Store},
     usage::{Price, PriceOverrides, Usage, UsageScanner, price_for},
 };
 use http_body::{Body as _, Frame};
@@ -52,7 +52,12 @@ pub(crate) struct Spend {
     rates: Mutex<HashMap<String, VecDeque<Instant>>>,
     // Tokens used within the last minute, and held by requests in flight, per team, person or key.
     tokens: Mutex<HashMap<String, Tokens>>,
+    // ponytail: the cache stays per process even with a store. Answers are never written to the database (slice 7),
+    // and a hit from memory takes microseconds where one from Postgres would take a round trip.
     cache: Mutex<Cache>,
+    /// With a store: this gateway's lease on each rate-limit scope. One lease asked for at a time per scope, so a
+    /// burst waits for it instead of leasing the whole limit in pieces.
+    leases: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Leased>>>>,
     pub(crate) metrics: Arc<crate::metrics::Metrics>,
     /// Shared with other gateways when the policy has `store:`: budgets are then reserved and settled there, and
     /// the ledger above only counts for this process.
@@ -72,6 +77,26 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 struct Tokens {
     used: VecDeque<(Instant, u64)>,
     reserved: u64,
+}
+
+/// What is left of a lease on a rate limit, and until when it may be spent.
+#[derive(Default)]
+struct Leased {
+    grant: i64,
+    left: u64,
+    until: Option<Instant>,
+}
+
+/// A lease is this part of the limit, or what the request needs if more: a gateway leases about once every three
+/// seconds of traffic at the limit's pace, and holds at most a twentieth of it unused for a lease's second.
+const LEASE_PARTS: u64 = 20;
+
+/// Why a request was not given what it needs from a shared rate limit.
+enum Short {
+    /// Seconds until it could fit.
+    Over(u64),
+    /// The store cannot be reached.
+    Down(String),
 }
 
 /// What one team or person has spent and reserved in the current day or month.
@@ -179,6 +204,18 @@ fn store_unavailable(err: &str) -> Refusal {
         "store_unavailable",
         format!(
             "Refused: a budget applies to this request, and Gantry cannot reach its store to reserve what it could cost ({err}). Requests under a budget are refused until the store is back; requests without one still work. Tell your Gantry admin to check the Postgres database the policy's store: names."
+        ),
+    )
+}
+
+/// The store cannot be asked for a rate-limit lease: refused as a budget is, since the gateways could otherwise
+/// admit the limit each.
+fn rate_store_unavailable(err: &str) -> Refusal {
+    Refusal::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "store_unavailable",
+        format!(
+            "Refused: a rate limit applies to this request, and Gantry cannot reach its store to count it against the limit every replica shares ({err}). Requests under rpm or tpm are refused until the store is back; requests without one still work. Tell your Gantry admin to check the Postgres database the policy's store: names."
         ),
     )
 }
@@ -393,8 +430,82 @@ impl Spend {
         Ok(())
     }
 
+    /// Takes `need` of `limit` per minute for `scope` from this gateway's lease, leasing more from the store when
+    /// the lease is spent or over. Returns the grant it came from, to give back what is not used.
+    async fn take(
+        &self,
+        store: &Arc<dyn Store>,
+        scope: &str,
+        need: u64,
+        limit: u64,
+    ) -> Result<i64, Short> {
+        let slot = locked(&self.leases)
+            .entry(scope.to_string())
+            .or_default()
+            .clone();
+        let mut lease = slot.lock().await;
+        if lease.until.is_some_and(|until| until > Instant::now()) && lease.left >= need {
+            lease.left -= need;
+            return Ok(lease.grant);
+        }
+        if lease.left > 0 {
+            store.give_back(lease.grant, i64::try_from(lease.left).unwrap_or(i64::MAX));
+        }
+        *lease = Leased::default();
+        let want = need.max(limit.div_ceil(LEASE_PARTS)).min(limit);
+        // Timed from before the store is asked, so the lease ends before the store stops counting it.
+        let until = Instant::now() + LEASE;
+        match store.lease(scope.to_string(), need, want, limit).await {
+            Ok(Lease::Granted { grant, n }) => {
+                *lease = Leased {
+                    grant,
+                    left: n.saturating_sub(need),
+                    until: Some(until),
+                };
+                if lease.left > 0 {
+                    // What is not spent by the end of the lease goes back, so another gateway may have it.
+                    let (slot, store) = (slot.clone(), store.clone());
+                    tokio::spawn(async move {
+                        tokio::time::sleep_until(tokio::time::Instant::from_std(until)).await;
+                        let mut lease = slot.lock().await;
+                        if lease.grant == grant && lease.left > 0 {
+                            store.give_back(grant, i64::try_from(lease.left).unwrap_or(i64::MAX));
+                            lease.left = 0;
+                        }
+                    });
+                }
+                Ok(grant)
+            }
+            Ok(Lease::Over { wait }) => Err(Short::Over(wait)),
+            Err(err) => Err(Short::Down(err)),
+        }
+    }
+
+    /// Gives `n` back to a grant: to this gateway's lease while it lasts, else to the store.
+    fn give_back(&self, store: &Arc<dyn Store>, scope: &str, grant: i64, n: i64) {
+        if let (Ok(add), Some(slot)) = (u64::try_from(n), locked(&self.leases).get(scope)) {
+            if let Ok(mut lease) = slot.try_lock() {
+                if lease.grant == grant && lease.until.is_some_and(|until| until > Instant::now()) {
+                    lease.left += add;
+                    return;
+                }
+            }
+        }
+        store.give_back(grant, n);
+    }
+
     /// Gives back what a request held, and counts what it used, if it was sent.
-    fn settle_tokens(&self, scope: &str, held: u64, used: Option<u64>) {
+    fn settle_tokens(&self, scope: &str, held: u64, used: Option<u64>, grant: Option<i64>) {
+        // With a store the tokens were counted when the request was admitted: what it did not use goes back, and
+        // what it used beyond its hold is added.
+        if let (Some(store), Some(grant)) = (&self.store, grant) {
+            let n = i64::try_from(held).unwrap_or(i64::MAX)
+                - i64::try_from(used.unwrap_or(0)).unwrap_or(i64::MAX);
+            if n != 0 {
+                self.give_back(store, scope, grant, n);
+            }
+            return;
+        }
         let mut all = locked(&self.tokens);
         let window = all.entry(scope.to_string()).or_default();
         window.reserved = window.reserved.saturating_sub(held);
@@ -654,8 +765,9 @@ pub(crate) struct Admitted {
     streamed: Option<u64>,
     /// The path the request was sent to: an images request may be priced by the image.
     route: String,
-    /// Tokens held against each tokens-per-minute limit the request counts against, by scope.
-    tokens: Vec<(String, u64)>,
+    /// Tokens held against each tokens-per-minute limit the request counts against, by scope, with the store's
+    /// grant they came from when there is a store.
+    tokens: Vec<(String, u64, Option<i64>)>,
     /// Set while the provider has the request and its answer has not been handed on: a caller who hangs up then
     /// has still made the provider run (and bill) it.
     forwarded: bool,
@@ -678,8 +790,8 @@ impl Drop for Admitted {
             self.spend.release(&reservation);
         }
         // Never sent, or never answered: what it held goes back and nothing is counted as used.
-        for (scope, held) in self.tokens.drain(..) {
-            self.spend.settle_tokens(&scope, held, None);
+        for (scope, held, grant) in self.tokens.drain(..) {
+            self.spend.settle_tokens(&scope, held, None, grant);
         }
     }
 }
@@ -812,7 +924,23 @@ pub(crate) async fn admit(
         }
     }
     if let Some(rpm) = limits.rpm {
-        if let Err(wait) = spend.rate(&ask.person.name, rpm, Instant::now()) {
+        let counted = match &spend.store {
+            None => spend.rate(&ask.person.name, rpm, Instant::now()),
+            Some(store) => match spend
+                .take(
+                    store,
+                    &format!("rpm:{}", ask.person.name),
+                    1,
+                    u64::from(rpm),
+                )
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(Short::Over(wait)) => Err(wait),
+                Err(Short::Down(err)) => return Err(rate_store_unavailable(&err)),
+            },
+        };
+        if let Err(wait) = counted {
             let mut refusal = Refusal::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limited",
@@ -858,30 +986,53 @@ pub(crate) async fn admit(
             }),
         ];
         for (scope, limit, whose, of) in limits.into_iter().flatten() {
-            let now = Instant::now();
-            if let Err(wait) = spend.hold_tokens(&scope, limit, most, now) {
-                let mut refusal = Refusal::new(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    "rate_limited",
-                    if most > u64::from(limit) {
-                        format!(
-                            "Refused: this request could use up to {most} tokens, more than the {limit} per minute {whose} allows. Send a shorter request or a smaller max_tokens."
-                        )
-                    } else {
-                        format!(
-                            "Refused: the tokens used in the last minute and held by requests in flight, with up to {most} for this request, would pass the {limit} per minute {whose} allows. Send it again in {wait} seconds."
-                        )
-                    },
-                );
-                if most <= u64::from(limit) {
-                    refusal.retry_after = Some(wait);
+            let held = match &spend.store {
+                None => spend
+                    .hold_tokens(&scope, limit, most, Instant::now())
+                    .map(|()| None),
+                // Never fits: refused without asking the store.
+                Some(_) if most > u64::from(limit) => Err(60),
+                Some(store) => match spend
+                    .take(store, &format!("tpm:{scope}"), most, u64::from(limit))
+                    .await
+                {
+                    Ok(grant) => Ok(Some(grant)),
+                    Err(Short::Over(wait)) => Err(wait),
+                    Err(Short::Down(err)) => return Err(rate_store_unavailable(&err)),
+                },
+            };
+            let grant = match held {
+                Ok(grant) => grant,
+                Err(wait) => {
+                    let mut refusal = Refusal::new(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "rate_limited",
+                        if most > u64::from(limit) {
+                            format!(
+                                "Refused: this request could use up to {most} tokens, more than the {limit} per minute {whose} allows. Send a shorter request or a smaller max_tokens."
+                            )
+                        } else {
+                            format!(
+                                "Refused: the tokens used in the last minute and held by requests in flight, with up to {most} for this request, would pass the {limit} per minute {whose} allows. Send it again in {wait} seconds."
+                            )
+                        },
+                    );
+                    if most <= u64::from(limit) {
+                        refusal.retry_after = Some(wait);
+                    }
+                    refusal.record = Some(Box::new(
+                        serde_json::json!({ "limit": { "kind": "tpm", "of": of, "value": limit, "request_could_use": most } }),
+                    ));
+                    return Err(refusal);
                 }
-                refusal.record = Some(Box::new(
-                    serde_json::json!({ "limit": { "kind": "tpm", "of": of, "value": limit, "request_could_use": most } }),
-                ));
-                return Err(refusal);
-            }
-            admitted.tokens.push((scope, most));
+            };
+            // With a store, the scope is the lease's, so what is given back finds it.
+            let scope = if grant.is_some() {
+                format!("tpm:{scope}")
+            } else {
+                scope
+            };
+            admitted.tokens.push((scope, most, grant));
         }
     }
     if budgeted && !ask.free {
@@ -1168,9 +1319,9 @@ impl Admitted {
         // What the request used against a tokens-per-minute limit: what the provider reported, else what it held.
         let used =
             usage.map(|u| u.input + u.output + u.cache_read + u.cache_write + u.cache_write_1h);
-        for (scope, held) in self.tokens.drain(..) {
+        for (scope, held, grant) in self.tokens.drain(..) {
             let counted = if hit { Some(0) } else { used.or(Some(held)) };
-            self.spend.settle_tokens(&scope, held, counted);
+            self.spend.settle_tokens(&scope, held, counted, grant);
         }
         // Every budget reserved the same most-it-could-cost, so one of them says what was reserved.
         let reserved = self.reservations.first().map(|r| r.usd);

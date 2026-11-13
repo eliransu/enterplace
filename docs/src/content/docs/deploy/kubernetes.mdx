@@ -187,7 +187,7 @@ The Helm chart ships inside the `gantry-enterprise` image, so it always matches 
 
 ## Expose it
 
-Turn on the Ingress with TLS at the Ingress, and session affinity, because console sign-ins live in the pod that made them. With ingress-nginx, add to `gantry-values.yaml`:
+Turn on the Ingress with TLS at the Ingress, and session affinity, because a console single sign-on callback must reach the pod that started the sign-in. Sessions themselves are in the store and good on every pod. With ingress-nginx, add to `gantry-values.yaml`:
 
 ```yaml title="gantry-values.yaml"
 ingress:
