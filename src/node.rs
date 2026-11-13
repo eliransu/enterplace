@@ -41,6 +41,7 @@ const SHIPPED: &[&str] = &[
     "policy_sha256",
     "problem_count",
     "problems",
+    "guardrails",
     "keys_sha256",
     "action",
     "prev",
@@ -61,6 +62,8 @@ pub struct Options {
     pub secrets_interval: Duration,
     /// Extra environment variables the gateway may read, beyond the defaults (see `gateway_env`).
     pub pass_env: Vec<String>,
+    /// Where the gateway serves Prometheus metrics, if anywhere.
+    pub metrics: Option<String>,
     /// With a limit, a node that has not reached the control plane for this long stops serving (fail closed), so a
     /// key revoked during an outage cannot be used for longer than this. Without one it serves its last config.
     pub max_offline: Option<Duration>,
@@ -242,10 +245,13 @@ fn apply(opts: &Options, config: &Config) -> Result<(), String> {
 fn spawn_gateway(opts: &Options, env: &BTreeMap<String, String>) -> Result<Child, String> {
     let exe = std::env::current_exe()
         .map_err(|err| format!("could not find this program's path: {err}"))?;
-    Command::new(exe)
-        .current_dir(&opts.dir)
-        .args(["serve", POLICY, "--keys", KEYS, "--listen", &opts.listen])
-        .env_clear()
+    let mut cmd = Command::new(exe);
+    cmd.current_dir(&opts.dir)
+        .args(["serve", POLICY, "--keys", KEYS, "--listen", &opts.listen]);
+    if let Some(metrics) = &opts.metrics {
+        cmd.args(["--metrics", metrics]);
+    }
+    cmd.env_clear()
         .envs(gateway_env(opts, env))
         .spawn()
         .map_err(|err| format!("could not start the gateway: {err}"))

@@ -20,12 +20,13 @@ const USAGE: &str = "usage:
       The gateway's environment starts empty: it gets PATH, HOME, TZ, LANG, SSL_CERT_*, every *_PROVIDER_KEY,
       and the names in --pass-env A,B (for example AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY for Bedrock).
       --max-offline <seconds> stops serving when the control plane has not answered for that long (fail closed).
+      --metrics <host:port> serves Prometheus metrics at GET /metrics on that address.
       HTTPS_PROXY is used to reach the control plane and secret sources.
   gantry-enterprise device --control-plane <url> [--interval <seconds>] [--dry-run] [--once] [--home <folder>]
       Point the signed-in user's coding tools at the org's gateway every --interval seconds (default 300) and
       report coverage. The enrolment token goes in GANTRY_DEVICE_TOKEN, or in the file GANTRY_DEVICE_TOKEN_FILE
       names (default /Library/Application Support/Gantry/device-token, which the MDM profile installs).
-  gantry-enterprise serve <policy> [--keys <file>] [--listen <host:port>]
+  gantry-enterprise serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
       Run the gateway on local files, as `gantry serve` does.
   gantry-enterprise serve --unchecked";
 
@@ -86,6 +87,7 @@ async fn main() -> ExitCode {
                     max_offline: flag(&args, "--max-offline")
                         .and_then(|s| s.parse().ok())
                         .map(Duration::from_secs),
+                    metrics: flag(&args, "--metrics").map(str::to_owned),
                     pass_env: args
                         .windows(2)
                         .filter(|w| w[0] == "--pass-env")
@@ -149,7 +151,7 @@ async fn main() -> ExitCode {
             Path::new(&args[1]),
             flag(&args, "--keys").map(Path::new),
             flag(&args, "--listen"),
-            None,
+            flag(&args, "--metrics"),
             None,
         )
         .await
