@@ -1,0 +1,28 @@
+---
+title: Retention and legal hold
+description: Delete audit records older than a set number of days while the hash chain stays verifiable, and stop all deletion with a legal hold. An enterprise feature, unlocked by the license feature retention.
+sidebar:
+  order: 10
+---
+
+With a license that includes `retention`, the **Audit export** page has a retention period and a legal hold. Without it the audit log grows until you start a new chain by hand ([Size](/governance/audit-log/#size)). The policy needs a `store:` section: the settings are shared by every replica through Postgres.
+
+## How records are deleted
+
+The hash chain must still prove the records that are left, so whole files are deleted, and each deletion is a record in the chain.
+
+1. Once a day, each replica seals its log: the records written before today move to `gantry-audit.jsonl.sealed/<first>-<last>.jsonl` and the log goes on in a new file. The chain does not change.
+2. Every hour, each replica deletes its oldest sealed segments that are older than the retention period and older than the start of this month (spend is replayed from the log at start). Before deleting, it verifies the whole chain and appends an `audit_retired` record naming the records removed, the hash they chained from, the hash of the last one, and each file's SHA-256. A log that does not hold is never cut.
+3. With [SIEM export](/operations/siem-export/), a segment goes only once every destination has taken its records, and the exported copies in Postgres older than the period are deleted with it.
+
+`gantry audit verify` then shows the chain from the first record kept and says which record retired the ones before. Segments deleted without that record fail verification. See [Sealed segments and retirement](/governance/audit-log/#sealed-segments-and-retirement).
+
+The retention period is 30 to 3650 days; 365 by default. Owners and admins change it. The page shows each replica's last run and what it did.
+
+Sealing needs Linux or macOS: a Windows replica keeps its log whole and says so on the page.
+
+## Legal hold
+
+An owner turns legal hold on or off with a reason. While it is on, nothing is sealed or deleted, on any replica. The reason, who set it and when are shown on the page, and each change is an admin record in the audit log. Admins and viewers cannot change it.
+
+Keep the archive before turning on retention if you need records past the period: use the [archive](/operations/siem-export/#backfill-and-archive) or an object storage destination.

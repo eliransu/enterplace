@@ -56,6 +56,9 @@ struct Chain {
     file: File,
     n: u64,
     prev: String,
+    /// The number of the first record in the open file: `n + 1` while it holds none. Sealed segments hold the ones
+    /// before it.
+    first: u64,
     /// Where the file was opened, to notice when that name no longer leads to this file.
     path: Option<PathBuf>,
     /// Bytes the log held after the last write, to notice when it is cut.
@@ -95,6 +98,8 @@ type Job = (Fields, Box<dyn FnOnce(io::Result<()>) + Send>);
 enum Fields {
     Ready(String),
     Later(Box<dyn FnOnce() -> Option<Map<String, Value>> + Send>),
+    /// Seal the file once the records before it are written: see [`AuditLog::seal`].
+    Seal(mpsc::Sender<io::Result<Option<PathBuf>>>),
 }
 
 /// A record's fields as the writer takes them.
@@ -111,8 +116,9 @@ pub struct AuditLog {
     // Records go to one thread that does nothing but write them. A write from a thread that just woke up costs
     // ten times one from a thread that is already writing, and under load the writer takes many records per write.
     writer: mpsc::Sender<Job>,
-    // A second handle to the same file, so syncing to disk does not hold up the writer.
-    syncer: Option<File>,
+    // A second handle to the same file, so syncing to disk does not hold up the writer. The writer replaces it when
+    // it seals the file.
+    syncer: Arc<std::sync::Mutex<Option<File>>>,
     // Set by the writer once a write has failed or the file is gone. It stays set until Gantry is started again.
     broken: Arc<AtomicBool>,
     path: Option<PathBuf>,
@@ -614,6 +620,7 @@ fn write_records(
     broken: &AtomicBool,
     len: &AtomicU64,
     stats: &Stats,
+    syncer: &std::sync::Mutex<Option<File>>,
 ) {
     let mut failed = false;
     while let Ok(first) = jobs.recv() {
@@ -621,10 +628,17 @@ fn write_records(
         let (mut n, mut prev) = (chain.n, chain.prev.clone());
         let mut lines = String::new();
         let mut quiet: Vec<Box<dyn FnOnce(io::Result<()>) + Send>> = Vec::new();
+        let mut seal = None;
         for (fields, done) in std::iter::once(first).chain(jobs.try_iter().take(255)) {
             stats.queued.fetch_sub(1, Ordering::Relaxed);
             let fields = match fields {
                 Fields::Ready(fields) => fields,
+                // Later records wait for the next round, so they go to the new file.
+                Fields::Seal(reply) => {
+                    quiet.push(done);
+                    seal = Some(reply);
+                    break;
+                }
                 Fields::Later(make) => match make().map(|record| fields_of(&record)) {
                     Some(Ok(fields)) => fields,
                     Some(Err(err)) => {
@@ -650,13 +664,52 @@ fn write_records(
             lines.push_str(&prev);
             lines.push_str("\"}\n");
         }
-        if batch.is_empty() {
-            quiet.into_iter().for_each(|done| done(Ok(())));
-            continue;
+        if !batch.is_empty() {
+            write_batch(
+                &mut chain,
+                &lines,
+                (n, prev),
+                batch,
+                &mut failed,
+                broken,
+                len,
+                stats,
+            );
         }
+        if let Some(reply) = seal {
+            let sealed = if failed {
+                Err(io::Error::other(
+                    "the audit log is broken, so it is not sealed",
+                ))
+            } else {
+                seal_file(&mut chain, len, syncer)
+            };
+            if sealed.is_err() && chain.intact().is_err() {
+                failed = true;
+                broken.store(true, Ordering::Relaxed);
+            }
+            let _ = reply.send(sealed);
+        }
+        quiet.into_iter().for_each(|done| done(Ok(())));
+    }
+}
+
+/// Writes one round of chained lines and tells each record's caller how it went.
+#[allow(clippy::too_many_arguments)]
+fn write_batch(
+    chain: &mut Chain,
+    lines: &str,
+    (n, prev): (u64, String),
+    batch: Vec<Box<dyn FnOnce(io::Result<()>) + Send>>,
+    failed: &mut bool,
+    broken: &AtomicBool,
+    len: &AtomicU64,
+    stats: &Stats,
+) {
+    {
         // After a failed write the file may end in half a record, so nothing more is written to it.
         // Every later request is refused until an admin has looked and Gantry is started again.
-        let result = if failed {
+        let result = if *failed {
             Err(io::ErrorKind::BrokenPipe)
         } else if let Some(why) = chain.fence.as_ref().and_then(|fence| fence.lost()) {
             eprintln!("gantry: {why}");
@@ -682,15 +735,63 @@ fn write_records(
                 len.store(chain.len, Ordering::Relaxed);
             }
             Err(_) => {
-                failed = true;
+                *failed = true;
                 broken.store(true, Ordering::Relaxed);
             }
         }
         for done in batch {
             done(result.map_err(io::Error::from));
         }
-        quiet.into_iter().for_each(|done| done(Ok(())));
     }
+}
+
+/// Moves the open file aside as a sealed segment and goes on in a new, empty file at the same path. The chain goes
+/// on unchanged: the new file's first record follows the segment's last.
+fn seal_file(
+    chain: &mut Chain,
+    len: &AtomicU64,
+    syncer: &std::sync::Mutex<Option<File>>,
+) -> io::Result<Option<PathBuf>> {
+    let Some(path) = chain.path.clone() else {
+        return Err(io::Error::other(
+            "this audit log was opened without a path, so it has nothing to seal",
+        ));
+    };
+    if !cfg!(unix) {
+        // The log is opened so that no one may rename it while it is open (see `open`), Gantry included.
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "sealing a log that is being written works on Linux and macOS only",
+        ));
+    }
+    if chain.first > chain.n {
+        return Ok(None);
+    }
+    chain.file.sync_all()?;
+    let sealed = segment_path(&path, chain.first, chain.n);
+    if sealed.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("{} already exists", sealed.display()),
+        ));
+    }
+    let mut folder = std::fs::DirBuilder::new();
+    folder.recursive(true);
+    // Readable by the log's owner only, as the log is.
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+    folder.create(sealed_dir(&path))?;
+    std::fs::rename(&path, &sealed)?;
+    // From here the old file is a segment. If the new one cannot be made, the log is gone and requests stop.
+    let file = log_options().open(&path)?;
+    *syncer
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = file.try_clone().ok();
+    chain.file = file;
+    chain.len = 0;
+    len.store(0, Ordering::Relaxed);
+    chain.first = chain.n + 1;
+    Ok(Some(sealed))
 }
 
 /// The time now, as records write it.
@@ -762,17 +863,7 @@ impl AuditLog {
     fn open_as(path: &Path, beat: Duration, me: &Me) -> Result<Self, String> {
         // Taken before the chain is read: a Gantry waited for may still be adding records until it stops.
         let lock = take_lock(path, beat, me)?;
-        let mut options = OpenOptions::new();
-        options.create(true).read(true).append(true);
-        // A new log is readable by its owner only: it names every caller and what each asked for.
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        // Windows has no inode to compare, so it cannot tell a replaced log from the one it opened. Without
-        // FILE_SHARE_DELETE nobody can delete, rename or replace the log while this handle is open; writers and readers
-        // are still let in, and a log cut short is caught by its length as on Unix.
-        #[cfg(windows)]
-        std::os::windows::fs::OpenOptionsExt::share_mode(&mut options, FILE_SHARE_READ_WRITE);
-        let mut file = options
+        let mut file = log_options()
             .open(path)
             .map_err(|err| {
                 format!(
@@ -795,53 +886,30 @@ impl AuditLog {
             }
         };
         let len = meta.len();
-        let (mut n, mut prev) = (0, GENESIS.to_string());
-        // A configuration record holds the whole policy file, so the last line can be long. The window grows to fit it.
-        let mut window = 64 * 1024;
-        // Ends at the first whole last line, or returns why there is none.
-        while len > 0 && n == 0 {
-            // The last record is enough to continue the chain. `gantry audit verify` checks all of it.
-            let from = len.saturating_sub(window);
-            file.seek(SeekFrom::Start(from)).map_err(io_err)?;
-            // Read as bytes: the window can start in the middle of a character, and only the last line has to be text.
-            let mut tail = Vec::new();
-            file.read_to_end(&mut tail).map_err(io_err)?;
-            let Some(complete) = tail.strip_suffix(b"\n") else {
-                return Err(broken(path, "the last line is cut short"));
-            };
-            let start = complete
-                .iter()
-                .rposition(|b| *b == b'\n')
-                .map_or(0, |i| i + 1);
-            if start == 0 && from > 0 {
-                if window < MAX_LINE {
-                    window *= 4;
-                    continue;
+        let (n, prev) = match last_record(&mut file, len, path)? {
+            Some(last) => last,
+            // An empty file after a seal: the chain goes on from the newest sealed segment.
+            None => match segments(path).map_err(io_err)?.last() {
+                Some(segment) => {
+                    let mut sealed = File::open(&segment.path).map_err(io_err)?;
+                    let size = sealed.metadata().map_err(io_err)?.len();
+                    last_record(&mut sealed, size, &segment.path)?.ok_or_else(|| {
+                        broken(&segment.path, "this sealed segment holds no record")
+                    })?
                 }
-                return Err(broken(
-                    path,
-                    "the last line is longer than any record Gantry writes",
-                ));
-            }
-            let Ok(last) = std::str::from_utf8(&complete[start..]) else {
-                return Err(broken(path, "the last line is not text"));
-            };
-            let record = split(last)
-                .filter(|(body, hash)| hash_of(body) == *hash)
-                .and_then(|(_, hash)| {
-                    let value: Value = serde_json::from_str(last).ok()?;
-                    Some((value.get("n")?.as_u64()?, hash.to_string()))
-                });
-            let Some(found) = record else {
-                return Err(broken(path, "the last line is not a whole record"));
-            };
-            (n, prev) = found;
-            break;
-        }
+                None => (0, GENESIS.to_string()),
+            },
+        };
+        let first = if len == 0 {
+            n + 1
+        } else {
+            first_number(&mut file).map_err(io_err)?
+        };
         let mut log = Self::start(Chain {
             file,
             n,
             prev,
+            first,
             path: Some(path.to_path_buf()),
             len,
             fence: lock.as_ref().map(|lock| lock.fence.clone()),
@@ -850,9 +918,89 @@ impl AuditLog {
         log.lock = lock;
         Ok(log)
     }
+}
 
+/// How the log file is opened, at start and when a seal makes a new one.
+fn log_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).append(true);
+    // A new log is readable by its owner only: it names every caller and what each asked for.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    // Windows has no inode to compare, so it cannot tell a replaced log from the one it opened. Without
+    // FILE_SHARE_DELETE nobody can delete, rename or replace the log while this handle is open; writers and readers
+    // are still let in, and a log cut short is caught by its length as on Unix.
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::share_mode(&mut options, FILE_SHARE_READ_WRITE);
+    options
+}
+
+/// The number of the first record in a file that holds one.
+fn first_number(file: &mut File) -> io::Result<u64> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut start = Vec::new();
+    // `{"n":<number>,` is all that is needed; a configuration record's line can be megabytes long.
+    file.take(32).read_to_end(&mut start)?;
+    let text = String::from_utf8_lossy(&start);
+    text.strip_prefix("{\"n\":")
+        .and_then(|rest| rest.split(',').next())
+        .and_then(|n| n.parse().ok())
+        .ok_or_else(|| io::Error::other("its first line does not start as a record does"))
+}
+
+/// The number and hash of the last record of a file, `None` when it is empty, or why its end is not a record.
+fn last_record(file: &mut File, len: u64, path: &Path) -> Result<Option<(u64, String)>, String> {
+    let io_err =
+        |err: io::Error| format!("the audit log at {} cannot be read: {err}.", path.display());
+    let (mut n, mut prev) = (0, GENESIS.to_string());
+    // A configuration record holds the whole policy file, so the last line can be long. The window grows to fit it.
+    let mut window = 64 * 1024;
+    // Ends at the first whole last line, or returns why there is none.
+    while len > 0 && n == 0 {
+        // The last record is enough to continue the chain. `gantry audit verify` checks all of it.
+        let from = len.saturating_sub(window);
+        file.seek(SeekFrom::Start(from)).map_err(io_err)?;
+        // Read as bytes: the window can start in the middle of a character, and only the last line has to be text.
+        let mut tail = Vec::new();
+        file.read_to_end(&mut tail).map_err(io_err)?;
+        let Some(complete) = tail.strip_suffix(b"\n") else {
+            return Err(broken(path, "the last line is cut short"));
+        };
+        let start = complete
+            .iter()
+            .rposition(|b| *b == b'\n')
+            .map_or(0, |i| i + 1);
+        if start == 0 && from > 0 {
+            if window < MAX_LINE {
+                window *= 4;
+                continue;
+            }
+            return Err(broken(
+                path,
+                "the last line is longer than any record Gantry writes",
+            ));
+        }
+        let Ok(last) = std::str::from_utf8(&complete[start..]) else {
+            return Err(broken(path, "the last line is not text"));
+        };
+        let record = split(last)
+            .filter(|(body, hash)| hash_of(body) == *hash)
+            .and_then(|(_, hash)| {
+                let value: Value = serde_json::from_str(last).ok()?;
+                Some((value.get("n")?.as_u64()?, hash.to_string()))
+            });
+        let Some(found) = record else {
+            return Err(broken(path, "the last line is not a whole record"));
+        };
+        (n, prev) = found;
+        break;
+    }
+    Ok((n > 0).then_some((n, prev)))
+}
+
+impl AuditLog {
     fn start(chain: Chain) -> io::Result<Self> {
-        let syncer = chain.file.try_clone().ok();
+        let syncer = Arc::new(std::sync::Mutex::new(chain.file.try_clone().ok()));
         let (path, records_at_open) = (chain.path.clone(), chain.n);
         let len = Arc::new(AtomicU64::new(chain.len));
         let (writer, jobs) = mpsc::channel();
@@ -861,8 +1009,9 @@ impl AuditLog {
         std::thread::Builder::new()
             .name("gantry-audit".into())
             .spawn({
-                let (broken, len, stats) = (broken.clone(), len.clone(), stats.clone());
-                move || write_records(chain, &jobs, &broken, &len, &stats)
+                let (broken, len, stats, syncer) =
+                    (broken.clone(), len.clone(), stats.clone(), syncer.clone());
+                move || write_records(chain, &jobs, &broken, &len, &stats, &syncer)
             })?;
         Ok(Self {
             writer,
@@ -883,6 +1032,7 @@ impl AuditLog {
             file,
             n: 0,
             prev: GENESIS.to_string(),
+            first: 1,
             path: None,
             len,
             fence: None,
@@ -1006,8 +1156,12 @@ impl AuditLog {
         {
             return true;
         }
+        let syncer = self
+            .syncer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         #[cfg(unix)]
-        if let (Some(path), Some(open)) = (&self.path, &self.syncer) {
+        if let (Some(path), Some(open)) = (&self.path, syncer.as_ref()) {
             use std::os::unix::fs::MetadataExt;
             return !matches!(
                 (std::fs::metadata(path), open.metadata()),
@@ -1016,7 +1170,7 @@ impl AuditLog {
         }
         // Elsewhere the log is opened so it cannot be deleted or replaced (see `open`): only its length can change.
         #[cfg(not(unix))]
-        if let (Some(_), Some(open)) = (&self.path, &self.syncer) {
+        if let (Some(_), Some(open)) = (&self.path, syncer.as_ref()) {
             return !open
                 .metadata()
                 .is_ok_and(|open| open.len() >= self.len.load(Ordering::Relaxed));
@@ -1044,9 +1198,28 @@ impl AuditLog {
         self.sync();
     }
 
+    /// Moves the records written so far into a sealed segment in the folder beside the log, named for the first and
+    /// last record it holds (`gantry-audit.jsonl.sealed/<first>-<last>.jsonl`, numbers padded to 20 digits), and goes on in a new, empty
+    /// file at the log's path. The chain is not changed: the next record follows the segment's last, and `verify`
+    /// walks the segments and the log as one chain. `None` when the log holds no record since the last seal. Waits
+    /// for the records handed over before it. Linux and macOS only: on Windows the open log cannot be renamed.
+    pub fn seal(&self) -> io::Result<Option<PathBuf>> {
+        let (tell, told) = mpsc::channel();
+        self.send(Fields::Seal(tell), Box::new(|_| {}));
+        told.recv()
+            .unwrap_or_else(|_| Err(io::Error::other("the audit log writer has stopped")))
+    }
+
     /// Asks the operating system to put what was written on disk. Called once a second by the server.
     pub fn sync(&self) {
-        if let Some(file) = &self.syncer {
+        // Cloned out of the lock, so a seal waits for no disk.
+        let file = self
+            .syncer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|f| f.try_clone().ok());
+        if let Some(file) = file {
             let _ = file.sync_data();
         }
     }
@@ -1061,10 +1234,195 @@ pub struct LastConfig {
     pub keys: BTreeSet<(String, String, String)>,
 }
 
+/// A sealed segment of a log: a file of whole records, `first` to `last`, that the log went on from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Segment {
+    pub first: u64,
+    pub last: u64,
+    pub path: PathBuf,
+}
+
+/// The folder beside the log at `path` that holds its sealed segments: `<log>.sealed`.
+pub fn sealed_dir(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".sealed");
+    PathBuf::from(name)
+}
+
+/// Where the segment holding `first` to `last` of the log at `path` is kept.
+pub fn segment_path(path: &Path, first: u64, last: u64) -> PathBuf {
+    sealed_dir(path).join(format!("{first:020}-{last:020}.jsonl"))
+}
+
+/// The sealed segments of the log at `path`, oldest first.
+pub fn segments(path: &Path) -> io::Result<Vec<Segment>> {
+    let dir = sealed_dir(path);
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let file = entry?.file_name();
+        let parsed = file
+            .to_str()
+            .and_then(|f| f.strip_suffix(".jsonl"))
+            .and_then(|f| f.split_once('-'))
+            .filter(|(a, b)| a.len() == 20 && b.len() == 20)
+            .and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)));
+        if let Some((first, last)) = parsed {
+            found.push(Segment {
+                first,
+                last,
+                path: dir.join(&file),
+            });
+        }
+    }
+    found.sort_by_key(|s| s.first);
+    Ok(found)
+}
+
+/// Whether the log at `path` holds any record, in its sealed segments or in the file itself.
+pub fn has_records(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0)
+        || segments(path).is_ok_and(|s| !s.is_empty())
+}
+
+/// The whole chain of the log at `path` as one reader: its sealed segments oldest first, then the file itself.
+/// For whatever reads the records back (spend, an exporter).
+pub fn chain_reader(path: &Path) -> io::Result<Box<dyn BufRead + Send>> {
+    let mut reader: Box<dyn Read + Send> = Box::new(io::empty());
+    for segment in segments(path)? {
+        reader = Box::new(reader.chain(File::open(&segment.path)?));
+    }
+    match File::open(path) {
+        Ok(file) => reader = Box::new(reader.chain(file)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    Ok(Box::new(BufReader::new(reader)))
+}
+
+/// What `retire` removed.
+#[derive(Clone, Debug)]
+pub struct Retired {
+    pub from: u64,
+    pub through: u64,
+    pub files: Vec<PathBuf>,
+}
+
+/// Removes the oldest sealed segments, those whose records all come at or before record `through`, after writing
+/// an `audit_retired` record to the chain that names them: the numbers and hashes they ran between (`from_n`,
+/// `from_prev`, the hash they chained from, `through_n`, `through_hash`) and each file's SHA-256. `verify` then
+/// accepts a chain that starts after them, because that record says what went and the first record kept still
+/// follows `through_hash`. The whole chain is verified first, so a log that does not hold keeps its evidence.
+/// `None` when no segment is that old. `log` must be the log open at `path`. Blocks while it reads the chain.
+pub fn retire(log: &AuditLog, path: &Path, through: u64) -> Result<Option<Retired>, String> {
+    let io_err =
+        |err: io::Error| format!("the audit log at {} cannot be read: {err}.", path.display());
+    let old: Vec<Segment> = segments(path)
+        .map_err(io_err)?
+        .into_iter()
+        .take_while(|s| s.last <= through)
+        .collect();
+    let (Some(oldest), Some(newest)) = (old.first(), old.last()) else {
+        return Ok(None);
+    };
+    verify_full(path, None).map_err(|err| {
+        format!("{err} Nothing was retired: a log that does not hold is kept whole, as evidence.")
+    })?;
+    let line_of = |segment: &Segment, last: bool| -> Result<Value, String> {
+        let file = File::open(&segment.path).map_err(io_err)?;
+        let mut lines = BufReader::new(file).lines();
+        let line = if last {
+            lines.map_while(Result::ok).last()
+        } else {
+            lines.next().and_then(Result::ok)
+        };
+        line.and_then(|l| serde_json::from_str(&l).ok())
+            .ok_or_else(|| broken(&segment.path, "this sealed segment holds no record"))
+    };
+    let (first, last) = (line_of(oldest, false)?, line_of(newest, true)?);
+    let mut files = Vec::new();
+    for segment in &old {
+        let mut file = File::open(&segment.path).map_err(io_err)?;
+        let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
+        let mut bytes = 0u64;
+        let mut chunk = vec![0u8; 1 << 16];
+        loop {
+            let read = file.read(&mut chunk).map_err(io_err)?;
+            if read == 0 {
+                break;
+            }
+            bytes += read as u64;
+            sha2::Digest::update(&mut hasher, &chunk[..read]);
+        }
+        let name = segment
+            .path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        files.push(serde_json::json!({
+            "file": name,
+            "first_n": segment.first,
+            "last_n": segment.last,
+            "bytes": bytes,
+            "sha256": crate::id::hex(&sha2::Digest::finalize(hasher)),
+        }));
+    }
+    let mut record = Map::new();
+    record.insert("event".into(), "audit_retired".into());
+    record.insert("time".into(), timestamp().into());
+    record.insert("from_n".into(), oldest.first.into());
+    record.insert("from_prev".into(), first["prev"].clone());
+    record.insert("through_n".into(), newest.last.into());
+    record.insert("through_hash".into(), last["hash"].clone());
+    record.insert("records".into(), (newest.last - oldest.first + 1).into());
+    record.insert("segments".into(), files.into());
+    // Written before anything is removed: a removal the chain does not name is a gap `verify` reports.
+    log.append_record(&record).map_err(|err| {
+        format!(
+            "the audit log at {} could not record the retirement: {err}. Nothing was removed.",
+            path.display()
+        )
+    })?;
+    let mut removed = Vec::new();
+    for segment in &old {
+        std::fs::remove_file(&segment.path).map_err(|err| {
+            format!(
+                "{} could not be removed: {err}. The chain already names it as retired; remove it by hand or retire again.",
+                segment.path.display()
+            )
+        })?;
+        removed.push(segment.path.clone());
+    }
+    Ok(Some(Retired {
+        from: oldest.first,
+        through: newest.last,
+        files: removed,
+    }))
+}
+
+/// Records at the start of a chain that an `audit_retired` record says were removed on purpose.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Retirement {
+    /// The last record retired: the chain now starts at `through + 1`.
+    pub through: u64,
+    pub through_hash: String,
+    /// The number and time of the `audit_retired` record that names them.
+    pub by: u64,
+    pub time: String,
+}
+
 /// What a walk of the whole chain found.
 #[derive(Clone, Debug, Default)]
 pub struct Summary {
+    /// The number of the last record: how many the chain has held, retired ones included.
     pub records: u64,
+    /// The number of the first record still kept: 1 unless older records were retired.
+    pub first: u64,
+    /// Set when the chain starts after record 1, by the record that retired the ones before.
+    pub retired: Option<Retirement>,
     pub requests: u64,
     pub configuration: u64,
     pub admin: u64,
@@ -1101,13 +1459,20 @@ pub fn verify_full(path: &Path, expect: Option<&str>) -> Result<Summary, String>
             expect.chars().count()
         ));
     }
-    let file = File::open(path).map_err(|err| {
+    // Sealed segments with no file beside them are still a chain; a log with neither cannot be opened.
+    if !path.exists() && segments(path).is_ok_and(|s| s.is_empty()) {
+        return Err(format!(
+            "the audit log at {} cannot be opened: it does not exist.",
+            path.display()
+        ));
+    }
+    let reader = chain_reader(path).map_err(|err| {
         format!(
             "the audit log at {} cannot be opened: {err}.",
             path.display()
         )
     })?;
-    walk(BufReader::new(file), path, expect)
+    walk(reader, path, expect)
 }
 
 /// A last line cut short by a write that failed part way: where the whole records end, and the bytes after them.
@@ -1144,7 +1509,11 @@ pub fn find_cut(path: &Path) -> Result<Option<Cut>, String> {
         }
     };
     file.seek(SeekFrom::Start(0)).map_err(io_err)?;
-    let records = walk(BufReader::new(file.take(keep)), path, None)?.records;
+    let mut sealed: Box<dyn Read> = Box::new(io::empty());
+    for segment in segments(path).map_err(io_err)? {
+        sealed = Box::new(sealed.chain(File::open(&segment.path).map_err(io_err)?));
+    }
+    let records = walk(BufReader::new(sealed.chain(file.take(keep))), path, None)?.records;
     let removed = tail[usize::try_from(keep - from).unwrap_or(0)..].to_vec();
     // Only the start of the record the writer was writing is a cut line. Whole JSON (a record that lost its newline,
     // or a changed one) and anything else is evidence, never removed.
@@ -1228,14 +1597,30 @@ fn walk(reader: impl BufRead, path: &Path, expect: Option<&str>) -> Result<Summa
             path.display()
         )
     };
-    let mut lines = reader.lines();
+    let mut lines = reader.lines().peekable();
+    // A chain whose oldest records were retired starts after record 1. It is taken from where it starts, and holds
+    // only if an `audit_retired` record further on names exactly what came before.
+    let mut start = None;
+    if let Some(Ok(line)) = lines.peek() {
+        let head = serde_json::from_str::<Value>(line).ok();
+        let at = head
+            .as_ref()
+            .and_then(|v| Some((v.get("n")?.as_u64()?, v.get("prev")?.as_str()?.to_string())));
+        if let Some((n, prev)) = at.filter(|(n, _)| *n > 1) {
+            summary.records = n - 1;
+            summary.last_hash = prev.clone();
+            start = Some((n, prev));
+        }
+    }
+    summary.first = summary.records + 1;
     while let Some(line) = lines.next() {
         let n = summary.records + 1;
         let count = summary.records;
-        let before = match count {
+        let first = summary.first;
+        let before = match count + 1 - first {
             0 => "No record before it is intact.".to_string(),
-            1 => "Record 1 is intact.".to_string(),
-            _ => format!("Records 1 to {count} are intact."),
+            1 => format!("Record {first} is intact."),
+            _ => format!("Records {first} to {count} are intact."),
         };
         let fail = |what: &str| {
             format!(
@@ -1292,6 +1677,22 @@ fn walk(reader: impl BufRead, path: &Path, expect: Option<&str>) -> Result<Summa
         match value.get("event").and_then(Value::as_str) {
             None => summary.requests += 1,
             Some("admin" | "audit_repaired") => summary.admin += 1,
+            Some("audit_retired") => {
+                summary.admin += 1;
+                let through = value["through_n"].as_u64();
+                let through_hash = value["through_hash"].as_str().unwrap_or_default();
+                if let Some((first, prev)) = &start
+                    && through.is_some_and(|t| t + 1 == *first)
+                    && through_hash == prev
+                {
+                    summary.retired = Some(Retirement {
+                        through: first - 1,
+                        through_hash: through_hash.to_string(),
+                        by: n,
+                        time: value["time"].as_str().unwrap_or_default().to_string(),
+                    });
+                }
+            }
             Some("attempts") => summary.attempts += 1,
             // An MCP tool call's outcome follows its decision as a usage record follows a model request's.
             Some("usage" | "mcp_result") => summary.usage += 1,
@@ -1322,8 +1723,25 @@ fn walk(reader: impl BufRead, path: &Path, expect: Option<&str>) -> Result<Summa
         summary.records = n;
         summary.last_hash = hash;
     }
-    match expect {
-        Some(expect) if summary.found.is_none() => Err(not_here(expect)),
+    let unexplained = start.filter(|_| summary.retired.is_none()).map(|(first, prev)| {
+        let missing = match first - 1 {
+            1 => "record 1 is".to_string(),
+            last => format!("records 1 to {last} are"),
+        };
+        format!(
+            "{} starts at record {first}: {missing} missing, and no audit_retired record in the chain says they were retired after {prev}. They were removed or moved aside without being retired; the records from {first} on hold only if that was on purpose.",
+            path.display()
+        )
+    });
+    if summary.records == 0 {
+        summary.first = 0;
+    }
+    match (expect, unexplained) {
+        (Some(expect), Some(gap)) if summary.found.is_none() => {
+            Err(format!("{} Also: {gap}", not_here(expect)))
+        }
+        (Some(expect), None) if summary.found.is_none() => Err(not_here(expect)),
+        (_, Some(gap)) => Err(gap),
         _ => Ok(summary),
     }
 }
@@ -1920,6 +2338,198 @@ mod tests {
         assert_eq!(text.lines().count(), 1);
         assert!(text.len() < 2000, "{}", text.len());
         assert_eq!(verify(&path)?.0, 1);
+        Ok(())
+    }
+
+    /// Appends requests `ids` and waits for them.
+    fn requests(log: &AuditLog, ids: &[&str]) -> TestResult {
+        for id in ids {
+            log.append(&Entry {
+                id,
+                ..Default::default()
+            })?;
+        }
+        Ok(())
+    }
+
+    fn clear(path: &Path) -> TestResult {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir_all(sealed_dir(path));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sealed_segment_keeps_the_chain_going_across_files_and_restarts() -> TestResult {
+        let path = temp("seal");
+        clear(&path)?;
+        let log = AuditLog::open(&path)?;
+        requests(&log, &["A", "B", "C"])?;
+        let sealed = log.seal()?.ok_or("nothing sealed")?;
+        assert_eq!(sealed, segment_path(&path, 1, 3));
+        assert!(
+            sealed
+                .to_string_lossy()
+                .ends_with(".jsonl.sealed/00000000000000000001-00000000000000000003.jsonl")
+        );
+        assert_eq!(
+            std::fs::metadata(&path)?.len(),
+            0,
+            "the log goes on in a new file"
+        );
+        assert!(log.seal()?.is_none(), "an empty file is not sealed");
+        assert!(!log.is_broken(), "a seal is not a replaced log");
+        requests(&log, &["D"])?;
+        let summary = verify_full(&path, None)?;
+        assert_eq!(
+            (summary.first, summary.records, summary.requests),
+            (1, 4, 4)
+        );
+        // The chain crosses the file boundary: record 4 follows record 3's hash.
+        let segment = std::fs::read_to_string(&sealed)?;
+        let three: Value = serde_json::from_str(segment.lines().last().ok_or("empty")?)?;
+        let four: Value = serde_json::from_str(std::fs::read_to_string(&path)?.trim())?;
+        assert_eq!(four["prev"], three["hash"]);
+        assert_eq!(four["n"], 4);
+        // Sealed again and restarted on the empty file: the next record still follows.
+        assert_eq!(log.seal()?, Some(segment_path(&path, 4, 4)));
+        drop(log);
+        let log = AuditLog::open(&path)?;
+        assert_eq!(log.records_at_open(), 4);
+        requests(&log, &["E"])?;
+        log.flush();
+        let summary = verify_full(&path, None)?;
+        assert_eq!((summary.records, summary.requests), (5, 5));
+        assert_eq!(chain_reader(&path)?.lines().count(), 5);
+        // A segment changed after it was sealed breaks the chain where it was changed.
+        std::fs::write(&sealed, segment.replacen("\"B\"", "\"Z\"", 1))?;
+        let err = verify(&path).err().ok_or("a changed segment passed")?;
+        assert!(err.contains("record 2"), "{err}");
+        drop(log);
+        clear(&path)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retiring_old_segments_is_recorded_and_verify_proves_what_went() -> TestResult {
+        let path = temp("retire");
+        clear(&path)?;
+        let log = AuditLog::open(&path)?;
+        requests(&log, &["A", "B"])?;
+        log.seal()?;
+        requests(&log, &["C", "D"])?;
+        log.seal()?;
+        requests(&log, &["E"])?;
+        let before = std::fs::read_to_string(segment_path(&path, 3, 4))?;
+        let four: Value = serde_json::from_str(before.lines().last().ok_or("empty")?)?;
+        let one: Value = serde_json::from_str(
+            std::fs::read_to_string(segment_path(&path, 1, 2))?
+                .lines()
+                .next()
+                .ok_or("empty")?,
+        )?;
+
+        assert!(
+            retire(&log, &path, 1)?.is_none(),
+            "no segment ends by record 1"
+        );
+        let retired = retire(&log, &path, 4)?.ok_or("nothing retired")?;
+        assert_eq!((retired.from, retired.through), (1, 4));
+        assert_eq!(retired.files.len(), 2);
+        assert!(segments(&path)?.is_empty());
+
+        // The chain starts at 5 now, and the record at 6 says why.
+        let summary = verify_full(&path, None)?;
+        assert_eq!((summary.first, summary.records), (5, 6));
+        let why = summary.retired.ok_or("no retirement found")?;
+        assert_eq!((why.through, why.by), (4, 6));
+        assert_eq!(Value::from(why.through_hash.clone()), four["hash"]);
+        let text = std::fs::read_to_string(&path)?;
+        let record: Value = serde_json::from_str(text.lines().last().ok_or("empty")?)?;
+        assert_eq!(record["event"], "audit_retired");
+        assert_eq!(record["from_n"], 1);
+        assert_eq!(record["from_prev"], one["prev"]);
+        assert_eq!(record["through_n"], 4);
+        assert_eq!(record["records"], 4);
+        assert_eq!(
+            record["segments"][1]["sha256"],
+            Value::from(sha256_hex(before.as_bytes()))
+        );
+
+        // The kept hash of a retired record is not in the chain any more, and verify says so.
+        let gone = four["hash"].as_str().ok_or("hash")?;
+        assert!(verify_full(&path, Some(gone)).is_err());
+        drop(log);
+        clear(&path)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn records_removed_from_the_start_without_a_retire_record_fail_verify() -> TestResult {
+        let path = temp("retire-forged");
+        clear(&path)?;
+        let log = AuditLog::open(&path)?;
+        requests(&log, &["A", "B"])?;
+        log.seal()?;
+        requests(&log, &["C"])?;
+        log.flush();
+        std::fs::remove_file(segment_path(&path, 1, 2))?;
+        let err = verify(&path).err().ok_or("a removed segment passed")?;
+        assert!(
+            err.contains("starts at record 3") && err.contains("records 1 to 2 are missing"),
+            "{err}"
+        );
+
+        // A retire record that names another range does not cover the gap either.
+        let mut record = Map::new();
+        record.insert("event".into(), "audit_retired".into());
+        record.insert("through_n".into(), 1.into());
+        record.insert("through_hash".into(), "f".repeat(64).into());
+        log.append_record(&record)?;
+        assert!(verify(&path).is_err());
+        drop(log);
+        clear(&path)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_log_that_does_not_hold_is_never_retired() -> TestResult {
+        let path = temp("retire-broken");
+        clear(&path)?;
+        let log = AuditLog::open(&path)?;
+        requests(&log, &["A", "B"])?;
+        log.seal()?;
+        let segment = segment_path(&path, 1, 2);
+        let text = std::fs::read_to_string(&segment)?;
+        std::fs::write(&segment, text.replacen("\"A\"", "\"Z\"", 1))?;
+        let err = retire(&log, &path, 2).err().ok_or("retired a broken log")?;
+        assert!(err.contains("Nothing was retired"), "{err}");
+        assert!(segment.exists());
+        drop(log);
+        clear(&path)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cut_last_line_is_found_after_a_seal() -> TestResult {
+        let path = temp("seal-cut");
+        clear(&path)?;
+        let log = AuditLog::open(&path)?;
+        requests(&log, &["A", "B"])?;
+        log.seal()?;
+        requests(&log, &["C"])?;
+        drop(log);
+        let mut file = OpenOptions::new().append(true).open(&path)?;
+        file.write_all(b"{\"n\":4,\"id\"")?;
+        drop(file);
+        let cut = find_cut(&path)?.ok_or("no cut found")?;
+        assert_eq!(repair(&path, &cut)?, 4);
+        assert_eq!(verify(&path)?.0, 4);
+        clear(&path)?;
         Ok(())
     }
 }

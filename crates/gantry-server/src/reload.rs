@@ -248,6 +248,10 @@ pub struct Host<'a> {
     /// The keys file's path. Keys are read and changed through it (`gantry_core::keyfile`), from the store when there is one.
     pub keys: &'a Path,
     pub policy: &'a Path,
+    /// The audit log this gateway writes, and its path, for a binary that reads the records back, seals the log or
+    /// retires old segments (`gantry_core::audit::{chain_reader, retire}`).
+    pub audit: &'a Arc<AuditLog>,
+    pub audit_path: &'a Path,
 }
 
 /// `governed`, with what an embedding binary adds: `extend` runs before the router is built.
@@ -337,7 +341,7 @@ pub fn governed_with(
     let log = Arc::new(AuditLog::open(&loaded.audit_path)?);
     // The whole chain is checked before serving: Gantry does not add records to a log it cannot vouch for.
     // ponytail: this reads the whole file at every start. When logs grow past a few gigabytes, checkpoint the verified prefix.
-    let last = if std::fs::metadata(&loaded.audit_path).is_ok_and(|m| m.is_file() && m.len() > 0) {
+    let last = if audit::has_records(&loaded.audit_path) {
         audit::verify_full(&loaded.audit_path, None)
             .map_err(|err| {
                 format!("{err} Gantry does not start on an audit log that does not hold. Move the file aside to keep it, and start again to begin a new chain.")
@@ -371,6 +375,8 @@ pub fn governed_with(
         postgres: postgres.as_ref(),
         keys: &loaded.keys_path,
         policy: policy_path,
+        audit: &log,
+        audit_path: &loaded.audit_path,
     })?;
     let config = Config {
         providers,

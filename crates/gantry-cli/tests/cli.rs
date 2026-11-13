@@ -270,6 +270,40 @@ fn audit_verify_reports_the_count_or_the_first_broken_record() -> TestResult {
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn audit_verify_says_what_was_retired_and_that_the_rest_holds() -> TestResult {
+    let dir = workdir("audit-retired")?;
+    let log_path = dir.join("gantry-audit.jsonl");
+    let log = gantry_core::audit::AuditLog::open(&log_path)?;
+    for id in ["A", "B", "C"] {
+        log.append(&gantry_core::audit::Entry {
+            id,
+            ..Default::default()
+        })?;
+    }
+    log.seal()?;
+    log.append(&gantry_core::audit::Entry {
+        id: "D",
+        ..Default::default()
+    })?;
+    gantry_core::audit::retire(&log, &log_path, 3)?;
+    log.flush();
+    let file = log_path.display().to_string();
+    let out = gantry(&["audit", "verify", &file], &[])?;
+    let text = String::from_utf8(out.stdout)?;
+    assert!(out.status.success(), "{text}");
+    assert!(
+        text.contains("2 records in an unbroken chain from record 4 to record 5"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Records 1 to 3 were retired on purpose: record 5 (audit_retired"),
+        "{text}"
+    );
+    Ok(())
+}
+
 #[test]
 fn audit_repair_shows_then_removes_only_a_cut_last_line_and_records_it() -> TestResult {
     // QA10-11: a write that failed on a full disk leaves a cut last line, and serve refuses to start on it.

@@ -28,6 +28,7 @@ Each record has an `event` field naming its kind, except request records:
 | Configuration | `config_loaded`, `config_rejected` | The policy or keys file was loaded at start, changed, or a change was refused. |
 | Admin | `admin` | Every admin API call, console sign-in, sign-out, issue and revoke, `gantry login` self-issue and kill switch change, written before it is done. |
 | Repair | `audit_repaired` | `gantry audit repair --yes` removed a cut last line. |
+| Retirement | `audit_retired` | Old sealed segments were deleted. Names the records removed and the hashes they ran between. |
 
 Usage, attempts and answer guardrails records share the `id` of the request they belong to. That ID is the decision ID in the `X-Gantry-Decision` header and in every refusal message.
 
@@ -152,9 +153,29 @@ While Gantry has the log open it keeps `gantry-audit.jsonl.lock` beside it. The 
 - A Gantry that cannot rewrite its lock for 15 seconds (the share is unreachable), or finds that another Gantry took it over, refuses every request until it is started again. Two writers never append to one chain.
 - After `kill -9` or a crash, the lock stays. For a repair, delete it once Gantry is surely stopped, then run the repair again.
 
+## Sealed segments and retirement
+
+A program that embeds Gantry (Gantry Enterprise's [retention](/operations/retention/)) can seal the log: the records written so far move to a file in `gantry-audit.jsonl.sealed/`, named for the first and last record it holds (`00000000000000000001-00000000000000040211.jsonl`), and Gantry goes on in a new, empty `gantry-audit.jsonl`. The chain does not change: the next record follows the segment's last hash. `gantry audit verify`, the check at every start and spend replay read the segments and the file as one chain. Sealing works on Linux and macOS.
+
+Retiring deletes the oldest sealed segments. First it verifies the whole chain (a log that does not hold is never retired), then it appends an `audit_retired` record naming the records removed (`from_n` to `through_n`), the hash they chained from, the hash of the last one and each file's SHA-256, and only then deletes the files. `verify` then accepts a chain that starts after record 1 only if such a record names exactly what is missing:
+
+```text
+gantry-audit.jsonl: 51023 records in an unbroken chain from record 40212 to record 91234.
+...
+Records 1 to 40211 were retired on purpose: record 91234 (audit_retired, 2026-11-13T03:00:00.512Z) names them, and record 40212 follows their last hash 9c1f...
+```
+
+Segments deleted without that record, or a record that names another range, fail:
+
+```text
+error: gantry-audit.jsonl starts at record 40212: records 1 to 40211 are missing, and no audit_retired record in the chain says they were retired after 9c1f.... They were removed or moved aside without being retired; the records from 40212 on hold only if that was on purpose.
+```
+
+A hash kept elsewhere for a retired record is no longer in the chain, so `--expect-last` with it fails: keep the hash of a later record, or check the retired range against your archive (the `audit_retired` record gives each file's SHA-256).
+
 ## Size
 
-A request record is about 650 bytes and a usage record about 700, so a million forwarded requests make about 1.35 GB. Gantry reads the whole file at every start to verify it, so start-up time grows with the file. To start a new chain, stop Gantry, move the file aside with its last hash, and start again.
+A request record is about 650 bytes and a usage record about 700, so a million forwarded requests make about 1.35 GB. Gantry reads the whole file at every start to verify it, so start-up time grows with the file. To start a new chain, stop Gantry, move the file aside with its last hash, and start again. With Gantry Enterprise, retention seals the log daily and deletes old segments with a record in the chain: see [Retention and legal hold](/operations/retention/).
 
 Ship records to a log store with Vector, Fluent Bit or the OpenTelemetry Collector: see [Observability](/operations/observability/).
 
