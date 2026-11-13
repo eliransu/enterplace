@@ -442,6 +442,14 @@ async fn serve_unchecked(unchecked: bool) -> ExitCode {
 fn check(policy: &Path, keys: Option<&Path>) -> ExitCode {
     match config::load(policy, keys) {
         Ok(loaded) => {
+            // Credential names live in the store: checked there when it can be reached, warned about when not.
+            match gantry_server::credential_problems(policy, &loaded, &|v| std::env::var(v).ok()) {
+                Ok(problems) if !problems.is_empty() => {
+                    return check_failed(policy, &problems);
+                }
+                Ok(_) => {}
+                Err(why) => eprintln!("warning: credential names were not checked: {why}"),
+            }
             // UX12-4: keys from `gantry login` lapse on their own, so a past expiry is a warning: the files did not
             // change, and serving refuses such a key (recorded) either way.
             for warning in expired_keys(&loaded)
@@ -463,18 +471,20 @@ fn check(policy: &Path, keys: Option<&Path>) -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        Err(errors) => {
-            for error in &errors {
-                eprintln!("{error}");
-            }
-            let problems = match errors.len() {
-                1 => "1 problem".to_string(),
-                n => format!("{n} problems"),
-            };
-            eprintln!("{} cannot be used: {problems} above.", policy.display());
-            ExitCode::from(1)
-        }
+        Err(errors) => check_failed(policy, &errors),
     }
+}
+
+fn check_failed(policy: &Path, errors: &[String]) -> ExitCode {
+    for error in errors {
+        eprintln!("{error}");
+    }
+    let problems = match errors.len() {
+        1 => "1 problem".to_string(),
+        n => format!("{n} problems"),
+    };
+    eprintln!("{} cannot be used: {problems} above.", policy.display());
+    ExitCode::from(1)
 }
 
 /// One problem per key in the keys file whose expiry has passed, on the line of its hash.
