@@ -47,13 +47,14 @@ Hybrid gateways are part of the commercial product. They run `gantry-enterprise 
 | `--interval <seconds>` | How often it asks the control plane for changes. Default 5. |
 | `--max-offline <seconds>` | Stop serving when the control plane has not answered for this long, so a key revoked during an outage cannot be used for longer. Off by default: the gateway keeps serving its last config. |
 | `--pass-env A,B` | Environment variables the gateway may read besides `*_PROVIDER_KEY`, such as `AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY` for Bedrock. The gateway's environment otherwise starts empty. |
+| `--metrics <host:port>` | Serve Prometheus metrics at `GET /metrics` on that address, as `gantry serve --metrics` does. |
 | `--secrets NAME=<source>` | Read a provider key from `file:`, `env:`, `vault:<url>#field` or `aws-sm:<arn>`, and rotate it without a restart. |
 
 The node reaches the control plane through `HTTPS_PROXY` when it is set. On SIGTERM it ships its last audit records and stops the gateway.
 
 ## What leaves your network
 
-Only these audit fields, for each decision: `n`, `event`, `id`, `time`, `person`, `team`, `key` (a hash prefix), `method`, `path`, `model`, `verdict`, `code`, `rule`, `provider`, `status`, `ended`, `input_tokens`, `output_tokens`, `cost_usd`, `charged_usd`, `trigger`, `policy_sha256`, `keys_sha256`, `action`, `prev`, `hash`, and for a rejected config its `problem_count` and `problems`. No prompt or answer text, no client address, no provider key. `person` is the key's name, often an email address.
+Only these audit fields, for each decision: `n`, `event`, `id`, `time`, `person`, `team`, `key` (a hash prefix), `method`, `path`, `model`, `verdict`, `code`, `rule`, `provider`, `status`, `ended`, `input_tokens`, `output_tokens`, `cost_usd`, `charged_usd`, `trigger`, `policy_sha256`, `keys_sha256`, `action`, `prev`, `hash`, `guardrails` (detector, kind and action of each finding, never the text found), and for a rejected config its `problem_count` and `problems`. No prompt or answer text, no client address, no provider key. `person` is the key's name, often an email address.
 
 <Aside type="caution">
 The control plane keeps metadata only, so its copy of the audit log cannot be checked with `gantry audit verify`. The full hash chain is the node's own `gantry-audit.jsonl`: keep that volume, and verify it there.

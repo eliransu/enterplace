@@ -819,6 +819,19 @@ const KINDS: &[Kind] = &[
         pattern: r"\b[0-9]{9}\b",
         valid: israeli_id_ok,
     },
+    // Health data is found by its label: a bare number or date is too common to call a record number or a birthday.
+    Kind {
+        detector: PII,
+        kind: "medical_record_number",
+        pattern: r"(?i:\b(?:MRN|medical record(?: number| no\.?)?))[:#\s]+[A-Z0-9-]{5,12}\b",
+        valid: any,
+    },
+    Kind {
+        detector: PII,
+        kind: "date_of_birth",
+        pattern: r"(?i:\b(?:DOB|date of birth|born on))[:\s]+(?:[0-9]{1,2}[/.-][0-9]{1,2}[/.-][0-9]{2,4}|[0-9]{4}-[0-9]{2}-[0-9]{2})\b",
+        valid: any,
+    },
     Kind {
         detector: PII,
         kind: "phone_number",
@@ -1491,6 +1504,10 @@ mod tests {
             ("iban IL620108000000099999999", "iban"),
             ("id 123456782", "israeli_id"),
             ("ssn 123-45-6789", "us_ssn"),
+            ("patient MRN: A1234567 admitted", "medical_record_number"),
+            ("Medical record number 00482913", "medical_record_number"),
+            ("DOB: 04/12/1987", "date_of_birth"),
+            ("date of birth 1987-04-12", "date_of_birth"),
         ];
         for (text, kind) in found {
             assert_eq!(kinds(text)?, [kind], "{text}");

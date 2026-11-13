@@ -74,9 +74,9 @@ Guardrails run before the cache, the rate limit and the budget. See [Order of ch
 | Type | Kinds found |
 |---|---|
 | `secrets` | `private_key` (the whole PEM block), `aws_access_key`, `github_token`, `slack_token`, `gantry_key`, `jwt`, `api_key` (`sk-...`) |
-| `pii` | `email_address`, `phone_number`, `credit_card` (Luhn checked), `iban` (mod 97 checked), `israeli_id` (check digit), `us_ssn` |
+| `pii` | `email_address`, `phone_number`, `credit_card` (Luhn checked), `iban` (mod 97 checked), `israeli_id` (check digit), `us_ssn`, `medical_record_number` and `date_of_birth` (only after a label such as `MRN:` or `DOB:`) |
 
-These are pattern detectors. A password, a database URL with credentials, a key with no known prefix, a name, an address or a date of birth is not found. Text that is encoded, split across messages, spelled out or translated is not found either. Any 9-digit number with a valid Israeli ID check digit, and some long digit runs that pass Luhn, are reported. Use a vendor for anything beyond these patterns.
+These are pattern detectors. A password, a database URL with credentials, a key with no known prefix, a name, an address, or a date of birth or record number with no label is not found. Text that is encoded, split across messages, spelled out or translated is not found either. Any 9-digit number with a valid Israeli ID check digit, and some long digit runs that pass Luhn, are reported. Use a vendor such as Presidio for names, addresses and anything else beyond these patterns.
 
 ## Vendors
 
