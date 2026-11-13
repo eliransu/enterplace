@@ -1,0 +1,63 @@
+---
+title: License key
+description: Set the commercial license with GANTRY_LICENSE, see what it unlocks, and what happens at expiry and over seats. Checked offline; nothing calls home.
+sidebar:
+  order: 7
+---
+
+The open source gateway needs no license. The commercial product, `gantry-enterprise`, reads a license key to unlock its enterprise features. Without one it runs the open source features only.
+
+## Set it
+
+The license is one line of text. Give it to `gantry-enterprise` in one of two ways:
+
+```sh
+export GANTRY_LICENSE='eyJjdXN0b21lciI6...'          # the token itself
+export GANTRY_LICENSE_FILE=/etc/gantry/license       # or a file that holds it
+```
+
+Set one, not both. In Kubernetes, put the token in a Secret and pass it as `GANTRY_LICENSE`. Restart the gateway after you change it.
+
+At start, the gateway says once what the license unlocks:
+
+```text
+License lic_8f2 for Acme: scim, siem, 50 seats, until 2027-11-13.
+```
+
+To see it at any time, without the token:
+
+```sh
+gantry-enterprise license show --keys gantry.keys.yaml
+```
+
+It prints the customer, the features, seats used of allowed, the expiry date and whether the license is in its grace period.
+
+## Nothing calls home
+
+The license is signed by Gantry and checked against a public key built into the binary. The check never uses the network, so it works the same in an air-gapped network.
+
+## At expiry
+
+| When | What happens |
+|---|---|
+| Before the expiry date | Everything the license names is on. |
+| Up to 30 days after it | Everything stays on. A warning is printed at start. |
+| After the 30 days | Enterprise features are off. Model traffic is still served. |
+
+A license never stops model traffic: the gateway keeps serving, governing and recording requests whatever the license says. A feature the license does not unlock answers with the code `license_required` and says what to do.
+
+Set the renewed license and restart to turn the features back on.
+
+## Seats
+
+Seats count people: the distinct names in the keys file. When more people hold keys than the license has seats, the gateway prints a warning at start. It does not block anyone. Ask for more seats, or revoke keys that are no longer used.
+
+## When the gateway refuses to start
+
+A license that is set and cannot be checked stops the start, with the cause:
+
+- **not a Gantry license**: the token is cut short or has extra text. Paste it again, on one line.
+- **not signed by Gantry**: the token was changed after it was issued. Paste it exactly as you received it, or ask for a new one.
+- **both GANTRY_LICENSE and GANTRY_LICENSE_FILE are set**: unset one.
+
+To run the open source features only, unset `GANTRY_LICENSE` and `GANTRY_LICENSE_FILE`.
