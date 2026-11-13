@@ -61,6 +61,17 @@ export DATABASE_URL='postgres://gantry:...@mydb.abc123.eu-west-1.rds.amazonaws.c
 
 Cloud SQL and Azure Database for PostgreSQL publish their server CA the same way: download it and name it with `sslrootcert`. When the certificate is not trusted, `gantry serve` refuses to start and says to add `sslrootcert`.
 
+A Unix socket never leaves the machine and Postgres offers no TLS on one, so Gantry connects to a socket in plain text whatever `sslmode` says, with no warning, as libpq does. A host that starts with `/` is a socket directory.
+
+The two common clouds:
+
+- **AWS, Amazon RDS directly** (not through RDS Proxy): the RDS endpoint with `sslrootcert` naming the RDS bundle, as above. `verify-full` holds, since the certificate names the endpoint.
+- **GCP, Cloud SQL through the Cloud SQL Auth Proxy or connector**: the connector encrypts to Cloud SQL and gives a Unix socket, so name the socket and nothing else:
+
+  ```bash
+  export DATABASE_URL='host=/cloudsql/my-project:europe-west1:gantry user=gantry password=... dbname=gantry'
+  ```
+
 A Postgres inside your Kubernetes cluster, on a private address and without TLS, needs `sslmode=disable`. Use it only on a network you trust: key hashes, kill switches and spend then cross it in plain text.
 
 Changing the `store:` section needs a restart. The rest of the policy still reloads within 2 seconds.

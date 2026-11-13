@@ -140,7 +140,7 @@ fn write<T>(lock: &RwLock<T>, value: T) {
 /// its tables, and reads the keys and kill switches. Fails, naming the fix, if any of that cannot be done.
 pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
     let (config, tls) = connection(env, url)?;
-    if tls.is_none() {
+    if tls.is_none() && !socket(&config) {
         eprintln!(
             "warning: {env} says sslmode=disable, so the connection to the store is not encrypted: key hashes, kill switches and spend cross the network in plain text. Use it only on a network you trust, such as a cluster's own Postgres; remove sslmode=disable to encrypt it."
         );
@@ -245,7 +245,9 @@ fn connection(env: &str, url: &str) -> Result<(tokio_postgres::Config, Option<Ru
             "{env} says sslmode={mode}, which Gantry does not take: it never falls back to plain text unasked. Use verify-full (the default), verify-ca, require or disable."
         ));
     }
-    if mode == "disable" {
+    // A Unix socket (the Cloud SQL connector's /cloudsql/..., a local server) never leaves the machine, and
+    // Postgres offers no TLS on one, as libpq knows: whatever sslmode says, it is plain and not warned about.
+    if mode == "disable" || socket(&config) {
         config.ssl_mode(SslMode::Disable);
         return Ok((config, None));
     }
@@ -285,6 +287,21 @@ fn connection(env: &str, url: &str) -> Result<(tokio_postgres::Config, Option<Ru
         config,
         Some(Rustls(tokio_rustls::TlsConnector::from(Arc::new(tls)))),
     ))
+}
+
+/// Whether every host the string names is a Unix socket directory.
+#[cfg(unix)]
+fn socket(config: &tokio_postgres::Config) -> bool {
+    let hosts = config.get_hosts();
+    !hosts.is_empty()
+        && hosts
+            .iter()
+            .all(|host| matches!(host, tokio_postgres::config::Host::Unix(_)))
+}
+
+#[cfg(not(unix))]
+fn socket(_: &tokio_postgres::Config) -> bool {
+    false
 }
 
 /// The certificates of an `sslrootcert` file.
@@ -1118,6 +1135,24 @@ mod tests {
             err.contains("/no/such/ca.pem") && err.contains("PEM"),
             "{err}"
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_unix_socket_is_local_and_never_tries_tls() -> Result<(), String> {
+        for url in [
+            "host=/cloudsql/project:europe-west1:gantry user=u dbname=g",
+            "host=/cloudsql/project:europe-west1:gantry user=u dbname=g sslmode=verify-full",
+            "postgresql://u:p@/g?host=/cloudsql/project:europe-west1:gantry",
+        ] {
+            let (config, tls) = connection("DATABASE_URL", url)?;
+            assert!(tls.is_none(), "{url}");
+            assert!(socket(&config), "{url}: no plain text warning");
+            assert_eq!(config.get_ssl_mode(), SslMode::Disable, "{url}");
+        }
+        let (config, _) = connection("DATABASE_URL", "postgres://u:p@10.0.0.7/g?sslmode=disable")?;
+        assert!(!socket(&config), "a network host is warned about");
         Ok(())
     }
 

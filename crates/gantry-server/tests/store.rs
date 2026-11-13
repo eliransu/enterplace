@@ -742,3 +742,61 @@ async fn tls_to_the_store_does_what_sslmode_and_sslrootcert_say() -> TestResult 
     start("tls-disabled", format!("{no_tls} sslmode=disable"))?;
     Ok(())
 }
+
+/// A Unix socket in front of the test Postgres, as the Cloud SQL connector gives one at /cloudsql/...: plain
+/// bytes both ways, and the server behind it offers no TLS.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_unix_socket_connects_without_tls_whatever_sslmode_says() -> TestResult {
+    let Some(url) = database("socket").await? else {
+        return Ok(());
+    };
+    let config: tokio_postgres::Config = url.parse()?;
+    let host = match config.get_hosts().first() {
+        Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
+        _ => "127.0.0.1".into(),
+    };
+    let to = (host, config.get_ports().first().copied().unwrap_or(5432));
+    // Short and under /tmp: a socket path is limited to about 100 bytes.
+    let folder = PathBuf::from(format!("/tmp/gantry-sock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder)?;
+    let port = 5432;
+    let listener = tokio::net::UnixListener::bind(folder.join(format!(".s.PGSQL.{port}")))?;
+    tokio::spawn(async move {
+        while let Ok((mut inbound, _)) = listener.accept().await {
+            let to = to.clone();
+            tokio::spawn(async move {
+                if let Ok(mut outbound) = tokio::net::TcpStream::connect(to).await {
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                }
+            });
+        }
+    });
+    let password = config
+        .get_password()
+        .map(|p| String::from_utf8_lossy(p).to_string())
+        .unwrap_or_default();
+    let socket = format!(
+        "host='{}' port={port} user='{}' password='{password}' dbname='{}'",
+        folder.display(),
+        config.get_user().unwrap_or("postgres"),
+        config.get_dbname().unwrap_or("postgres")
+    );
+    let provider = provider().await?;
+    for (name, tail) in [("sock-default", ""), ("sock-full", " sslmode=verify-full")] {
+        let a = gateway(&dir(name)?, &format!("{socket}{tail}"), provider)?;
+        // The second gateway reads the key the first wrote, at start.
+        if name == "sock-default" {
+            add_key(&a, "maya", "ops", MAYA, false)?;
+        }
+        let (status, body) = answer(
+            &a.router,
+            request("POST", "/v1/chat/completions", MAYA, FREE)?,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK, "{name}: {body}");
+    }
+    let _ = std::fs::remove_dir_all(&folder);
+    Ok(())
+}
