@@ -685,6 +685,18 @@ async fn the_health_check_fails_once_the_audit_log_is_lost() -> TestResult {
         StatusCode::OK
     );
 
+    if cfg!(windows) {
+        // Windows: a held log cannot be deleted, so it is never lost and the check stays healthy.
+        assert!(
+            std::fs::remove_file(&log).is_err(),
+            "a held audit log was deleted"
+        );
+        assert_eq!(
+            app.clone().oneshot(health()?).await?.status(),
+            StatusCode::OK
+        );
+        return Ok(());
+    }
     std::fs::remove_file(&log)?;
     // Before any request has been refused: the check looks at the log itself.
     assert_eq!(
@@ -873,6 +885,20 @@ async fn removing_the_audit_folder_while_running_refuses_every_request() -> Test
         StatusCode::OK
     );
 
+    if cfg!(windows) {
+        // Windows: a held log cannot be deleted, so its folder cannot be removed and records keep reaching it.
+        assert!(
+            std::fs::remove_dir_all(log.parent().ok_or("no folder")?).is_err() && log.exists(),
+            "the folder of a held audit log was removed"
+        );
+        assert_eq!(
+            answer(&app, chat(OMER, "any-model")?).await?.0,
+            StatusCode::OK
+        );
+        assert_eq!(provider.hits.load(Ordering::SeqCst), 2);
+        gantry_core::audit::verify(&log)?;
+        return Ok(());
+    }
     std::fs::remove_dir_all(log.parent().ok_or("no folder")?)?;
     for _ in 0..2 {
         let (status, _, body) = answer(&app, chat(OMER, "any-model")?).await?;
