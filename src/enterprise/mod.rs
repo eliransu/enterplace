@@ -1,0 +1,332 @@
+//! The enterprise features, added to the open source gateway through its extension points
+//! (`gantry_server::serve_policy_with`): routes, console pages, tables in the store's Postgres and /healthz fields.
+//! A feature is added only when the license unlocks it; without one the gateway and console are the open source ones.
+//!
+//! How a feature registers is written up in docs/porting.md.
+
+mod members;
+
+use std::sync::Arc;
+
+use gantry_server::{
+    Extension, Host,
+    store::{PgStore, tokio_postgres::Client},
+};
+use serde_json::json;
+
+use crate::license::{self, State, Status};
+
+/// The enterprise tables, one migration per entry, applied in order under the namespace `enterprise` (its own
+/// version row in `gantry_migrations`, apart from the gateway's tables). Never edit an entry that has shipped: add
+/// one. Every feature's tables are here, so one version says where a database is.
+const MIGRATIONS: &[&str] = &[members::MIGRATION];
+
+/// What the enterprise binary adds to the gateway it serves, for `status` (the license loaded at start).
+pub fn extend(status: &Status, host: Host<'_>) -> Result<Extension, String> {
+    let mut extension = Extension {
+        health: Some(health(status)),
+        ..Extension::default()
+    };
+    if !status.unlocked(members::FEATURE) {
+        members::locked(&mut extension, status);
+        return Ok(extension);
+    }
+    // The license never stops traffic: a feature that cannot run says why and the gateway starts without it.
+    let Some(pg) = host.postgres else {
+        eprintln!(
+            "warning: the license unlocks members, and they are kept in Postgres, but the policy has no store. Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then the console signs in with admin keys only."
+        );
+        return Ok(extension);
+    };
+    pg.migrate("enterprise", MIGRATIONS)?;
+    let db = Arc::new(Db::new(pg.clone()));
+    members::register(&mut extension, db, host.keys.to_path_buf());
+    Ok(extension)
+}
+
+/// The license as /healthz shows it: who it is for and until when, never the token.
+fn health(status: &Status) -> gantry_server::Health {
+    let state = match status.state {
+        State::Missing => "missing",
+        State::Valid => "valid",
+        State::Grace => "grace",
+        State::Lapsed => "lapsed",
+    };
+    let fields = json!({
+        "state": state,
+        "customer": status.license.as_ref().map(|l| &l.customer),
+        "id": status.license.as_ref().map(|l| &l.id),
+        "features": status.license.as_ref().map(|l| &l.features),
+        "expires": status.license.as_ref().map(|l| &l.expires),
+        "grace_days": license::GRACE_DAYS,
+    });
+    let mut map = serde_json::Map::new();
+    map.insert("license".into(), fields);
+    Arc::new(move || map.clone())
+}
+
+/// The enterprise features' connection to the store's database. Their own, apart from the gateway's, so it may hold
+/// transactions.
+// ponytail: one connection, so enterprise queries (console pages and sign-ins, not model traffic) wait in turn.
+// A pool when a feature puts queries on the request path.
+pub struct Db {
+    pg: Arc<PgStore>,
+    client: tokio::sync::Mutex<Option<Client>>,
+}
+
+impl Db {
+    fn new(pg: Arc<PgStore>) -> Self {
+        Self {
+            pg,
+            client: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    /// The connection, opened again if it was lost.
+    pub async fn client(&self) -> Result<tokio::sync::MappedMutexGuard<'_, Client>, String> {
+        let mut client = self.client.lock().await;
+        if client.as_ref().is_none_or(Client::is_closed) {
+            *client = Some(self.pg.connect().await?);
+        }
+        tokio::sync::MutexGuard::try_map(client, Option::as_mut)
+            .map_err(|_| "the connection to Postgres was not opened".to_string())
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod testing {
+    //! A gateway with the enterprise features, on a fresh database of the Postgres GANTRY_TEST_DATABASE_URL names.
+
+    use std::path::PathBuf;
+
+    use axum::{
+        Router,
+        body::Body,
+        http::{HeaderMap, Request, StatusCode, header},
+    };
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    use crate::license::{License, State, Status};
+
+    pub type Error = Box<dyn std::error::Error>;
+    pub const HOST: &str = "127.0.0.1:19870";
+    pub const ADMIN_KEY: &str = "gantry_admin_0123456789abcdef0123456789";
+
+    pub fn licensed(features: &[&str]) -> Status {
+        Status {
+            license: Some(License {
+                customer: "Acme".into(),
+                id: "lic_test".into(),
+                features: features.iter().map(|f| (*f).to_string()).collect(),
+                seats: 10,
+                issued: "2026-11-01".into(),
+                expires: "2099-01-01".into(),
+            }),
+            state: State::Valid,
+        }
+    }
+
+    pub fn unlicensed() -> Status {
+        Status {
+            license: None,
+            state: State::Missing,
+        }
+    }
+
+    /// A fresh database, as a connection string. `None` (and a line saying so) when GANTRY_TEST_DATABASE_URL is not
+    /// set, so a machine without Postgres skips these tests; CI sets it.
+    pub async fn database(test: &str) -> Result<Option<String>, Error> {
+        let Ok(url) = std::env::var("GANTRY_TEST_DATABASE_URL") else {
+            eprintln!(
+                "skipped {test}: GANTRY_TEST_DATABASE_URL is not set. Set it to a Postgres connection string to run the enterprise tests."
+            );
+            return Ok(None);
+        };
+        use gantry_server::store::tokio_postgres;
+        let config: tokio_postgres::Config = url.parse()?;
+        let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
+        tokio::spawn(connection);
+        let name = format!("gantry_ent_{}_{test}", std::process::id());
+        client
+            .batch_execute(&format!("DROP DATABASE IF EXISTS {name}"))
+            .await?;
+        client
+            .batch_execute(&format!("CREATE DATABASE {name}"))
+            .await?;
+        let host = match config.get_hosts().first() {
+            Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
+            _ => "127.0.0.1".into(),
+        };
+        let password = config
+            .get_password()
+            .map(|p| String::from_utf8_lossy(p).to_string())
+            .unwrap_or_default();
+        Ok(Some(format!(
+            "host={host} port={} user={} password='{}' dbname={name} sslmode=disable",
+            config.get_ports().first().copied().unwrap_or(5432),
+            config.get_user().unwrap_or("postgres"),
+            password.replace('\\', "\\\\").replace('\'', "\\'"),
+        )))
+    }
+
+    pub struct Gateway {
+        pub app: Router,
+        pub keys: PathBuf,
+        pub dir: PathBuf,
+        _gw: gantry_server::Governed,
+    }
+
+    /// The gateway `serve` runs, with the enterprise features `status` unlocks, and one admin key, noa's.
+    pub fn gateway(test: &str, url: &str, status: &Status) -> Result<Gateway, Error> {
+        let dir = std::env::temp_dir().join(format!("gantry-ent-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let policy = dir.join("gantry.policy.yaml");
+        std::fs::write(
+            &policy,
+            "version: 1\nstore: { postgres_url_env: GANTRY_STORE_URL }\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\nrules:\n  - name: all\n    principals: { any: true }\n    models: [m]\n",
+        )?;
+        let url = url.to_string();
+        let env = move |variable: &str| match variable {
+            "GANTRY_STORE_URL" => Some(url.clone()),
+            _ => Some("provider-secret".into()),
+        };
+        let gw =
+            gantry_server::governed_with(&policy, None, &env, &|host| super::extend(status, host))?;
+        let keys = gw.loaded.keys_path.clone();
+        gantry_core::keyfile::add_entry("noa", "platform", ADMIN_KEY, true, &keys)?;
+        Ok(Gateway {
+            app: gw.router.clone(),
+            keys,
+            dir,
+            _gw: gw,
+        })
+    }
+
+    /// A browser: keeps the console cookie and sends forms from the console's own origin.
+    #[derive(Default)]
+    pub struct Browser {
+        pub cookie: String,
+    }
+
+    pub struct Answer {
+        pub status: StatusCode,
+        pub location: String,
+        pub text: String,
+    }
+
+    impl Browser {
+        pub async fn go(
+            &mut self,
+            app: &Router,
+            method: &str,
+            path: &str,
+            form: &[(&str, &str)],
+        ) -> Result<Answer, Error> {
+            let body = form
+                .iter()
+                .map(|(k, v)| format!("{}={}", enc(k), enc(v)))
+                .collect::<Vec<_>>()
+                .join("&");
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header(header::HOST, HOST)
+                .header(header::ORIGIN, format!("http://{HOST}"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+            if !self.cookie.is_empty() {
+                request = request.header(header::COOKIE, &self.cookie);
+            }
+            let response = app.clone().oneshot(request.body(Body::from(body))?).await?;
+            let (parts, body) = response.into_parts();
+            self.keep(&parts.headers);
+            let text = String::from_utf8_lossy(&body.collect().await?.to_bytes()).into_owned();
+            Ok(Answer {
+                status: parts.status,
+                location: parts
+                    .headers
+                    .get(header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string(),
+                text,
+            })
+        }
+
+        fn keep(&mut self, headers: &HeaderMap) {
+            for cookie in headers.get_all(header::SET_COOKIE) {
+                if let Some(pair) = cookie.to_str().ok().and_then(|c| c.split(';').next())
+                    && pair.starts_with("gantry_console=")
+                {
+                    self.cookie = pair.to_string();
+                }
+            }
+        }
+
+        /// Signs in with noa's admin key.
+        pub async fn admin(app: &Router) -> Result<Self, Error> {
+            let mut browser = Self::default();
+            let signed = browser
+                .go(app, "POST", "/console/sign-in", &[("key", ADMIN_KEY)])
+                .await?;
+            if signed.status != StatusCode::SEE_OTHER {
+                return Err(format!("admin sign-in: {}", signed.status).into());
+            }
+            Ok(browser)
+        }
+    }
+
+    fn enc(text: &str) -> String {
+        text.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::*;
+    use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn healthz_shows_the_license_and_never_the_token() -> Result<(), Error> {
+        let Some(url) = database("health").await? else {
+            return Ok(());
+        };
+        let gw = gateway("health", &url, &licensed(&["members"]))?;
+        let answer = Browser::default()
+            .go(&gw.app, "GET", "/healthz", &[])
+            .await?;
+        assert_eq!(answer.status, StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_str(&answer.text)?;
+        assert_eq!(body["status"], "ok");
+        let license = &body["license"];
+        assert_eq!(license["customer"], "Acme");
+        assert_eq!(license["expires"], "2099-01-01");
+        assert_eq!(license["state"], "valid");
+        assert_eq!(license["grace_days"], 30);
+        assert!(license.get("token").is_none() && !answer.text.contains("signature"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn without_a_license_healthz_says_so() -> Result<(), Error> {
+        let Some(url) = database("health_none").await? else {
+            return Ok(());
+        };
+        let gw = gateway("health_none", &url, &unlicensed())?;
+        let answer = Browser::default()
+            .go(&gw.app, "GET", "/healthz", &[])
+            .await?;
+        let body: serde_json::Value = serde_json::from_str(&answer.text)?;
+        assert_eq!(body["license"]["state"], "missing");
+        assert!(body["license"]["customer"].is_null());
+        Ok(())
+    }
+}
