@@ -1,0 +1,133 @@
+---
+title: Several replicas with a store
+description: Point two or more Gantry processes at one Postgres database so they share keys, kill switches and budgets, and act as one gateway.
+sidebar:
+  order: 2
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Without a store, each Gantry process keeps its keys in a file, its kill switches beside it, and its spend in memory. That is right for one process. To run two or more behind a load balancer, give them one Postgres database: the store. They then act as one gateway.
+
+- A key issued on any replica is accepted by all within 2 seconds. A revoked key is refused by all within 2 seconds.
+- A kill switch set on any replica stops traffic on all within 1 second.
+- A budget is enforced once across all replicas: what they charge together never passes it by more than one request's estimate.
+
+## When to use it
+
+Use a store when you run more than one replica, for availability or for load. With one process, the files are simpler: there is nothing to run and nothing to back up but the volume.
+
+## Configuration
+
+Add a `store:` section to the policy. It names the environment variable that holds the connection string, never the string itself, which carries a password.
+
+```yaml
+store:
+  postgres_url_env: DATABASE_URL
+```
+
+Set the variable on every replica:
+
+```bash
+export DATABASE_URL='postgres://gantry:...@db.example.com:5432/gantry'
+gantry serve gantry.policy.yaml
+```
+
+- **Start.** `gantry serve` refuses to start, naming the fix, if the variable is unset or the database cannot be reached. `gantry check` checks the section without connecting.
+- **Tables.** Gantry creates its tables on first start, in the database the string names. The user needs `CREATE` on it. The schema is versioned in the binary (the `gantry_schema` table); a newer Gantry updates it, and an older Gantry refuses a database a newer one has written, so upgrade every replica to the same version.
+- **Commands.** `gantry key new`, `key list`, `key revoke` and `key prune` change the store when the policy beside the keys file (or `--policy`) has `store:`, with the variable set. `gantry kill` and `unkill`, the admin API and the console change it through any replica.
+
+### TLS
+
+Gantry reads the libpq parameters `sslmode` and `sslrootcert` in the connection string, in URL form (`?sslmode=verify-full&sslrootcert=/etc/gantry/ca.pem`) or key=value form.
+
+| `sslmode` | Encrypted | What is checked |
+|---|---|---|
+| `verify-full` (the default) | yes | The certificate is signed by a trusted root and names the host in the string. |
+| `verify-ca` | yes | The certificate is signed by a trusted root. Any host name. |
+| `require` | yes | Nothing, as libpq does. With `sslrootcert`, it checks as `verify-ca`. |
+| `disable` | no | Nothing. Gantry starts with a warning that the connection is not encrypted. |
+
+`prefer` and `allow` are refused: they fall back to plain text without saying so.
+
+The trusted roots are the Mozilla set built into the binary (no system certificates are read), plus the certificates in the PEM file `sslrootcert` names. For `verify-ca` with `sslrootcert`, the file's certificates are the only roots.
+
+Managed databases often sign with a CA of their own. Amazon RDS does: give its bundle.
+
+```bash
+curl -sSfo /etc/gantry/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+export DATABASE_URL='postgres://gantry:...@mydb.abc123.eu-west-1.rds.amazonaws.com:5432/gantry?sslrootcert=/etc/gantry/rds-global-bundle.pem'
+```
+
+Cloud SQL and Azure Database for PostgreSQL publish their server CA the same way: download it and name it with `sslrootcert`. When the certificate is not trusted, `gantry serve` refuses to start and says to add `sslrootcert`.
+
+A Unix socket never leaves the machine and Postgres offers no TLS on one, so Gantry connects to a socket in plain text whatever `sslmode` says, with no warning, as libpq does. A host that starts with `/` is a socket directory.
+
+The two common clouds:
+
+- **AWS, Amazon RDS directly** (not through RDS Proxy): the RDS endpoint with `sslrootcert` naming the RDS bundle, as above. `verify-full` holds, since the certificate names the endpoint.
+- **GCP, Cloud SQL through the Cloud SQL Auth Proxy or connector**: the connector encrypts to Cloud SQL and gives a Unix socket, so name the socket and nothing else:
+
+  ```bash
+  export DATABASE_URL='host=/cloudsql/my-project:europe-west1:gantry user=gantry password=... dbname=gantry'
+  ```
+
+A Postgres inside your Kubernetes cluster, on a private address and without TLS, needs `sslmode=disable`. Use it only on a network you trust: key hashes, kill switches and spend then cross it in plain text.
+
+Changing the `store:` section needs a restart. The rest of the policy still reloads within 2 seconds.
+
+### Moving an existing keys file in
+
+```bash
+gantry store import --keys gantry.keys.yaml --policy gantry.policy.yaml
+```
+
+This copies every key of the file, and the kill switches in `gantry.kills.json` beside it, into the store. Keys already there are left as they are, so running it twice is safe. The file itself is not changed. While the policy has `store:`, Gantry does not read it: keep it as a backup or delete it.
+
+## What is stored, and what is not
+
+| In the store | Not in the store |
+|---|---|
+| Keys: name, team, the SHA-256 of the key, admin, expiry, budget, models, tpm. Never a key itself. | The policy. It stays a file, reviewed in git, and every replica reads its own copy. |
+| Kill switches, with their reason, who set them and when. | Prompts and answers. Gantry never stores them, here or anywhere. |
+| Spend and reservations, per team, person and key, per day and month. | The audit log. Each replica keeps its own hash-chained file. |
+| | Rate limits (`rpm`, `tpm`) and the answer cache. They are counted per replica. |
+| | Console sessions. A sign-in is good on the replica that made it. |
+
+Spend in the store counts requests under a budget (a rule's or a key's). Requests without a budget never reach the database, so their cost is in the audit log and in each replica's memory only.
+
+## How it works
+
+Keys and kill switches are read from memory, as without a store. Each replica polls a version row every 500 ms and reloads them when the version changes, so a request never waits on the database for its key or a switch. A change is applied at once on the replica that made it.
+
+A request under a budget reserves the most it could cost with one atomic statement, which fails when the reservation would pass the budget. Two replicas reserving at the same moment are ordered by Postgres, so they cannot both pass. When the answer ends, a second statement replaces the reservation with what the request cost. A request with no budget makes no database call. In tests against a local Postgres, a budgeted request took about 0.3 ms longer than the same request without a budget.
+
+## Several replicas
+
+Run every replica with the same policy and the same `DATABASE_URL`, each with its own volume for its audit log. On Kubernetes that is a StatefulSet (a volume per pod) rather than the single-replica chart: see [Kubernetes](/operations/kubernetes/). Put a load balancer in front, with its health check on `GET /healthz`.
+
+- Each replica's audit log is a chain of its own. Verify each with `gantry audit verify`, and ship each to your SIEM.
+- A replica that restarts reads the keys and switches from the store, and spend is in the store: nothing is lost.
+- Console single sign-on: the identity provider's callback must reach the replica that started the sign-in. Use session affinity on `/console`.
+
+## When Postgres is down
+
+Gantry fails closed for spend and stays up for everything else:
+
+- **Known keys keep working** from memory. A key issued or revoked during the outage cannot be: the command says the store cannot be reached, and nothing is changed.
+- **Kill switches keep their last state.** A new switch cannot be set until the store is back.
+- **A request under a budget is refused** with `503` and the code [`store_unavailable`](/reference/refusal-codes/#store_unavailable): Gantry cannot reserve its cost, and it never lets it through unchecked. Requests without a budget are served.
+- **What requests cost** while the database comes and goes is retried for 10 minutes. A reservation that is never settled keeps counting against its budget until the period ends: an outage can make a budget stricter, never looser.
+
+Each replica writes one line to stderr when the store goes away and one when it is back. Budgeted requests are served again within a second of the database answering.
+
+<Aside type="caution">
+A replica that dies with requests in flight leaves their reservations held until the budget's period ends (the next UTC day or month). Size budgets with that in mind, or raise one by hand if a crash holds too much of it.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" description="How a request is admitted under a budget." />
+	<LinkCard title="Kubernetes" href="/operations/kubernetes/" description="The Helm chart and plain manifests." />
+</CardGrid>

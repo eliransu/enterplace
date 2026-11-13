@@ -103,6 +103,10 @@ struct File {
 
 /// The switches in the file. No file is no switch.
 pub fn read(path: &Path) -> Result<Vec<Kill>, String> {
+    // With a store, the switches are in the database, and every reader of this file gets them from there.
+    if let Some(store) = crate::store::attached_kills(path) {
+        return Ok(store.kills().to_vec());
+    }
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -191,6 +195,8 @@ pub struct Switches {
     /// One change at a time on this node, so two changes made together both stay.
     // ponytail: two nodes changing switches in the same instant can lose one change; admins set switches by hand.
     changing: Mutex<()>,
+    /// Serves the switches in place of the file when the policy has `store:`.
+    store: Option<Arc<dyn crate::store::Store>>,
 }
 
 impl Switches {
@@ -201,6 +207,7 @@ impl Switches {
             kills: read(&path).map(Arc::new),
         });
         Self {
+            store: crate::store::attached_kills(&path),
             path,
             cache,
             changing: Mutex::new(()),
@@ -213,6 +220,9 @@ impl Switches {
 
     /// The switches on now. `Err` when the file cannot be read: no request can then be told it is not stopped.
     pub fn current(&self) -> Result<Arc<Vec<Kill>>, String> {
+        if let Some(store) = &self.store {
+            return Ok(store.kills());
+        }
         {
             let cache = self
                 .cache
@@ -259,6 +269,9 @@ impl Switches {
 
     /// Turns a switch on, or replaces the reason of the same switch. Returns the switch it replaced.
     pub fn set(&self, kill: Kill) -> Result<Option<Kill>, String> {
+        if let Some(store) = &self.store {
+            return store.set_kill(&kill);
+        }
         self.change(|kills| {
             let old = kills
                 .iter()
@@ -271,6 +284,9 @@ impl Switches {
 
     /// Turns a switch off. Returns it, or `None` when it was not on.
     pub fn clear(&self, scope: &str, value: &str) -> Result<Option<Kill>, String> {
+        if let Some(store) = &self.store {
+            return store.clear_kill(scope, value);
+        }
         self.change(|kills| {
             kills
                 .iter()

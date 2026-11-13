@@ -64,4 +64,4 @@ The control plane keeps metadata only, so its copy of the audit log cannot be ch
 
 The gateway keeps serving the policy and keys it last received, and ships the audit records it held back once the control plane answers again. A key revoked during the outage stays usable on that gateway until it reconnects, unless `--max-offline` is set.
 
-Run one replica per gateway: budgets, rate limits and the cache are counted per process. Terraform modules for Kubernetes and Amazon ECS come with the commercial product.
+Run one replica per gateway, or several sharing a [store](/operations/store/) for keys, kill switches and budgets; rate limits and the cache are counted per process. Terraform modules for Kubernetes and Amazon ECS come with the commercial product.

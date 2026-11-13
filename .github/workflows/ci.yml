@@ -15,6 +15,21 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # The store tests run against a real Postgres: two gateways on one database, a budget across both, an outage.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      GANTRY_TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - run: rustup show

@@ -61,7 +61,7 @@ pub enum Models {
 }
 
 /// How often a budget starts again from zero, at midnight UTC.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Period {
     Day,
     Month,

@@ -120,7 +120,7 @@ The record of a refusal by a limit names it in `limit`, for example `{"kind": "t
 Claude Code reads `x-should-retry` and does not retry a budget refusal. See [Refusal codes](/reference/refusal-codes/).
 
 <Aside type="note">
-Spend, reservations and rate-limit windows live in the memory of one Gantry process. Rate-limit windows start empty after a restart; spend is read back from the audit log.
+Without a store, spend, reservations and rate-limit windows live in the memory of one Gantry process. Rate-limit windows start empty after a restart; spend is read back from the audit log. With a [store](/operations/store/), budgets are reserved and settled in Postgres, so every replica enforces one budget; if the store cannot be reached, budgeted requests are refused with `store_unavailable`.
 </Aside>
 
 ## Related

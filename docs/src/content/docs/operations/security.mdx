@@ -118,8 +118,8 @@ Anyone who can write the policy file or the keys file decides who may do what. A
 - **Private addresses are judged by what is written.** A public host name that resolves to a private address is not caught.
 - **The key search is a text match.** A Gantry key split across headers or encoded is not found. Such a header still has to pass the name filter.
 - **A key removed by hand works for up to 2 seconds**, until the reload. Revoking through the console or the admin API stops it at once.
-- **One node.** Budgets, rate limits, the cache and console sessions live in one process. A restart signs everyone out of the console. Behind a load balancer, the identity provider's callback must reach the node that started the sign-in.
-- **Kill switches across nodes.** In force on the node that sets them before it answers, and on every node serving the same files within 1 second. Two nodes changing switches at the same instant can lose one change.
+- **One node, or a store.** Without a [store](/operations/store/), budgets, rate limits, the cache and console sessions live in one process. With one, keys, kill switches and budgets are shared through Postgres; rate limits, the cache and console sessions stay per replica. A restart signs everyone out of the console. Behind a load balancer, the identity provider's callback must reach the node that started the sign-in.
+- **Kill switches across nodes.** In force on the node that sets them before it answers, and on every node serving the same files or the same store within 1 second. With files, two nodes changing switches at the same instant can lose one change; with a store, each change is one statement and none is lost.
 - **A request the HTTP library rejects as malformed** gets a bare 400 with no decision ID and no record.
 - **`client` in the record** is the address of the connection, so behind a proxy it is the proxy's.
 

@@ -24,6 +24,7 @@ use gantry_core::{
     audit::{self, AuditLog},
     id::sha256,
     policy::{Budget, Period, Principal, Rule, Who},
+    store::{Bucket as Counter, Change, Reserve, Store},
     usage::{Price, PriceOverrides, Usage, UsageScanner, price_for},
 };
 use http_body::{Body as _, Frame};
@@ -53,6 +54,9 @@ pub(crate) struct Spend {
     tokens: Mutex<HashMap<String, Tokens>>,
     cache: Mutex<Cache>,
     pub(crate) metrics: Arc<crate::metrics::Metrics>,
+    /// Shared with other gateways when the policy has `store:`: budgets are then reserved and settled there, and
+    /// the ledger above only counts for this process.
+    pub(crate) store: Option<Arc<dyn Store>>,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -138,6 +142,47 @@ pub(crate) struct Reservation {
     usd: f64,
 }
 
+impl Reservation {
+    fn bucket(&self) -> Counter {
+        Counter {
+            scope: self.scope.clone(),
+            per: self.per,
+            period: self.period.clone(),
+        }
+    }
+}
+
+/// The buckets a cost counts in: its person, team and key, for the day and the month of `time`.
+fn buckets(person: &str, team: &str, key: &str, time: &str) -> Vec<Counter> {
+    let mut scopes = vec![format!("person:{person}"), format!("team:{team}")];
+    // Records written before keys were named in usage records have no key: they count for person and team only.
+    if !key.is_empty() {
+        scopes.push(format!("key:{key}"));
+    }
+    let mut buckets = Vec::with_capacity(scopes.len() * 2);
+    for scope in scopes {
+        for per in [Period::Day, Period::Month] {
+            buckets.push(Counter {
+                scope: scope.clone(),
+                per,
+                period: period_of(time, per).to_string(),
+            });
+        }
+    }
+    buckets
+}
+
+/// The store cannot be asked for a reservation: the request is refused, never let through unchecked.
+fn store_unavailable(err: &str) -> Refusal {
+    Refusal::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "store_unavailable",
+        format!(
+            "Refused: a budget applies to this request, and Gantry cannot reach its store to reserve what it could cost ({err}). Requests under a budget are refused until the store is back; requests without one still work. Tell your Gantry admin to check the Postgres database the policy's store: names."
+        ),
+    )
+}
+
 /// The budget would be passed: what the refusal tells the caller.
 struct Over {
     spent: f64,
@@ -196,7 +241,49 @@ impl Spend {
         })
     }
 
+    /// `reserve`, in the store when there is one. The outer `Err` is a refusal; inside it, `Err` names why the
+    /// store could not be asked.
+    async fn reserve_shared(
+        &self,
+        scope: &str,
+        budget: Budget,
+        usd: f64,
+        now: &str,
+    ) -> Result<Reservation, Result<Over, String>> {
+        let Some(store) = &self.store else {
+            return self.reserve(scope, budget, usd, now).map_err(Ok);
+        };
+        let period = period_of(now, budget.per).to_string();
+        let bucket = Counter {
+            scope: scope.to_string(),
+            per: budget.per,
+            period: period.clone(),
+        };
+        match store.reserve(bucket, usd, budget.usd).await {
+            Ok(Reserve::Done) => Ok(Reservation {
+                scope: scope.to_string(),
+                per: budget.per,
+                period,
+                usd,
+            }),
+            Ok(Reserve::Over { spent, reserved }) => Err(Ok(Over {
+                spent,
+                reserved,
+                resets: resets(&period),
+            })),
+            Err(err) => Err(Err(err)),
+        }
+    }
+
     fn release(&self, reservation: &Reservation) {
+        if let Some(store) = &self.store {
+            store.settle(vec![Change {
+                bucket: reservation.bucket(),
+                spent: 0.0,
+                reserved: -reservation.usd,
+            }]);
+            return;
+        }
         let mut ledger = locked(&self.ledger);
         if let Some(bucket) = ledger.get_mut(&(reservation.scope.clone(), reservation.per)) {
             if bucket.period == reservation.period {
@@ -211,16 +298,9 @@ impl Spend {
             return;
         }
         let mut ledger = locked(&self.ledger);
-        let mut scopes = vec![format!("person:{person}"), format!("team:{team}")];
-        // Records written before keys were named in usage records have no key: they count for person and team only.
-        if !key.is_empty() {
-            scopes.push(format!("key:{key}"));
-        }
-        for scope in scopes {
-            for per in [Period::Day, Period::Month] {
-                if let Some(bucket) = Self::bucket(&mut ledger, &scope, per, period_of(time, per)) {
-                    bucket.spent += usd;
-                }
+        for b in buckets(person, team, key, time) {
+            if let Some(bucket) = Self::bucket(&mut ledger, &b.scope, b.per, &b.period) {
+                bucket.spent += usd;
             }
         }
     }
@@ -644,7 +724,7 @@ pub(crate) struct Ask<'a> {
 
 /// Applies the rule's cache, rate and budget to an allowed request, in that order: a cached answer costs nothing
 /// and uses no provider capacity, so it is neither rate limited nor charged.
-pub(crate) fn admit(
+pub(crate) async fn admit(
     spend: &Arc<Spend>,
     audit: Option<&Arc<AuditLog>>,
     ask: Ask<'_>,
@@ -880,17 +960,23 @@ pub(crate) fn admit(
                 ),
             };
             let under = format!(" under rule \"{}\"", ask.rule.name);
-            let reservation = spend.reserve(&scope, budget, most, &now).map_err(|over| {
-                over_budget(&over, "budget_exceeded", &whose, budget, &under, most)
-            })?;
+            let reservation = spend
+                .reserve_shared(&scope, budget, most, &now)
+                .await
+                .map_err(|over| match over {
+                    Ok(over) => over_budget(&over, "budget_exceeded", &whose, budget, &under, most),
+                    Err(err) => store_unavailable(&err),
+                })?;
             admitted.reservations.push(reservation);
         }
         if let Some(budget) = ask.person.budget {
             let whose = format!("the key {} of \"{}\"", ask.person.key, ask.person.name);
             let reservation = spend
-                .reserve(&format!("key:{}", ask.person.key), budget, most, &now)
-                .map_err(|over| {
-                    over_budget(&over, "key_budget_exceeded", &whose, budget, "", most)
+                .reserve_shared(&format!("key:{}", ask.person.key), budget, most, &now)
+                .await
+                .map_err(|over| match over {
+                    Ok(over) => over_budget(&over, "key_budget_exceeded", &whose, budget, "", most),
+                    Err(err) => store_unavailable(&err),
                 })?;
             admitted.reservations.push(reservation);
         }
@@ -1126,8 +1212,37 @@ impl Admitted {
                 );
             }
         }
-        for reservation in self.reservations.drain(..) {
-            self.spend.release(&reservation);
+        match &self.spend.store {
+            // Only a request under a budget reaches the store: its holds given back and its cost counted, in one
+            // statement, where every gateway's budgets read it.
+            Some(store) if !self.reservations.is_empty() => {
+                let mut changes: Vec<Change> = self
+                    .reservations
+                    .drain(..)
+                    .map(|r| Change {
+                        bucket: r.bucket(),
+                        spent: 0.0,
+                        reserved: -r.usd,
+                    })
+                    .collect();
+                if charged > 0.0 && charged.is_finite() {
+                    changes.extend(
+                        buckets(&self.person, &self.team, &self.key, &now)
+                            .into_iter()
+                            .map(|bucket| Change {
+                                bucket,
+                                spent: charged,
+                                reserved: 0.0,
+                            }),
+                    );
+                }
+                store.settle(changes);
+            }
+            _ => {
+                for reservation in self.reservations.drain(..) {
+                    self.spend.release(&reservation);
+                }
+            }
         }
         self.spend
             .add(&self.person, &self.team, &self.key, charged, &now);

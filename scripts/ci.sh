@@ -15,6 +15,18 @@ cargo fmt --all --check
 step "lint"
 cargo clippy --workspace --all-targets --locked -- -D warnings
 step "tests"
+# The store tests (crates/gantry-server/tests/store.rs, crates/gantry-cli/tests/store.rs) run against the Postgres
+# that GANTRY_TEST_DATABASE_URL names, and say they were skipped without it. CI must run them.
+if [ -n "${GANTRY_TEST_DATABASE_URL:-}" ]; then
+  echo "store tests run against Postgres (GANTRY_TEST_DATABASE_URL is set)"
+elif [ -n "${CI:-}" ]; then
+  echo "GANTRY_TEST_DATABASE_URL is not set: CI must run the store tests against Postgres. See .github/workflows/ci.yml."
+  exit 1
+else
+  echo "store tests skipped: set GANTRY_TEST_DATABASE_URL, for example after"
+  echo "  docker run -d --name gantry-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:16"
+  echo "  export GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres"
+fi
 cargo test --workspace --locked
 step "release build"
 cargo build --release --locked

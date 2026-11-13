@@ -19,6 +19,7 @@ use gantry_core::{
     id::{hex, sha256_hex},
     policy::Policy,
     sigv4,
+    store::{self, Store},
 };
 use serde_json::{Map, Value, json};
 
@@ -80,6 +81,8 @@ pub struct Reloader {
     // never waits for a check to finish.
     shown: Mutex<Option<Prints>>,
     wake: Mutex<Option<mpsc::Sender<Trigger>>>,
+    /// Where the keys come from when the policy has `store:`, in place of the keys file.
+    store: Option<Arc<dyn Store>>,
 }
 
 impl std::fmt::Debug for Reloader {
@@ -189,6 +192,33 @@ fn key_prints(loaded: &Loaded) -> Vec<Option<String>> {
         .collect()
 }
 
+/// Connects to the store when the policy has `store:`, and serves the keys file's path from it, so every reader
+/// and writer of the keys (command line, admin API, console) uses the database. `None` without `store:`.
+pub fn open_store(
+    policy_path: &Path,
+    keys_path: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<Arc<dyn Store>>, String> {
+    let text = match std::fs::read_to_string(policy_path) {
+        Ok(text) if config::names_store(&text) => text,
+        // Not a store, or a policy that does not read: `config::load` reports it as it always has.
+        _ => return Ok(None),
+    };
+    let setting = config::load_texts(policy_path, &text, keys_path, "")
+        .map_err(|errors| errors.join("\n"))?
+        .store
+        .ok_or("the policy's store section could not be read. Run `gantry check` on it.")?;
+    let variable = &setting.postgres_url_env;
+    let url = env(variable).filter(|v| !v.trim().is_empty()).ok_or_else(|| {
+        format!(
+            "the policy keeps keys, kill switches and budgets in Postgres, and {variable} (its postgres_url_env) is not set. Set it to the connection string (`export {variable}=postgres://user:password@host:5432/database`) and start again."
+        )
+    })?;
+    let opened: Arc<dyn Store> = crate::store::open(variable, &url)?;
+    store::attach(keys_path, &opened);
+    Ok(Some(opened))
+}
+
 /// Starts serving from the files: checks them, opens and verifies the audit log, records the version Gantry starts
 /// with, and builds the router. `provider_key` gives the value of an environment variable, so tests need not set any.
 pub fn governed(
@@ -196,6 +226,8 @@ pub fn governed(
     keys_path: Option<&Path>,
     provider_key: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Governed, String> {
+    let keys_file = keys_path.map_or_else(|| config::keys_path_for(policy_path), Path::to_path_buf);
+    let shared = open_store(policy_path, &keys_file, provider_key)?;
     let loaded = config::load(policy_path, keys_path).map_err(|errors| errors.join("\n"))?;
     let unset = guard::unset_webhook_env(loaded.policy.rule_list(), &|variable| {
         provider_key(variable).is_some_and(|value| !value.trim().is_empty())
@@ -325,6 +357,7 @@ pub fn governed(
         traces: crate::TraceExport::from_env(|name| std::env::var(name).ok())?,
         setup: setup.clone(),
         mcp,
+        store: shared.clone(),
         ..Config::default()
     };
     let prints = (
@@ -345,6 +378,7 @@ pub fn governed(
             }),
             shown: Mutex::new(None),
             wake: Mutex::new(None),
+            store: shared.clone(),
         }))
     })
     .map_err(|err| err.to_string())?;
@@ -425,7 +459,12 @@ impl Reloader {
             self.rotate(&current.loaded);
             current.key_prints = keys_now;
         }
-        let (policy, keys) = (read(&self.policy_path), read(&self.keys_path));
+        let keys = match &self.store {
+            // From memory: the store's poll keeps it current, and a database that is down keeps the keys known.
+            Some(store) => Ok(Some(store.keys_text().into_bytes())),
+            None => read(&self.keys_path),
+        };
+        let policy = read(&self.policy_path);
         let print = |file: &Result<Option<Vec<u8>>, String>| match file {
             Ok(bytes) => bytes.as_deref().map(sha256_hex),
             // Unreadable is a state of its own, never the same as a file Gantry read.

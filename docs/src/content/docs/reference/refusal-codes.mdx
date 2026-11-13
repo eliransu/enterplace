@@ -61,6 +61,7 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`key_budget_exceeded`](#key_budget_exceeded) | 429 | `rate_limit_error` |
 | [`no_price`](#no_price) | 403 | `invalid_request_error` |
 | [`audit_unavailable`](#audit_unavailable) | 503 | `api_error` |
+| [`store_unavailable`](#store_unavailable) | 503 | `api_error` |
 | [`upstream_unreachable`](#upstream_unreachable) | 502 | `api_error` |
 | [`upstream_failed`](#upstream_failed) | 502 | `api_error` |
 | [`upstream_timeout`](#upstream_timeout) | 504 | `timeout_error` |
@@ -260,6 +261,12 @@ Also 403 when a guardrail with `on: [answer]` withheld the model's whole answer.
 **503.** The record could not be written: the disk failed, or the log was deleted, moved, replaced or cut short. Every request, admin call and console action is refused until a restart, and `/healthz` answers 503. This refusal has no record, because that is the problem it reports.
 
 **Fix:** the admin checks the log file and the server's stderr, then restarts. See [Running in production](/operations/operations/#disk-full-and-audit-repair).
+
+### store_unavailable
+
+**503.** A budget applies to the request, and Gantry cannot reach the Postgres [store](/operations/store/) to reserve what it could cost. It is refused rather than let through unchecked. Requests without a budget are still served, and known keys keep working.
+
+**Fix:** the admin checks the database and the connection string in the variable `store: postgres_url_env` names. Budgeted requests are served again within a second of the database answering.
 
 ### upstream_unreachable
 
