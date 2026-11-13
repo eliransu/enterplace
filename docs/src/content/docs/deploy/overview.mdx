@@ -8,7 +8,7 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry Enterprise runs in your own network or cloud account. These guides take you from nothing to a gateway that answers governed requests, with the console signed in and the audit log verified, and then through what production needs. The deploy files they use are in the `gantry-enterprise` repository, under `deploy/`.
+Gantry Enterprise runs in your own network or cloud account. These guides take you from nothing to a gateway that answers governed requests, with the console signed in and the audit log verified, and then through what production needs. You need Docker and the registry token Gantry gives you with your license: the image carries everything else, and the Compose file is on the [Docker Compose](/deploy/docker/) page.
 
 ## What you deploy
 
@@ -43,11 +43,19 @@ store: { postgres_url_env: DATABASE_URL }
 
 ### The image tags
 
-Each build of `main` is pushed tagged with its full commit SHA, and each release with its version, such as `0.1.0`. There is no `latest` tag. Pin the version you were given in every deploy file: a moving tag makes a rollback guesswork.
+Each build of `main` is pushed tagged with its full commit SHA and as `latest`, and each release with its version, such as `0.1.0`. `latest` is for a first try. Pin the version you were given in every production deploy file: a moving tag makes a rollback guesswork.
 
 ### The command line
 
-The `gantry-enterprise` image runs `serve` and `license show`. Issuing keys from a shell, `gantry check` and `gantry audit verify` come from the open source `gantry` command line, built from the `gantry` repository (see the [Quickstart](/getting-started/quickstart/#1-install)). The Compose stack builds it for you as its `cli` service. In the clouds you use the console and the admin API instead, and verify audit logs from a copy.
+The image holds one binary, `/gantry-enterprise`, and it runs every `gantry` command with the same arguments and output: `key new`, `check`, `audit verify`, `kill` and the rest, beside its own `serve` and `license show`. Run them with the image you deploy:
+
+| Where | How |
+|---|---|
+| Docker Compose | `docker compose run --rm gantry audit verify /var/lib/gantry/gantry-audit.jsonl` |
+| Kubernetes | `kubectl exec gantry-0 -c gantry -- /gantry-enterprise audit verify /var/lib/gantry/gantry-audit.jsonl` |
+| Any machine with Docker | `docker run --rm -v "$PWD":/w:ro ghcr.io/ggantry/gantry-enterprise:<version> audit verify /w/gantry-audit.jsonl` |
+
+The image also carries the Helm chart and the Terraform modules for its version, under `/deploy`. Copy them out with `docker create --name gantry-files <image> && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files`.
 
 ## What stays in your network
 

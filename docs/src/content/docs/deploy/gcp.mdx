@@ -8,7 +8,7 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The module in `deploy/terraform/gcp-cloud-run` of the `gantry-enterprise` repository runs one gateway on Cloud Run, with Cloud SQL Postgres 16 for the store, the audit log on Filestore over NFS, and the policy and secrets in Secret Manager.
+The Terraform module `gcp-cloud-run`, which ships inside the `gantry-enterprise` image, runs one gateway on Cloud Run, with Cloud SQL Postgres 16 for the store, the audit log on Filestore over NFS, and the policy and secrets in Secret Manager.
 
 ## What it creates
 
@@ -28,10 +28,10 @@ The module in `deploy/terraform/gcp-cloud-run` of the `gantry-enterprise` reposi
 
 ## Prerequisites
 
-- Terraform 1.6 or later, `git`, Docker, and the `gcloud` command line signed in to the project with Application Default Credentials for Terraform: `gcloud auth application-default login`.
+- Terraform 1.6 or later, Docker, and the `gcloud` command line signed in to the project with Application Default Credentials for Terraform: `gcloud auth application-default login`.
 - A Google Cloud project with billing on, and a role that can enable APIs and create Cloud Run, Cloud SQL, Filestore, Secret Manager secrets, service accounts and project IAM bindings (Owner, or Editor with Project IAM Admin and Secret Manager Admin).
 - A VPC network with a subnetwork in your region. The project's `default` network has one.
-- Read access to the `ggantry/gantry-enterprise` repository and `ghcr.io/ggantry/gantry-enterprise`: a GitHub user and a token with `read:packages`. Both come with your license.
+- The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry-enterprise`, and the user name that goes with it.
 - Your license key, a provider key, and the image version you were given.
 
 The service URL comes with a Google-managed certificate, so the first deploy needs no certificate of your own.
@@ -47,7 +47,7 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
    gcloud services enable artifactregistry.googleapis.com secretmanager.googleapis.com
    gcloud artifacts repositories create gantry --repository-format=docker --location=europe
    gcloud auth configure-docker europe-docker.pkg.dev
-   docker login ghcr.io -u <your GitHub user>
+   docker login ghcr.io -u <your user name>
    docker buildx imagetools create \
      --tag europe-docker.pkg.dev/my-project/gantry/gantry-enterprise:<version> \
      ghcr.io/ggantry/gantry-enterprise:<version>
@@ -60,12 +60,29 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
    printf '%s' 'eyJjdXN0b21lciI6...' | gcloud secrets create gantry-license --data-file=-
    ```
 
-3. Get the module and a starting policy.
+3. Copy the module out of the image you will run, and save a starting policy beside it as `gantry.policy.yaml`. The image carries the module for its own version, so nothing is cloned.
 
    ```bash
    mkdir gantry-gcp && cd gantry-gcp
-   git clone https://github.com/ggantry/gantry-enterprise.git
-   cp gantry-enterprise/deploy/compose/gantry.policy.yaml .
+   docker login ghcr.io -u <your user name>
+   docker create --name gantry-files ghcr.io/ggantry/gantry-enterprise:<version>
+   docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
+   ```
+
+   ```yaml title="gantry.policy.yaml"
+   version: 1
+   providers:
+     - name: openai
+       kind: openai
+       url: https://api.openai.com/v1
+       key_env: OPENAI_PROVIDER_KEY
+       models: [gpt-4o-mini]
+   rules:
+     - name: everyone
+       principals: { any: true }
+       models: [gpt-4o-mini]
+   audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+   store: { postgres_url_env: DATABASE_URL }
    ```
 
    The policy must keep its last two lines: the audit log under `/var/lib/gantry` and `store: { postgres_url_env: DATABASE_URL }`.
@@ -83,7 +100,7 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
    }
 
    module "gantry" {
-     source = "./gantry-enterprise/deploy/terraform/gcp-cloud-run"
+     source = "./gantry-deploy/terraform/gcp-cloud-run"
 
      project = "my-project"
      region  = "europe-west1"
@@ -188,12 +205,13 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
      -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}]}'
    ```
 
-5. Verify the audit log. In the console, open **Audit log** and select **Verify chain now**, and keep the last hash it shows where the project cannot write. To check with the command line, mount the share read-only on a Compute Engine VM in the same network, with `gantry` and `nfs-common` installed:
+5. Verify the audit log. In the console, open **Audit log** and select **Verify chain now**, and keep the last hash it shows where the project cannot write. To check with the command line, mount the share read-only on a Compute Engine VM in the same network, with Docker and `nfs-common` installed, and run the image's own `audit verify` on it:
 
    ```bash
    sudo mkdir -p /mnt/gantry
    sudo mount -o ro <filestore_ip>:/gantry /mnt/gantry
-   gantry audit verify /mnt/gantry/<revision>/gantry-audit.jsonl
+   docker run --rm -v /mnt/gantry:/mnt/gantry:ro ghcr.io/ggantry/gantry-enterprise:<version> \
+     audit verify /mnt/gantry/<revision>/gantry-audit.jsonl
    ```
 
 </Steps>

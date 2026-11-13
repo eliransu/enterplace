@@ -1,86 +1,133 @@
 ---
 title: Docker Compose
-description: Run Gantry Enterprise and Postgres on one machine with Docker Compose, make a governed call, sign in to the console, verify the audit log, then harden the VM.
+description: Run Gantry Enterprise and Postgres on one machine from one Compose file, make a governed call, verify the audit log, then harden the VM.
 sidebar:
   order: 2
 ---
 
-import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The Compose stack in `deploy/compose` runs the gateway and Postgres 16 on one machine, each with a named volume: `gantry-data` for the audit log and `postgres-data` for the database. It fits a trial on a laptop and a team on one VM.
+One Compose file runs the gateway and Postgres 16 on one machine, each with a named volume: `gantry-data` for the audit log and `postgres-data` for the database. It fits a trial on a laptop and a team on one VM. You need Docker, a login to the registry, and the two files on this page. Nothing is cloned or built.
 
 ## Prerequisites
 
-- Docker with Compose v2 (`docker compose version` prints a version).
-- `git`, `curl` and `openssl`.
-- Read access to the `ggantry/gantry-enterprise` repository and the `ghcr.io/ggantry/gantry-enterprise` package. Both come with your license, for a GitHub account or a token with `read:packages`.
+- Docker with Compose 2.23 or later (`docker compose version`).
+- The registry token Gantry gave you with your license. Log in once on this machine:
+
+  ```bash
+  docker login ghcr.io -u <your GitHub user or the user name Gantry gave you>
+  ```
+
+  Paste the token as the password. It reads `ghcr.io/ggantry/gantry-enterprise` and nothing else.
 - Your license key, and a key for at least one provider (OpenAI in this guide).
 
 ## From nothing to a governed call
 
 <Steps>
 
-1. Get the files. The stack builds the `gantry` command line from the open source repository, so clone both side by side.
+1. Make a folder and save the Compose file in it. The policy is inside it, under `configs:`.
 
    ```bash
-   mkdir gantry-deploy && cd gantry-deploy
-   git clone https://github.com/ggantry/gantry-enterprise.git
-   git clone https://github.com/ggantry/gantry.git
-   cd gantry-enterprise/deploy/compose
+   mkdir gantry && cd gantry
    ```
 
-   Every command below runs in `gantry-enterprise/deploy/compose`.
+   ```yaml title="docker-compose.yml"
+   # Gantry Enterprise on one machine: the gateway and Postgres 16, each with its own named volume.
+   # Settings come from .env beside this file. Admin commands run with the same image:
+   #   docker compose run --rm gantry <command>
+   name: gantry
 
-2. Write the settings. Compose reads `.env` from this folder.
+   services:
+     postgres:
+       image: postgres:16-alpine
+       environment:
+         POSTGRES_USER: gantry
+         POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+         POSTGRES_DB: gantry
+       volumes:
+         - postgres-data:/var/lib/postgresql/data
+       # Gantry shares this container's network (network_mode below), so its port is published here.
+       ports:
+         - "${GANTRY_BIND:-127.0.0.1}:${GANTRY_PORT:-8080}:8080"
+       healthcheck:
+         test: ["CMD", "pg_isready", "-U", "gantry", "-d", "gantry"]
+         interval: 2s
+         timeout: 3s
+         retries: 30
+       restart: unless-stopped
 
-   ```bash
-   cp .env.example .env
-   openssl rand -hex 16    # a password for POSTGRES_PASSWORD
+     gantry:
+       image: ${GANTRY_IMAGE:-ghcr.io/ggantry/gantry-enterprise:latest}
+       command: ["serve", "/etc/gantry/gantry.policy.yaml", "--keys", "/var/lib/gantry/gantry.keys.yaml", "--listen", "0.0.0.0:8080"]
+       # Sharing Postgres's network keeps the database off every other network, so the connection is plain.
+       network_mode: service:postgres
+       environment:
+         DATABASE_URL: postgres://gantry:${POSTGRES_PASSWORD}@localhost:5432/gantry?sslmode=disable
+         OPENAI_PROVIDER_KEY: ${OPENAI_PROVIDER_KEY:-}
+         GANTRY_LICENSE: ${GANTRY_LICENSE:-}
+       configs:
+         - source: policy
+           target: /etc/gantry/gantry.policy.yaml
+       volumes:
+         # The audit log. One volume per gateway: each writes its own hash chain.
+         - gantry-data:/var/lib/gantry
+       depends_on:
+         postgres:
+           condition: service_healthy
+       # No read_only: Compose cannot place the policy in a read-only container. The image runs as user 65532 and
+       # holds one binary, so the only folder Gantry can write is its volume.
+       cap_drop: [ALL]
+       security_opt: ["no-new-privileges:true"]
+       # 30 s for requests in flight after SIGTERM, plus margin, so the audit log is synced before the stop.
+       stop_grace_period: 40s
+       restart: unless-stopped
+
+   configs:
+     # The policy. Reference: https://gantry-docs.eliran.me/governance/policy/
+     policy:
+       content: |
+         version: 1
+         providers:
+           - name: openai
+             kind: openai
+             url: https://api.openai.com/v1
+             key_env: OPENAI_PROVIDER_KEY
+             models: [gpt-4o-mini]
+         rules:
+           - name: everyone
+             principals: { any: true }
+             models: [gpt-4o-mini]
+         # On the volume: everything else in the container is read-only.
+         audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+         # Keys, kill switches and budgets live in Postgres.
+         store: { postgres_url_env: DATABASE_URL }
+
+   volumes:
+     postgres-data:
+     gantry-data:
    ```
 
-   Open `.env` and set:
-
-   | Variable | Value |
-   |---|---|
-   | `POSTGRES_PASSWORD` | Letters and digits only, such as the output of `openssl rand -hex 16`. It goes into a connection string unescaped |
-   | `OPENAI_PROVIDER_KEY` | Your OpenAI key. The policy names it in `key_env` |
-   | `GANTRY_LICENSE` | Your license key, on one line. Empty runs the open source features only |
-   | `GANTRY_IMAGE` | The image to run, in the next step |
-   | `GANTRY_BIND`, `GANTRY_PORT` | Where Gantry listens. Empty means `127.0.0.1` and `8080` |
-
-3. Get the images: the gateway, and the `cli` service, which is the open source `gantry` command line for `key new` and `audit verify`.
-
-   <Tabs>
-   <TabItem label="Pull the release">
-
-   Log in with your GitHub user and a token with `read:packages`, then set the version you were given in `.env`:
-
-   ```bash
-   docker login ghcr.io -u <your GitHub user>
-   ```
+2. Save the settings beside it as `.env`, and fill in the empty values.
 
    ```bash title=".env"
-   GANTRY_IMAGE=ghcr.io/ggantry/gantry-enterprise:<version>
+   # Letters and digits only: it goes into a connection string unescaped. `openssl rand -hex 16` makes one.
+   POSTGRES_PASSWORD=
+   # The provider key the policy names in key_env.
+   OPENAI_PROVIDER_KEY=
+   # Your license key, on one line. Empty runs the open source features only.
+   GANTRY_LICENSE=
+   # The image. Pin the version you were given, or a commit SHA, in production.
+   GANTRY_IMAGE=ghcr.io/ggantry/gantry-enterprise:latest
+   # Where Gantry listens on this machine.
+   GANTRY_BIND=127.0.0.1
+   GANTRY_PORT=8080
    ```
 
    ```bash
-   docker compose pull gantry
-   docker compose --profile tools build cli
+   chmod 600 .env
    ```
 
-   </TabItem>
-   <TabItem label="Build from source">
-
-   Leave `GANTRY_IMAGE` empty. Compose builds the image from `gantry-enterprise/Dockerfile`, with the folder that holds both repositories as its context.
-
-   ```bash
-   docker compose --profile tools build gantry cli
-   ```
-
-   </TabItem>
-   </Tabs>
-
-4. Start the stack.
+3. Start the stack.
 
    ```bash
    docker compose up -d
@@ -91,7 +138,7 @@ The Compose stack in `deploy/compose` runs the gateway and Postgres 16 on one ma
    {"status":"ok","policy_sha256":"2e4896bb...","keys_sha256":"aebe9c54...","rejected":null}
    ```
 
-   Gantry waits for Postgres to be healthy, creates its tables in the `gantry` database, and starts. `docker compose logs gantry` shows what it started with:
+   Compose pulls the image, waits for Postgres to be healthy, and starts Gantry, which creates its tables in the `gantry` database. `docker compose logs gantry` shows what it started with:
 
    ```text
    License lic_8f2 for Acme: scim, siem, 50 seats, until 2027-11-13.
@@ -103,32 +150,32 @@ The Compose stack in `deploy/compose` runs the gateway and Postgres 16 on one ma
    Keys, kill switches and budgets are shared through the store named by DATABASE_URL with every Gantry on that database.
    ```
 
-   The `sslmode=disable` warning is expected here: Gantry shares the Postgres container's network, so the database is on the same machine and its traffic never crosses a network.
+   The `sslmode=disable` warning is expected here: Gantry shares the Postgres container's network, so database traffic never leaves the machine.
 
-5. Make the first admin and sign in to the console. Print the one-time link and open it in a browser on this machine.
+4. Make the first admin and sign in to the console. Print the one-time link and open it in a browser on this machine.
 
    ```bash
    docker compose logs gantry | grep 'First run'
    ```
 
-   Give your name and team. The page shows your admin key once: keep it in your password manager. Sign in at `http://127.0.0.1:8080/console` with it. The key works within 2 seconds.
+   Give your name and team. The page shows your admin key once: keep it in your password manager. Sign in at `http://127.0.0.1:8080/console` with it.
 
-6. Issue a key and make a governed call.
+5. Issue a key and make a governed call. Admin commands run with the same image: `docker compose run --rm gantry <command>` takes every `gantry` command.
 
    ```bash
-   KEY=$(docker compose run --rm -T cli key new maya.cohen --team payments --policy /etc/gantry/gantry.policy.yaml --quiet)
+   KEY=$(docker compose run --rm -T gantry key new maya.cohen --team payments --policy /etc/gantry/gantry.policy.yaml --quiet)
    sleep 2
    curl -s http://127.0.0.1:8080/v1/chat/completions \
      -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
      -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}]}'
    ```
 
-   `key new` writes the key's hash to Postgres, because the policy has `store:`, and prints the key alone. Every gateway on the database accepts it within 2 seconds. The answer is OpenAI's, with an `X-Gantry-Decision` header added. A call without a key is refused with 401 `no_key`.
+   `key new` writes the key's hash to Postgres, because the policy has `store:`, and prints the key alone. The gateway accepts it within 2 seconds. The answer is OpenAI's, with an `X-Gantry-Decision` header added. A call without a key is refused with 401 `no_key`.
 
-7. Verify the audit log.
+6. Verify the audit log.
 
    ```bash
-   docker compose run --rm -T cli audit verify /var/lib/gantry/gantry-audit.jsonl
+   docker compose run --rm -T gantry audit verify /var/lib/gantry/gantry-audit.jsonl
    ```
 
    ```text
@@ -143,23 +190,82 @@ The Compose stack in `deploy/compose` runs the gateway and Postgres 16 on one ma
 
 ## Change the policy
 
-The policy is `gantry.policy.yaml` in this folder, mounted read-only. Edit it, check it, and Gantry uses it within 2 seconds. A change that fails the check is not used: Gantry keeps the version it has and records `config_rejected`.
+The policy is the `content:` under `configs:` in `docker-compose.yml`. Edit it, then recreate the gateway; Compose sees the change.
 
 ```bash
-docker compose run --rm -T cli check /etc/gantry/gantry.policy.yaml
+docker compose up -d
+docker compose run --rm -T gantry check /etc/gantry/gantry.policy.yaml
 ```
 
 ```text
 /etc/gantry/gantry.policy.yaml is valid: 1 rule, keys in the store named by DATABASE_URL, 1 provider: openai (openai) at https://api.openai.com/v1.
 ```
 
-To use another file, set `GANTRY_POLICY=./my.policy.yaml` in `.env`. Changing the `store:` section needs `docker compose up -d --force-recreate gantry`.
+To change the policy without a restart, keep it in a file: save the YAML as `gantry.policy.yaml` beside `docker-compose.yml`, replace `content: |` and the lines under it with `file: ./gantry.policy.yaml`, and run `docker compose up -d` once. From then on Gantry uses each saved change within 2 seconds, or keeps the version it has and records `config_rejected`. Changing the `store:` section always needs `docker compose up -d --force-recreate gantry`.
+
+## Try it without a provider key
+
+A stand-in for OpenAI answers every chat call with `pong`, so the steps above work before you have a provider key. Save this beside `docker-compose.yml`; Compose reads it on every command.
+
+```yaml title="docker-compose.override.yml"
+# A stand-in for OpenAI, for a trial: delete this file to use OpenAI.
+services:
+  mock:
+    image: python:3.12-alpine
+    command:
+      - python
+      - -c
+      - |
+        import json
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+                answer = json.dumps({
+                    "id": "chatcmpl-mock", "object": "chat.completion", "created": 0,
+                    "model": body.get("model", "gpt-4o-mini"),
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+                }).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(answer)))
+                self.end_headers()
+                self.wfile.write(answer)
+        ThreadingHTTPServer(("0.0.0.0", 9000), Handler).serve_forever()
+
+configs:
+  policy:
+    content: |
+      version: 1
+      providers:
+        - name: openai
+          kind: openai
+          url: http://mock:9000/v1
+          # The stand-in is on the Compose network, a private address Gantry refuses unless told.
+          allow_private: true
+          models: [gpt-4o-mini]
+      rules:
+        - name: everyone
+          principals: { any: true }
+          models: [gpt-4o-mini]
+      audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+      store: { postgres_url_env: DATABASE_URL }
+```
+
+Then run steps 3 to 6. The governed call answers `pong`. To switch to OpenAI, delete the file, set `OPENAI_PROVIDER_KEY` and run `docker compose up -d --remove-orphans`.
 
 ## Production on one VM
 
 <Steps>
 
-1. **TLS.** Keep `GANTRY_BIND` empty, so Gantry listens on `127.0.0.1` only, and put Caddy on the VM in front of it. Caddy gets and renews the certificate.
+1. **Pin the image.** Set `GANTRY_IMAGE` in `.env` to the version you were given, or a commit SHA, never `latest`, so an upgrade happens only when you choose it.
+
+   ```bash title=".env"
+   GANTRY_IMAGE=ghcr.io/ggantry/gantry-enterprise:<version>
+   ```
+
+2. **TLS.** Keep `GANTRY_BIND=127.0.0.1`, so Gantry listens on this machine only, and put Caddy on the VM in front of it. Caddy gets and renews the certificate.
 
    ```text title="/etc/caddy/Caddyfile"
    gantry.example.com {
@@ -171,19 +277,15 @@ To use another file, set `GANTRY_POLICY=./my.policy.yaml` in `.env`. Changing th
 
    For nginx, see [Deployment](/operations/deployment/#a-proxy-in-front). Callers then use `https://gantry.example.com/v1`.
 
-2. **Secrets.** `.env` holds the database password, the provider keys and the license. It is in `.gitignore`. Make it readable by its owner only, or write it at boot from your secret manager.
+3. **Secrets.** `.env` holds the database password, the provider keys and the license. Keep it readable by its owner only (`chmod 600 .env`), out of version control, or write it at boot from your secret manager.
 
-   ```bash
-   chmod 600 .env
-   ```
-
-3. **Start on boot.** Every service has `restart: unless-stopped`, so the stack comes back when Docker does.
+4. **Start on boot.** Every service has `restart: unless-stopped`, so the stack comes back when Docker does.
 
    ```bash
    sudo systemctl enable docker
    ```
 
-4. **Back up Postgres** on a schedule. It holds the keys, kill switches and spend.
+5. **Back up Postgres** on a schedule. It holds the keys, kill switches and spend.
 
    ```bash
    docker compose exec -T postgres pg_dump -U gantry gantry > gantry-db-$(date +%F).sql
@@ -199,17 +301,17 @@ To use another file, set `GANTRY_POLICY=./my.policy.yaml` in `.env`. Changing th
    docker compose start gantry
    ```
 
-5. **Back up the audit volume** and keep its last hash where the VM cannot write. A chain cannot show records removed from its end; the kept hash can.
+6. **Back up the audit volume** and keep its last hash where the VM cannot write. A chain cannot show records removed from its end; the kept hash can.
 
    ```bash
    docker run --rm -v gantry_gantry-data:/data:ro -v "$PWD":/backup busybox:1.36.1 \
      tar czf /backup/gantry-data-$(date +%F).tgz -C /data .
-   docker compose run --rm -T cli audit verify /var/lib/gantry/gantry-audit.jsonl | sed -n 's/^Last hash: //p'
+   docker compose run --rm -T gantry audit verify /var/lib/gantry/gantry-audit.jsonl | sed -n 's/^Last hash: //p'
    ```
 
    Later, `audit verify ... --expect-last <kept hash>` proves no record up to it was changed or removed. To ship the log as it is written, see [Observability](/operations/observability/#shipping-the-audit-log).
 
-6. **Monitoring.** Add metrics and traces with a `docker-compose.override.yml` beside `docker-compose.yml`. Compose reads it on every command. The port is published on the `postgres` service because Gantry shares its network.
+7. **Monitoring.** Add metrics and traces in `docker-compose.override.yml` beside `docker-compose.yml`. The port is published on the `postgres` service because Gantry shares its network.
 
    ```yaml title="docker-compose.override.yml"
    services:
@@ -229,7 +331,7 @@ To use another file, set `GANTRY_POLICY=./my.policy.yaml` in `.env`. Changing th
 
    Point your uptime check at `https://gantry.example.com/healthz`. Scrape configuration and alerts are in [Observability](/operations/observability/#scrape-and-alert).
 
-7. **Upgrade.** Back up Postgres first: a newer Gantry may update the database schema, and an older one refuses a database a newer one has written. Then set the new version in `.env` and recreate the gateway. Requests in flight get 30 seconds.
+8. **Upgrade.** Back up Postgres first: a newer Gantry may update the database schema, and an older one refuses a database a newer one has written. Then set the new version in `GANTRY_IMAGE` and recreate the gateway. Requests in flight get 30 seconds.
 
    ```bash
    docker compose exec -T postgres pg_dump -U gantry gantry > gantry-db-before-upgrade.sql
@@ -238,9 +340,9 @@ To use another file, set `GANTRY_POLICY=./my.policy.yaml` in `.env`. Changing th
    docker compose logs gantry | grep 'Audit log'
    ```
 
-   The start line says the chain continues at the next record. When you build from source, run `git pull` in both repositories and `docker compose --profile tools build gantry cli` in place of `docker compose pull gantry`.
+   The start line says the chain continues at the next record.
 
-8. **Roll back.** Set `GANTRY_IMAGE` back to the previous version and run `docker compose up -d`. If the previous version refuses the database because the new one changed its schema, restore the dump taken before the upgrade, as in step 4.
+9. **Roll back.** Set `GANTRY_IMAGE` back to the previous version and run `docker compose up -d`. If the previous version refuses the database because the new one changed its schema, restore the dump taken before the upgrade, as in step 5.
 
 </Steps>
 
@@ -255,22 +357,8 @@ To use another file, set `GANTRY_POLICY=./my.policy.yaml` in `.env`. Changing th
 | Certificate expiry | Caddy renews on its own; a certificate you manage does not | Renew before it lapses |
 
 <Aside type="caution">
-One gateway per `gantry-data` volume. Two processes writing one audit log break its chain. To run more than one replica, use [Kubernetes](/deploy/kubernetes/) or [AWS](/deploy/aws/).
+One gateway per `gantry-data` volume. Two processes writing one audit log break its chain. `docker compose run --rm gantry` runs admin commands, never a second `serve`. To run more than one replica, use [Kubernetes](/deploy/kubernetes/) or [AWS](/deploy/aws/).
 </Aside>
-
-## Test the stack without a provider
-
-`test/run.sh` starts the stack with an OpenAI-compatible mock in place of OpenAI, issues a key, makes a governed call, checks that a call without a key gets 401 and verifies the audit chain. It runs as its own Compose project on port `18080` and removes everything it made.
-
-```bash
-sh test/run.sh
-```
-
-```text
-governed call: 200, answer from the mock
-call without a key: 401
-compose test passed
-```
 
 ## Next
 

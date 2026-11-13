@@ -7,24 +7,27 @@ sidebar:
 
 import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The chart in `deploy/helm/gantry` of the `gantry-enterprise` repository runs the gateway as a StatefulSet. Each pod gets its own claim (`data-gantry-0`, `data-gantry-1`, ...) for its audit log, and every pod shares keys, kill switches and budgets through one Postgres database.
+The Helm chart ships inside the `gantry-enterprise` image, so it always matches the version you run. It runs the gateway as a StatefulSet. Each pod gets its own claim (`data-gantry-0`, `data-gantry-1`, ...) for its audit log, and every pod shares keys, kill switches and budgets through one Postgres database.
 
 ## Prerequisites
 
 - A cluster on Kubernetes 1.27 or later, with a default StorageClass that offers `ReadWriteOnce` volumes. EKS, GKE and AKS all do.
-- `kubectl` pointed at the cluster, `helm` 3 or later, and `git`.
+- `kubectl` pointed at the cluster, `helm` 3 or later, and Docker, to copy the chart out of the image.
 - Postgres 16 that the cluster can reach, with a database `gantry` and a user that has `CREATE` on it. Gantry creates its tables on first start. Use the cloud's managed Postgres.
-- Read access to the `ggantry/gantry-enterprise` repository and the `ghcr.io/ggantry/gantry-enterprise` package: a GitHub user and a token with `read:packages`. Both come with your license.
+- The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry-enterprise`.
 - Your license key, a provider key (OpenAI in this guide), and the image version you were given.
 
 ## Install
 
 <Steps>
 
-1. Get the chart, and give the install its own namespace.
+1. Copy the chart out of the image you will run, and give the install its own namespace.
 
    ```bash
-   git clone https://github.com/ggantry/gantry-enterprise.git
+   export GANTRY_VERSION=<version>
+   docker login ghcr.io -u <your user name>
+   docker create --name gantry-files ghcr.io/ggantry/gantry-enterprise:$GANTRY_VERSION
+   docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
    kubectl create namespace gantry
    kubectl config set-context --current --namespace gantry
    ```
@@ -35,7 +38,7 @@ The chart in `deploy/helm/gantry` of the `gantry-enterprise` repository runs the
 
    ```bash
    kubectl create secret docker-registry ghcr --docker-server=ghcr.io \
-     --docker-username=<your GitHub user> --docker-password=<token with read:packages>
+     --docker-username=<your user name> --docker-password=<registry token>
    ```
 
    The gateway's environment: one entry per provider `key_env`, the license, and the database:
@@ -118,8 +121,7 @@ The chart in `deploy/helm/gantry` of the `gantry-enterprise` repository runs the
 5. Install the chart.
 
    ```bash
-   export GANTRY_VERSION=<version>
-   helm install gantry ./gantry-enterprise/deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
+   helm install gantry ./gantry-deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
    kubectl rollout status statefulset/gantry
    ```
 
@@ -169,9 +171,17 @@ The chart in `deploy/helm/gantry` of the `gantry-enterprise` repository runs the
      -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}]}'
    ```
 
-   The key is in Postgres, so every pod accepts it within 2 seconds.
+   The key is in Postgres, so every pod accepts it within 2 seconds. The image's own command line does the same from the cluster, with no port forward:
 
-4. Verify the audit log. In the console, open **Audit log** and select **Verify chain now**: the pod you are signed in to walks its whole chain, as `gantry audit verify` does, and shows its last hash. Each pod has its own chain, so do it on each (`kubectl port-forward pod/gantry-1 8080:8080`). The image has no shell and no `audit verify` command; to verify with the command line, ship the log off the pod and verify the copy.
+   ```bash
+   kubectl exec gantry-0 -c gantry -- /gantry-enterprise key new maya.cohen --team payments --policy /etc/gantry/gantry.policy.yaml --quiet
+   ```
+
+4. Verify the audit log. In the console, open **Audit log** and select **Verify chain now**: the pod you are signed in to walks its whole chain, as `gantry audit verify` does, and shows its last hash. Each pod has its own chain, so do it on each (`kubectl port-forward pod/gantry-1 8080:8080`). From the command line, the image runs `audit verify` itself:
+
+   ```bash
+   kubectl exec gantry-0 -c gantry -- /gantry-enterprise audit verify /var/lib/gantry/gantry-audit.jsonl
+   ```
 
 </Steps>
 
@@ -192,7 +202,7 @@ ingress:
 `gantry-tls` is a `kubernetes.io/tls` Secret, from cert-manager or `kubectl create secret tls gantry-tls --cert=tls.crt --key=tls.key`. The chart's default annotations stay: buffering off so answers stream, 32m bodies, a 600-second read timeout. For another controller, set the same three things.
 
 ```bash
-helm upgrade gantry ./gantry-enterprise/deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
+helm upgrade gantry ./gantry-deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
 curl -s https://gantry.example.com/healthz
 ```
 
@@ -212,7 +222,7 @@ Changing the `store:` section needs a restart: `kubectl rollout restart stateful
 ## Scale out
 
 ```bash
-helm upgrade gantry ./gantry-enterprise/deploy/helm/gantry --reuse-values --set replicaCount=3
+helm upgrade gantry ./gantry-deploy/helm/gantry --reuse-values --set replicaCount=3
 ```
 
 The new pod gets its own claim and starts its own chain. Scaling down keeps the claims, and scaling up again reuses them, so a returning pod continues its chain. Budgets are enforced once across every pod. Rate limits and the answer cache are counted per pod.
@@ -227,7 +237,9 @@ The new pod gets its own claim and starts its own chain. Scaling down keeps the 
 
    ```bash
    export GANTRY_VERSION=<new version>
-   helm upgrade gantry ./gantry-enterprise/deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
+   rm -rf gantry-deploy && docker create --name gantry-files ghcr.io/ggantry/gantry-enterprise:$GANTRY_VERSION
+   docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
+   helm upgrade gantry ./gantry-deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
    kubectl rollout status statefulset/gantry
    ```
 

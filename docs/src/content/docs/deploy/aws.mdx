@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The module in `deploy/terraform/aws-ecs` of the `gantry-enterprise` repository runs the gateways on ECS Fargate behind an HTTPS Application Load Balancer, with RDS Postgres 16 for the store and EFS for each gateway's audit log. Everything here is done with Terraform and the AWS console.
+The Terraform module `aws-ecs`, which ships inside the `gantry-enterprise` image, runs the gateways on ECS Fargate behind an HTTPS Application Load Balancer, with RDS Postgres 16 for the store and EFS for each gateway's audit log. Everything here is done with Terraform and the AWS console.
 
 ## What it creates
 
@@ -24,11 +24,11 @@ The module in `deploy/terraform/aws-ecs` of the `gantry-enterprise` repository r
 
 ## Prerequisites
 
-- Terraform 1.6 or later, and `git`.
+- Terraform 1.6 or later, and Docker.
 - An AWS account and credentials for Terraform, given as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the environment. They need to create ECS, Elastic Load Balancing, EFS, RDS and RDS Proxy, Secrets Manager, SSM, IAM roles and policies, CloudWatch Logs and EC2 security groups.
 - A VPC with at least two private subnets and two public subnets, in two availability zones. The private subnets need outbound HTTPS through a NAT gateway: the tasks pull the image from ghcr.io and busybox from `public.ecr.aws`, and call the model providers.
 - A domain name you control, and an ACM certificate for it in the same region. Request it in the console under **Certificate Manager**, **Request**, with DNS validation, and wait until its status is **Issued**.
-- Read access to the `ggantry/gantry-enterprise` repository and `ghcr.io/ggantry/gantry-enterprise`: a GitHub user and a token with `read:packages`. Both come with your license.
+- The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry-enterprise`, and the user name that goes with it.
 - Your license key, a provider key, and the image version you were given.
 
 ## Deploy
@@ -39,18 +39,35 @@ The module in `deploy/terraform/aws-ecs` of the `gantry-enterprise` repository r
 
    | Secret name | Value | Becomes |
    |---|---|---|
-   | `ghcr-pull` | Key/value: `username` your GitHub user, `password` the token | The registry credentials ECS pulls the image with |
+   | `ghcr-pull` | Key/value: `username` your user name, `password` the registry token | The registry credentials ECS pulls the image with |
    | `gantry-license` | Plaintext: the license key | `GANTRY_LICENSE` |
    | `openai` | Plaintext: the OpenAI key | `OPENAI_PROVIDER_KEY` |
 
    Copy each secret's ARN from its page.
 
-2. Get the module and a starting policy.
+2. Copy the module out of the image you will run, and save a starting policy beside it. The image carries the module for its own version, so nothing is cloned.
 
    ```bash
    mkdir gantry-aws && cd gantry-aws
-   git clone https://github.com/ggantry/gantry-enterprise.git
-   cp gantry-enterprise/deploy/compose/gantry.policy.yaml .
+   docker login ghcr.io -u <your user name>
+   docker create --name gantry-files ghcr.io/ggantry/gantry-enterprise:<version>
+   docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
+   ```
+
+   ```yaml title="gantry.policy.yaml"
+   version: 1
+   providers:
+     - name: openai
+       kind: openai
+       url: https://api.openai.com/v1
+       key_env: OPENAI_PROVIDER_KEY
+       models: [gpt-4o-mini]
+   rules:
+     - name: everyone
+       principals: { any: true }
+       models: [gpt-4o-mini]
+   audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+   store: { postgres_url_env: DATABASE_URL }
    ```
 
    The policy must keep its last two lines: the audit log under `/var/lib/gantry` and `store: { postgres_url_env: DATABASE_URL }`. It may be at most 8 KB.
@@ -67,7 +84,7 @@ The module in `deploy/terraform/aws-ecs` of the `gantry-enterprise` repository r
    }
 
    module "gantry" {
-     source = "./gantry-enterprise/deploy/terraform/aws-ecs"
+     source = "./gantry-deploy/terraform/aws-ecs"
 
      image              = "ghcr.io/ggantry/gantry-enterprise:<version>"
      policy             = file("gantry.policy.yaml")
@@ -194,7 +211,7 @@ The module in `deploy/terraform/aws-ecs` of the `gantry-enterprise` repository r
 - **Deploys have a gap.** A new image or policy stops each gateway before its replacement starts, because two tasks must never write one chain. Every service deploys at once, so even with two replicas there is a short time with no gateway.
 - **The policy holds at most 8 KB.** It lives in an SSM parameter.
 - **The connection to the database is encrypted, not checked.** The module connects to RDS Proxy with `sslmode=require`: TLS on, the certificate not verified. Only the gateways' security group reaches the proxy.
-- **No machine can read EFS but the tasks.** Its security group lets in the tasks only, and the image has no shell, so the module gives no way to run `gantry audit verify` on the files. Use **Verify chain now** in the console. For the command line, allow an EC2 instance in the `<name>-efs` security group on port 2049, mount the file system there read-only, and run `gantry audit verify /mnt/efs/gantry-0/gantry-audit.jsonl`.
+- **No machine can read EFS but the tasks.** Its security group lets in the tasks only. Use **Verify chain now** in the console. For the command line, allow an EC2 instance with Docker in the `<name>-efs` security group on port 2049, mount the file system there read-only, and run the image's own `audit verify` on it: `docker run --rm -v /mnt/efs:/mnt/efs:ro ghcr.io/ggantry/gantry-enterprise:<version> audit verify /mnt/efs/gantry-0/gantry-audit.jsonl`.
 - **The tasks have no AWS permissions.** For Amazon Bedrock, store an access key pair in Secrets Manager and map it: `provider_key_secret_arns = { AWS_ACCESS_KEY_ID = "...", AWS_SECRET_ACCESS_KEY = "..." }`.
 - **Deletion is protected.** Set `deletion_protection = false` and apply before `terraform destroy`. RDS takes a final snapshot named `<name>-final`.
 
