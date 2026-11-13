@@ -107,6 +107,8 @@ const KNOWN: &[&str] = &[
     "tpm",
     "mcp",
     "tools",
+    "store",
+    "postgres_url_env",
 ];
 /// Keys whose value is a map whose keys the user chooses: model names, or header names under `headers_env`.
 /// Those names are not Gantry keys, so the unknown-key scan never reads them.
@@ -132,6 +134,22 @@ struct PolicyFile {
     aliases: Vec<AliasFile>,
     #[serde(default)]
     mcp: Vec<crate::mcp::ServerFile>,
+    #[serde(default)]
+    store: Option<StoreFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoreFile {
+    postgres_url_env: String,
+}
+
+/// Where several gateways keep what they share while they run, as `store:` in the policy sets it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoreSetting {
+    /// The environment variable that holds the Postgres connection string. The string never goes in the file: it
+    /// carries a password.
+    pub postgres_url_env: String,
 }
 
 #[derive(Deserialize)]
@@ -839,6 +857,8 @@ pub struct Loaded {
     pub aliases: Vec<Alias>,
     /// Upstream MCP servers whose tools Gantry serves at `/mcp`.
     pub mcp: Vec<crate::mcp::Server>,
+    /// The shared store, when the policy sets `store:`. Keys and kill switches are then read from it, not files.
+    pub store: Option<StoreSetting>,
 }
 
 /// "1 provider: openai at https://api.openai.com", for messages.
@@ -1181,6 +1201,10 @@ fn unknown_keys(file: &Path, text: &str, errors: &mut Vec<String>) -> bool {
 /// The text of a keys file, or `None` if there is none yet. Any other failure to read it is an error:
 /// a file that exists and cannot be read must never be taken for an empty one.
 pub fn read_keys(path: &Path) -> Result<Option<String>, String> {
+    // With a store, the keys are in the database, and every reader of the keys file gets them from there.
+    if let Some(store) = crate::store::attached(path) {
+        return Ok(Some(store.keys_text()));
+    }
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -2379,6 +2403,15 @@ fn principals(entries: Vec<KeyEntry>) -> HashMap<[u8; 32], Principal> {
 /// Reads and checks both files. Returns every problem found, one per line, each with its file and line.
 pub fn load(policy_path: &Path, keys_path: Option<&Path>) -> Result<Loaded, Vec<String>> {
     let policy_text = read(policy_path, "policy file").map_err(|e| vec![e])?;
+    if names_store(&policy_text) {
+        // The keys are in the store: a keys file left beside the policy is not read. `gantry check` has no
+        // connection, so it checks the policy alone.
+        let keys_file = keys_path.map_or_else(|| keys_path_for(policy_path), Path::to_path_buf);
+        let text = crate::store::attached(&keys_file)
+            .map(|store| store.keys_text())
+            .unwrap_or_default();
+        return load_texts(policy_path, &policy_text, &keys_file, &text);
+    }
     // The keys file may not exist yet: a new setup has a policy before it has its first key.
     let (keys_file, keys_text) = match keys_path {
         Some(path) => (
@@ -2400,6 +2433,39 @@ pub fn load(policy_path: &Path, keys_path: Option<&Path>) -> Result<Loaded, Vec<
     )?;
     loaded.keys_file_found = found;
     Ok(loaded)
+}
+
+/// Whether a policy text sets `store:`. A text that does not parse says no here and gets its problems from
+/// `load_texts`.
+pub fn names_store(policy_text: &str) -> bool {
+    #[derive(Deserialize)]
+    struct Probe {
+        #[serde(default)]
+        store: Option<serde::de::IgnoredAny>,
+    }
+    from_yaml::<Probe>(policy_text).is_ok_and(|probe| probe.store.is_some())
+}
+
+/// The `store:` section, checked: the name of the variable that holds the connection string.
+fn store_setting(
+    file: &Path,
+    text: &str,
+    parsed: &PolicyFile,
+    errors: &mut Vec<String>,
+) -> Option<StoreSetting> {
+    let store = parsed.store.as_ref()?;
+    let env = &store.postgres_url_env;
+    if env.is_empty() || !env.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        errors.push(format!(
+            "{}:{}: postgres_url_env is the name of an environment variable that holds the connection string, for example DATABASE_URL. The string itself carries a password and never goes in this file.",
+            file.display(),
+            line_of_key(text, "postgres_url_env", 1, usize::MAX)
+        ));
+        return None;
+    }
+    Some(StoreSetting {
+        postgres_url_env: env.clone(),
+    })
 }
 
 /// Checks the text of both files, as read by the caller, with the same rules as `load`.
@@ -2450,6 +2516,7 @@ pub fn load_texts(
     let sso = console_sso(policy_path, policy_text, &parsed, &mut errors);
     let aliases = aliases(policy_path, policy_text, &parsed, &providers, &mut errors);
     let mcp = crate::mcp::servers(policy_path, policy_text, &parsed.mcp, &mut errors);
+    let store = store_setting(policy_path, policy_text, &parsed, &mut errors);
     let audit_path = match &parsed.audit {
         Some(audit) => audit.path.clone(),
         None => policy_path.with_file_name("gantry-audit.jsonl"),
@@ -2467,6 +2534,7 @@ pub fn load_texts(
             sso,
             aliases,
             mcp,
+            store,
         }),
         _ => Err(errors),
     }
@@ -2487,6 +2555,12 @@ pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
     if old.mcp != new.mcp {
         reasons.push(
             "the mcp servers changed. Their credentials are read at start: restart Gantry to apply it. A rule's tools may change without one.".to_string(),
+        );
+    }
+    // The connection to the store is made once, at start.
+    if old.store != new.store {
+        reasons.push(
+            "the store section changed. Gantry connects to its store at start: restart Gantry to apply it.".to_string(),
         );
     }
     for provider in &old.providers {

@@ -15,6 +15,7 @@ pub mod mcp;
 pub mod metrics;
 pub mod policy;
 pub mod sigv4;
+pub mod store;
 pub mod translate;
 pub mod usage;
 pub mod vendors;

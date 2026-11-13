@@ -11,11 +11,13 @@ Gantry ships a Helm chart in `deploy/helm/gantry` and plain manifests in `deploy
 
 ## One replica, one audit chain
 
-The audit log is one hash chain in one file, and budgets, rate limits and the cache are counted in one process. Two replicas would each write a chain of their own and each count a budget from zero. The chart therefore:
+The audit log is one hash chain in one file, and without a store, keys live in a file and budgets in one process. Two replicas of this chart would share one volume and each count a budget from zero. The chart therefore:
 
 - refuses any `replicaCount` other than `1`: `helm template` fails with the reason,
 - uses the `Recreate` strategy, so the old pod lets go of the volume before the new one starts (a few seconds with no gateway on every upgrade),
 - keeps the audit log and keys file on one `ReadWriteOnce` volume annotated `helm.sh/resource-policy: keep`, so `helm uninstall` does not delete the record.
+
+To run several replicas, use a [store](/operations/store/): add `store: { postgres_url_env: DATABASE_URL }` to the policy, put the connection string in a Secret, and run Gantry as a StatefulSet with a volume per pod (each replica writes its own audit chain). Keys, kill switches and budgets are then shared through Postgres. The chart does not offer that yet; it stays one replica.
 
 ## Install
 

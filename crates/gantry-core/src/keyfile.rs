@@ -116,6 +116,66 @@ pub fn add_with(
         return Err("a name and a team use letters, digits, dots, dashes, underscores and @ only, at most 100 characters, for example maya.cohen and payments.".into());
     }
     let hash = id::sha256_hex(key.as_bytes());
+    if let Some(store) = crate::store::attached(keys) {
+        return store.add_key(&config::KeyEntry {
+            name: name.to_string(),
+            team: team.to_string(),
+            sha256: hash,
+            admin: attributes.admin,
+            expires: attributes.expires.clone(),
+            budget: attributes.budget,
+            models: attributes.models.clone(),
+            tpm: attributes.tpm,
+        });
+    }
+    let entry = entry_text(name, team, &hash, attributes);
+    // Set once this run's entry has gone into the file, with whether the name already had a key.
+    let mut appended = None;
+    match retried(|| add(name, keys, &entry, &hash, &mut appended)) {
+        Ok(rotated) => Ok(rotated),
+        Err(err) if appended.is_none() => Err(err),
+        // The entry went in and the key cannot be shown. It is taken out again, so the file does not keep an entry
+        // whose key nobody has.
+        Err(err) => match retried(|| remove(keys, &hash)) {
+            Ok(_) => Err(format!(
+                "{err}\nThe entry this run added is not in the file any more. Run the command again."
+            )),
+            Err(_) => Err(format!(
+                "{err}\nThe entry this run added for {name} (sha256 {}...) may still be in {}. Its key was never shown, so it works for nobody: remove that entry.",
+                &hash[..16],
+                keys.display()
+            )),
+        },
+    }
+}
+
+/// A keys file holding `entries`, written as `gantry key new` writes them: how a store hands its keys to the
+/// loader, so they are checked by the same rules as a file.
+pub fn keys_text(entries: &[config::KeyEntry]) -> String {
+    let mut text = String::from(
+        "# Keys from the store. Change them with `gantry key` or the admin API.\nkeys:",
+    );
+    text.push_str(if entries.is_empty() { " []\n" } else { "\n" });
+    for entry in entries {
+        let attributes = Attributes {
+            admin: entry.admin,
+            expires: entry.expires.clone(),
+            budget: entry.budget,
+            models: entry.models.clone(),
+            tpm: entry.tpm,
+        };
+        text.push_str(&entry_text(
+            &entry.name,
+            &entry.team,
+            &entry.sha256,
+            &attributes,
+        ));
+    }
+    text
+}
+
+/// One entry of the keys list, indented by two spaces.
+fn entry_text(name: &str, team: &str, hash: &str, attributes: &Attributes) -> String {
     let mut entry = format!("  - name: {name}\n    team: {team}\n    sha256: {hash}\n");
     if attributes.admin {
         entry.push_str("    admin: true\n");
@@ -138,24 +198,7 @@ pub fn add_with(
     if let Some(tpm) = attributes.tpm {
         entry.push_str(&format!("    tpm: {tpm}\n"));
     }
-    // Set once this run's entry has gone into the file, with whether the name already had a key.
-    let mut appended = None;
-    match retried(|| add(name, keys, &entry, &hash, &mut appended)) {
-        Ok(rotated) => Ok(rotated),
-        Err(err) if appended.is_none() => Err(err),
-        // The entry went in and the key cannot be shown. It is taken out again, so the file does not keep an entry
-        // whose key nobody has.
-        Err(err) => match retried(|| remove(keys, &hash)) {
-            Ok(_) => Err(format!(
-                "{err}\nThe entry this run added is not in the file any more. Run the command again."
-            )),
-            Err(_) => Err(format!(
-                "{err}\nThe entry this run added for {name} (sha256 {}...) may still be in {}. Its key was never shown, so it works for nobody: remove that entry.",
-                &hash[..16],
-                keys.display()
-            )),
-        },
-    }
+    entry
 }
 
 /// Removes the one entry whose hash starts with `prefix`. `Ok(None)` when no entry has it.
@@ -163,6 +206,9 @@ pub fn revoke(keys: &Path, prefix: &str) -> Result<Option<Revoked>, String> {
     let prefix = prefix.to_ascii_lowercase();
     if prefix.len() < 8 || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("name the key by at least the first 8 hex characters of its hash, as `GET /admin/keys` lists it.".into());
+    }
+    if let Some(store) = crate::store::attached(keys) {
+        return store.revoke(&prefix);
     }
     retried(|| remove(keys, &prefix))
 }

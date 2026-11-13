@@ -30,9 +30,15 @@ Commands:
   key list [--keys <file>]
         List the keys in the keys file: name, team, hash prefix, admin, expiry, budget,
         models and tpm. Never a key.
+  key revoke <hash prefix> [--keys <file>]
+        Remove the key whose hash starts with the prefix (at least 8 hex characters, as `key list` shows
+        it). A running Gantry refuses it within 2 seconds.
   key prune [--keys <file>]
         Remove the entries whose expiry has passed, such as old `gantry login` keys. Each is removed
         as `DELETE /admin/keys` removes one, safe while Gantry runs; every other line is kept.
+  store import --keys <file> [--policy <file>]
+        Copy the keys of a keys file, and the kill switches beside it, into the store the policy's store:
+        names (default gantry.policy.yaml). Keys already there are left as they are. The file is not changed.
   import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>]
         Write a Gantry policy (default gantry.policy.yaml, never over an existing file) from a LiteLLM proxy
         config, check it, and list what could not be mapped. --keys-from reads an export of LiteLLM virtual
@@ -84,7 +90,9 @@ Commands:
   version
         Print the version, the hash of the sources it was built from and the day it was built.
 
-The keys file is gantry.keys.yaml beside the policy file unless --keys names another.";
+The keys file is gantry.keys.yaml beside the policy file unless --keys names another. When the policy
+beside the keys file (or --policy) has a store: section, the key commands change the store instead, and
+every gateway on that database applies the change within 2 seconds.";
 
 /// Splits arguments into positional ones and `--name value` options. `None` if an option is unknown or has no value.
 fn options<'a>(
@@ -169,6 +177,7 @@ async fn main() -> ExitCode {
                 &[
                     "--team",
                     "--keys",
+                    "--policy",
                     "--expires",
                     "--budget",
                     "--models",
@@ -183,6 +192,7 @@ async fn main() -> ExitCode {
                         .get("--keys")
                         .map_or_else(|| PathBuf::from("gantry.keys.yaml"), PathBuf::from);
                     let made = attributes(flag("--admin"), &named).and_then(|attributes| {
+                        let _store = store_for(&keys, named.get("--policy").copied())?;
                         key_new(
                             positional[0],
                             named["--team"],
@@ -215,21 +225,53 @@ async fn main() -> ExitCode {
             ),
             _ => None,
         },
-        ["key", "prune", rest @ ..] => match options(rest, &["--keys"]) {
+        ["key", "prune", rest @ ..] => match options(rest, &["--keys", "--policy"]) {
             Some((positional, named)) if positional.is_empty() => {
                 let keys = named
                     .get("--keys")
                     .map_or_else(|| PathBuf::from("gantry.keys.yaml"), PathBuf::from);
-                Some(key_prune(&keys).map_or_else(fail, |()| ExitCode::SUCCESS))
+                let pruned = store_for(&keys, named.get("--policy").copied())
+                    .and_then(|_store| key_prune(&keys));
+                Some(pruned.map_or_else(fail, |()| ExitCode::SUCCESS))
             }
             _ => None,
         },
-        ["key", "list", rest @ ..] => match options(rest, &["--keys"]) {
+        ["key", "list", rest @ ..] => match options(rest, &["--keys", "--policy"]) {
             Some((positional, named)) if positional.is_empty() => {
                 let keys = named
                     .get("--keys")
                     .map_or_else(|| PathBuf::from("gantry.keys.yaml"), PathBuf::from);
-                Some(key_list(&keys).map_or_else(fail, |()| ExitCode::SUCCESS))
+                let listed = store_for(&keys, named.get("--policy").copied())
+                    .and_then(|_store| key_list(&keys));
+                Some(listed.map_or_else(fail, |()| ExitCode::SUCCESS))
+            }
+            _ => None,
+        },
+        ["key", "revoke", rest @ ..] => match options(rest, &["--keys", "--policy"]) {
+            Some((positional, named)) if positional.len() == 1 => {
+                let keys = named
+                    .get("--keys")
+                    .map_or_else(|| PathBuf::from("gantry.keys.yaml"), PathBuf::from);
+                let revoked = store_for(&keys, named.get("--policy").copied())
+                    .and_then(|_store| key_revoke(&keys, positional[0]));
+                Some(revoked.map_or_else(fail, |()| ExitCode::SUCCESS))
+            }
+            _ => None,
+        },
+        ["store", "import", rest @ ..] => match options(rest, &["--keys", "--policy"]) {
+            Some((positional, named)) if positional.is_empty() && named.contains_key("--keys") => {
+                Some(
+                    store_import(
+                        Path::new(named["--keys"]),
+                        Path::new(
+                            named
+                                .get("--policy")
+                                .copied()
+                                .unwrap_or("gantry.policy.yaml"),
+                        ),
+                    )
+                    .map_or_else(fail, |()| ExitCode::SUCCESS),
+                )
             }
             _ => None,
         },
@@ -339,14 +381,18 @@ async fn main() -> ExitCode {
         // A known command with the wrong arguments gets its own usage line, not the whole help.
         let usage = match args.as_slice() {
             ["check", ..] => Some("gantry check <policy> [--keys <file>]"),
-            ["key", "list", ..] => Some("gantry key list [--keys <file>]"),
-            ["key", "prune", ..] => Some("gantry key prune [--keys <file>]"),
+            ["key", "list", ..] => Some("gantry key list [--keys <file>] [--policy <file>]"),
+            ["key", "prune", ..] => Some("gantry key prune [--keys <file>] [--policy <file>]"),
+            ["key", "revoke", ..] => {
+                Some("gantry key revoke <hash prefix> [--keys <file>] [--policy <file>]")
+            }
+            ["store", ..] => Some("gantry store import --keys <file> [--policy <file>]"),
             ["prices", ..] => Some("gantry prices <model> [--policy <file>]"),
             ["import", ..] => Some(
                 "gantry import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>]",
             ),
             ["key", ..] => Some(
-                "gantry key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>/<day|month>] [--models <a,b>] [--tpm <n>] [--url <gateway url>] [--quiet] [--keys <file>]",
+                "gantry key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>/<day|month>] [--models <a,b>] [--tpm <n>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]",
             ),
             ["serve", ..] => Some(
                 "gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>]",
@@ -403,11 +449,15 @@ fn check(policy: &Path, keys: Option<&Path>) -> ExitCode {
             {
                 eprintln!("{warning}");
             }
+            // With a store the keys are in the database, which `check` does not connect to.
+            let keys = match &loaded.store {
+                Some(store) => format!("keys in the store named by {}", store.postgres_url_env),
+                None => gantry_core::count(loaded.policy.keys(), "key"),
+            };
             println!(
-                "{} is valid: {}, {}, {}.",
+                "{} is valid: {}, {keys}, {}.",
                 policy.display(),
                 gantry_core::count(loaded.policy.rules(), "rule"),
-                gantry_core::count(loaded.policy.keys(), "key"),
                 gantry_core::config::describe(&loaded.providers)
             );
             ExitCode::SUCCESS
@@ -540,12 +590,18 @@ fn key_new(
         "To hand it over, send these lines through your secret manager, never in chat. Claude Code and the OpenAI SDKs read them:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_API_KEY={key}\nexport OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\n\nFor Codex, put the key in GANTRY_KEY and see https://gantry-docs.eliran.me/integrations/codex/ for its provider settings.\n",
         key = issued.key
     );
-    println!(
-        "Its hash was added to {}. A running `gantry serve` accepts it within 2 seconds. `gantry serve` reads the keys file beside its policy file unless `--keys` names another.",
-        std::fs::canonicalize(keys)
-            .unwrap_or_else(|_| keys.to_path_buf())
-            .display()
-    );
+    if gantry_core::store::attached(keys).is_some() {
+        println!(
+            "Its hash was added to the store. Every `gantry serve` on that database accepts it within 2 seconds."
+        );
+    } else {
+        println!(
+            "Its hash was added to {}. A running `gantry serve` accepts it within 2 seconds. `gantry serve` reads the keys file beside its policy file unless `--keys` names another.",
+            std::fs::canonicalize(keys)
+                .unwrap_or_else(|_| keys.to_path_buf())
+                .display()
+        );
+    }
     if attributes.admin {
         println!(
             "It may sign in to the console at {url}/console and call the admin API to issue and revoke keys."
@@ -676,8 +732,8 @@ fn print_price(model: &str, price: &gantry_core::usage::Price, policy: Option<&P
 /// Removes every expired entry, one at a time with the same safe rewrite a revoke uses.
 fn key_prune(keys: &Path) -> Result<(), String> {
     let now = audit::timestamp();
-    let text = std::fs::read_to_string(keys)
-        .map_err(|err| format!("{} cannot be read: {err}.", keys.display()))?;
+    let text = config::read_keys(keys)?
+        .ok_or_else(|| format!("{} cannot be read: it does not exist.", keys.display()))?;
     let entries = config::key_entries(keys, &text).map_err(|errors| errors.join("\n"))?;
     let mut removed = 0;
     for entry in entries.iter().filter(|e| {
@@ -701,6 +757,101 @@ fn key_prune(keys: &Path) -> Result<(), String> {
             keys.display()
         );
     }
+    Ok(())
+}
+
+/// The store the policy names, when it has `store:`, serving `keys` so the key commands change the database.
+/// The policy is `--policy`, else gantry.policy.yaml beside the keys file. Held for as long as the command runs.
+fn store_for(
+    keys: &Path,
+    policy: Option<&str>,
+) -> Result<Option<std::sync::Arc<dyn gantry_core::store::Store>>, String> {
+    let path = match policy {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            std::fs::metadata(&path).map_err(|err| {
+                format!(
+                    "{} (--policy) cannot be read: {err}. Name the policy file Gantry serves.",
+                    path.display()
+                )
+            })?;
+            path
+        }
+        None => keys.with_file_name("gantry.policy.yaml"),
+    };
+    gantry_server::open_store(&path, keys, &|variable| std::env::var(variable).ok())
+}
+
+fn key_revoke(keys: &Path, prefix: &str) -> Result<(), String> {
+    match keyfile::revoke(keys, prefix)? {
+        Some(gone) => {
+            println!(
+                "Revoked the key of \"{}\" (team {}, hash {}). Gantry refuses it within 2 seconds.",
+                gone.name,
+                gone.team,
+                &gone.sha256[..8]
+            );
+            Ok(())
+        }
+        None => Err(format!(
+            "no key hash starts with {prefix}. `gantry key list` shows the keys and their hash prefixes."
+        )),
+    }
+}
+
+/// Copies a keys file's entries, and the switches beside it, into the store. Both files are read before the store
+/// is opened: once it is, their paths read from the store.
+fn store_import(keys: &Path, policy: &Path) -> Result<(), String> {
+    let text = config::read_keys(keys)?.ok_or_else(|| {
+        format!(
+            "{} does not exist. Name the keys file to import with --keys.",
+            keys.display()
+        )
+    })?;
+    let entries = config::key_entries(keys, &text).map_err(|problems| problems.join("\n"))?;
+    let kills = gantry_core::kill::read(&gantry_core::kill::path_beside(keys))?;
+    std::fs::metadata(policy).map_err(|err| {
+        format!(
+            "{} cannot be read: {err}. Name the policy that has the store: section with --policy.",
+            policy.display()
+        )
+    })?;
+    let store = gantry_server::open_store(policy, keys, &|variable| std::env::var(variable).ok())?
+        .ok_or_else(|| {
+            format!(
+                "{} has no store: section, so there is no store to import into. Add `store: {{ postgres_url_env: DATABASE_URL }}` to it first.",
+                policy.display()
+            )
+        })?;
+    let there =
+        config::key_entries(keys, &store.keys_text()).map_err(|problems| problems.join("\n"))?;
+    let (mut added, mut skipped) = (0, 0);
+    for entry in &entries {
+        if there.iter().any(|e| e.sha256 == entry.sha256) {
+            skipped += 1;
+            continue;
+        }
+        store.add_key(entry)?;
+        added += 1;
+    }
+    let present = store.kills();
+    let mut switched = 0;
+    for kill in kills {
+        if !present
+            .iter()
+            .any(|k| k.scope == kill.scope && k.value == kill.value)
+        {
+            store.set_kill(&kill)?;
+            switched += 1;
+        }
+    }
+    println!(
+        "Imported {} and {switched} kill switches from {} into the store ({} already there). {} is not read while the policy has store:; keep it as a backup or delete it.",
+        count(added, "key"),
+        keys.display(),
+        count(skipped, "key"),
+        keys.display()
+    );
     Ok(())
 }
 

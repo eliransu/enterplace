@@ -18,6 +18,10 @@ gantry-console.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 
+[dev-dependencies]
+# The store tests make a fresh database for each test. Already a dependency of gantry-server.
+tokio-postgres.workspace = true
+
 [lints]
 workspace = true
 

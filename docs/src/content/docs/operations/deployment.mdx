@@ -236,7 +236,7 @@ Behind a proxy, the `client` field of every audit record is the proxy's address.
 </Steps>
 
 <Aside type="note">
-Gantry runs as one process per audit log. Budgets, rate limits, the cache and console sessions live in its memory. See [Project status](/getting-started/status/).
+Without a store, Gantry runs as one process per audit log: keys and kill switches are files, and budgets, rate limits, the cache and console sessions live in its memory. To run several replicas, give them one Postgres database with `store:` in the policy: see [Several replicas with a store](/operations/store/).
 </Aside>
 
 ## Next

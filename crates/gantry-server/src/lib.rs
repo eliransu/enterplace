@@ -36,6 +36,7 @@ mod mcp;
 mod metrics;
 mod reload;
 mod spend;
+pub mod store;
 mod traces;
 pub use mcp::McpRoute;
 pub use traces::TraceExport;
@@ -48,7 +49,7 @@ use hyper_util::{
     server::{conn::auto::Builder, graceful::GracefulShutdown},
     service::TowerToHyperService,
 };
-pub use reload::{Governed, Reload, Reloader, Trigger, governed};
+pub use reload::{Governed, Reload, Reloader, Trigger, governed, open_store};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tower::ServiceExt;
 
@@ -238,6 +239,8 @@ pub struct Config {
     pub setup: Option<String>,
     /// Upstream MCP servers whose tools are served at `/mcp`. Empty serves no `/mcp`.
     pub mcp: Vec<McpRoute>,
+    /// What several gateways share (`store:` in the policy). `None` keeps keys, switches and spend to this process.
+    pub store: Option<Arc<dyn gantry_core::store::Store>>,
 }
 
 /// A configuration the server refuses to start with. The message names the cause and the fix.
@@ -446,7 +449,9 @@ fn build(
         keys_sha256,
     })));
     let reloader = make_reloader(&live);
-    let spend = Arc::new(spend::Spend::default());
+    let mut spend = spend::Spend::default();
+    spend.store = config.store.clone();
+    let spend = Arc::new(spend);
     if let Some(path) = &config.spent_from {
         spend.replay(path).map_err(ConfigError)?;
     }
@@ -2026,7 +2031,7 @@ async fn limit(
         body: bytes,
         free: parts.uri.path() == COUNT_TOKENS,
     };
-    match spend::admit(&state.spend, state.audit.as_ref().map(|a| &a.log), ask)? {
+    match spend::admit(&state.spend, state.audit.as_ref().map(|a| &a.log), ask).await? {
         spend::Admit::Hit(response, admitted) => {
             seen.cache = Some("hit");
             seen.hit = Some(admitted);
@@ -4111,15 +4116,23 @@ pub async fn serve_policy(
         gantry_core::count(loaded.policy.keys(), "key"),
         gantry_core::config::describe(&loaded.providers)
     );
+    // With a store, keys come from the database and the keys file is not read.
+    let keys_from = match &loaded.store {
+        Some(store) => format!("the store named by {}", store.postgres_url_env),
+        None => loaded.keys_path.display().to_string(),
+    };
+    if loaded.store.is_some() {
+        println!(
+            "Keys, kill switches and budgets are shared through {keys_from} with every Gantry on that database."
+        );
+    }
     println!(
-        "Changes to {} and {} are used within 2 seconds, or at once on SIGHUP.",
+        "Changes to {} and {keys_from} are used within 2 seconds, or at once on SIGHUP.",
         policy_path.display(),
-        loaded.keys_path.display()
     );
     if loaded.policy.keys() == 0 {
         eprintln!(
-            "warning: no keys in {}, so every request will be refused. Add one with `gantry key new <name> --team <team>`: it is used within 2 seconds.",
-            loaded.keys_path.display()
+            "warning: no keys in {keys_from}, so every request will be refused. Add one with `gantry key new <name> --team <team>`: it is used within 2 seconds.",
         );
     }
     if !addr.ip().is_loopback() && tls.is_none() {
