@@ -1,4 +1,7 @@
-"""Builds the Gantry website into dist/site/ from the approved landing page design.
+"""Builds the Gantry website into site/public/ from the approved landing page design.
+
+The design lives outside this repository, so the built page is committed and CI deploys it as it is.
+Rebuild it here after a design change.
 
 Usage: python3 scripts/site.py [design-screens folder]
 The markup comes from the design's own helpers in design-screens/build.py (tags, buttons, the motif, points,
@@ -8,7 +11,7 @@ what is not built yet: no price, more than one node marked next, and an install 
 import importlib.util, pathlib, shutil, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUT = ROOT / "dist" / "site"
+OUT = ROOT / "site" / "public"
 # The repository sits beside design-screens, or one level deeper in a working copy.
 SCREENS = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else next((p / "design-screens" for p in (ROOT.parent, ROOT.parent.parent) if (p / "design-screens").is_dir()), ROOT.parent / "design-screens")
 SYSTEM = SCREENS.parent / "design-system" / "project"
