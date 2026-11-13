@@ -1,0 +1,104 @@
+name: helm
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - name: Lint and render with each option
+        working-directory: deploy/helm/gantry
+        run: |
+          helm lint --strict .
+          helm template t . > /dev/null
+          for f in ci/*.yaml; do
+            helm lint --strict -f "$f" .
+            helm template t . -f "$f" > /dev/null
+          done
+      - name: More than one replica without a store is refused
+        working-directory: deploy/helm/gantry
+        run: |
+          if out=$(helm template t . --set replicaCount=2 2>&1); then echo "rendered: $out"; exit 1; fi
+          grep -q "needs the policy's \`store:\` section" <<<"$out"
+          if out=$(helm template t . --set postgres.enabled=true 2>&1); then echo "rendered: $out"; exit 1; fi
+          grep -q "nothing uses" <<<"$out"
+
+  # Installs the chart on a kind cluster with the image built here and makes a governed call through the Service.
+  kind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gantry-enterprise
+      # The open source repository is private: GANTRY_REPO_TOKEN is a token that can read it.
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/gantry
+          path: gantry
+          token: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
+      - name: Build the image
+        run: |
+          docker build -f gantry-enterprise/Dockerfile -t gantry-enterprise:ci .
+          size=$(docker image inspect gantry-enterprise:ci --format '{{.Size}}')
+          user=$(docker image inspect gantry-enterprise:ci --format '{{.Config.User}}')
+          echo "image: $size bytes, user $user"
+          [ "$size" -lt $((50 * 1024 * 1024)) ] || { echo "the image is over 50 MB"; exit 1; }
+          case "$user" in ""|0|0:*|root|root:*) echo "the image runs as root"; exit 1;; esac
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: gantry
+      - name: Load the image, start the mock provider, make a key
+        run: |
+          kind load docker-image gantry-enterprise:ci --name gantry
+          kubectl apply -f gantry-enterprise/deploy/helm/gantry/ci/mock-provider.yaml
+          key="gantry_$(openssl rand -hex 32)"
+          echo "::add-mask::$key"
+          echo "GANTRY_KEY=$key" >> "$GITHUB_ENV"
+          hash=$(printf %s "$key" | sha256sum | cut -d' ' -f1)
+          printf 'keys:\n  - name: ci\n    team: platform\n    sha256: %s\n' "$hash" > keys.yaml
+          kubectl create secret generic gantry-keys --from-file=gantry.keys.yaml=keys.yaml
+          kubectl create secret generic gantry-secrets --from-literal=MOCK_PROVIDER_KEY=mock
+          kubectl rollout status deploy/mock-provider --timeout=180s
+      - name: Install the chart
+        run: |
+          helm install gantry gantry-enterprise/deploy/helm/gantry \
+            -f gantry-enterprise/deploy/helm/gantry/ci/kind.yaml --wait --timeout 5m \
+            || { kubectl describe pod gantry-0; kubectl logs gantry-0 --all-containers; exit 1; }
+      - name: A governed chat call returns 200 and leaves a decision record
+        run: |
+          kubectl port-forward svc/gantry 8080:8080 9464:9464 & sleep 3
+          status=$(curl -sS -o body.json -D headers.txt -w '%{http_code}' http://127.0.0.1:8080/v1/chat/completions \
+            -H "Authorization: Bearer $GANTRY_KEY" -H 'Content-Type: application/json' \
+            -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}')
+          cat headers.txt body.json; echo
+          [ "$status" = 200 ]
+          decision=$(grep -i '^x-gantry-decision:' headers.txt | cut -d' ' -f2 | tr -d '\r')
+          [ -n "$decision" ]
+          # No key, no answer.
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/v1/chat/completions -d '{}')" = 401 ]
+          curl -sf http://127.0.0.1:9464/metrics | grep -q gantry_
+          # The image has no shell, so a second pod reads the audit log from the same volume (kind has one node).
+          kubectl run audit-reader --image=busybox:1.36.1 --restart=Never --overrides='{
+            "spec": {"containers": [{"name": "r", "image": "busybox:1.36.1", "command": ["cat", "/data/gantry-audit.jsonl"],
+              "volumeMounts": [{"name": "d", "mountPath": "/data", "readOnly": true}]}],
+              "volumes": [{"name": "d", "persistentVolumeClaim": {"claimName": "data-gantry-0", "readOnly": true}}]}}'
+          kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/audit-reader --timeout=120s
+          kubectl logs audit-reader > audit.jsonl
+          grep "\"$decision\"" audit.jsonl
+          ! grep -q '"hi"' audit.jsonl
+      - name: Logs on failure
+        if: failure()
+        run: kubectl get pods -o wide; kubectl logs gantry-0 --all-containers --tail=100; kubectl logs deploy/mock-provider --tail=50

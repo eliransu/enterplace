@@ -1,0 +1,149 @@
+# Gantry Enterprise runs as a StatefulSet: each replica writes its own hash-chained audit log, so each needs a volume
+# of its own, and volumeClaimTemplates give every pod its own claim (data-<release>-0, data-<release>-1, ...) that follows it
+# across restarts and upgrades. A Deployment would make all replicas share one claim, or need one claim per replica
+# written out by hand.
+#
+# Without a store, keys, budgets, rate limits and kill switches live in one process, so the chart refuses more than
+# one replica: two would each count a budget from zero and each keep their own kill switches. With the policy's
+# `store:` section (Postgres), keys, budgets and kill switches are shared and more replicas are allowed. Rate limits
+# and the response cache stay per replica either way.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/ggantry/gantry-enterprise
+  # Empty: the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# The registry is private. Make a docker-registry Secret with a token that can read the package, for example:
+#   kubectl create secret docker-registry ghcr --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
+imagePullSecrets: []
+#  - name: ghcr
+
+# The policy file, mounted read-only at /etc/gantry/gantry.policy.yaml. `helm upgrade` with a new policy does not
+# restart the pods: the kubelet updates the mounted file (within about a minute) and Gantry checks it and uses it
+# within 2 seconds, or keeps the old one and records config_rejected if it does not pass.
+# The audit path must be under /var/lib/gantry: everything else in the container is read-only.
+# To share keys, budgets and kill switches across replicas, add:
+#   store: { postgres_url_env: DATABASE_URL }
+# and put DATABASE_URL in one of the Secrets under envFromSecrets (or turn on the trial postgres below).
+policy: |
+  version: 1
+  providers:
+    - name: openai
+      kind: openai
+      url: https://api.openai.com/v1
+      key_env: OPENAI_PROVIDER_KEY
+      models: [gpt-4o-mini]
+  rules:
+    - name: everyone
+      principals: { any: true }
+      models: [gpt-4o-mini]
+  audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+
+# Use a ConfigMap you manage (key gantry.policy.yaml) instead of `policy` above. The chart cannot read it, so it
+# cannot check that it has `store:` before allowing more than one replica: that is on you.
+existingPolicyConfigMap: ""
+
+# Secrets you make yourself, each loaded whole as environment variables: one entry per provider `key_env`, and
+# DATABASE_URL and GANTRY_LICENSE when you use them. Secret values never go in this file. For example:
+#   kubectl create secret generic gantry-secrets \
+#     --from-literal=OPENAI_PROVIDER_KEY=sk-... --from-literal=GANTRY_LICENSE=... \
+#     --from-literal=DATABASE_URL='postgres://gantry:...@db.example.com:5432/gantry'
+# Gantry refuses to start while a key_env variable is unset or empty.
+envFromSecrets:
+  - gantry-secrets
+
+keys:
+  # A Secret holding gantry.keys.yaml (as `gantry key new` writes it), copied to a replica's volume the first time
+  # that volume is used. Without it a new volume starts with no keys. The file stays writable on the volume because
+  # the console and the admin API issue and revoke keys there. With `store:`, keys live in Postgres instead.
+  existingSecret: ""
+  # A small image with a shell that writes the keys file on a new volume once; the Gantry image has no shell.
+  initImage: busybox:1.36.1
+
+persistence:
+  # One claim per replica for its audit log and keys file. A million forwarded requests make about 1.35 GB of audit.
+  # Claims are kept on `helm uninstall` and on scale down: the audit log is the record of every AI request.
+  size: 10Gi
+  storageClassName: ""
+
+service:
+  type: ClusterIP
+  port: 8080
+
+metrics:
+  # Serves GET /metrics on a port of its own. It takes no key and shows team, model and spend: keep it on the
+  # cluster network, never on the Ingress.
+  enabled: false
+  port: 9464
+  serviceMonitor:
+    # Needs the Prometheus Operator's ServiceMonitor CRD in the cluster.
+    enabled: false
+    interval: 30s
+
+ingress:
+  enabled: false
+  className: ""
+  host: gantry.example.com
+  # For ingress-nginx: stream answers instead of buffering them, and allow Gantry's 32 MiB body limit.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-body-size: 32m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+  # A kubernetes.io/tls Secret: TLS ends at the Ingress.
+  tlsSecretName: ""
+
+networkPolicy:
+  # Lets in the gateway port from `from` (empty: from anywhere) and the metrics port from this namespace and
+  # `metricsFrom`, and lets out DNS, the trial postgres when it is on, and `egress`.
+  enabled: false
+  from: []
+  metricsFrom: []
+  # Where Gantry may connect: providers, the database, the OTLP collector, the proxy. Default: any host on 443.
+  egress:
+    - ports:
+        - port: 443
+          protocol: TCP
+
+# OpenTelemetry trace export, set as environment variables, for example:
+#   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318
+#   OTEL_SERVICE_NAME: gantry
+# Put OTEL_EXPORTER_OTLP_HEADERS in a Secret under envFromSecrets when it holds a token.
+otel: {}
+
+# Set as HTTPS_PROXY and NO_PROXY. Today only `node` reaches out through it (to the control plane and secret
+# sources); `serve` connects to providers directly, so allow that egress too.
+proxy:
+  https: ""
+  noProxy: ""
+
+# The full 256 MiB body budget fits in 384 MiB.
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    memory: 384Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# A one-pod Postgres in the chart, for trials only: NOT FOR PRODUCTION. No backups, no high availability, no TLS, and
+# its password is generated once and kept in the Secret <release>-postgres. Use a managed database (RDS, Cloud SQL,
+# Azure Database for PostgreSQL) in production, with DATABASE_URL in your own Secret.
+# When on, the chart sets DATABASE_URL for Gantry; the policy still needs `store: { postgres_url_env: DATABASE_URL }`.
+# Known gap: the store requires TLS signed by a public root for any database not on localhost, which this one does
+# not have, so it is refused until the store can trust a private CA.
+postgres:
+  enabled: false
+  image: postgres:17.2-alpine
+  size: 5Gi
+  storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi

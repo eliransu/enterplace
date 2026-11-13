@@ -1,0 +1,116 @@
+{{- if .Values.postgres.enabled }}
+{{- /* For trials only, NOT FOR PRODUCTION: see values.yaml. */}}
+{{- $name := printf "%s-postgres" (include "gantry.fullname" .) }}
+{{- /* The password is made once: an upgrade that made a new one would lock Gantry out of its own database. */}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $password := "" }}
+{{- if $existing }}
+{{- $password = index $existing.data "POSTGRES_PASSWORD" | b64dec }}
+{{- else }}
+{{- $password = randAlphaNum 32 }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "gantry.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: {{ $password | quote }}
+  DATABASE_URL: {{ printf "postgres://gantry:%s@%s:5432/gantry" $password $name | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "gantry.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "gantry.postgresSelector" . | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "gantry.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $name }}
+  selector:
+    matchLabels:
+      {{- include "gantry.postgresSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gantry.postgresSelector" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # The postgres user of the alpine image.
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          env:
+            - name: POSTGRES_USER
+              value: gantry
+            - name: POSTGRES_DB
+              value: gantry
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}
+                  key: POSTGRES_PASSWORD
+            # A folder inside the volume: initdb refuses a mount point that holds lost+found.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, gantry, -d, gantry]
+            periodSeconds: 5
+          securityContext:
+            {{- include "gantry.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            # The root filesystem is read-only; Postgres writes its socket and lock here.
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.postgres.storageClassName }}
+        storageClassName: {{ .Values.postgres.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.size }}
+{{- end }}

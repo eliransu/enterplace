@@ -1,0 +1,29 @@
+# Every option on, for `helm lint` and `helm template` in CI. Not for installing.
+imagePullSecrets:
+  - name: ghcr
+keys:
+  existingSecret: gantry-keys
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+ingress:
+  enabled: true
+  className: nginx
+  tlsSecretName: gantry-tls
+networkPolicy:
+  enabled: true
+  from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: apps
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+otel:
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318
+  OTEL_SERVICE_NAME: gantry
+proxy:
+  https: http://proxy.internal:3128
+  noProxy: .svc,.cluster.local
