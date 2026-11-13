@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -22,4 +23,6 @@ jobs:
         run: |
           cargo fmt --check
           cargo clippy --all-targets --locked -- -D warnings
+          cargo clippy --all-targets --all-features --locked -- -D warnings
           cargo test --locked
+          cargo test --all-features --locked

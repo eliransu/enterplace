@@ -15,6 +15,15 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 # The node talks to the control plane from plain threads; a blocking client keeps that code short.
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 serde_json = "1"
+# Ed25519 for license signatures; already in the build through rustls, so no new code is compiled in.
+ring = "0.17"
+# Licenses travel as base64url text; already in the build through the open crates.
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+
+[features]
+# Gantry staff only: `license keygen` and `license issue`. Customer builds cannot sign licenses.
+issuer = []
 
 [lints.rust]
 unsafe_code = "forbid"
