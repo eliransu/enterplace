@@ -290,6 +290,17 @@ pub fn document_with(title: &str, head: &str, body: &str) -> String {
     )
 }
 
+/// What an embedding binary added to every page, set per request by the console (see `crate::Extension`).
+#[derive(Default)]
+pub(crate) struct Extra {
+    pub nav: Vec<(String, String)>,
+    pub sign_in: Option<(String, String)>,
+}
+
+tokio::task_local! {
+    pub(crate) static EXTRA: std::sync::Arc<Extra>;
+}
+
 const NAV: [(&str, &str); 4] = [
     ("/console/audit", "Audit log"),
     ("/console/policy", "Policy"),
@@ -298,9 +309,16 @@ const NAV: [(&str, &str); 4] = [
 ];
 
 fn nav_links(current: &str, class: &str, extra: &str) -> String {
+    let added = EXTRA
+        .try_with(|e| e.nav.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(href, label)| (esc(&href), esc(&label)));
     NAV.iter()
+        .map(|(href, label)| ((*href).to_string(), (*label).to_string()))
+        .chain(added)
         .map(|(href, label)| {
-            let here = if *label == current {
+            let here = if label == current {
                 r#" aria-current="page""#
             } else {
                 ""

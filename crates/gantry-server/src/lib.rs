@@ -49,7 +49,7 @@ use hyper_util::{
     server::{conn::auto::Builder, graceful::GracefulShutdown},
     service::TowerToHyperService,
 };
-pub use reload::{Governed, Reload, Reloader, Trigger, governed, open_store};
+pub use reload::{Governed, Host, Reload, Reloader, Trigger, governed, governed_with, open_store};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tower::ServiceExt;
 
@@ -241,6 +241,31 @@ pub struct Config {
     pub mcp: Vec<McpRoute>,
     /// What several gateways share (`store:` in the policy). `None` keeps keys, switches and spend to this process.
     pub store: Option<Arc<dyn gantry_core::store::Store>>,
+    /// What a binary that embeds the gateway adds to it.
+    pub extension: Extension,
+}
+
+/// Fields added to the body of `GET /healthz`. Asked on every call, so keep it cheap.
+pub type Health = Arc<dyn Fn() -> serde_json::Map<String, serde_json::Value> + Send + Sync>;
+
+/// What a binary that embeds the gateway adds to it. The open source binary adds nothing.
+#[derive(Clone, Default)]
+pub struct Extension {
+    /// Routes merged into the gateway's router. A path the gateway already serves panics at start.
+    pub routes: Router,
+    /// Pages, nav entries and a way to sign in, added to the console.
+    pub console: gantry_console::Extension,
+    /// Fields added to `GET /healthz`. They never replace the gateway's own (`status` and the versions).
+    pub health: Option<Health>,
+}
+
+impl std::fmt::Debug for Extension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Extension")
+            .field("console", &self.console)
+            .field("health", &self.health.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// A configuration the server refuses to start with. The message names the cause and the fix.
@@ -297,6 +322,8 @@ struct AppState {
     pool: Arc<alias::Pool>,
     // One span per request, when traces are exported.
     tracer: Option<Arc<traces::Tracer>>,
+    // Fields an embedding binary adds to /healthz.
+    health: Option<Health>,
 }
 
 impl AppState {
@@ -497,6 +524,7 @@ fn build(
             ))
         }),
         pool: Arc::default(),
+        health: config.extension.health.clone(),
     };
     let metrics = Router::new()
         .route("/metrics", get(metrics::serve))
@@ -524,10 +552,11 @@ fn build(
         Some(mcp) => router.merge(mcp),
         None => router,
     };
+    let router = router.merge(config.extension.routes);
     let router = match console {
         Some(console) => router.nest(
             "/console",
-            gantry_console::router_with_setup(console, config.setup.clone()),
+            gantry_console::router_with(console, config.setup.clone(), config.extension.console),
         ),
         None => router,
     };
@@ -564,12 +593,17 @@ async fn healthz(State(state): State<AppState>) -> Response {
     };
     let version = state.version();
     let rejected = state.reloader.as_ref().and_then(|r| r.rejected());
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "status": text,
         "policy_sha256": version.policy_sha256,
         "keys_sha256": version.keys_sha256,
         "rejected": rejected.map(|(policy, keys)| serde_json::json!({ "policy_sha256": policy, "keys_sha256": keys })),
     });
+    if let (Some(health), Some(fields)) = (&state.health, body.as_object_mut()) {
+        for (name, value) in health() {
+            fields.entry(name).or_insert(value);
+        }
+    }
     (
         status,
         [(header::CONTENT_TYPE, "application/json")],
@@ -4032,6 +4066,23 @@ pub async fn serve_policy(
     metrics: Option<&str>,
     tls: Option<(&Path, &Path)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    serve_policy_with(name, policy_path, keys_path, listen, metrics, tls, &|_| {
+        Ok(Extension::default())
+    })
+    .await
+}
+
+/// `serve_policy`, with what an embedding binary adds: `extend` runs once the files are checked and the store is
+/// open, and its `Err` stops the start with that message.
+pub async fn serve_policy_with(
+    name: &str,
+    policy_path: &Path,
+    keys_path: Option<&Path>,
+    listen: Option<&str>,
+    metrics: Option<&str>,
+    tls: Option<(&Path, &Path)>,
+    extend: &(dyn Fn(Host<'_>) -> Result<Extension, String> + Sync),
+) -> Result<(), Box<dyn std::error::Error>> {
     // The addresses and the TLS files are checked before anything is written to the audit log.
     let tls = tls.map(|(cert, key)| tls_acceptor(cert, key)).transpose()?;
     let scheme = if tls.is_some() { "https" } else { "http" };
@@ -4042,9 +4093,12 @@ pub async fn serve_policy(
     if metrics_addr == Some(addr) {
         return Err("--metrics and --listen name the same address. Give /metrics a port of its own, for example --metrics 127.0.0.1:9464.".into());
     }
-    let started = governed(policy_path, keys_path, &|variable| {
-        std::env::var(variable).ok()
-    })?;
+    let started = governed_with(
+        policy_path,
+        keys_path,
+        &|variable| std::env::var(variable).ok(),
+        extend,
+    )?;
     let loaded = &started.loaded;
     // Listen first, then say so: "listening" must be true when it is printed.
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|err| {

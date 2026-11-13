@@ -101,7 +101,7 @@ fn page_number(query: &Form) -> usize {
     query.get("page").parse().unwrap_or(1).max(1)
 }
 
-fn tool_page(
+pub(crate) fn tool_page(
     current: &str,
     admin: &str,
     here: &str,
@@ -171,6 +171,7 @@ pub fn sign_in(key_error: &str, notice: &str, sso: bool) -> String {
 <div class="g-head__actions">{}</div>
 </form>
 <p class="t-small g-muted g-measure" style="margin: 0">To make an admin, run <span class="t-mono">gantry key new &lt;name&gt; --team &lt;team&gt; --admin</span>.</p>
+{other}
 </div>
 <aside class="g-panel g-stack" style="gap: var(--space-10); padding: var(--space-10); align-content: start">
 {closed}
@@ -200,7 +201,16 @@ pub fn sign_in(key_error: &str, notice: &str, sso: bool) -> String {
 "#
         } else {
             ""
-        }
+        },
+        // Another way in that the binary embedding the console adds, such as people signing in with a password.
+        other = crate::html::EXTRA
+            .try_with(|e| e.sign_in.clone())
+            .ok()
+            .flatten()
+            .map_or_else(String::new, |(href, label)| format!(
+                r#"<div class="g-head__actions">{}</div>"#,
+                link(&esc(&label), "quiet", &esc(&href), false)
+            ))
     );
     document("Sign in", &body)
 }
@@ -3681,7 +3691,7 @@ fn money_cents(usd: f64) -> String {
 
 // ---- First run ----
 
-fn setup_shell(title: &str, inner: &str) -> String {
+pub(crate) fn setup_shell(title: &str, inner: &str) -> String {
     document(
         title,
         &format!(

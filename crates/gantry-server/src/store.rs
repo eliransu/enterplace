@@ -37,6 +37,10 @@ use tokio_postgres::{
 };
 use tokio_rustls::rustls;
 
+/// The Postgres client a [`PgStore::connect`] connection is, for a binary that embeds the gateway: it uses the same
+/// version without naming the crate itself.
+pub use tokio_postgres;
+
 /// How often the versions of the keys and the kill switches are read: a change reaches every gateway within this
 /// plus the reloader's second for keys, and within this for kill switches, under the 1 second the switches promise.
 const POLL: Duration = Duration::from_millis(500);
@@ -787,6 +791,92 @@ fn kill_of(row: &tokio_postgres::Row) -> Result<Kill, String> {
         by: row.try_get(3).map_err(field)?,
         at: row.try_get(4).map_err(field)?,
     })
+}
+
+/// Applies `migrations` in order under `namespace`, one Gantry at a time, and refuses a database a newer binary has
+/// written. The version of each namespace is its row in `gantry_migrations`, apart from the gateway's own tables.
+async fn migrate_namespace(
+    client: &mut Client,
+    namespace: &str,
+    migrations: &[&str],
+) -> Result<(), String> {
+    let failed = |err: tokio_postgres::Error| {
+        format!(
+            "the {namespace} tables could not be created or updated: {err}. The connection string's user needs CREATE on the database. Fix that and start again."
+        )
+    };
+    let tx = client.transaction().await.map_err(failed)?;
+    tx.batch_execute(
+        "SELECT pg_advisory_xact_lock(7349127341); CREATE TABLE IF NOT EXISTS gantry_migrations (namespace text PRIMARY KEY, version integer NOT NULL);",
+    )
+    .await
+    .map_err(failed)?;
+    let row = tx
+        .query_opt(
+            "SELECT version FROM gantry_migrations WHERE namespace = $1",
+            &[&namespace],
+        )
+        .await
+        .map_err(failed)?;
+    let applied: i32 = row
+        .map(|r| r.try_get(0))
+        .transpose()
+        .map_err(failed)?
+        .unwrap_or(0);
+    let known = i32::try_from(migrations.len()).unwrap_or(i32::MAX);
+    if applied > known {
+        return Err(format!(
+            "the {namespace} tables were written by a newer version (schema version {applied}; this one knows up to {known}). Run the same version as the other gateways on this database, or point this one at another database."
+        ));
+    }
+    for (number, sql) in migrations
+        .iter()
+        .enumerate()
+        .skip(usize::try_from(applied).unwrap_or(0))
+    {
+        tx.batch_execute(sql).await.map_err(failed)?;
+        let version = i32::try_from(number + 1).unwrap_or(i32::MAX);
+        tx.execute(
+            "INSERT INTO gantry_migrations VALUES ($1, $2) ON CONFLICT (namespace) DO UPDATE SET version = excluded.version",
+            &[&namespace, &version],
+        )
+        .await
+        .map_err(failed)?;
+    }
+    tx.commit().await.map_err(failed)
+}
+
+/// For a binary that embeds the gateway and keeps tables of its own in the store's database.
+impl PgStore {
+    /// A new connection to the store's database, with the store's TLS settings. Its own, so it may hold a
+    /// transaction: the store's shared connection never does. Its I/O runs on the store's thread.
+    pub async fn connect(&self) -> Result<Client, String> {
+        let inner = self.inner.clone();
+        let env = self.inner.env.clone();
+        self.handle
+            .spawn(async move { inner.connect().await })
+            .await
+            .map_err(|_| "the store stopped before it answered".to_string())?
+            .map_err(|err| unreachable(&env, &err))
+    }
+
+    /// Creates or updates tables of `namespace` (for example `enterprise`): entry N of `migrations` runs once, in
+    /// order, on the first start that knows it. Never edit an entry that has shipped: add one. Blocks until done.
+    pub fn migrate(
+        &self,
+        namespace: &str,
+        migrations: &'static [&'static str],
+    ) -> Result<(), String> {
+        let inner = self.inner.clone();
+        let namespace = namespace.to_string();
+        self.wait(async move {
+            let mut client = inner
+                .connect()
+                .await
+                .map_err(|err| unreachable(&inner.env, &err))?;
+            migrate_namespace(&mut client, &namespace, migrations).await
+        })
+    }
 }
 
 impl PgStore {

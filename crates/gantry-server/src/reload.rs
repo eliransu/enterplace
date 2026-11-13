@@ -199,6 +199,14 @@ pub fn open_store(
     keys_path: &Path,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Option<Arc<dyn Store>>, String> {
+    Ok(open_postgres(policy_path, keys_path, env)?.map(|pg| -> Arc<dyn Store> { pg }))
+}
+
+fn open_postgres(
+    policy_path: &Path,
+    keys_path: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<Arc<crate::store::PgStore>>, String> {
     let text = match std::fs::read_to_string(policy_path) {
         Ok(text) if config::names_store(&text) => text,
         // Not a store, or a policy that does not read: `config::load` reports it as it always has.
@@ -214,8 +222,9 @@ pub fn open_store(
             "the policy keeps keys, kill switches and budgets in Postgres, and {variable} (its postgres_url_env) is not set. Set it to the connection string (`export {variable}=postgres://user:password@host:5432/database`) and start again."
         )
     })?;
-    let opened: Arc<dyn Store> = crate::store::open(variable, &url)?;
-    store::attach(keys_path, &opened);
+    let opened = crate::store::open(variable, &url)?;
+    let shared: Arc<dyn Store> = opened.clone();
+    store::attach(keys_path, &shared);
     Ok(Some(opened))
 }
 
@@ -226,8 +235,31 @@ pub fn governed(
     keys_path: Option<&Path>,
     provider_key: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Governed, String> {
+    governed_with(policy_path, keys_path, provider_key, &|_| {
+        Ok(crate::Extension::default())
+    })
+}
+
+/// What a binary that embeds the gateway builds its additions from, once the files are checked and the store is open.
+pub struct Host<'a> {
+    /// The Postgres store when the policy has `store:`, for tables of the binary's own
+    /// ([`PgStore::migrate`](crate::store::PgStore::migrate), [`PgStore::connect`](crate::store::PgStore::connect)).
+    pub postgres: Option<&'a Arc<crate::store::PgStore>>,
+    /// The keys file's path. Keys are read and changed through it (`gantry_core::keyfile`), from the store when there is one.
+    pub keys: &'a Path,
+    pub policy: &'a Path,
+}
+
+/// `governed`, with what an embedding binary adds: `extend` runs before the router is built.
+pub fn governed_with(
+    policy_path: &Path,
+    keys_path: Option<&Path>,
+    provider_key: &dyn Fn(&str) -> Option<String>,
+    extend: &(dyn Fn(Host<'_>) -> Result<crate::Extension, String> + Sync),
+) -> Result<Governed, String> {
     let keys_file = keys_path.map_or_else(|| config::keys_path_for(policy_path), Path::to_path_buf);
-    let shared = open_store(policy_path, &keys_file, provider_key)?;
+    let postgres = open_postgres(policy_path, &keys_file, provider_key)?;
+    let shared = postgres.clone().map(|pg| -> Arc<dyn Store> { pg });
     let loaded = config::load(policy_path, keys_path).map_err(|errors| errors.join("\n"))?;
     let unset = guard::unset_webhook_env(loaded.policy.rule_list(), &|variable| {
         provider_key(variable).is_some_and(|value| !value.trim().is_empty())
@@ -335,6 +367,11 @@ pub fn governed(
     // First run: no one can sign in to the console yet, so a one-time link makes the first admin.
     let setup =
         (!loaded.policy.entries().any(|(_, p)| p.admin)).then(|| gantry_core::id::random_hex(24));
+    let extension = extend(Host {
+        postgres: postgres.as_ref(),
+        keys: &loaded.keys_path,
+        policy: policy_path,
+    })?;
     let config = Config {
         providers,
         audit: Some(Audit {
@@ -358,6 +395,7 @@ pub fn governed(
         setup: setup.clone(),
         mcp,
         store: shared.clone(),
+        extension,
         ..Config::default()
     };
     let prints = (

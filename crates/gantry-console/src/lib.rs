@@ -5,14 +5,16 @@
 //! reads the policy, keys and audit files when it is asked for.
 
 pub mod cli;
-mod html;
+pub mod html;
 mod pages;
 mod sso;
 
 use std::{
     collections::{BTreeMap, HashMap},
+    future::Future,
     net::{IpAddr, SocketAddr},
     path::PathBuf,
+    pin::Pin,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -61,11 +63,45 @@ const MAX_USED: usize = 10_000;
 /// Sign-ins started within one minute that make the console write one record about it, at most once a minute.
 const FLOOD: u64 = 100;
 
+#[derive(Clone)]
 enum Who {
     /// Signed in with an admin key, by its hash.
     Key(String),
     /// Signed in through single sign-on.
     Sso { email: String, read_only: bool },
+    /// Signed in to an account an [`Extension`] keeps, by its ID. The extension says who it is on every request.
+    Account(String),
+}
+
+/// Says who the account a session was opened for is now. `None` ends the session: the account was removed, or may
+/// no longer sign in. Asked on every request, so a change takes effect at once on every gateway.
+pub type Accounts =
+    Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Option<Admin>> + Send>> + Send + Sync>;
+
+/// What a binary that embeds the console adds to it: pages beside the built-in ones with their nav entries, another
+/// way to sign in, and the accounts that way signs in. Its handlers take `State<Console>` and use
+/// [`Console::signed_in`], [`Console::page`] and [`Console::audit`], so they share the console's sessions, look and
+/// audit records.
+#[derive(Clone, Default)]
+pub struct Extension {
+    /// Nav entries after the built-in ones, as (path, label). A page passes its label as `current` to be marked.
+    pub nav: Vec<(String, String)>,
+    /// Routes nested at /console beside the built-in ones. A path the console already serves panics at start.
+    pub routes: Router<Console>,
+    /// A link under the sign-in form, as (path, label), to the extension's own way in.
+    pub sign_in: Option<(String, String)>,
+    /// Answers for sessions opened with [`Console::sign_in_account`].
+    pub accounts: Option<Accounts>,
+}
+
+impl std::fmt::Debug for Extension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Extension")
+            .field("nav", &self.nav)
+            .field("sign_in", &self.sign_in)
+            .field("accounts", &self.accounts.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 struct Session {
@@ -101,6 +137,9 @@ struct Inner {
     codes: Mutex<HashMap<String, Pending>>,
     /// The one-time setup link's token, and whether it was used.
     setup: Mutex<Option<(String, bool)>>,
+    accounts: Option<Accounts>,
+    /// Nav entries and the sign-in link an extension added, set on every request for the pages to draw.
+    extra: Arc<html::Extra>,
 }
 
 /// A person who signed in for `gantry login`, until their CLI trades the code for a key.
@@ -120,8 +159,9 @@ struct CliStart {
     challenge: String,
 }
 
+/// The console's state, which an [`Extension`]'s handlers take as `State<Console>`.
 #[derive(Clone)]
-struct Console(Arc<Inner>);
+pub struct Console(Arc<Inner>);
 
 /// One client address's refused sign-ins in its minute.
 struct Refusals {
@@ -135,13 +175,21 @@ tokio::task_local! {
     static CLIENT: Option<IpAddr>;
 }
 
-/// Runs a console request with its client's address at hand. The server puts the peer address on each request.
-async fn with_client(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+/// Runs a console request with its client's address and the extension's nav at hand. The server puts the peer
+/// address on each request.
+async fn with_client(
+    State(console): State<Console>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
     let client = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
-    CLIENT.scope(client, next.run(request)).await
+    let extra = console.0.extra.clone();
+    CLIENT
+        .scope(client, html::EXTRA.scope(extra, next.run(request)))
+        .await
 }
 
 fn client() -> Option<IpAddr> {
@@ -163,24 +211,39 @@ fn flood_key(client: Option<IpAddr>) -> String {
     }
 }
 
-/// The admin a request is signed in as.
-struct Admin {
-    name: String,
+/// Who a console request is signed in as.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Admin {
+    pub name: String,
     /// Empty for a person signed in through single sign-on: the identity provider gives no Gantry team.
-    team: String,
+    pub team: String,
     /// May look but not issue or revoke keys.
-    read_only: bool,
+    pub read_only: bool,
+    /// The role the pages show under the name.
+    pub role: String,
+    pub via: Via,
+}
+
+/// How a person signed in to the console.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Via {
+    /// An admin key.
+    Key,
+    /// Single sign-on.
+    Sso,
+    /// An account an [`Extension`] keeps, by its ID.
+    Account(String),
 }
 
 impl Admin {
     /// How the pages show who is signed in.
     fn label(&self) -> String {
-        format!(
-            "{}, {}",
-            self.name,
-            if self.read_only { "read only" } else { "admin" }
-        )
+        format!("{}, {}", self.name, self.role)
     }
+}
+
+fn sso_role(read_only: bool) -> String {
+    if read_only { "read only" } else { "admin" }.to_string()
 }
 
 /// What an admin record says: what was done, by whom, to what.
@@ -263,6 +326,11 @@ pub fn router(config: ConsoleConfig) -> Router {
 
 /// The console's routes, with a one-time setup link at `/console/setup/<token>` that makes the first admin key.
 pub fn router_with_setup(config: ConsoleConfig, setup: Option<String>) -> Router {
+    router_with(config, setup, Extension::default())
+}
+
+/// The console's routes with what an embedding binary adds to them.
+pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Extension) -> Router {
     let state = Console(Arc::new(Inner {
         config,
         sessions: Mutex::default(),
@@ -280,6 +348,11 @@ pub fn router_with_setup(config: ConsoleConfig, setup: Option<String>) -> Router
         verified: Mutex::default(),
         codes: Mutex::default(),
         setup: Mutex::new(setup.map(|token| (token, false))),
+        accounts: extension.accounts,
+        extra: Arc::new(html::Extra {
+            nav: extension.nav,
+            sign_in: extension.sign_in,
+        }),
     }));
     Router::new()
         .route("/setup/{token}", get(setup_page).post(setup_done))
@@ -309,6 +382,7 @@ pub fn router_with_setup(config: ConsoleConfig, setup: Option<String>) -> Router
         .route("/spend", get(spend_page))
         .route("/assets/{file}", get(asset))
         .route("/assets/fonts/{file}", get(font))
+        .merge(extension.routes)
         .fallback(|| async {
             page(
                 StatusCode::NOT_FOUND,
@@ -320,15 +394,18 @@ pub fn router_with_setup(config: ConsoleConfig, setup: Option<String>) -> Router
                 ),
             )
         })
-        .layer(axum::middleware::from_fn(with_client))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            with_client,
+        ))
         .with_state(state)
 }
 
 /// Query or form pairs, decoded.
-pub(crate) struct Form(Vec<(String, String)>);
+pub struct Form(Vec<(String, String)>);
 
 impl Form {
-    fn parse(text: &str) -> Self {
+    pub fn parse(text: &str) -> Self {
         let decode = |part: &str| {
             let bytes = part.as_bytes();
             let mut out = Vec::with_capacity(bytes.len());
@@ -363,12 +440,12 @@ impl Form {
         )
     }
 
-    fn of(uri: &Uri) -> Self {
+    pub fn of(uri: &Uri) -> Self {
         Self::parse(uri.query().unwrap_or(""))
     }
 
     /// The last value given for a name, or "".
-    pub(crate) fn get(&self, name: &str) -> &str {
+    pub fn get(&self, name: &str) -> &str {
         self.0
             .iter()
             .rev()
@@ -408,7 +485,8 @@ fn page(status: StatusCode, body: String) -> Response {
     )
 }
 
-fn redirect(to: &str) -> Response {
+/// A 303 to `to`, with the headers every console page carries.
+pub fn redirect(to: &str) -> Response {
     let mut response = StatusCode::SEE_OTHER.into_response();
     if let Ok(value) = HeaderValue::from_str(to) {
         response.headers_mut().insert(header::LOCATION, value);
@@ -431,7 +509,7 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
 
 /// Set on a request by `gantry serve --tls-cert`: the connection is TLS terminated by Gantry itself. An origin-form
 /// request's URI has no scheme to say so (QA14-6).
-type Tls = Option<axum::Extension<axum::http::uri::Scheme>>;
+pub type Tls = Option<axum::Extension<axum::http::uri::Scheme>>;
 
 /// The cookie is Secure when the browser reached Gantry over TLS, directly or through a proxy that says so.
 fn secure(headers: &HeaderMap, uri: &Uri, tls: &Tls) -> bool {
@@ -444,7 +522,7 @@ fn secure(headers: &HeaderMap, uri: &Uri, tls: &Tls) -> bool {
 
 /// A form must come from a console page on this same address. SameSite=Strict covers signed-in forms;
 /// this also covers the sign-in form, which has no cookie yet.
-fn same_origin(headers: &HeaderMap) -> bool {
+pub fn same_origin(headers: &HeaderMap) -> bool {
     let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
     match (get("host"), get("origin")) {
         (Some(host), Some(origin)) if origin != "null" => {
@@ -456,7 +534,8 @@ fn same_origin(headers: &HeaderMap) -> bool {
     }
 }
 
-fn foreign() -> Response {
+/// The answer to a form [`same_origin`] refused.
+pub fn foreign() -> Response {
     page(
         StatusCode::FORBIDDEN,
         pages::notice(
@@ -483,18 +562,12 @@ impl Console {
 
     /// The admin of a signed-in request. The keys file is read every time, so a key revoked or no longer
     /// marked admin ends its sessions at once.
-    fn admin(&self, headers: &HeaderMap) -> Option<Admin> {
+    async fn admin(&self, headers: &HeaderMap) -> Option<Admin> {
         let id = cookie_value(headers, COOKIE)?;
         let who = {
             let mut sessions = self.sessions();
             match sessions.get(&id) {
-                Some(s) if s.expires > Instant::now() => match &s.who {
-                    Who::Key(sha) => Who::Key(sha.clone()),
-                    Who::Sso { email, read_only } => Who::Sso {
-                        email: email.clone(),
-                        read_only: *read_only,
-                    },
-                },
+                Some(s) if s.expires > Instant::now() => s.who.clone(),
                 Some(_) => {
                     sessions.remove(&id);
                     return None;
@@ -507,6 +580,8 @@ impl Console {
                 name: e.name,
                 team: e.team,
                 read_only: false,
+                role: sso_role(false),
+                via: Via::Key,
             }),
             // The policy file is read every time, so removing console.sso or a person's email ends their session at once.
             Who::Sso { email, read_only } => {
@@ -522,8 +597,14 @@ impl Console {
                         name: email,
                         team: String::new(),
                         read_only,
+                        role: sso_role(read_only),
+                        via: Via::Sso,
                     })
             }
+            Who::Account(account) => match &self.0.accounts {
+                Some(accounts) => accounts(account).await,
+                None => None,
+            },
         };
         if admin.is_none() {
             self.sessions().remove(&id);
@@ -640,6 +721,94 @@ impl Console {
     }
 }
 
+/// What an [`Extension`]'s handlers use: the console's sessions, look and audit records.
+impl Console {
+    /// Who the request is signed in as, checked again now. `None` when no one is: send them to /console/sign-in.
+    pub async fn signed_in(&self, headers: &HeaderMap) -> Option<Admin> {
+        self.admin(headers).await
+    }
+
+    /// A console page: the nav with the extension's entries, who is signed in, and `main` (markup from [`html`]).
+    /// `current` is the nav label to mark, and `here` the page's own path, for the phone menu.
+    pub fn page(
+        &self,
+        status: StatusCode,
+        admin: &Admin,
+        current: &str,
+        uri: &Uri,
+        main: &str,
+    ) -> Response {
+        page(
+            status,
+            pages::tool_page(
+                current,
+                &admin.label(),
+                uri.path(),
+                &Form::of(uri),
+                main,
+                "",
+            ),
+        )
+    }
+
+    /// Writes an admin record (`event: admin`, `via: console`) to the audit log, in the same chain as requests, and
+    /// waits for it. `code` marks a refusal. `Err` holds the message to show: the action must not be done.
+    pub async fn audit(
+        &self,
+        by: Option<&Admin>,
+        action: &'static str,
+        target: Value,
+        code: Option<&str>,
+    ) -> Result<(), &'static str> {
+        let act = Act {
+            action,
+            by: by.map(|a| (a.name.as_str(), a.team.as_str())),
+            key: None,
+            target,
+        };
+        record(self, &act, code, None)
+            .await
+            .map_err(|()| NOT_RECORDED)
+    }
+
+    /// Records the sign-in and opens a session for `account`, which [`Extension::accounts`] answers for from then
+    /// on, then sends the browser to the audit log. `admin` is who the account is now, for the record.
+    pub async fn sign_in_account(
+        &self,
+        account: &str,
+        admin: &Admin,
+        headers: &HeaderMap,
+        uri: &Uri,
+        tls: &Tls,
+    ) -> Response {
+        let target = json!({ "via": "account", "role": admin.role });
+        if self
+            .audit(Some(admin), "console_sign_in", target, None)
+            .await
+            .is_err()
+        {
+            return page(
+                StatusCode::SERVICE_UNAVAILABLE,
+                pages::sign_in("", NOT_RECORDED, self.sso_on()),
+            );
+        }
+        let Some(session) = self.open_session(Who::Account(account.to_string())) else {
+            return page(
+                StatusCode::SERVICE_UNAVAILABLE,
+                pages::sign_in("", NO_RANDOM, self.sso_on()),
+            );
+        };
+        let mut response = redirect("/console/audit");
+        set_cookie(&mut response, &session_cookie(&session, headers, uri, tls));
+        response
+    }
+}
+
+/// A page with no nav, for someone not signed in (an invite, another sign-in form): the brand, then `inner`.
+pub fn bare_page(status: StatusCode, title: &str, inner: &str) -> Response {
+    page(status, pages::setup_shell(title, inner))
+}
+
 fn admin_entry(keys: &std::path::Path, sha256: &str) -> Option<config::KeyEntry> {
     let text = config::read_keys(keys).ok()??;
     config::key_entries(keys, &text)
@@ -649,14 +818,14 @@ fn admin_entry(keys: &std::path::Path, sha256: &str) -> Option<config::KeyEntry>
 }
 
 async fn root(State(console): State<Console>, headers: HeaderMap) -> Response {
-    match console.admin(&headers) {
+    match console.admin(&headers).await {
         Some(_) => redirect("/console/audit"),
         None => redirect("/console/sign-in"),
     }
 }
 
 async fn sign_in_page(State(console): State<Console>, headers: HeaderMap) -> Response {
-    if console.admin(&headers).is_some() {
+    if console.admin(&headers).await.is_some() {
         return redirect("/console/audit");
     }
     page(StatusCode::OK, pages::sign_in("", "", console.sso_on()))
@@ -1411,7 +1580,7 @@ async fn sso_finish(console: &Console, headers: &HeaderMap, query: &Form) -> Sso
 }
 
 async fn sign_out(State(console): State<Console>, headers: HeaderMap) -> Response {
-    if let Some(admin) = console.admin(&headers) {
+    if let Some(admin) = console.admin(&headers).await {
         let act = Act {
             action: "console_sign_out",
             by: Some((&admin.name, &admin.team)),
@@ -1444,7 +1613,7 @@ fn read(path: &std::path::Path) -> Result<Option<String>, String> {
 }
 
 async fn audit_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    let Some(admin) = console.admin(&headers) else {
+    let Some(admin) = console.admin(&headers).await else {
         return redirect("/console/sign-in");
     };
     let config = console.config();
@@ -1469,7 +1638,7 @@ async fn verify(State(console): State<Console>, headers: HeaderMap) -> Response 
     if !same_origin(&headers) {
         return foreign();
     }
-    if console.admin(&headers).is_none() {
+    if console.admin(&headers).await.is_none() {
         return redirect("/console/sign-in");
     }
     let path = console.config().audit.clone();
@@ -1492,7 +1661,7 @@ async fn verify(State(console): State<Console>, headers: HeaderMap) -> Response 
 }
 
 async fn people_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    let Some(admin) = console.admin(&headers) else {
+    let Some(admin) = console.admin(&headers).await else {
         return redirect("/console/sign-in");
     };
     let query = Form::of(&uri);
@@ -1526,7 +1695,7 @@ async fn issue(State(console): State<Console>, headers: HeaderMap, body: String)
     if !same_origin(&headers) {
         return foreign();
     }
-    let Some(admin) = console.admin(&headers) else {
+    let Some(admin) = console.admin(&headers).await else {
         return redirect("/console/sign-in");
     };
     let form = Form::parse(&body);
@@ -1639,7 +1808,7 @@ async fn revoke(State(console): State<Console>, headers: HeaderMap, body: String
     if !same_origin(&headers) {
         return foreign();
     }
-    let Some(admin) = console.admin(&headers) else {
+    let Some(admin) = console.admin(&headers).await else {
         return redirect("/console/sign-in");
     };
     let form = Form::parse(&body);
@@ -1733,7 +1902,7 @@ async fn revoked(console: &Console, admin: &Admin, entry: &config::KeyEntry) -> 
 }
 
 async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    let Some(admin) = console.admin(&headers) else {
+    let Some(admin) = console.admin(&headers).await else {
         return redirect("/console/sign-in");
     };
     let config = console.config();
@@ -1750,7 +1919,7 @@ async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Ur
 }
 
 async fn spend_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    let Some(admin) = console.admin(&headers) else {
+    let Some(admin) = console.admin(&headers).await else {
         return redirect("/console/sign-in");
     };
     let config = console.config();
