@@ -45,6 +45,8 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/gantry
           path: gantry
+          # The open source repository is private for now, and the default token reads only this one.
+          token: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
       # Builds both images from the checkouts, starts Postgres, Gantry and the mock, issues a key, makes a governed
       # call and verifies the audit chain.
       - name: Compose test
