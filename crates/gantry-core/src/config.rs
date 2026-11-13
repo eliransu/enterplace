@@ -2443,7 +2443,9 @@ pub fn names_store(policy_text: &str) -> bool {
         #[serde(default)]
         store: Option<serde::de::IgnoredAny>,
     }
-    from_yaml::<Probe>(policy_text).is_ok_and(|probe| probe.store.is_some())
+    // The console loads the policy on every page and sign-in: a policy without the word is not parsed twice.
+    policy_text.contains("store")
+        && from_yaml::<Probe>(policy_text).is_ok_and(|probe| probe.store.is_some())
 }
 
 /// The `store:` section, checked: the name of the variable that holds the connection string.
