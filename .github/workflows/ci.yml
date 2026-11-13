@@ -18,6 +18,8 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/gantry
           path: gantry
+          # The open source repository is private: GANTRY_REPO_TOKEN is a token that can read it.
+          token: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
       - working-directory: gantry-enterprise
         run: |
           cargo fmt --check
