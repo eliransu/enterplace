@@ -175,6 +175,38 @@ Expired login keys stay in the keys file until you run [`gantry key prune`](/gov
 Console sessions and sign-ins in progress live in memory. A restart signs everyone out, and behind a load balancer the provider's callback must reach the node that started the sign-in.
 </Aside>
 
+## The Gantry app
+
+The Gantry app (hosted and hybrid gateways) has its own sign-in. Each organization connects its own OpenID Connect provider, so people sign in with their company account. Password sign-in can add a code from an authenticator app.
+
+### Connect your identity provider
+
+<Steps>
+
+1. In your provider, create an OpenID Connect web application with the redirect URI `https://gantry-app.eliran.me/sso/callback`. Okta: Applications, Create App Integration, OIDC, Web Application. Entra ID: App registrations, New registration, Web. Google Workspace: Google Cloud console, Credentials, OAuth client ID, Web application.
+
+2. In the Gantry app, an owner opens **Settings**, **Single sign-on** and enters the issuer, client ID, client secret and your email domain. Gantry reads the issuer's discovery document before it saves.
+
+3. Test the sign-in link it shows, `https://gantry-app.eliran.me/sso/<org-id>`, from a private window.
+
+4. To require it, set **Require SSO** to yes. Members other than owners must then sign in through your provider to open the organization. Owners keep password access, so a broken provider cannot lock everyone out.
+
+</Steps>
+
+People in your email domain who sign in for the first time join with the role you choose (viewer or admin). Removing someone in your provider stops their next sign-in; to revoke their keys at once, remove them in Gantry or connect SCIM on the **Members** page.
+
+A session made by your SSO opens your organization only. It does not open the person's other organizations, it never carries Gantry staff rights, and it cannot change account settings. So your provider vouches for your people in your organization, and nothing else.
+
+The flow is the same as the console's: authorization code with PKCE, a `state` tied to the browser and usable once within 10 minutes, a `nonce`, and an ID token signed with RS256 or ES256 whose `iss`, `aud`, `exp` and `nonce` are checked. The email must be in your domain and not marked unverified. The client secret is stored encrypted.
+
+### Two-step sign-in
+
+Anyone who signs in with a password can turn on two-step sign-in under **Account security** on the organizations page. Gantry shows a key to add to an authenticator app (1Password, Google Authenticator, Microsoft Authenticator, Authy), asks for one code to confirm, and shows 10 recovery codes once. Each recovery code works once.
+
+After that, a matching password asks for the current 6-digit code. A code works once, and five wrong codes end the attempt, so the password must be entered again. SSO sign-ins skip this step: your provider runs its own MFA.
+
+SAML is not supported yet. Most providers that offer SAML also offer OpenID Connect for the same application.
+
 ## Related
 
 <CardGrid>
