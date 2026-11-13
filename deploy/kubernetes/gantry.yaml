@@ -2,7 +2,7 @@
 # Apply after making the provider key Secret:
 #   kubectl create secret generic gantry-provider-keys --from-literal=OPENAI_PROVIDER_KEY=sk-...
 #   kubectl apply -f deploy/kubernetes/gantry.yaml
-# ONE replica: the audit log is one hash chain in one file on one ReadWriteOnce volume. See docs/kubernetes.md.
+# ONE replica: the audit log is one hash chain in one file on one ReadWriteOnce volume. See https://ggantry.github.io/gantry/operations/kubernetes/.
 apiVersion: v1
 kind: ConfigMap
 metadata:

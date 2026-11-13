@@ -1,0 +1,49 @@
+---
+title: Cline
+description: Configure Cline in VS Code to send its requests through Gantry over OpenAI's or Anthropic's API.
+sidebar:
+  order: 5
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Cline is configured in its settings panel in VS Code. It can reach Gantry over OpenAI's chat completions API or Anthropic's messages API, with a Gantry key in place of a provider key.
+
+## Setup
+
+<Tabs>
+<TabItem label="OpenAI Compatible">
+
+| Setting | Value |
+|---|---|
+| API Provider | OpenAI Compatible |
+| Base URL | Gantry's address with `/v1`, for example `http://127.0.0.1:8080/v1` |
+| API Key | The Gantry key |
+| Model | The model as the policy names it |
+
+Requests go to `POST /v1/chat/completions`. Cline's documentation gives no example base URL, so the `/v1` ending follows the OpenAI convention. A 404 `unknown_route` from Gantry means the path is wrong.
+
+</TabItem>
+<TabItem label="Anthropic">
+
+| Setting | Value |
+|---|---|
+| API Provider | Anthropic |
+| API Key | The Gantry key |
+| Use custom base URL | Checked, with Gantry's address and no `/v1`, for example `http://127.0.0.1:8080` |
+
+Requests go to `POST /v1/messages`, where refusals use Anthropic's error shape.
+
+</TabItem>
+</Tabs>
+
+<Aside type="note">
+This setup follows Cline's documentation. Cline lists "Invalid API Key" and "Model Not Found" errors; whether it shows Gantry's message text is not documented.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Continue" href="/gantry/integrations/continue/" description="A model in Continue's config.yaml." />
+	<LinkCard title="Refusal codes" href="/gantry/reference/refusal-codes/" description="Every code Gantry returns and what to do about it." />
+</CardGrid>

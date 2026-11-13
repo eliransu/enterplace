@@ -1,0 +1,370 @@
+---
+title: Refusal codes
+description: Every code Gantry refuses a request with, its HTTP status, what causes it and how to fix it.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every refusal has a stable code, an HTTP status, a message that names the cause and the fix, and the decision ID. It never contains an address, an internal error or another caller's data.
+
+## Response shape
+
+On `/v1/messages` and `/v1/messages/count_tokens` a refusal uses Anthropic's error shape, so Claude Code and Anthropic's SDKs show the message. Everywhere else, the admin API included, it uses OpenAI's shape.
+
+```json title="Anthropic shape"
+{"type":"error","error":{"type":"permission_error","message":"Refused (model_not_allowed): ... Decision 01M79..."},"gantry_code":"model_not_allowed","decision":"01M79..."}
+```
+
+```json title="OpenAI shape"
+{"error":{"message":"Refused (no_key): ... Decision 01M79...","type":"gantry_error","code":"no_key","decision":"01M79..."}}
+```
+
+| Header | On | Value |
+|---|---|---|
+| `X-Gantry-Decision` | Every response | The decision ID |
+| `x-should-retry` | Every refusal | `true` for `busy`, `rate_limited` and `upstream_*`, `false` otherwise |
+| `Retry-After` | `busy`, `rate_limited` | `1` for `busy`; the seconds to wait for `rate_limited` |
+
+Every refusal except `audit_unavailable` is written to the audit log with its code. The `upstream_*` codes, `bad_path` and the 502 `untranslatable` come after the request was recorded as allowed, so its record says `allow`.
+
+## Summary
+
+| Code | Status | Anthropic `error.type` |
+|---|---|---|
+| [`no_key`](#no_key) | 401 | `authentication_error` |
+| [`ambiguous_key`](#ambiguous_key) | 400 | `invalid_request_error` |
+| [`unknown_key`](#unknown_key) | 401 | `authentication_error` |
+| [`key_expired`](#key_expired) | 401 | `authentication_error` |
+| [`killed`](#killed) | 403 | `permission_error` |
+| [`kills_unreadable`](#kills_unreadable) | 503 | `api_error` |
+| [`unknown_route`](#unknown_route) | 404 | `not_found_error` |
+| [`body_too_large`](#body_too_large) | 413 | `request_too_large` |
+| [`body_timeout`](#body_timeout) | 408 | `invalid_request_error` |
+| [`busy`](#busy) | 429 or 503 | `rate_limit_error` or `overloaded_error` |
+| [`unreadable_request`](#unreadable_request) | 400 | `invalid_request_error` |
+| [`bad_limits`](#bad_limits) | 400 | `invalid_request_error` |
+| [`stored_context`](#stored_context) | 400 | `invalid_request_error` |
+| [`max_tokens_needed`](#max_tokens_needed) | 400 | `invalid_request_error` |
+| [`no_rule`](#no_rule) | 403 | `permission_error` |
+| [`model_not_allowed`](#model_not_allowed) | 403 | `permission_error` |
+| [`unknown_model`](#unknown_model) | 403 | `permission_error` |
+| [`wrong_route`](#wrong_route) | 400 | `invalid_request_error` |
+| [`untranslatable`](#untranslatable) | 400 or 502 | `invalid_request_error` or `api_error` |
+| [`unknown_query`](#unknown_query) | 400 | `invalid_request_error` |
+| [`guardrail_blocked`](#guardrail_blocked) | 403 or 500 | `permission_error` |
+| [`rate_limited`](#rate_limited) | 429 | `rate_limit_error` |
+| [`budget_exceeded`](#budget_exceeded) | 429 | `rate_limit_error` |
+| [`key_budget_exceeded`](#key_budget_exceeded) | 429 | `rate_limit_error` |
+| [`no_price`](#no_price) | 403 | `invalid_request_error` |
+| [`audit_unavailable`](#audit_unavailable) | 503 | `api_error` |
+| [`upstream_unreachable`](#upstream_unreachable) | 502 | `api_error` |
+| [`upstream_failed`](#upstream_failed) | 502 | `api_error` |
+| [`upstream_timeout`](#upstream_timeout) | 504 | `timeout_error` |
+| [`bad_path`](#bad_path) | 400 | `invalid_request_error` |
+| [`no_upstream`](#no_upstream) | 503 | `api_error` |
+
+## Identity
+
+### no_key
+
+**401.** No credential, an empty one, an `Authorization` header that is not `Bearer`, or a header that is not text. The key is checked before the route, so an unknown route without a key gets `no_key`.
+
+**Fix:** send the Gantry key as `Authorization: Bearer gantry_...` or `x-api-key: gantry_...`.
+
+### ambiguous_key
+
+**400.** `Authorization` and `x-api-key` hold different values, one of them is empty beside the other (the message names the empty one), or one of them appears twice. On the admin API, also a key prefix that more than one key hash starts with.
+
+**Fix:** send exactly one credential, the Gantry key. On the admin API, send more of the hash.
+
+### unknown_key
+
+**401.** The key's hash is not in the keys file: never issued, or removed. A key starting with `sk-` gets the hint that it looks like a provider key.
+
+**Fix:** ask an admin for a key. A key just issued works within 2 seconds. Never send a provider key.
+
+### key_expired
+
+**401.** The key's entry has `expires:` and that UTC date or time has come. The record names whose key it was.
+
+**Fix:** ask an admin for a new key, or run `gantry login` again.
+
+### killed
+
+**403.** A kill switch stops this person, team, key, model or everyone. The message names the switch, the reason, the admin who set it and when.
+
+**Fix:** ask that admin. The switch stays until `gantry unkill`. See [Kill switches](/gantry/governance/kill-switches/).
+
+### kills_unreadable
+
+**503.** `gantry.kills.json` beside the keys file cannot be read, so Gantry cannot tell whether a switch stops the request. Every request is refused.
+
+**Fix:** the admin fixes the file, or deletes it, which turns every switch off.
+
+## Route and body
+
+### unknown_route
+
+**404.** The method and path are not one Gantry serves. See [HTTP routes](/gantry/reference/http-routes/). On the admin API, also a method and path it does not serve, or a Gantry that serves no keys file.
+
+**Fix:** check the method and the path.
+
+### body_too_large
+
+**413.** The body is over 32 MiB, or over the memory one caller may hold at once (64 MiB).
+
+**Fix:** send a smaller request.
+
+### body_timeout
+
+**408.** The body did not arrive within 30 seconds.
+
+**Fix:** send it again, from a faster link.
+
+### busy
+
+**429** when this caller's requests in flight already hold 64 MiB of request bodies. **503** when Gantry holds as many request bodies as its 256 MiB budget allows, across all callers. Both send `Retry-After: 1`.
+
+**Fix:** wait a moment and send again.
+
+### unreadable_request
+
+**400.** One of:
+
+- The body is not a JSON object with exactly one `model` string. A second spelling such as `Model` counts as a second one. Or it stopped before it was complete.
+- On `/v1/audio/transcriptions`: the body is not `multipart/form-data` with one boundary and exactly one `model` field, or a part is not plain (an extended `name*=`, spaces around `=`, an escape, a folded header).
+- The body is sent with a `Content-Encoding` other than `identity`.
+- On a rule with guardrails: an object in the body names the same key twice, or a text field has a shape the guardrails do not read (a moderation input item other than a string or `text` item, a non-string image prompt or speech input).
+
+**Fix:** send an uncompressed JSON object, or form, with one `model` field and each key once.
+
+### bad_limits
+
+**400.** A budget or a cache applies, and the body names `model`, `messages`, `system`, `input`, `stream`, `max_tokens`, `max_completion_tokens`, `max_output_tokens` or `n` twice, gives a token limit that is not a whole number, `n` that is not a whole number from 1 to 16, or `stream` that is not `true`, `false` or `null`. On a rule that also has guardrails, a key named twice is caught first as `unreadable_request`.
+
+**Fix:** send each field once, token limits as whole numbers.
+
+### stored_context
+
+**400.** A budget applies to a `/v1/responses` request that names `previous_response_id`, `conversation` or `prompt`. The provider adds stored context Gantry cannot see, so the most the request could cost is unknown. The message names the fields.
+
+**Fix:** send the whole conversation in `input` with `store: false`, as Codex does, or ask an admin to set `max_context` for the model under `prices:`.
+
+### max_tokens_needed
+
+**400.** A budget or a tokens-per-minute limit applies, the request states no `max_tokens` (or `max_completion_tokens`, `max_output_tokens`), and the model's price has no `max_output`, so the most it could cost or use is unknown. The message names the budget that applies and the field of the route. An image or speech request to a token-priced model has no such field: its model needs `max_output`, or `per_image` for images.
+
+**Fix:** send `max_tokens` (`max_output_tokens` on `/v1/responses`), or ask an admin to set `max_output` for the model under `prices:`.
+
+## Policy
+
+### no_rule
+
+**403.** No rule names the caller's name or team.
+
+**Fix:** an admin adds a rule. See [Policy file](/gantry/governance/policy/).
+
+### model_not_allowed
+
+**403.** The first rule that names the caller does not list the model. The message names the rule and what it allows. Also when the rule allows the model and the caller's key has its own `models:` list without it: the message then names the key and its list, and the record has `key_models: true`.
+
+**Fix:** use an allowed model, or ask an admin to change the policy.
+
+### unknown_model
+
+**403.** The rule allows the model, but no provider lists it, or an alias has no deployment Gantry can reach. It is 403, not 404, because Claude Code replaces the message of a 404 with its own and retries a 400.
+
+**Fix:** check the model name, or an admin adds it to a provider. See [Providers](/gantry/providers/overview/).
+
+### wrong_route
+
+**400.** The model is served by a provider that speaks the other API. The message names the route to use and, where it applies, the provider setting that would allow it:
+
+- A chat request for an `anthropic`, `bedrock` or `vertex_anthropic` model. An admin can set `accept_chat: true`.
+- A messages request for a chat provider without `accept_messages`. An admin can set it.
+- `count_tokens` for a `bedrock` or `vertex_anthropic` model, or a model on a provider with `accept_messages`.
+- A Responses, embeddings, images, audio, moderations or rerank request for a model on a provider not of kind `openai`.
+
+**Fix:** send chat requests for `openai`, `azure`, `gemini` and `vertex` models to `/v1/chat/completions`, messages requests for `anthropic`, `bedrock` and `vertex_anthropic` models to `/v1/messages`, and the other `/v1` routes to `openai` models only.
+
+### untranslatable
+
+**400** before the record: a chat request for a provider with `accept_chat: true` holds a field the messages API has no equivalent for, or a messages request for a provider with `accept_messages: true` holds one chat completions has none for (thinking of type `enabled`, a server tool, a `context_management` edit other than clearing thinking). A chat request to a `gemini` or `vertex` model that cannot be translated is refused the same way. The message names the field.
+
+**502** after the record: the provider's whole answer to a translated request could not be translated back.
+
+**Fix:** remove the field, or use a model whose provider speaks the route's API. For a 502, tell the admin.
+
+### unknown_query
+
+**400.** A query parameter the route does not forward, a value it does not take, or a parameter given twice. Allowed: `beta` (`true` or `false`) on the messages routes, `limit` (1 to 1000) on `/v1/models`, none elsewhere. The value is never repeated in the message.
+
+**Fix:** remove the parameter.
+
+### guardrail_blocked
+
+**403.** A guardrail the rule names refused the request. The message names the guardrail, the kinds it found (for example `aws_access_key (1)`) and where (`/messages/0/content`), never the text. A `fail_closed` webhook guardrail that could not check the request refuses with this code too, and says so.
+
+Also 403 when a guardrail with `on: [answer]` withheld the model's whole answer. That one comes after the request was recorded as allowed, and has an `answer_guardrails` record with the same ID.
+
+**500** when a guardrail masked the request and the masked body could not be written. The unmasked body is never sent.
+
+**Fix:** remove what was found and send again. For a guardrail service that is down, try later or tell the admin. See [Guardrails](/gantry/governance/guardrails/).
+
+## Limits
+
+### rate_limited
+
+**429.** The caller sent as many requests in the last minute as `rate: { rpm: N }` allows, or the tokens used in the last minute, plus those held by requests in flight, plus the most this request could use would pass a `tpm` limit (the rule's, or the key's). `Retry-After` says how many seconds to wait. A request that could use more tokens than a whole minute allows is refused without `Retry-After`. The record's `limit` field names the limit.
+
+**Fix:** wait the seconds in `Retry-After`, or send a smaller `max_tokens`. See [Budgets and rate limits](/gantry/governance/budgets-and-rate-limits/).
+
+### budget_exceeded
+
+**429.** Spent, plus what requests in flight reserved, plus the most this request could cost would pass the rule's `budget`. The message says how much is spent of how much, what requests in flight hold, and when the budget starts again (UTC).
+
+**Fix:** wait for the period to end, send a smaller `max_tokens`, or ask an admin to raise the budget.
+
+### key_budget_exceeded
+
+**429.** The key has a `budget:` of its own, and its spend plus what its requests in flight reserved plus the most this request could cost would pass it. The message names the key by the first 8 hex characters of its hash.
+
+**Fix:** wait for the period to end, or ask an admin to raise the key's budget.
+
+### no_price
+
+**403.** A budgeted rule reached a model with no price. Only possible in a configuration built in code: `gantry check` refuses it in a policy file.
+
+**Fix:** add the model's price under `prices:`.
+
+## Audit and provider
+
+### audit_unavailable
+
+**503.** The record could not be written: the disk failed, or the log was deleted, moved, replaced or cut short. Every request, admin call and console action is refused until a restart, and `/healthz` answers 503. This refusal has no record, because that is the problem it reports.
+
+**Fix:** the admin checks the log file and the server's stderr, then restarts. See [Running in production](/gantry/operations/operations/#disk-full-and-audit-repair).
+
+### upstream_unreachable
+
+**502.** Gantry could not connect to the provider within the 5 second connect timeout.
+
+**Fix:** try again. If it persists, the admin checks the provider URL and the network.
+
+### upstream_failed
+
+**502.** The provider broke the connection before answering, or Gantry could not sign a Bedrock request with the configured credentials and region.
+
+**Fix:** try again. If it persists, tell the admin.
+
+### upstream_timeout
+
+**504.** The provider sent nothing for 120 seconds.
+
+**Fix:** try again, or with a smaller request.
+
+### bad_path
+
+**400.** The request path could not be joined to the provider URL.
+
+**Fix:** check the path.
+
+### no_upstream
+
+**503.** Only with `gantry serve --unchecked`: `GANTRY_UPSTREAM` is not set.
+
+**Fix:** set `GANTRY_UPSTREAM` and restart.
+
+<Aside type="note">
+With `retries` or a `fallback` on the provider, an `upstream_*` failure, a 429 or a 5xx is tried again before any byte reaches the caller, and an `attempts` record lists every try. The caller sees only the last outcome.
+</Aside>
+
+## Admin API codes
+
+These come from `/admin/keys` and `/admin/kills`, in OpenAI's shape. `no_key`, `ambiguous_key`, `unknown_key`, `unknown_route`, `busy`, `body_too_large`, `body_timeout` and `audit_unavailable` apply there too. See [Admin API](/gantry/reference/admin-api/).
+
+### not_admin
+
+**403.** The key is valid, but its entry does not say `admin: true`.
+
+**Fix:** use an admin key, or ask an admin.
+
+### invalid_request
+
+**400.** The body is not the JSON object the route takes, has an unknown field, or holds a value out of range: a name or team with characters other than letters, digits, dots, dashes, underscores and `@` or over 100 characters, a bad expiry, a budget that is not above 0 per `day` or `month`, an empty `models` list or a model not served, a `tpm` outside 1 to 1000000000, a key prefix that is not 8 to 64 hex characters, a kill scope other than `person`, `team`, `key_prefix`, `model` or `all`, or a kill reason that is not 1 to 500 characters.
+
+**Fix:** correct the field the message names.
+
+### kill_matches_nothing
+
+**400.** The kill switch names a person, team, key or model that no key holds and no provider serves, so it would stop nothing. The message lists names close to it.
+
+**Fix:** name one that exists, or send `"force": true` (`gantry kill --force`).
+
+### no_such_key
+
+**404.** No key in the keys file has a hash starting with that prefix, or someone else removed it meanwhile.
+
+**Fix:** list the keys with `GET /admin/keys`.
+
+### no_such_switch
+
+**404.** No kill switch is on for that scope and value.
+
+**Fix:** list the switches with `GET /admin/kills`.
+
+### keys_file
+
+**409.** The keys file could not be read or written, or changed while Gantry was writing it.
+
+**Fix:** check the file and its permissions, then try again.
+
+### kills_file
+
+**409.** The kill switch file could not be read or written.
+
+**Fix:** check `gantry.kills.json` and its permissions, then try again.
+
+### no_randomness
+
+**503.** The operating system gave no randomness for a new key.
+
+**Fix:** try again.
+
+### internal
+
+**500.** The change stopped before it finished.
+
+**Fix:** check the keys file and try again.
+
+## Single sign-on codes
+
+Console and `gantry login` sign-ins that fail show a page with the cause and the fix, and write an `admin` record with `action: console_sign_in` and one of these codes. See [Single sign-on](/gantry/governance/single-sign-on/).
+
+| Code | Cause |
+|---|---|
+| `sso_config` | `console.sso` is not set up, or does not pass the check |
+| `sso_secret` | The variable `client_secret_env` names is not set |
+| `sso_provider` | The identity provider's discovery document or key set could not be read, names an endpoint that is not https, or does not offer PKCE with S256 |
+| `sso_issuer` | The discovery document names a different issuer than `console.sso.issuer` |
+| `sso_state` | The sign-in came back with a state this browser did not start, already used, or older than 10 minutes |
+| `sso_token` | The code could not be traded for an ID token |
+| `sso_signature` | The ID token is signed with an algorithm other than RS256 or ES256, or the signature does not hold |
+| `sso_unknown_key` | The ID token names a signing key that is not in the provider's key set |
+| `sso_audience` | The ID token was issued for another client |
+| `sso_expired` | The ID token has expired |
+| `sso_nonce` | The ID token's nonce does not match the sign-in |
+| `sso_email` | The ID token has no email, an email marked unverified, or one not in `allowed_emails` or `allowed_domains` |
+| `sso_role` | The role claim holds no value from `admin_values` or `read_only_values` |
+| `sso_self_issue` | `gantry login` is used and the policy has no `console.sso.self_issue` section |
+| `cli_login` | A `gantry login` link was cut short or changed |
+
+Inside a signed-in console session, `not_admin` is recorded for a key that is not an admin's, and `read_only` for a read-only person who tries to issue or revoke a key.
+
+## Not a refusal
+
+A provider's own error passes through unchanged, with `X-Gantry-Decision` added. Two exceptions keep the caller's error shape: a Bedrock error is put in Anthropic's shape, and an error answer to a translated chat request is put in OpenAI's shape, each with the provider's message.
+
+A request the HTTP library rejects as malformed gets a bare 400 with no body, no code and no decision ID. A client that takes more than 10 seconds to send its headers is disconnected.

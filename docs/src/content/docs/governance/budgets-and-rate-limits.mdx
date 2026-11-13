@@ -1,0 +1,132 @@
+---
+title: Budgets and rate limits
+description: Cap spend in dollars per team, person or key, and requests and tokens per minute, with reservations that cannot be overrun.
+sidebar:
+  order: 4
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A budget caps what a team, a person or a key spends in US dollars per day or month. A rate limit caps requests and tokens per minute. Both are checked when a request is admitted, so requests in flight cannot overrun them together.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+rules:
+  - name: payments-team
+    principals: { team: payments }
+    models: [gpt-4o-mini]
+    budget: { usd: 2000, per: month }
+    rate: { rpm: 600, tpm: 200000 }
+```
+
+A key can carry its own budget and `tpm` on top of its rule's:
+
+```bash
+gantry key new ci.release --team platform --budget 20/month --tpm 50000
+```
+
+## Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `budget.usd` | number | required | US dollars, above 0. |
+| `budget.per` | string | required | `day` or `month`. Periods start at midnight UTC, on the first of the month for `month`. |
+| `rate.rpm` | integer | none | Requests per sliding minute, per person. 1 to 1000000. |
+| `rate.tpm` | integer | none | Tokens (prompt and answer) per sliding minute. 1 to 1000000000. |
+
+`rpm` and `tpm` may be given together. On a key, the same limits are `budget: { usd, per }` and `tpm:` in its entry, or `--budget` and `--tpm` on [`gantry key new`](/gantry/governance/keys/#limits-per-key).
+
+## Who a limit counts
+
+| Rule principal | `budget` and `tpm` count | `rpm` counts |
+|---|---|---|
+| `{ team: ... }` | the whole team | each person |
+| `{ name: ... }` | that person | that person |
+| `{ any: true }` | each person | each person |
+| A key's own limit | that key alone | none |
+
+A budget counts all of that team's or person's spend in the period, under any rule. A budget added mid-month starts from what was already spent.
+
+A request must fit its rule's limits and its key's limits. Over the rule's budget it is refused with `budget_exceeded`, over the key's with `key_budget_exceeded`.
+
+## How a budget is counted
+
+<Steps>
+
+1. **Reserve.** At admission the request reserves the most it could cost: one token per three bytes of its body at the model's dearest prompt price (input or cache write), plus its output tokens at the output price.
+
+2. **Admit.** The request is admitted only if spent, plus what requests in flight have reserved, plus its own reservation, fits the budget. Otherwise it is refused with `budget_exceeded`.
+
+3. **Settle.** When the answer ends, the reservation is replaced by the real cost from the [usage record](/gantry/governance/audit-log/#what-is-recorded).
+
+</Steps>
+
+A budget is passed only when a provider bills more than the reservation: a model writing past its `max_tokens`, or a prompt that tokenizes to more than one token per three bytes.
+
+**Output tokens reserved** are the largest of `max_tokens`, `max_completion_tokens` and `max_output_tokens`, because a provider may read any of them. A request that states none reserves the model's `max_output` from its [price](/gantry/routing/pricing/), and is refused with `max_tokens_needed` when the price has none. A chat request with `n` reserves its output `n` times. Embeddings have no output tokens. `count_tokens` requests are free.
+
+**Spend survives a restart.** At start, Gantry sums the `charged_usd` of the current month's usage records from the audit log. A reload that changes a budget applies to the next request.
+
+### Answers without usage
+
+| The answer | Is charged | `usage` in the record |
+|---|---|---|
+| Reports usage | its cost | `reported` |
+| Reports no usage (an OpenAI stream without `stream_options.include_usage`, the SDK default) | its whole reservation | `not_reported` |
+| Cut off before its final usage event, by the caller or mid-answer | the larger of what it reported and its reservation | `partial` |
+| Never answered (`upstream_*` failure) | nothing, the reservation is given back | no usage record |
+
+Send `stream_options: {"include_usage": true}` on OpenAI streams to be charged exactly what the provider reports. Gantry never adds it, because it never rewrites a request.
+
+Without a budget, a finished stream without usage is charged an estimate from what it streamed (`usage: estimated`), so spend counted before a budget is added is not understated.
+
+### Requests a budget refuses by shape
+
+Under a budget, Gantry refuses a request whose cost it cannot bound:
+
+- **`bad_limits` (400):** a body that names `model`, `messages`, `system`, `input`, `stream`, `n`, `previous_response_id`, `conversation`, `prompt` or a token limit twice; a token limit that is not a whole number; or `n` outside 1 to 16. Parsers differ on which copy wins, so the reservation could be of another request. The same applies under a cache.
+- **`stored_context` (400):** a Responses request naming `previous_response_id`, `conversation` or `prompt`, because the provider adds context the body does not hold. It is admitted when the model's price sets `max_context`, reserving that many input tokens. Otherwise send the whole conversation in `input` with `store: false`, as Codex does.
+- **`max_tokens_needed` (400):** no output limit in the request and no `max_output` in the price.
+
+Every model a budgeted rule reaches must have a price. `gantry check` refuses a file that breaks this.
+
+## How rate limits are counted
+
+**`rpm`** allows each person at most that many requests in any 60 seconds. A request answered from the cache does not count.
+
+**`tpm`** reserves tokens as budgets reserve dollars: a request holds the most it could use (a token per three bytes of body, plus its `max_tokens` or the model's `max_output`) until its answer ends, then counts what the provider reported, prompt, answer and cache tokens included. Images, audio, moderations and rerank count their prompt only.
+
+| Over the limit | Response |
+|---|---|
+| `rpm` | `rate_limited` (429), `Retry-After` set to the seconds until the oldest request leaves the minute, `x-should-retry: true` |
+| `tpm`, would fit later | `rate_limited` (429) with `Retry-After` |
+| `tpm`, could never fit in one minute | `rate_limited` (429) without `Retry-After` |
+| `tpm`, size unknown | `max_tokens_needed` (400) |
+
+The record of a refusal by a limit names it in `limit`, for example `{"kind": "tpm", "of": "key", "value": 1000, "request_could_use": 1228}`.
+
+## Refusal codes
+
+| Code | Status | Retry | Cause |
+|---|---|---|---|
+| `budget_exceeded` | 429 | no | The rule's budget would be passed. The message gives spent, budget, what requests in flight hold, and when the budget starts again. |
+| `key_budget_exceeded` | 429 | no | The key's own budget would be passed. |
+| `rate_limited` | 429 | yes, after `Retry-After` | An `rpm` or `tpm` limit. |
+| `max_tokens_needed` | 400 | no | No output limit and no `max_output` price. |
+| `bad_limits` | 400 | no | Duplicate keys, a non-integer token limit or `n` out of range. |
+| `stored_context` | 400 | no | Stored Responses context under a budget without `max_context`. |
+
+Claude Code reads `x-should-retry` and does not retry a budget refusal. See [Refusal codes](/gantry/reference/refusal-codes/).
+
+<Aside type="note">
+Spend, reservations and rate-limit windows live in the memory of one Gantry process. Rate-limit windows start empty after a restart; spend is read back from the audit log.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Pricing" href="/gantry/routing/pricing/" description="Where each model's price comes from, and how to override it." />
+	<LinkCard title="Keys" href="/gantry/governance/keys/" description="Budgets, models and tpm per key." />
+	<LinkCard title="Audit log" href="/gantry/governance/audit-log/" description="The usage records spend is counted from." />
+</CardGrid>

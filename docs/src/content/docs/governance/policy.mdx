@@ -1,0 +1,257 @@
+---
+title: Policy file
+description: Write gantry.policy.yaml, the file that names your providers and decides who may use which model, and read what gantry check reports.
+sidebar:
+  order: 1
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The policy file names the providers Gantry forwards to and the rules that decide who may use which model. `gantry check` and `gantry serve` read it the same way, so a file that passes one is accepted by the other.
+
+Any key Gantry does not know is an error. Nothing in the file is ignored.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-4o-mini, gpt-4o]
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_PROVIDER_KEY
+    models: [claude-sonnet-5-5, claude-haiku-5-5]
+  - name: local
+    kind: openai
+    url: http://127.0.0.1:11434
+    allow_private: true
+    models: [gpt-oss:20b]
+guardrails:
+  - name: no-secrets
+    type: secrets
+    action: block
+  - name: mask-pii
+    type: pii
+    action: mask
+rules:
+  - name: maya-only
+    principals: { name: maya.cohen }
+    models: ["*"]
+  - name: payments-team
+    principals: { team: payments }
+    models: [gpt-4o-mini, claude-sonnet-5-5, claude-haiku-5-5]
+    guardrails: [no-secrets, mask-pii]
+    budget: { usd: 2000, per: month }
+    rate: { rpm: 600, tpm: 200000 }
+    cache: { ttl_seconds: 300 }
+  - name: everyone-else
+    principals: { any: true }
+    models: []
+prices:
+  gpt-oss:20b: { input: 0, output: 0 }
+audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+```
+
+```bash
+gantry check gantry.policy.yaml
+```
+
+```text
+gantry.policy.yaml is valid: 3 rules, 0 keys, 3 providers: openai (openai) at https://api.openai.com, anthropic (anthropic) at https://api.anthropic.com, local (openai) at http://127.0.0.1:11434.
+```
+
+## Rules and first match
+
+Rules are read top to bottom. **The first rule that names the caller decides.** Later rules are never consulted, even if they would allow the model.
+
+- A caller no rule names is refused with `no_rule`.
+- A caller whose first matching rule does not list the model is refused with `model_not_allowed`. The message lists what that rule allows.
+- A model a rule allows must still be served by a provider, or the request is refused with `unknown_model`.
+
+In the example, `maya.cohen` of team `payments` may use every model, because `maya-only` comes first. The rest of `payments` gets the three models listed. Everyone else gets nothing, with a message that says so.
+
+### Principals
+
+Each rule names exactly one principal. The name and team come from the caller's [Gantry key](/gantry/governance/keys/).
+
+| Principal | Matches |
+|---|---|
+| `{ name: maya.cohen }` | The one key, or keys, issued to that name. Keys from `gantry login` are named by email. |
+| `{ team: payments }` | Every key issued to that team. |
+| `{ any: true }` | Every identified caller. Put it last as the catch-all. |
+
+### Models
+
+| Value | Meaning |
+|---|---|
+| `[gpt-4o-mini, claude-sonnet-5-5]` | Exact model names, or alias names. |
+| `["*"]` | Every model any provider serves. `"*"` must stand alone. |
+| `[]` | No model. The rule matches the caller and refuses every request. |
+
+A key can carry its own `models:` list that narrows its rule further, never widens it. See [Keys](/gantry/governance/keys/#limits-per-key).
+
+## Field reference
+
+### Top level
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `version` | integer | required | Must be `1`. |
+| `providers` | list | required | At least one provider. |
+| `rules` | list | required | Read in order. An empty list refuses everyone with `no_rule`. |
+| `guardrails` | list | `[]` | Guardrails that rules may name. See [Guardrails](/gantry/governance/guardrails/). |
+| `prices` | map | `{}` | Prices by exact model name, over the built-in table. See [Pricing](/gantry/routing/pricing/). |
+| `aliases` | list | `[]` | One model name served by several deployments, with weights, cooldown and named fallbacks. See [Providers](/gantry/providers/overview/). |
+| `audit` | map | see below | `{ path: <file> }`. Where the audit log is written. Default `gantry-audit.jsonl` beside the policy file. |
+| `console` | map | none | `{ sso: ... }`. Console sign-in and `gantry login`. See [Single sign-on](/gantry/governance/single-sign-on/). |
+
+### Providers
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | required | Letters, digits, `.`, `-`, `_` and `@`, up to 100 characters. Unique. Audit records name the provider by it. |
+| `kind` | string | required | `openai`, `anthropic`, `azure`, `bedrock`, `gemini`, `vertex` or `vertex_anthropic`. |
+| `url` | string | required | Base URL, `http://` or `https://`, no query, fragment or login. May carry the vendor's path, such as `https://api.groq.com/openai/v1`. Not used by `bedrock`. |
+| `key_env` | string | required | Name of the environment variable holding the provider key. Optional for an `openai` provider with `allow_private: true`. Not used by `bedrock`, which signs with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. |
+| `models` | list | required | Exact model names this provider serves. Not empty, no `"*"`. A model may be listed by one provider only. |
+| `retries` | integer | `0` | 0 to 5. Retries after a connection failure, timeout, 429 or 5xx, before any byte reaches the caller. |
+| `fallback` | string | none | Another provider of the same API to try after the retries fail. |
+| `accept_chat` | boolean | `false` | `anthropic`, `bedrock` and `vertex_anthropic`: also take chat completions requests, translated to messages. |
+| `accept_messages` | boolean | `false` | `openai`, `azure`, `gemini` and `vertex`: also take messages requests (Claude Code), translated both ways. |
+| `allow_private` | boolean | `false` | Let `url` point at this machine or a private network. |
+| `deployments` | map | `azure` only | Model name to Azure deployment name. |
+| `api_version` | string | `azure` only | The Azure OpenAI `api-version`. |
+| `region` | string | `bedrock` only | The AWS region. |
+| `model_ids` | map | `bedrock` only | Model name to Bedrock model ID. |
+
+Per-kind routes, headers and examples are in [Providers](/gantry/providers/overview/).
+
+### Rules
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | required | Letters, digits, `.`, `-`, `_` and `@`. Shown in refusals and audit records. |
+| `principals` | map | required | Exactly one of `{ team: ... }`, `{ name: ... }`, `{ any: true }`. |
+| `models` | list | required | Exact names, `["*"]`, or `[]`. |
+| `guardrails` | list | `[]` | Names from the top-level `guardrails:`, run in this order. An undefined name is an error. |
+| `budget` | map | none | `{ usd: <above 0>, per: day \| month }`. See [Budgets and rate limits](/gantry/governance/budgets-and-rate-limits/). |
+| `rate` | map | none | `{ rpm: 1 to 1000000, tpm: 1 to 1000000000 }`, either or both. |
+| `cache` | map | none | `{ ttl_seconds: 1 to 86400 }`. See [Caching](/gantry/routing/caching/). |
+| `buffer_stream` | boolean | `false` | Hold a streamed answer whole so `on: [answer]` guardrails check it first. Needs a guardrail with `on: [answer]`. |
+
+Every model a budgeted rule reaches must have a price, built in or under `prices:`. For `models: ["*"]` that is every model every provider serves. `gantry check` refuses a file that breaks this.
+
+## Order of checks
+
+Each request passes these steps in order and stops at the first that refuses it.
+
+<Steps>
+
+1. **Identify and decide.** Look up the key, check for an active [kill switch](/gantry/governance/kill-switches/), find the first rule that names the caller, check the model, choose the provider.
+
+2. **Guardrails.** The rule's built-in detectors, then its vendors and webhooks, in the order written.
+
+3. **Cache.** A hit is answered here.
+
+4. **Rate limit.** Requests and tokens per minute.
+
+5. **Budget.** The request reserves the most it could cost.
+
+6. **Record.** The decision record is written. Nothing is sent before it is on file.
+
+7. **Forward.** Sent, retried and passed to the fallback as the provider allows. An `attempts` record follows when more than one try was made, and a usage record when the answer ends.
+
+</Steps>
+
+Guardrails run before the cache on purpose. A cached answer is served only to a request that passes the guardrails in force now, so a guardrail added by a reload also covers answers cached before it. A request a guardrail blocks never reads the cache and never counts against a rate limit or a budget.
+
+The cache key, the budget's estimate and the recorded usage are all of the body actually sent: masked if a guardrail masked it, translated if it was translated.
+
+For the full path, from body limits to provider errors, see [How it works](/gantry/getting-started/how-it-works/).
+
+## Reloading
+
+Save the policy file or the keys file and Gantry uses the new version within 2 seconds, without a restart. `kill -HUP <pid>` makes it check at once. Gantry compares the SHA-256 of both files once a second, so editors that save by renaming and symlinks switched to another file are both noticed.
+
+- **A change that passes** the same checks as `gantry check` is written to the audit log as a `config_loaded` record, then decides every request after it. The policy and keys switch together.
+- **A change that fails** is not used. Gantry keeps the version it has, prints every problem to stderr, writes one `config_rejected` record per distinct pair of files, and uses the next save that passes.
+- **A request decided before the switch** finishes under the decision it got, its stream included.
+
+```text
+/etc/gantry/gantry.policy.yaml:12: "modles" is not a key Gantry knows. Did you mean "models"?
+gantry: the change to /etc/gantry/gantry.policy.yaml or /etc/gantry/gantry.keys.yaml is not used: 1 problem above. Gantry keeps deciding with the version it has (policy 5d41402a, keys 7c211433) and uses the next save that passes `gantry check`.
+```
+
+Rules, guardrails, budgets, rate limits, caches, prices, keys, and a provider's `models`, `deployments`, `model_ids`, `retries`, `fallback` and `accept_chat` all change without a restart. Spend already counted and the cache are kept across a reload.
+
+These need a restart, and a change to one of them is rejected with that reason:
+
+- the audit log path,
+- a provider's `name`, `kind`, `url`, `key_env`, `allow_private`, `region` or `api_version`,
+- adding or removing a provider,
+- a new provider key value (it lives in an environment variable).
+
+`GET /healthz` names the hashes in use and those of a rejected version still on disk:
+
+```json
+{"status":"ok","policy_sha256":"5d41...","keys_sha256":"7c21...","rejected":null}
+```
+
+## gantry check
+
+```bash
+gantry check <policy> [--keys <file>]
+```
+
+`gantry check` prints every problem, one per line, with file and line, then `<file> cannot be used: N problems above.` It exits 0 when the files can be used and 1 when they cannot. The keys file is `gantry.keys.yaml` beside the policy unless `--keys` names another. A missing keys file is fine.
+
+An unknown key stops the check of that file at that point, because the rest cannot be read reliably. Fix the names it lists and run it again.
+
+| Problem | Message |
+|---|---|
+| Misspelled key | `gantry.policy.yaml:18: "modles" is not a key Gantry knows. Did you mean "models"?` |
+| Unknown key | `"colour" is not a key Gantry knows. Remove it, or check the spelling.` |
+| Key not enforced | `"tools" is not enforced by this version of Gantry. Remove the line: a policy file must not promise what Gantry does not do yet.` |
+| Key in the wrong place | `"retries" does not belong here. The keys here are name, principals, models, ... Move it to where it belongs, or remove it.` |
+| Missing key | `"url" is missing here. Add it.` |
+| Wrong type | `budget is integer 5. Write it as budget: { usd: 20, per: month }.` |
+| Wrong version | `version is 2. This version of Gantry reads version 1.` |
+| No provider | `the file lists no provider, so no request could be forwarded. Add one under providers.` |
+| Model on two providers | `model "claude-sonnet-5-5" is listed by provider "anthropic" and by provider "local" at line 8. A model is served by one provider. Remove it from one of them.` |
+| Private URL | `the provider url points at this machine or a private network. If that is intended, for example a local model server, add allow_private: true to the provider.` |
+| Bad `key_env` | `key_env is the name of an environment variable, for example OPENAI_API_KEY. The key itself never goes in this file.` |
+| Bad principals | `principals must be exactly one of { team: <team> }, { name: <person or workload> } or { any: true }.` |
+| `"*"` with other models | `"*" already allows every model. List it alone, or list the models by name.` |
+| `retries` too high | `retries is at most 5. Each retry can wait as long as the provider's whole timeout, so more would leave a caller waiting for many minutes.` |
+| Unknown `fallback` | `fallback names provider "bedrok", and there is none. The providers are: groq, azure, anthropic, bedrock.` |
+| Budget period | `per is "week". A budget starts again each day or each month (UTC): write per: day or per: month.` |
+| Budget on an unpriced model | `rule "everyone-else" has a budget in dollars, and model "my-model" has no price, so its spend could not be counted. Add its price ...` |
+| Rate | `rpm is the number of requests one person may send per minute, 1 to 1000000, for example rate: { rpm: 600 }. To set no limit, remove the line.` |
+| Cache | `ttl_seconds is how long an answer is served again, 1 to 86400 seconds, for example cache: { ttl_seconds: 300 }. To cache nothing, remove the line.` |
+| Guardrail not defined | `rule "payments-team" names guardrail "no-secret", which is not defined under guardrails. Define it there, or check the spelling.` |
+| Guardrail without an action | `guardrail "mask-pii" has no action. Add action: block, mask or warn.` |
+| Webhook without `on_failure` | `guardrail "vendor" does not say what to do when the service fails. Add on_failure: fail_closed ... or fail_open ...` |
+| Bad key hash | `gantry.keys.yaml:4: sha256 must be 64 hex characters. Run gantry key new to add a key instead of writing one by hand.` |
+| Impossible expiry | `gantry.keys.yaml:4: expires 2026-11-31 is not a date: November 2026 has 30 days. Write a day that exists.` |
+
+Each message starts with `<file>:<line>: `, shortened in the table.
+
+**Warnings** do not stop the file from loading: a model a rule names that no provider serves, a provider model name with spaces at its ends or holding `*`, two provider model names that differ only in case or spaces, and a key whose expiry has passed. `gantry serve` and a reload accept expired keys, because keys expire while Gantry runs.
+
+<Aside type="note">
+`tools` appears in Gantry's designs but is not enforced. A policy file that contains it is refused, so the file never promises a control Gantry does not apply.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Keys" href="/gantry/governance/keys/" description="Issue the keys that give each caller a name and a team." />
+	<LinkCard title="Budgets and rate limits" href="/gantry/governance/budgets-and-rate-limits/" description="How budget, rpm and tpm are counted and refused." />
+	<LinkCard title="Guardrails" href="/gantry/governance/guardrails/" description="Detectors and vendors a rule can run." />
+	<LinkCard title="Refusal codes" href="/gantry/reference/refusal-codes/" description="Every code a request can be refused with." />
+</CardGrid>

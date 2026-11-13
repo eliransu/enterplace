@@ -1,0 +1,130 @@
+---
+title: HTTP routes
+description: Every route Gantry serves, the provider kinds behind each, the query parameters it allows, and the headers it forwards, strips and adds.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Gantry serves the OpenAI and Anthropic routes your clients already call, plus a health check, the console and the metrics endpoint. Any other method or path is refused with `unknown_route` and recorded.
+
+## Route list
+
+| Method | Path | Key | Recorded | Description |
+|---|---|---|---|---|
+| `POST` | `/v1/chat/completions` | yes | yes | OpenAI chat completions |
+| `POST` | `/v1/responses` | yes | yes | OpenAI Responses (Codex CLI and newer SDKs) |
+| `POST` | `/v1/embeddings` | yes | yes | OpenAI embeddings |
+| `POST` | `/v1/images/generations` | yes | yes | OpenAI image generation |
+| `POST` | `/v1/audio/transcriptions` | yes | yes | OpenAI transcription, `multipart/form-data` |
+| `POST` | `/v1/audio/speech` | yes | yes | OpenAI text to speech |
+| `POST` | `/v1/moderations` | yes | yes | OpenAI moderations |
+| `POST` | `/v1/rerank` | yes | yes | Rerank, forwarded as sent |
+| `POST` | `/v1/messages` | yes | yes | Anthropic messages (Claude Code) |
+| `POST` | `/v1/messages/count_tokens` | yes | yes | Anthropic token counting |
+| `GET` | `/v1/models` | yes | yes | The models the caller's rule allows |
+| `GET` | `/healthz` | no | no | Health check |
+| `HEAD` | `/api/hello` | no | no | Claude Code's startup probe. Answers 200 and reaches no provider |
+| `GET`, `POST` | `/console/...` | session | sign-ins and changes | The [admin console](/gantry/operations/console/) |
+| `GET`, `POST`, `DELETE` | `/admin/keys`, `/admin/keys/<prefix>`, `/admin/kills` | admin key | yes | The [admin API](/gantry/reference/admin-api/) |
+| `GET` | `/metrics` | no | no | Prometheus metrics, only on the `--metrics` address |
+
+Any method other than `GET` on `/healthz`, or other than `HEAD` on `/api/hello`, is refused with `unknown_route` and recorded. The key is checked before the route, so an unknown route without a key gets `no_key`.
+
+## Provider kinds per route
+
+A request goes to the one provider that lists its model, and only if that provider's kind serves the route.
+
+| Route | Provider kinds |
+|---|---|
+| `/v1/chat/completions` | `openai`, `azure`, `gemini` and `vertex` (the last two translated to Google's API). Also `anthropic`, `bedrock` and `vertex_anthropic` with `accept_chat: true`, translated |
+| `/v1/messages` | `anthropic`, `bedrock`, `vertex_anthropic`. Also `openai`, `azure`, `gemini` and `vertex` with `accept_messages: true`, translated |
+| `/v1/messages/count_tokens` | `anthropic` only |
+| `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank` | `openai` only |
+
+A model on a provider that does not serve the route is refused with `wrong_route`, and the message names the route to use. An alias tries only the deployments whose provider serves the route. See [Providers](/gantry/providers/overview/).
+
+The policy reads the `model` field of the JSON body, or the one `model` form field of a transcription. Everything else in the body is forwarded as sent.
+
+## GET /v1/models
+
+Lists the models the caller's rule allows, narrowed by the key's own `models:` list, with aliases beside them. The list takes the shape of the client asking.
+
+| Caller sends | Shape | Lists |
+|---|---|---|
+| `x-api-key` or `anthropic-version` (Anthropic clients, Claude Code) | Anthropic's: `data` of `{"type":"model","id","display_name","description"}`, with `has_more`, `first_id`, `last_id` | Models reachable on `/v1/messages`: on `anthropic`, `bedrock` and `vertex_anthropic` providers, and providers with `accept_messages` |
+| Anything else | OpenAI's: `{"object":"list","data":[{"id","object":"model","created":0,"owned_by"}]}` | Models on chat providers: `openai`, `azure`, `gemini`, `vertex` |
+
+The list is answered by Gantry and reaches no provider.
+
+## Query parameters
+
+Every query parameter must be one the route allows, given once, with a value it takes. Anything else is refused with `unknown_query`, never dropped. The value is never repeated in the refusal.
+
+| Route | Parameter | Values |
+|---|---|---|
+| `/v1/messages`, `/v1/messages/count_tokens` | `beta` | `true` or `false` (Claude Code adds it) |
+| `/v1/models` | `limit` | A whole number from 1 to 1000 |
+| Every other route | none | |
+
+## Headers
+
+### Caller credentials
+
+Send the Gantry key in one of:
+
+| Header | Form |
+|---|---|
+| `Authorization` | `Bearer gantry_...` |
+| `x-api-key` | `gantry_...` |
+
+Both with the same value is accepted. Different values, an empty one beside the other, or either header twice is refused with `ambiguous_key`.
+
+### Stripped before forwarding
+
+| Header | Why |
+|---|---|
+| Any name containing `authorization`, `key`, `token`, `secret`, `organization` or `project`, except `idempotency-key` | Credentials and account selection are Gantry's |
+| Any name starting with `x-amz` | AWS headers are Gantry's to sign and set |
+| Any header carrying the caller's Gantry key in its name or value | The caller's key never reaches a provider |
+| `Cookie` | Means nothing to a provider |
+| `Host` | Set for the provider |
+| `Content-Length` | Set from the body actually sent |
+| `Connection`, the headers it names, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade` | Hop-by-hop |
+| `anthropic-*` | Only on a messages request translated to chat completions |
+| `anthropic-beta`, `anthropic-version` | Only for `bedrock`: the betas move into the body as `anthropic_beta` |
+
+A body sent with a `Content-Encoding` other than `identity` is refused with `unreadable_request`.
+
+### Forwarded
+
+Every other header passes unchanged, including `anthropic-version`, `anthropic-beta`, `x-claude-code-*`, `idempotency-key`, `Content-Type` and `User-Agent`.
+
+### Added
+
+| Header | To | Value |
+|---|---|---|
+| The provider's key header | Provider | `Authorization: Bearer` for `openai`, `vertex`, `vertex_anthropic`; `x-api-key` for `anthropic`; `api-key` for `azure`; `x-goog-api-key` for `gemini`. A local `openai` provider without `key_env` gets none |
+| AWS Signature Version 4 headers | Provider | `bedrock` only, with `Content-Type: application/json` |
+| `anthropic-version: 2023-06-01` | Provider | A chat request translated for `anthropic` or `vertex_anthropic` that has none |
+| `X-Gantry-Decision` | Caller | The decision ID, on every response |
+| `Server-Timing: gantry;dur=<ms>` | Caller | Gantry's own time on a forwarded request, appended beside the provider's |
+| `x-should-retry`, `Retry-After` | Caller | On refusals. See [Refusal codes](/gantry/reference/refusal-codes/#response-shape) |
+
+The provider's answer, streamed or not, comes back as sent, with hop-by-hop headers removed.
+
+## Limits
+
+| Limit | Value |
+|---|---|
+| Request body | 32 MiB |
+| Request headers sent within | 10 seconds |
+| Request body sent within | 30 seconds |
+| Provider connect | 5 seconds |
+| Provider first byte | 120 seconds |
+| Protocol | HTTP/1.1, plain or over TLS |
+
+<Aside type="note">
+`gantry serve --unchecked` forwards `POST /v1/chat/completions` to `GANTRY_UPSTREAM` without identity, policy, audit or credential header stripping. Every other route is refused with `unknown_route`. It listens on loopback only.
+</Aside>

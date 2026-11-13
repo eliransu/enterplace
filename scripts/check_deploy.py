@@ -1,5 +1,5 @@
 """Checks deploy/ without a cluster: YAML parses, the security settings are there, and the policy passes `gantry check`.
-Also checks the OpenTelemetry Collector recipe in docs/observability.md against audit records a real Gantry writes
+Also checks the OpenTelemetry Collector recipe in the observability docs page against audit records a real Gantry writes
 (it starts `gantry serve` on 127.0.0.1:20953 for a moment).
 
 Usage: python3 scripts/check_deploy.py [path/to/gantry]
@@ -12,7 +12,7 @@ import json, pathlib, re, shutil, subprocess, sys, tempfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CHART = ROOT / "deploy" / "helm" / "gantry"
 PLAIN = ROOT / "deploy" / "kubernetes" / "gantry.yaml"
-OBSERVABILITY = ROOT / "docs" / "observability.md"
+OBSERVABILITY = ROOT / "docs" / "src" / "content" / "docs" / "operations" / "observability.mdx"
 GANTRY = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "target" / "debug" / "gantry"
 
 
@@ -49,10 +49,10 @@ def gantry_check(policy: str, where: str) -> None:
 
 
 def check_otel() -> None:
-    """The Collector recipe in docs/observability.md parses, and its timestamp layout fits every record a real Gantry wrote."""
+    """The Collector recipe in the observability docs page parses, and its timestamp layout fits every record a real Gantry wrote."""
     text = OBSERVABILITY.read_text()
     block = re.search(r"### OpenTelemetry Collector.*?```yaml\n(.*?)```", text, re.S)
-    assert block, "no Collector recipe in docs/observability.md"
+    assert block, "no Collector recipe in the observability docs page"
     with tempfile.TemporaryDirectory() as tmp:
         recipe = pathlib.Path(tmp) / "collector.yaml"
         recipe.write_text(block.group(1))

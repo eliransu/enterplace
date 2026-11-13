@@ -1,0 +1,187 @@
+---
+title: Guardrail webhooks
+description: Build your own guardrail service against Gantry's webhook contract, with the exact request and answer format.
+sidebar:
+  order: 6
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A `webhook` guardrail sends each request's text to your service and obeys its verdict: allow, block or mask. Use it for a company's own checks, or to put a guardrail vendor Gantry does not speak to directly behind a small adapter.
+
+## Policy
+
+```yaml title="gantry.policy.yaml"
+guardrails:
+  - name: vendor
+    type: webhook
+    url: https://guard.example.com/v1/check
+    timeout_ms: 300
+    on_failure: fail_closed
+    action: block
+    headers_env:
+      Authorization: GUARD_TOKEN
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+    guardrails: [vendor]
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `url` | string | required | `https://`, or `http://` on `localhost`, `127.0.0.1` or `[::1]` only (a sidecar on the same machine). |
+| `on_failure` | string | required | `fail_closed` or `fail_open`. No default, because it is a security choice. |
+| `action` | string | `block` | `block` obeys the answer. `warn` records it and never enforces, for rollouts. `mask` is refused: the service decides what to mask. |
+| `timeout_ms` | integer | `1000` | 1 to 30000. Covers connecting, sending and reading the whole answer. |
+| `headers_env` | map | none | Header name to the environment variable holding its value. |
+| `on` | list | `[request]` | `[request]`, `[answer]` or `[request, answer]`. |
+
+`headers_env` values are read from the environment: put the whole value in the variable (`export GUARD_TOKEN="Bearer abc..."`). The value is never in the policy file, an audit record or a log; the `config_loaded` record holds the variable's name only. `gantry serve` does not start, and a reload is rejected, while a named variable is unset. `gantry check` refuses header names Gantry sets itself (`Host`, `Content-Type`, `Content-Length` and the connection headers).
+
+Built-in guardrails run first. A webhook sees the request after built-in masking, and is not called if a built-in guardrail blocks.
+
+## Request
+
+Gantry sends `POST <url>` with `Content-Type: application/json`, once per request the rule allows. It sends only the headers `headers_env` names and none of the caller's. The client is the one Gantry uses for providers: HTTP/1.1, reused connections, public TLS roots.
+
+```json
+{
+  "decision_id": "01JD3X6Q8M2T4V9W0Y1Z3A5B7C",
+  "person": "maya.cohen",
+  "team": "payments",
+  "model": "gpt-4o-mini",
+  "route": "/v1/chat/completions",
+  "messages": [
+    { "role": "system", "text": "You are a support assistant." },
+    { "role": "user", "text": "My card is 4111 1111 1111 1111, why was it declined?" }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `decision_id` | string | Gantry's decision and audit record ID for this request. Log it to join your records with Gantry's. |
+| `person` | string | The name on the Gantry key: a person or a workload. |
+| `team` | string | That key's team. |
+| `model` | string | The model the request asks for. |
+| `route` | string | The Gantry route, for example `/v1/chat/completions` or `/v1/messages`. |
+| `messages` | list | Every text part of the request, in order, as `{ "role", "text" }`. One entry per text part, so one message with two text blocks gives two entries with the same role. |
+
+Images, tool definitions and tool arguments are not sent.
+
+## Answer
+
+Answer `200` with a JSON body:
+
+```json
+{
+  "action": "mask",
+  "reason": "payment card number",
+  "findings": [ { "kind": "credit_card", "message": 1 } ],
+  "masked_messages": [
+    "You are a support assistant.",
+    "My card is [CARD], why was it declined?"
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `action` | string | yes | `allow`, `block` or `mask`. |
+| `reason` | string | no | One line, at most 500 characters, no control characters. Checked, then neither shown to the caller nor recorded, because it may quote the prompt. Keep it for your own logs. |
+| `findings` | list | no | `{ "kind": "...", "message": <index> }`. `kind` is 1 to 64 letters, digits, `.`, `-` or `_`, and is written to the audit record, so it must never hold the matched text. `message` is an optional 0-based index into `messages`. |
+| `masked_messages` | list | with `mask` | Exactly one string per entry of `messages`, in the same order. Refused with any other action. Gantry writes each changed string back where it came from. |
+
+Unknown fields are refused, so a misspelled field fails loudly.
+
+A block answer:
+
+```json
+{ "action": "block", "reason": "prompt injection detected", "findings": [ { "kind": "prompt_injection", "message": 1 } ] }
+```
+
+### What Gantry does
+
+| Answer | Gantry | Recorded action |
+|---|---|---|
+| `allow` | Forwards the request. | `warn`, for any findings |
+| `block` | Refuses with `guardrail_blocked` (403, Anthropic type `permission_error`, `x-should-retry: false`): `Guardrail "<name>" refused this request: the guardrail service found <kind> (<count>), ...` | `block` (kind `unspecified` with no findings) |
+| `mask` | Forwards the changed request. | `mask` |
+
+With `action: warn` on the guardrail, every answer is recorded and the request is forwarded unchanged.
+
+### Failures
+
+These count as a failure of the service, and `on_failure` applies:
+
+- a status other than 2xx,
+- no whole answer within `timeout_ms`,
+- a service that cannot be reached,
+- a malformed answer.
+
+With `fail_closed`, the caller gets `guardrail_blocked` with a message saying the guardrail could not check the request. With `fail_open`, the request is forwarded and recorded with kind `unavailable` and action `skipped`. Gantry logs the cause for the operator, for example:
+
+```text
+missing field 'action'
+unknown variant 'deny', expected one of 'allow', 'block', 'mask'
+unknown field 'score'
+the answer says mask and has no masked_messages
+masked_messages has 1 string and the request had 2 messages
+masked_messages is only read when action is mask
+a finding points at message 2, and the request had 2 messages
+a finding's kind must be 1 to 64 letters, digits, dots, dashes or underscores
+```
+
+## A vendor behind an adapter
+
+Most vendors have their own API shape. Connect one with a small adapter on the same machine or pod that speaks this contract on one side and the vendor's API on the other. The vendor key never enters the policy file.
+
+```text
+client -> Gantry --contract JSON--> adapter on 127.0.0.1:9100 --vendor API + key--> vendor
+                 <--allow/block/mask--                         <--vendor verdict----
+```
+
+```yaml title="gantry.policy.yaml"
+guardrails:
+  - name: vendor
+    type: webhook
+    url: http://127.0.0.1:9100/check
+    timeout_ms: 800
+    on_failure: fail_closed
+    action: warn
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+    guardrails: [vendor]
+```
+
+<Steps>
+
+1. Read the contract JSON. Pass `messages` to the vendor in its format, with `person`, `team` and `decision_id` as metadata if it takes them, so its console and Gantry's audit log join on `decision_id`.
+
+2. Authenticate to the vendor with a key from the adapter's own environment. If the adapter wants a credential from Gantry, name it in `headers_env`.
+
+3. Map the verdict: nothing found is `{"action": "allow"}`, a finding to stop is `{"action": "block", "findings": [{"kind": "<vendor category>"}]}`, a redaction is `{"action": "mask", "masked_messages": [...]}` with one string per message received.
+
+4. Put the vendor's category name in `kind`, never the matched text.
+
+5. When the vendor errors or is slow, answer with a non-2xx status or not at all, so Gantry applies `on_failure` instead of an `allow` that hides the outage.
+
+6. Start with `action: warn`, and switch to `block` once the findings look right.
+
+</Steps>
+
+To move the adapter or point it at another vendor, change `url` and save. The next request uses it, no restart needed.
+
+<Aside type="tip">
+`timeout_ms` bounds the whole round trip, so the adapter's own call to the vendor must fit inside it.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Guardrails" href="/gantry/governance/guardrails/" description="Built-in detectors, vendors, actions and answer checks." />
+	<LinkCard title="Audit records" href="/gantry/reference/audit-records/" description="The guardrails field in each record." />
+</CardGrid>

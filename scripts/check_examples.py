@@ -1,7 +1,7 @@
 """Runs every policy example a reader can copy through `gantry check`, so no example can drift from the code.
 
 Usage: python3 scripts/check_examples.py [path/to/gantry]
-Checked: every fenced block in README.md and docs/*.md with a top-level `version:` line (a whole policy file), and the
+Checked: every fenced block in README.md and the docs site pages (docs/src/content/docs) with a top-level `version:` line (a whole policy file), and the
 policy the website shows (POLICY in scripts/site.py), whose `gantry check` output the site prints must also match.
 A fragment (a block whose top-level keys are all policy sections, such as `guardrails:` or `providers:` alone) is
 pasted into a minimal policy, replacing that section, and checked the same way. A block written to show a mistake on
@@ -50,10 +50,10 @@ def blocks(path: pathlib.Path):
     lines = path.read_text().splitlines()
     i = 0
     while i < len(lines):
-        if lines[i].startswith("```"):
+        if lines[i].lstrip().startswith("```"):
             start, body = i, []
             i += 1
-            while i < len(lines) and not lines[i].startswith("```"):
+            while i < len(lines) and not lines[i].lstrip().startswith("```"):
                 body.append(lines[i])
                 i += 1
             skipped = start > 0 and "not checked" in lines[start - 1]
@@ -78,7 +78,7 @@ def main() -> int:
         print(f"{GANTRY} does not exist. Run `cargo build --release` first, or pass the binary.", file=sys.stderr)
         return 2
     failures, count = [], 0
-    for path in [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]:
+    for path in [ROOT / "README.md", *sorted((ROOT / "docs" / "src" / "content" / "docs").rglob("*.md*"))]:
         for line, text in blocks(path):
             count += 1
             check(text, f"{path.relative_to(ROOT)}:{line}", failures)

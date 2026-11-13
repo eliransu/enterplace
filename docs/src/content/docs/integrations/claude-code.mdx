@@ -1,0 +1,177 @@
+---
+title: Claude Code
+description: Route every Claude Code session through Gantry so each request is identified, decided by policy and recorded before it reaches a model.
+sidebar:
+  order: 1
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Claude Code talks to Anthropic's messages API. Point it at Gantry with a Gantry key in place of a provider key, and every request it sends is identified, decided by policy and recorded before it is forwarded.
+
+## Setup
+
+<Steps>
+
+1. **Allow both of Claude Code's models.** Claude Code uses a main model and a smaller one for background work. A provider must serve both, and the person's rule must allow both.
+
+    ```yaml title="gantry.policy.yaml"
+    version: 1
+    providers:
+      - name: anthropic
+        kind: anthropic
+        url: https://api.anthropic.com
+        key_env: ANTHROPIC_PROVIDER_KEY
+        models: [claude-sonnet-5-5, claude-haiku-5-5]
+    rules:
+      - name: payments-team
+        principals: { team: payments }
+        models: [claude-sonnet-5-5, claude-haiku-5-5]
+    ```
+
+    Keep the provider key in a variable of its own. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be the Gantry key.
+
+2. **Get a Gantry key.**
+
+    <Tabs syncKey="keysource">
+    <TabItem label="Single sign-on">
+
+    ```bash
+    gantry login https://gantry.example.com
+    ```
+
+    This signs the developer in through the browser, saves a personal key named by their email, and prints the variables below with their own key. Every request then carries their name. `gantry logout` revokes it. See [Single sign-on](/gantry/governance/single-sign-on/).
+
+    </TabItem>
+    <TabItem label="Issued by an admin">
+
+    ```bash
+    gantry key new maya.cohen --team payments --url https://gantry.example.com
+    ```
+
+    The key is printed once, with the variables below. See [Keys and identity](/gantry/governance/keys/).
+
+    </TabItem>
+    </Tabs>
+
+3. **Point Claude Code at Gantry.**
+
+    ```bash
+    export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+    export ANTHROPIC_API_KEY=gantry_...
+    export ANTHROPIC_MODEL=claude-sonnet-5-5
+    export ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-5-5
+    claude
+    ```
+
+</Steps>
+
+Each request now has a record in the audit log, background calls included.
+
+## Model picker
+
+Set `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` and Claude Code asks Gantry for its model list at startup (`GET /v1/models`). The `/model` picker then shows the models the person's rule allows on providers that take messages requests, each described as `Allowed by Gantry rule "<rule>"`. Each list request is recorded.
+
+Models on chat providers without `accept_messages` are left out: Claude Code would offer them, and every request would be refused with `wrong_route`.
+
+## Other providers
+
+The same four variables reach Claude on other clouds, and non-Claude models through translation. Only the provider entry changes.
+
+<Tabs>
+<TabItem label="Amazon Bedrock">
+
+```yaml
+providers:
+  - name: bedrock
+    kind: bedrock
+    region: us-east-1
+    models: [claude-sonnet-5-5, claude-haiku-5-5]
+    model_ids:
+      claude-sonnet-5-5: us.anthropic.claude-sonnet-5-5-v1:0
+      claude-haiku-5-5: us.anthropic.claude-haiku-5-5-v1:0
+```
+
+Gantry signs with AWS credentials from its own environment. See [Amazon Bedrock](/gantry/providers/bedrock/).
+
+</TabItem>
+<TabItem label="Vertex AI">
+
+```yaml
+providers:
+  - name: claude-vertex
+    kind: vertex_anthropic
+    url: https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic
+    key_env: VERTEX_ACCESS_TOKEN
+    models: [claude-sonnet-4-6, claude-haiku-4-5]
+```
+
+Vertex AI names models without Anthropic's date suffix. When Claude Code sends another name, map it with an [alias](/gantry/routing/aliases/). See [Vertex AI](/gantry/providers/vertex/).
+
+</TabItem>
+<TabItem label="GPT, Gemini or a local model">
+
+```yaml
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-5, gpt-5-mini]
+    accept_messages: true
+```
+
+```bash
+export ANTHROPIC_MODEL=gpt-5
+export ANTHROPIC_SMALL_FAST_MODEL=gpt-5-mini
+```
+
+`accept_messages: true` works on `openai`, `azure`, `gemini` and `vertex` providers. Requests and answers, streamed or whole and tool calls included, are translated to chat completions and back. A field with no chat equivalent is refused with `untranslatable`, naming the field. Claude Code warns that it does not know the model and assumes a context window; set one in its model configuration. See [Translation](/gantry/routing/translation/).
+
+</TabItem>
+</Tabs>
+
+## What Gantry does with its requests
+
+| Request | Behavior |
+|---|---|
+| `POST /v1/messages`, `POST /v1/messages/count_tokens` | Checked, recorded and forwarded as the original bytes to `anthropic` providers, streams, tool use and background calls included. Rewritten for `bedrock` and `vertex_anthropic`, translated for a provider with `accept_messages`. |
+| `anthropic-*` and `x-claude-code-*` headers | Passed unchanged, including `anthropic-version` and `anthropic-beta`. A provider with `accept_messages` gets no `anthropic-*` header. |
+| `?beta=true` or `?beta=false` | Forwarded, once. Any other query parameter or value, or `beta` twice, is refused by name with `unknown_query`. The refusal never repeats the value. |
+| `HEAD /api/hello` | Claude Code's startup probe. Answered with 200 and not recorded, because it reaches no provider. Any other method on `/api/hello` is refused with `unknown_route` and recorded. |
+
+## Refusals
+
+On the messages routes a refusal uses Anthropic's error shape, so Claude Code shows Gantry's message:
+
+```text
+API Error: 403 Refused (model_not_allowed): team "interns" may not use model "claude-sonnet-5-5" under rule "everyone-else". This rule allows no models. Ask a Gantry admin to change the policy if you need this one. Decision 01M7969SCWCX2P3AR3KSXZJ7VS.
+```
+
+Claude Code labels any 403 "Failed to authenticate". The message after that label is Gantry's.
+
+- A model no provider serves is refused with 403 `unknown_model`, not 404. Claude Code replaces the text of a 404 with its own and resends a 400 several times; it shows a 403 as it is and sends it once.
+- Every refusal sets `x-should-retry: false`, except `busy`, `rate_limited` and the `upstream_*` codes, which set `x-should-retry: true`. Claude Code resends those on its own. `rate_limited` also sets `Retry-After`.
+- A guardrail refusal says where the finding is, in words and as a JSON pointer: `in message 3 (/messages/2/content/1/text)`. That is the third message of the conversation Claude Code sent, which may be an earlier turn, a file it read or a tool result. Remove the secret from that turn or file and send again. A new session starts without the earlier turns.
+
+See [Refusal codes](/gantry/reference/refusal-codes/) for every code.
+
+## Budgets
+
+A budget reserves the most a request could cost before it is sent: its body at the input price plus its `max_tokens` at the output price. Claude Code asks for a large `max_tokens` on every request (32,000 or more, depending on the model), so each request reserves far more than it usually spends. One measurement put the reserve at $1.34 per Claude Code request.
+
+The difference is given back when the answer ends. While it is held, a small budget refuses requests that would have fitted, with `budget_exceeded` and "could cost up to ...". When budget is left, the refusal says a request with a smaller output token limit could fit.
+
+- **Lower what each request asks for.** Run `export CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000` before `claude`. Claude Code sends that `max_tokens`, and each request reserves less.
+- **Size the budget for the reserve, not the average.** A team running several sessions at once holds one reserve per request in flight.
+
+See [Budgets and rate limits](/gantry/governance/budgets-and-rate-limits/).
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Codex" href="/gantry/integrations/codex/" description="OpenAI's coding agent over the Responses API." />
+	<LinkCard title="Anthropic provider" href="/gantry/providers/anthropic/" description="The messages routes and the headers Gantry passes." />
+	<LinkCard title="Guardrails" href="/gantry/governance/guardrails/" description="Block or mask secrets and personal data in prompts." />
+	<LinkCard title="Translation" href="/gantry/routing/translation/" description="Run Claude Code on GPT, Gemini or a local model." />
+</CardGrid>

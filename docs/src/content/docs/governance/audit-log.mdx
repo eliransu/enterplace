@@ -1,0 +1,163 @@
+---
+title: Audit log
+description: What Gantry records for every request, how the hash chain works, and how to verify, anchor and repair the log.
+sidebar:
+  order: 8
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Every request Gantry decides leaves one hash-chained record in the audit log, allowed or refused, written before anything is forwarded. A request that cannot be recorded is refused with `audit_unavailable` and never reaches a provider.
+
+The log is a file of JSON lines: `gantry-audit.jsonl` beside the policy file, or the path in `audit: { path: ... }`. A new log is created with mode `0600`.
+
+## What is recorded
+
+```json
+{"n":1,"id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-13T00:53:10.132Z","person":"maya.cohen","team":"payments","client":"127.0.0.1","key":"5d1e4a07","method":"POST","path":"/v1/chat/completions","model":"gpt-oss:20b","verdict":"allow","code":null,"rule":"payments-team","rule_line":16,"provider":"local","policy_sha256":"6d0782...","keys_sha256":"37b02a...","prev":"0000000000000000000000000000000000000000000000000000000000000000","hash":"84347ac2..."}
+```
+
+Each record has an `event` field naming its kind, except request records:
+
+| Record | `event` | Written when |
+|---|---|---|
+| Request | none | Every decided request, allowed or refused, before forwarding. Holds who, which key prefix, the model, the verdict, the refusal `code`, the rule and its line, the provider, and the guardrail findings. |
+| Usage | `usage` | A forwarded request's answer ends. Holds status, tokens, cost, the reservation and what was charged. |
+| Attempts | `attempts` | A request was tried more than once (retries, fallback). |
+| Answer guardrails | `answer_guardrails` | A rule has `on: [answer]` guardrails. Holds the `verdict` (`block`, `mask`, `pass` or `not_run`) and the findings. |
+| Configuration | `config_loaded`, `config_rejected` | The policy or keys file was loaded at start, changed, or a change was refused. |
+| Admin | `admin` | Every admin API call, console sign-in, sign-out, issue and revoke, `gantry login` self-issue and kill switch change, written before it is done. |
+| Repair | `audit_repaired` | `gantry audit repair --yes` removed a cut last line. |
+
+Usage, attempts and answer guardrails records share the `id` of the request they belong to. That ID is the decision ID in the `X-Gantry-Decision` header and in every refusal message.
+
+An `admin` record's `action` is one of `list_keys`, `issue_key`, `revoke_key`, `revoke_own_key`, `self_issue_key`, `list_kills`, `set_kill`, `clear_kill`, or a console action such as `console_sign_in` and `console_sign_out`. Its `key` is the caller's key hash prefix.
+
+**Never recorded:** prompt text, answer text, a Gantry key, a provider key, the text a guardrail matched, or a webhook's `reason`. Strings that come from the caller (model, path) are cut to 200 characters.
+
+**Not recorded at all:** `GET /healthz`, `HEAD /api/hello` (Claude Code's startup probe), and a request so malformed that the HTTP library rejects it first (a bare 400 with no decision ID). A request that got no answer at all (an `upstream_*` failure) has a request record and no usage record.
+
+Every field of every record type is in [Audit records](/gantry/reference/audit-records/).
+
+### Configuration records
+
+A `config_loaded` record is written at start and for every change that passes `gantry check`, before the change decides any request. It holds:
+
+- the trigger: `start`, `file_change` or `signal`,
+- the hashes before and after (at start, "before" is the last version the log recorded, so a change made while Gantry was stopped shows),
+- the whole policy text, which holds no secrets,
+- the keys added and removed, each by name, team and hash prefix.
+
+A change that fails is recorded once per distinct pair of files as `config_rejected`, not once per second. Every request record carries the `policy_sha256` and `keys_sha256` of the version that decided it.
+
+Gantry cannot know who edited a file. Keep the policy and keys files in version control for that.
+
+## The hash chain
+
+Each record holds `n` (one more than the record before), `prev` (the `hash` of the record before, 64 zeros for record 1) and `hash` (the SHA-256 of the line up to and including `prev`). A changed, inserted, removed or reordered record breaks the chain at that record.
+
+### Verify
+
+```bash
+gantry audit verify gantry-audit.jsonl
+```
+
+```text
+gantry-audit.jsonl: 9 records in an unbroken chain from record 1 to record 9.
+5 requests, 1 configuration record, 0 admin records, 3 usage records.
+Last hash: 1ae338b73793e850d4a1a345e1648c1addde566b34dc70b1688fe50a887f7fb1
+Records removed from the end leave the chain unbroken. To rule that out, keep this hash somewhere else and check it later with --expect-last.
+```
+
+A broken chain names the first bad record:
+
+```text
+error: record 5 in gantry-audit.jsonl does not hold: <what>. Records 1 to 4 are intact. Record 5 and everything after it cannot be trusted.
+```
+
+`verify` exits 0 when the chain holds and 1 when it does not. `gantry serve` runs the same check on the whole file at every start and refuses to start on a log that does not hold. To begin a new chain, move the file aside, keep it, and start again.
+
+### Anchor the last hash
+
+A chain cannot show records removed from its end: the shorter file is still an unbroken chain. Keep the last hash somewhere the Gantry host cannot write (a ticket, a log store, another machine), and check it later:
+
+```bash
+gantry audit verify gantry-audit.jsonl --expect-last 1ae338b7...
+```
+
+```text
+The kept hash is record 9, and nothing up to it was changed or removed.
+```
+
+This passes only if a record with that hash is still in the chain and nothing before it changed. A failure says which: the hash is not in this file (records up to it were removed, or this is another log), or the chain is broken before it.
+
+Automate it, for example with a cron job that sends the last hash every hour to a store the Gantry host has no write access to:
+
+```bash
+gantry audit verify /var/lib/gantry/gantry-audit.jsonl | sed -n 's/^Last hash: //p'
+```
+
+<Aside type="caution">
+Anyone who can write the audit log file can rewrite the whole chain consistently. The last hash kept elsewhere is what catches that.
+</Aside>
+
+## Durability
+
+A record reaches the operating system before the request is forwarded. Gantry syncs the file to disk once a second, so a power loss can lose up to about a second of records already acted on. A process crash loses none.
+
+If a write fails, or the file is deleted, moved, replaced or cut shorter while Gantry runs, every later request is refused with `audit_unavailable` (503), `GET /healthz` answers 503, and the server log says what happened. Gantry does not write to that file again until it is restarted.
+
+On `SIGTERM`, every record already handed to the audit writer is written and synced before the process ends, including the usage record of an answer that ended just before the stop.
+
+## Repair a cut last line
+
+A write that fails part way, such as on a full disk, can leave the last line cut short. `gantry serve` then refuses to start and names the command to run.
+
+<Steps>
+
+1. Free the space and stop Gantry.
+
+2. Show the cut line. This checks the chain up to it, prints it, changes nothing and exits 1:
+
+   ```bash
+   gantry audit repair gantry-audit.jsonl
+   ```
+
+3. Remove it:
+
+   ```bash
+   gantry audit repair gantry-audit.jsonl --yes
+   ```
+
+   This removes only that line and appends an `audit_repaired` record holding what was removed (`removed_bytes`, `removed_sha256`, `removed_text`), so the repair is itself in the chain.
+
+4. Start Gantry.
+
+</Steps>
+
+Repair removes nothing else. A changed or missing record anywhere, or a whole last line that is not a record, is reported as `verify` reports it, and `audit repair` exits 1 and leaves the file as it is. A log changed in the middle is evidence, not something to repair.
+
+A last line is offered for removal only when it is the start of the next record cut short: it does not parse as JSON and begins as that record must (`{"n":<next number>,`, or a shorter piece of it). If the removed line was a usage record, its charge is gone from budgets after the restart; its text is kept in `removed_text`.
+
+### The lock file
+
+While Gantry has the log open it keeps `gantry-audit.jsonl.lock` beside it, holding its process ID.
+
+- `audit repair --yes` refuses while the lock file exists.
+- A second `gantry serve` on the same log refuses to start while the process named in the lock file runs.
+- After `kill -9` or a crash, the next `gantry serve` takes the lock over once that process is gone. For a repair, delete the lock file once Gantry is surely stopped, then run the repair again.
+- Two containers sharing one audit folder both run as process 1 and cannot tell each other apart. Give each its own audit path.
+
+## Size
+
+A request record is about 650 bytes and a usage record about 700, so a million forwarded requests make about 1.35 GB. Gantry reads the whole file at every start to verify it, so start-up time grows with the file. To start a new chain, stop Gantry, move the file aside with its last hash, and start again.
+
+Ship records to a log store with Vector, Fluent Bit or the OpenTelemetry Collector: see [Observability](/gantry/operations/observability/).
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Audit records" href="/gantry/reference/audit-records/" description="Every field of every record type." />
+	<LinkCard title="Policy file" href="/gantry/governance/policy/#reloading" description="When config_loaded and config_rejected are written." />
+	<LinkCard title="Security model" href="/gantry/operations/security/" description="What the chain proves and where it stops." />
+</CardGrid>

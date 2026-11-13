@@ -1,0 +1,184 @@
+---
+title: Single sign-on
+description: Sign in to the console through your OpenID Connect provider with admin and read-only roles, and let developers issue their own keys with gantry login.
+sidebar:
+  order: 3
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Connect the admin console to your identity provider (Okta, Microsoft Entra ID, Google, Keycloak or any OpenID Connect provider). People sign in with their company account and get the role their groups say. The same setup lets developers get their own expiring Gantry key with `gantry login`, without an admin.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_PROVIDER_KEY
+    models: [claude-sonnet-5-5, claude-haiku-5-5]
+rules:
+  - name: developers
+    principals: { team: developers }
+    models: [claude-sonnet-5-5, claude-haiku-5-5]
+    budget: { usd: 200, per: month }
+console:
+  sso:
+    issuer: https://login.example.com
+    client_id: gantry-console
+    client_secret_env: GANTRY_SSO_SECRET
+    redirect_url: https://gantry.example.com/console/sso/callback
+    allowed_domains: [example.com]
+    role_claim: groups
+    admin_values: [gantry-admins]
+    read_only_values: [gantry-viewers]
+    self_issue:
+      allowed_domains: [example.com]
+      team: developers
+      expires_days: 30
+```
+
+## Set up console sign-in
+
+<Steps>
+
+1. Register Gantry as an OpenID Connect web application at your provider, with the redirect URL `https://<your gantry>/console/sso/callback`.
+
+2. Make the provider put `email` and your role claim (for example `groups`) in the **ID token**. Gantry does not call the userinfo endpoint.
+
+3. Add `console.sso` to the policy file, as above.
+
+4. Set the client secret in the environment Gantry runs in, under the name `client_secret_env` gives: `GANTRY_SSO_SECRET=...`.
+
+5. Open `/console`. The sign-in page shows **Sign in with single sign-on**.
+
+</Steps>
+
+The policy file is read on every console page, so `console.sso` changes need no restart.
+
+### Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `issuer` | string | required | Exactly as the provider writes it. The ID token's `iss` must equal it. |
+| `client_id` | string | required | The client ID registered at the provider. |
+| `client_secret_env` | string | required | Name of the environment variable holding the client secret. The secret never goes in the file. |
+| `redirect_url` | string | required | The console's `/console/sso/callback` at its public address. |
+| `allowed_domains` | list | `[]` | Email domains let in. |
+| `allowed_emails` | list | `[]` | Whole addresses let in, for guests outside your domains. |
+| `role_claim` | string | required | The ID token claim, a string or a list, that carries the role. |
+| `admin_values` | list | `[]` | Claim values that give the admin role. |
+| `read_only_values` | list | `[]` | Claim values that give the read-only role. |
+| `self_issue` | map | none | Turns on `gantry login`. See [below](#developer-keys-with-gantry-login). |
+
+### Roles
+
+| Role | Can |
+|---|---|
+| Admin | Everything in the console: issue and revoke keys, including admin keys. |
+| Read only | See the audit log, people and keys, policy and spend. An attempt to issue or revoke is refused and recorded with code `read_only`. |
+
+There is no default role. A person whose role claim holds neither an admin nor a read-only value is refused. A role change at the provider applies at the next sign-in. Removing `console.sso`, or a person's email or domain, ends their session at once.
+
+People can still sign in with an admin Gantry key alongside SSO.
+
+## What Gantry checks
+
+Gantry refuses a sign-in on any failed check, with a message that names the cause and the fix.
+
+- **Flow.** Authorization code with PKCE (S256), a random `state` tied to the browser by a cookie and usable once within 10 minutes, and a `nonce`.
+- **Discovery.** From `<issuer>/.well-known/openid-configuration`, whose `issuer` must equal the configured one. Endpoints must be https (plain http only to localhost). Discovery and the key set are cached for 10 minutes. A token signed with an unknown `kid` fetches them again once, so key rotation is followed.
+- **ID token.** Signature RS256 or ES256 only, with the key its `kid` names. Then `iss`, `aud` (and `azp` with several audiences), `exp` (60 seconds of clock skew allowed) and `nonce`.
+- **Email.** Must be in `allowed_emails` or have a domain in `allowed_domains`, and must not be marked `email_verified: false`.
+
+Starting a sign-in keeps nothing on the server: the state lives in a sealed cookie, so a flood of `/console/sso/start` requests fills no memory and locks nobody out. Only finished sign-ins are remembered, to refuse a second use.
+
+### Audit records
+
+Every sign-in, refusal and sign-out is an `admin` record in the audit chain, with `action: console_sign_in` or `console_sign_out`, the email as `person` and `target.via: sso`. A sign-in record holds the role, a refusal the reason code:
+
+| Code | Cause |
+|---|---|
+| `sso_state` | The `state` is expired, already used, or was not started by this browser. |
+| `sso_provider` | Discovery or the key set could not be read, an endpoint is not https, or the provider does not offer PKCE with S256. |
+| `sso_issuer` | Discovery's `issuer`, or the token's `iss`, is not the configured issuer. |
+| `sso_token` | The code could not be traded for an ID token, or the ID token is missing or not a well formed JWT. |
+| `sso_signature` | The ID token is not signed with RS256 or ES256, or its signature does not match. |
+| `sso_unknown_key` | The token's `kid` is not in the provider's key set. |
+| `sso_audience` | `aud` or `azp` is not this client. |
+| `sso_expired` | The ID token has expired. |
+| `sso_nonce` | The `nonce` does not match. |
+| `sso_email` | The ID token has no email, the email is not verified, or it is not allowed. |
+| `sso_role` | The role claim holds no admin or read-only value. |
+| `sso_config` | `console.sso` is not set, or the policy file has problems. |
+| `sso_secret` | The client secret variable named by `client_secret_env` is not usable. |
+| `sso_self_issue` | `gantry login` with no `self_issue` section, or an email not on its lists. |
+
+Refused sign-ins are recorded one by one, up to 100 a minute from each client address (an IPv6 client counts by its /64). Past that, the address's minute is summed in one `console_sso_refusals` record with the count per code. A minute with 100 or more starts writes one `console_sso_starts` record.
+
+## Developer keys with gantry login
+
+With `self_issue` set, a developer gets a personal key without an admin:
+
+```bash
+gantry login https://gantry.example.com
+```
+
+<Steps>
+
+1. The CLI opens the browser at the console, and the person signs in at the identity provider.
+
+2. The browser comes back to a listener the CLI opened on `127.0.0.1`, carrying a one-use code (valid for two minutes), never the key.
+
+3. The CLI trades the code for the key, together with a PKCE verifier only it holds.
+
+4. The CLI saves the key and prints the line to add to a shell profile: `. ~/.config/gantry/env`.
+
+</Steps>
+
+The key:
+
+- is named by the person's email and put in the `self_issue` team,
+- expires after `expires_days`,
+- is recorded as an `admin` record with `action: self_issue_key`, the email as `person`, and the key's hash prefix and expiry in `target`.
+
+The CLI writes `~/.config/gantry/credentials` (`$XDG_CONFIG_HOME/gantry/credentials` when set) and, beside it, `env` with `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `GANTRY_KEY` for Claude Code, the OpenAI SDKs and Codex. Both files are readable by their owner only, in a folder only they can open. The CLI sends a key only to an https address (plain http only to this machine).
+
+Logging in again gives up the previous key and rewrites `env`, so a profile that sources it keeps working. A profile that holds the key itself breaks at the next login. When a login key expires or is revoked, the refusal (`key_expired` or `unknown_key`) says to run `gantry login` again.
+
+`--no-browser` prints the sign-in address instead of opening it.
+
+### self_issue fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `allowed_domains` | list | `[]` | Email domains that may self-issue. |
+| `allowed_emails` | list | `[]` | Whole addresses that may self-issue. |
+| `team` | string | `developers` | The team the keys are in. Write a rule for it. |
+| `expires_days` | integer | `30` | Days a key works, 1 to 365. |
+
+No `self_issue` section, no `gantry login`. No console role is needed: the key is for the person's own requests, which the policy's rules decide. An email outside the lists, or not verified, is refused and recorded with `sso_self_issue` or `sso_email`, and the CLI prints why.
+
+### gantry logout
+
+```bash
+gantry logout
+```
+
+Revokes the saved key through `DELETE /admin/keys/self`, which any key may call for itself (recorded as `revoke_own_key`), then deletes the credentials and `env` files. A key Gantry no longer knows counts as already revoked.
+
+Expired login keys stay in the keys file until you run [`gantry key prune`](/gantry/governance/keys/#prune-expired-keys).
+
+<Aside type="note">
+Console sessions and sign-ins in progress live in memory. A restart signs everyone out, and behind a load balancer the provider's callback must reach the node that started the sign-in.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Keys" href="/gantry/governance/keys/" description="Issue, limit and revoke keys." />
+	<LinkCard title="Admin console" href="/gantry/operations/console/" description="What each console page shows." />
+	<LinkCard title="Security model" href="/gantry/operations/security/" description="What Gantry protects and where it stops." />
+</CardGrid>

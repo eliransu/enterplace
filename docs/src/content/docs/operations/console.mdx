@@ -1,0 +1,101 @@
+---
+title: Admin console
+description: Read the audit log, issue and revoke keys, review the policy and watch spend in the admin console at /console, signed in by admin key or OIDC.
+sidebar:
+  order: 3
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+`gantry serve` serves an admin console at `/console` on the gateway's own address. It reads the policy, keys and audit files on every page, and every sign-in, issue and revoke it performs is a record in the same audit chain.
+
+## Open it
+
+Go to `http://127.0.0.1:8080/console` (or your gateway's address). The start line names it:
+
+```text
+Console: http://127.0.0.1:8080/console (sign in with an admin key)
+```
+
+The console exists only when Gantry serves from a policy file. It is not served with `--unchecked`.
+
+## Sign in
+
+<Tabs>
+<TabItem label="Admin key">
+
+Paste a Gantry key whose entry in the keys file says `admin: true`. Make the first one on the command line:
+
+```bash
+gantry key new noa.bar --team platform --admin
+```
+
+A key that is not an admin's is refused and recorded with code `not_admin`. The page gives the same answer for an unknown key, so it does not tell which keys exist.
+
+</TabItem>
+<TabItem label="Single sign-on">
+
+With `console.sso` in the policy, the sign-in page shows "Sign in with single sign-on". Gantry runs the OpenID Connect authorization code flow with PKCE against your identity provider and takes the person's role from a claim in the ID token. Setup is in [Single sign-on](/gantry/governance/single-sign-on/).
+
+If `client_secret_env` names a variable that is not set, Gantry starts with a warning and every single sign-on fails. Signing in with an admin key still works.
+
+</TabItem>
+</Tabs>
+
+The browser gets a random session ID in the `gantry_console` cookie, never the key or a token. The cookie is `HttpOnly` and `SameSite=Strict`, and `Secure` when the browser reached Gantry over TLS, directly or through a proxy that sends `X-Forwarded-Proto: https`. A session lasts 8 hours. Forms are accepted only from console pages on the same address.
+
+## Roles
+
+| Role | Signs in with | May |
+|---|---|---|
+| Admin | An admin key, or single sign-on with a value from `admin_values` in the role claim | Everything: read every page, issue and revoke keys, including admin keys |
+| Read only | Single sign-on with a value from `read_only_values` | Read every page. Issuing or revoking a key is refused and recorded with code `read_only` |
+
+There is no default role: a person whose claim holds neither value is refused with `sso_role`.
+
+## Pages
+
+| Page | Path | Shows |
+|---|---|---|
+| Audit log | `/console/audit` | Every record, newest first, filtered by All, Blocked, Refused, Masked, Warned or Changes, and searchable by person, team, key or decision ID. Each record opens on a sheet that explains the decision: the rule, the limit or kill switch that refused it, guardrail findings, and the usage and cost of its answer. A banner shows every kill switch that is on. **Verify** runs the same check as `gantry audit verify` |
+| People and workloads | `/console/people` | Every key by name, team and hash prefix, with admin flag, expiry, its own budget and what it spent this month and today. Issue and revoke keys here |
+| Policy | `/console/policy` | The policy file as it is on disk, with each problem `gantry check` finds placed under its line |
+| Spend | `/console/spend` | Spend this month (UTC) from the usage records, by model and person, against every budget in the policy |
+
+`/console` redirects to the audit log, or to the sign-in page without a session.
+
+## Issue and revoke keys
+
+A key issued in the console is appended to the keys file exactly as `gantry key new` appends it, and works as soon as the page answers. The key is shown once.
+
+Revoking removes the entry from the keys file and stops the key at once. The console refuses to revoke the only admin key: mark another key `admin: true` first, so someone can still sign in.
+
+<Aside type="caution">
+The console and the admin API write the keys file. Mount it writable, and keep it readable by Gantry's user only.
+</Aside>
+
+## What is recorded
+
+Each action is an `admin` record with `"via": "console"`, written before the action is done. An action that cannot be recorded is not done.
+
+| `action` | When |
+|---|---|
+| `console_sign_in` | A sign-in, allowed or refused. For single sign-on, `target.via` is `sso` and `target.role` is `admin` or `read_only`; a refusal carries an `sso_*` code |
+| `console_sign_out` | A sign-out |
+| `issue_key`, `revoke_key` | A key issued or revoked, with its name, team, hash prefix and admin flag in `target` |
+| `self_issue_key` | A key issued to a person by `gantry login` |
+| `console_sso_starts` | 100 or more single sign-on starts in one minute, written at most once a minute |
+| `console_sso_refusals` | Refused sign-ins from one client address past the first 100 in a minute, summed in one record with the count per code |
+
+Record fields are in [Audit records](/gantry/reference/audit-records/#admin). The sign-in refusal codes are in [Refusal codes](/gantry/reference/refusal-codes/#single-sign-on-codes).
+
+## Sessions live in memory
+
+Console sessions and single sign-ons in progress are held in the Gantry process. A restart signs everyone out. Removing `console.sso`, or a person's email or domain from it, ends their session at their next page, because the policy is read on every page. A change of role at the identity provider applies at the next sign-in.
+
+## Next
+
+<CardGrid>
+	<LinkCard title="Single sign-on" href="/gantry/governance/single-sign-on/" description="OIDC sign-in for the console and gantry login." />
+	<LinkCard title="Admin API" href="/gantry/reference/admin-api/" description="Issue and revoke keys and kill switches over HTTP." />
+</CardGrid>

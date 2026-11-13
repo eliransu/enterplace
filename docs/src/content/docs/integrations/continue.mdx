@@ -1,0 +1,64 @@
+---
+title: Continue
+description: Configure a Continue model that sends chat, edit and apply requests through Gantry with a Gantry key.
+sidebar:
+  order: 4
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Continue reads its models from `config.yaml` in `~/.continue`. Use the `openai` provider with `apiBase` set to Gantry, and its requests go to `POST /v1/chat/completions` on Gantry.
+
+## Setup
+
+<Steps>
+
+1. Add a model to Continue's `config.yaml`:
+
+    ```yaml title="~/.continue/config.yaml"
+    name: Gantry
+    version: 0.0.1
+    schema: v1
+    models:
+      - name: gpt-4o-mini via Gantry
+        provider: openai
+        model: gpt-4o-mini
+        apiBase: http://127.0.0.1:8080/v1
+        apiKey: ${{ secrets.GANTRY_KEY }}
+        roles: [chat, edit, apply]
+    ```
+
+2. Put the key in `~/.continue/.env`, or in `.env` or `.continue/.env` in the workspace:
+
+    ```bash title="~/.continue/.env"
+    GANTRY_KEY=gantry_...
+    ```
+
+3. Restart the IDE.
+
+</Steps>
+
+| Setting | Value |
+|---|---|
+| `provider` | `openai` |
+| `apiBase` | Gantry's address with `/v1` |
+| `apiKey` | The Gantry key, best as `${{ secrets.GANTRY_KEY }}` |
+| `model` | The model as the policy names it |
+
+## Behavior
+
+- Continue's VS Code and JetBrains extensions do not read shell environment variables, so `export GANTRY_KEY=...` is not enough there. Use a `.env` file. Only the Continue CLI reads the process environment.
+- Without `apiBase`, the `openai` provider sends the key to OpenAI.
+- Continue documents no `apiBase` for its `anthropic` provider, so use the `openai` provider. For Claude models, set `accept_chat: true` on the Gantry provider. See [Translation](/gantry/routing/translation/).
+- The example leaves out the `autocomplete` role. Gantry serves chat completions; autocomplete through Gantry is untried.
+
+<Aside type="note">
+This setup follows Continue's documentation. How Continue displays a Gantry refusal is not documented.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Cline" href="/gantry/integrations/cline/" description="Another VS Code agent, over either API." />
+	<LinkCard title="Refusal codes" href="/gantry/reference/refusal-codes/" description="Every code Gantry returns and what to do about it." />
+</CardGrid>

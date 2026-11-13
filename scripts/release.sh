@@ -46,7 +46,7 @@ case "${1:-}" in
     docker build -t "gantry:$version" -t gantry:local .
     docker run --rm "gantry:$version" version
     docker image inspect "gantry:$version" --format '{{index .RepoTags 0}}: {{.Size}} bytes, user {{.Config.User}}'
-    # The docs site and website take the size from here (scripts/docs.py, scripts/site.py), so it is never stale.
+    # The website takes the size from here (scripts/site.py), so it is never stale.
     bytes=$(docker image inspect "gantry:$version" --format '{{.Size}}')
     awk -v b="$bytes" 'BEGIN { printf "%.1f MB\n%s\n", b / 1e6, b }' > dist/image-size.txt
     ;;

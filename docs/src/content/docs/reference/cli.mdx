@@ -1,0 +1,336 @@
+---
+title: CLI
+description: Every gantry subcommand and flag, with its defaults, exit codes and an example.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+One binary, `gantry`, runs the gateway and every command around it. Every argument is matched exactly: an unknown command, flag or extra argument is an error, never ignored.
+
+```bash
+gantry help
+```
+
+## Conventions
+
+| Item | Behavior |
+|---|---|
+| Flags | `--name value`, separated by a space. A flag given twice is an error |
+| Keys file | `gantry.keys.yaml` beside the policy file for `serve` and `check`, unless `--keys` names another. `key new`, `key list` and `key prune` use `gantry.keys.yaml` in the current folder unless `--keys` names another |
+| Audit log | `gantry-audit.jsonl` in the current folder for `audit verify` and `audit repair` unless a file is named |
+| Help | `gantry help`, `gantry --help` or `gantry -h` prints every command. `--help` after a command prints that command's usage line |
+| Exit codes | `0` on success. `1` when a check fails (`check`, `audit verify`, `audit repair`). `2` for a usage error or a command that could not run |
+
+## serve
+
+Runs the gateway: every request is identified, checked against the policy and recorded.
+
+```text
+gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<policy>` | required | The policy file |
+| `--keys <file>` | `gantry.keys.yaml` beside the policy | The keys file. It must exist |
+| `--listen <host:port>` | `127.0.0.1:8080` | The gateway's address. An IP address and port; host names are refused. Port `0` lets the system pick |
+| `--metrics <host:port>` | off | Serves `GET /metrics` on this address only. Must differ from `--listen` |
+| `--tls-cert <pem>` | off | Certificate chain, PEM, server certificate first. Needs `--tls-key` |
+| `--tls-key <pem>` | off | The certificate's unencrypted private key, PEM (PKCS#8, PKCS#1 or SEC1). Needs `--tls-cert` |
+
+```bash
+OPENAI_PROVIDER_KEY=sk-... gantry serve gantry.policy.yaml --listen 0.0.0.0:8443 \
+  --tls-cert tls.crt --tls-key tls.key --metrics 127.0.0.1:9464
+```
+
+The start fails on any problem in the files, an unset provider key, an audit log whose chain does not hold, or a missing or mismatched TLS file. It warns when the keys file has no keys, when the address is not loopback and TLS is off, when `--metrics` is not loopback, and when `console.sso` is set without its client secret. See [Deployment](/gantry/operations/deployment/).
+
+### serve --unchecked
+
+Forwards every request without identity, policy or audit, on a loopback address only. For benchmarks.
+
+```text
+gantry serve --unchecked
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `GANTRY_ADDR` | `127.0.0.1:8080` | Address to listen on. Must be loopback |
+| `GANTRY_UPSTREAM` | none | The server to forward to. Without it, requests are refused with `no_upstream` |
+
+```bash
+GANTRY_UPSTREAM=http://127.0.0.1:9000 gantry serve --unchecked
+```
+
+`gantry serve` with no policy file is an error that names both forms.
+
+## check
+
+Checks a policy file and its keys file. Prints every problem with its file, line and fix.
+
+```text
+gantry check <policy> [--keys <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<policy>` | required | The policy file |
+| `--keys <file>` | `gantry.keys.yaml` beside the policy | The keys file |
+
+```bash
+gantry check gantry.policy.yaml
+```
+
+```text
+gantry.policy.yaml is valid: 2 rules, 1 key, 1 provider: openai (openai) at https://api.openai.com.
+```
+
+Exit `0` when valid, `1` with every problem otherwise. Warnings that do not fail the check: a rule that names a model no provider serves, and a key whose expiry has passed.
+
+## key new
+
+Makes a key for a person or a workload. The key is printed once, with the lines that point Claude Code and the OpenAI SDKs at Gantry. Only its SHA-256 is saved.
+
+```text
+gantry key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>/<day|month>]
+  [--models <a,b>] [--tpm <n>] [--url <gateway url>] [--quiet] [--keys <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<name>` | required | The person or workload. Letters, digits, dots, dashes, underscores and `@`, at most 100 characters |
+| `--team <team>` | required | The team, same characters |
+| `--admin` | off | The key may sign in to the console and call the admin API. The first admin starts here |
+| `--expires <date>` | none | Refused from that UTC day on (`2026-12-31`) or that time (`2026-12-31T18:00:00Z`), with `key_expired` |
+| `--budget <usd>/<period>` | none | What this key alone may spend, on top of its rule's budget: `20/month` or `5/day`. Refused with `key_budget_exceeded` |
+| `--models <a,b>` | none | Narrows the rule's models for this key, comma separated |
+| `--tpm <n>` | none | Tokens per minute for this key, 1 to 1000000000 |
+| `--url <gateway url>` | `http://127.0.0.1:8080` | The address printed in the setup lines |
+| `--quiet` | off | Print the key alone |
+| `--keys <file>` | `gantry.keys.yaml` | The keys file to append to |
+
+```bash
+gantry key new maya.cohen --team payments --budget 20/month --expires 2026-12-31 \
+  --url https://gantry.example.com
+```
+
+The entry is appended to the end of the file; nothing already there is rewritten. A running `gantry serve` accepts the key within 2 seconds. If the name already has a key, both work until you remove the old entry.
+
+## key list
+
+Lists the keys in the keys file. Never a key.
+
+```text
+gantry key list [--keys <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--keys <file>` | `gantry.keys.yaml` | The keys file |
+
+```bash
+gantry key list
+```
+
+```text
+name	team	key	admin	expires	budget	models	tpm
+maya.cohen	payments	5d1e4a07	-	2026-12-31	$20.00 a month	-	-
+noa.bar	platform	9b74c2e1	admin	-	-	-	-
+```
+
+Columns are tab separated: name, team, the first 8 hex characters of the key's hash, admin, expiry (with `(expired)` when passed), budget, models and tokens per minute.
+
+## key prune
+
+Removes the entries whose expiry has passed, such as old `gantry login` keys. Each is removed as `DELETE /admin/keys` removes one, safe while Gantry runs. Every other line is kept.
+
+```text
+gantry key prune [--keys <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--keys <file>` | `gantry.keys.yaml` | The keys file |
+
+```bash
+gantry key prune --keys /var/lib/gantry/gantry.keys.yaml
+```
+
+## audit verify
+
+Checks that the audit log is one unbroken chain: no record changed, inserted, removed or reordered. Prints the count and the last hash, to keep elsewhere.
+
+```text
+gantry audit verify [<file>] [--expect-last <hash>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<file>` | `gantry-audit.jsonl` | The audit log |
+| `--expect-last <hash>` | none | Also checks that a hash kept earlier is still in the chain, with nothing before it changed, and prints its record number |
+
+```bash
+gantry audit verify gantry-audit.jsonl --expect-last 1ae338b73793e850d4a1a345e1648c1addde566b34dc70b1688fe50a887f7fb1
+```
+
+```text
+gantry-audit.jsonl: 9 records in an unbroken chain from record 1 to record 9.
+5 requests, 1 configuration record, 0 admin records, 3 usage records.
+Last hash: 1ae338b73793e850d4a1a345e1648c1addde566b34dc70b1688fe50a887f7fb1
+The kept hash is record 9, and nothing up to it was changed or removed.
+```
+
+Exit `0` when the chain holds, `1` when it does not, naming the record where it breaks. `audit_repaired` records count with the admin records, and attempts records are counted when there are any. When only the last line is cut short, the error points at `gantry audit repair`.
+
+## audit repair
+
+For a log whose last line was cut short by a write that failed, such as on a full disk. Shows that line and checks the chain before it. Run it while Gantry is stopped.
+
+```text
+gantry audit repair [<file>] [--yes]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<file>` | `gantry-audit.jsonl` | The audit log |
+| `--yes` | off | Removes only the cut line and appends an `audit_repaired` record holding what was removed |
+
+```bash
+gantry audit repair /var/lib/gantry/gantry-audit.jsonl --yes
+```
+
+Exit `0` when there is nothing to repair or the repair is done. Exit `1` when it only showed the cut line, or refused: a broken chain, a whole last line, a lock file present, or a file that grew meanwhile. See [Running in production](/gantry/operations/operations/#disk-full-and-audit-repair).
+
+## prices
+
+Prints the price Gantry charges for a model and where it came from.
+
+```text
+gantry prices <model> [--policy <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<model>` | required | A model name, or an alias of the policy |
+| `--policy <file>` | none | Includes the policy's `prices:` and aliases |
+
+```bash
+gantry prices gpt-4o-mini
+```
+
+It prints the source (the policy's `prices:`, Gantry's own table, or the table generated from LiteLLM's price map, with its date), US dollars per million tokens for input, output, cache read, cache write and one-hour cache write, a long-context price and a per-image price when set, and the most output tokens and context window. For an alias it prints the price of each deployment. A model with no price exits `2` with the `prices:` lines to add.
+
+## import litellm
+
+Writes a Gantry policy from a LiteLLM proxy config, checks it, and lists what could not be mapped.
+
+```text
+gantry import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<config.yaml>` | required | The LiteLLM proxy config |
+| `--keys-from <file>` | none | A CSV or JSON export of LiteLLM virtual keys. They become team rules and the `gantry key new` lines to reissue them; keys cannot move |
+| `--out <file>` | `gantry.policy.yaml` | The policy to write. An existing file is never replaced |
+
+```bash
+gantry import litellm litellm_config.yaml --keys-from keys.csv --out gantry.policy.yaml
+```
+
+The exit code is that of the `gantry check` it runs on the result.
+
+## login
+
+Signs in through the console's single sign-on and gets a personal key, named by your email, that expires (30 days unless the policy says otherwise).
+
+```text
+gantry login <gantry url> [--no-browser]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<gantry url>` | required | The gateway. https, or plain http only for `127.0.0.1` or `localhost` |
+| `--no-browser` | off | Print the sign-in address instead of opening it |
+
+```bash
+gantry login https://gantry.example.com
+. ~/.config/gantry/env
+```
+
+The key is saved in `$XDG_CONFIG_HOME/gantry/credentials`, else `~/.config/gantry/credentials`, readable by you only. The setup lines (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `GANTRY_KEY`) are written to `env` in the same folder: source it from your shell profile. A new login revokes the key of the one before. See [Single sign-on](/gantry/governance/single-sign-on/).
+
+## logout
+
+Revokes the key `gantry login` saved, and deletes the credentials file and the `env` file.
+
+```text
+gantry logout
+```
+
+```bash
+gantry logout
+```
+
+If Gantry does not revoke the key, the files are kept and the reason is printed. A key Gantry no longer knows counts as revoked.
+
+## kill
+
+Turns a kill switch on. Gantry refuses that traffic with `killed` within 1 second on every node serving the same files, and the people stopped see the reason.
+
+```text
+gantry kill (--person <name> | --team <team> | --key-prefix <hash> | --model <model> | --all)
+  --reason <text> [--force] [--url <gantry url>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--person <name>` | | One person or workload, by key name |
+| `--team <team>` | | One team |
+| `--key-prefix <hash>` | | One key, by at least the first 8 hex characters of its hash |
+| `--model <model>` | | One model. Also stops every alias that can send to it |
+| `--all` | | Everyone |
+| `--reason <text>` | required | 1 to 500 characters, shown to the people stopped and kept in the audit log |
+| `--force` | off | Set the switch even when it matches no key, team or served model |
+| `--url <gantry url>` | `GANTRY_URL`, then the saved login | The gateway |
+
+Name exactly one of `--person`, `--team`, `--key-prefix`, `--model` or `--all`. The command needs an admin key in `GANTRY_ADMIN_KEY`, or a saved login key that is an admin's.
+
+```bash
+GANTRY_ADMIN_KEY=gantry_... gantry kill --team payments --reason "runaway agent, investigating" \
+  --url https://gantry.example.com
+```
+
+A switch that matches nothing is refused with the names it may have meant. See [Kill switches](/gantry/governance/kill-switches/).
+
+## unkill
+
+Turns that kill switch off.
+
+```text
+gantry unkill (--person <name> | --team <team> | --key-prefix <hash> | --model <model> | --all) [--url <gantry url>]
+```
+
+The flags are those of `kill`, without `--reason` and `--force`.
+
+```bash
+gantry unkill --team payments
+```
+
+## version
+
+Prints the version, the hash of the sources it was built from and the build day. `--version` and `-V` do the same.
+
+```bash
+gantry version
+```
+
+```text
+gantry 0.0.1 (src d88a5ce58bfa, built 2026-11-13)
+```
+
+<Aside type="note">
+`gantry-bench`, the overhead benchmark, is a separate binary: `cargo run --release -p gantry-bench`. Its flags are in [Running in production](/gantry/operations/operations/#bench).
+</Aside>

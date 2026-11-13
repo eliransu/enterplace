@@ -1,0 +1,150 @@
+---
+title: Providers overview
+description: What a provider entry is, which routes each kind serves, how Gantry builds the upstream URL, and how keys and private addresses work.
+sidebar:
+  order: 1
+  label: Overview
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A provider is a server Gantry forwards to. Each entry under `providers:` names the API it speaks (`kind`), where it is (`url`), the variable that holds its key (`key_env`) and the exact models it serves.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-4o-mini, gpt-4o]
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_PROVIDER_KEY
+    models: [claude-sonnet-5-5, claude-haiku-5-5]
+  - name: ollama
+    kind: openai
+    url: http://127.0.0.1:11434/v1
+    allow_private: true
+    models: [gpt-oss:20b]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+```
+
+## Kinds
+
+The `kind` decides which routes reach a provider and how its key is sent.
+
+| `kind` | API | Routes that reach it | Provider key sent as |
+|---|---|---|---|
+| `openai` | OpenAI and any OpenAI-compatible server | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank` | `Authorization: Bearer <key>`, or none for a local server without `key_env` |
+| `anthropic` | Anthropic messages | `POST /v1/messages`, `POST /v1/messages/count_tokens` | `x-api-key: <key>` |
+| `azure` | Azure OpenAI chat completions | `POST /v1/chat/completions` | `api-key: <key>` |
+| `bedrock` | Claude on Amazon Bedrock (InvokeModel) | `POST /v1/messages` | AWS Signature Version 4 |
+| `gemini` | Google Gemini API (generateContent) | `POST /v1/chat/completions`, translated | `x-goog-api-key: <key>` |
+| `vertex` | Gemini on Vertex AI | `POST /v1/chat/completions`, translated | `Authorization: Bearer <access token>` |
+| `vertex_anthropic` | Claude on Vertex AI (rawPredict) | `POST /v1/messages` | `Authorization: Bearer <access token>` |
+
+A request on a route its model's provider does not serve is refused with `wrong_route`, naming the route to use. Two opt-ins widen this:
+
+- `accept_chat: true` on `anthropic`, `bedrock` or `vertex_anthropic` also takes chat completions requests, translated to messages.
+- `accept_messages: true` on `openai`, `azure`, `gemini` or `vertex` also takes messages requests (Claude Code), translated to chat completions.
+
+See [Translation](/gantry/routing/translation/).
+
+## Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | required | Letters, digits, `.`, `-`, `_` and `@`, up to 100 characters. Unique. Audit records name the provider by it. |
+| `kind` | string | required | One of the kinds above. |
+| `url` | string | required | The base URL. See [How the URL is built](#how-the-url-is-built). Optional for `bedrock`. |
+| `key_env` | string | required | The name of the environment variable that holds the provider key. Not allowed on `bedrock`. Optional on a local `openai` provider with `allow_private: true`. |
+| `models` | list | required | The exact model names this provider serves. Not empty, no `"*"`. |
+| `allow_private` | bool | `false` | Lets `url` point at this machine or a private network. |
+| `retries` | integer | `0` | 0 to 5. See [Retries and fallbacks](/gantry/routing/retries-and-fallbacks/). |
+| `fallback` | string | none | Another provider of the same API to try after this one fails. |
+| `accept_chat` | bool | `false` | `anthropic`, `bedrock`, `vertex_anthropic`: also take chat completions requests. |
+| `accept_messages` | bool | `false` | `openai`, `azure`, `gemini`, `vertex`: also take messages requests. |
+| `deployments` | map | none | `azure` only: model name to deployment name. |
+| `api_version` | string | none | `azure` only: the Azure OpenAI `api-version`. |
+| `region` | string | none | `bedrock` only: the AWS region. |
+| `model_ids` | map | none | `bedrock` only: model name to Bedrock model ID. |
+
+Any field Gantry does not know is an error in `gantry check`, never ignored. See [Policy file](/gantry/governance/policy/).
+
+## Models
+
+Each provider lists the exact model names it serves, and a model may be listed by one provider only. A request goes to the one provider that lists its `model`. To spread one name over several providers, use an [alias](/gantry/routing/aliases/).
+
+On `openai` and `anthropic` providers the name the client sends is the name the provider receives, because Gantry forwards the body as it came. On `azure` and `bedrock` the name picks a deployment or model ID from the provider's map.
+
+Write model names exactly as the vendor documents them, including any prefix such as `MiniMaxAI/MiniMax-M3` or tag such as `gpt-oss:20b`. A YAML list written as `[a, b]` holds names with `/`, `:` and `.` without quotes.
+
+## How the URL is built
+
+`gantry check` and `gantry serve` use one rule:
+
+- `url` is `http` or `https`, a host, an optional port and an optional path. No login, query, fragment or spaces. A trailing `/` is ignored.
+- A `url` without a path gets the route as it came: a chat request goes to `<url>/v1/chat/completions`, a messages request with `?beta=true` to `<url>/v1/messages?beta=true`.
+- A `url` with a path is the vendor's base URL, ending where `/v1` would. It gets the route after `/v1`: with `url: https://api.groq.com/openai/v1`, a chat request goes to `https://api.groq.com/openai/v1/chat/completions`.
+
+Write the vendor's documented base URL as it is, or the part before `/v1`. Both `https://api.openai.com` and `https://api.openai.com/v1` reach `https://api.openai.com/v1/chat/completions`.
+
+## Provider keys
+
+`key_env` names the variable that holds the key. The key itself never goes in the policy file. `gantry serve` refuses to start while a `key_env` variable is unset or empty.
+
+<Aside type="caution">
+Do not name a provider key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be a Gantry key.
+</Aside>
+
+A `bedrock` provider takes no `key_env`: Gantry signs with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` from its environment.
+
+## Private addresses
+
+A `url` on this machine or a private network is refused unless the provider says `allow_private: true`. Private means `localhost`, `127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, link-local, `::1`, `fc00::/7`, `fe80::/10`, IPv4-mapped IPv6 of any of these, a trailing dot, and numeric spellings such as `127.1` or `2130706433`.
+
+An `openai` provider with `allow_private: true` may leave out `key_env`. It is then sent no `Authorization` header, and never the caller's Gantry key. See [Local models](/gantry/providers/local-models/).
+
+## Listing models
+
+`GET /v1/models` answers in the shape the caller expects, listing only the models its rule allows. Both are recorded.
+
+- A caller that sends `x-api-key` or `anthropic-version` (Anthropic's SDKs, Claude Code) gets Anthropic's list of the models the messages route reaches: `anthropic`, `bedrock`, `vertex_anthropic`, and any provider with `accept_messages: true`.
+- Any other caller (OpenAI's SDKs, Codex) gets OpenAI's list of the models on the chat route (`openai`, `azure`, `gemini`, `vertex`): `{"object":"list","data":[{"id":...,"object":"model","created":0,"owned_by":<provider>}]}`.
+
+The `limit` query parameter takes 1 to 1000.
+
+## What reaches the provider
+
+- **Body.** Byte for byte, except a translated request, a request to Bedrock or Vertex AI's Claude, a masked request, and a request for an alias, whose `model` is replaced with the deployment's.
+- **Path and query.** The route, and only the query parameters it allows: `beta=true` or `beta=false` on the messages routes, none on chat, Responses and embeddings. Any other is refused by name with `unknown_query`.
+- **Headers.** The caller's, except hop-by-hop headers, `Host`, `Cookie`, any header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), any `x-amz*` header, and any header that carries the caller's Gantry key.
+- **Credentials.** The provider key in the header its kind expects, the AWS signature for Bedrock, or nothing for a local `openai` provider without `key_env`.
+
+The provider's answer, errors and streamed events included, returns unchanged except for hop-by-hop headers, with `X-Gantry-Decision` and `Server-Timing: gantry;dur=<ms>` added. Bedrock and translated answers are converted.
+
+## Changes without a restart
+
+Gantry reloads the policy within 2 seconds of a save. A provider's `models`, `deployments`, `model_ids`, `retries`, `fallback`, `accept_chat` and `accept_messages` change without a restart.
+
+A change to a provider's `name`, `kind`, `url`, `key_env`, `allow_private`, `region` or `api_version`, or adding or removing a provider, needs a restart. A reload with such a change is rejected with that reason. Rotating a provider key means changing its environment variable, which also needs a restart.
+
+<Aside type="note">
+Most provider kinds are built from the vendor's API documentation and tested against local mocks. See [Project status](/gantry/getting-started/status/).
+</Aside>
+
+## Providers
+
+<CardGrid>
+	<LinkCard title="OpenAI and compatible vendors" href="/gantry/providers/openai/" description="OpenAI, Groq, Mistral, Together, Fireworks, DeepSeek, OpenRouter." />
+	<LinkCard title="Anthropic" href="/gantry/providers/anthropic/" description="Claude through Anthropic's messages API." />
+	<LinkCard title="Amazon Bedrock" href="/gantry/providers/bedrock/" description="Claude on Bedrock, signed with SigV4." />
+	<LinkCard title="Local models" href="/gantry/providers/local-models/" description="Ollama, vLLM and LM Studio." />
+</CardGrid>

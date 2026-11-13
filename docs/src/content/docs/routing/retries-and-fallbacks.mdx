@@ -1,0 +1,99 @@
+---
+title: Retries and fallbacks
+description: Retry a failing provider and fall back to another one before the caller sees an error, with every attempt in the audit log.
+sidebar:
+  order: 1
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A provider can retry a failed request and then hand it to a fallback provider. Callers see one answer; the audit log records every attempt.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_PROVIDER_KEY
+    models: [claude-sonnet-5-5]
+    retries: 2              # up to 2 more tries on this provider
+    fallback: bedrock       # then bedrock, with its own retries
+  - name: bedrock
+    kind: bedrock
+    region: us-east-1
+    models: [claude-haiku-5-5]
+    model_ids:
+      claude-haiku-5-5: us.anthropic.claude-haiku-5-5-v1:0
+      claude-sonnet-5-5: us.anthropic.claude-sonnet-5-5-v1:0   # serves the fallback
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [claude-sonnet-5-5, claude-haiku-5-5]
+```
+
+## Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `retries` | integer | `0` | 0 to 5. How many more times to try the same provider. |
+| `fallback` | string | none | The name of another provider to try when this one still fails after its retries. |
+
+Both change without a restart.
+
+## What is retried
+
+Before the first byte of an answer reaches the caller, Gantry tries again after:
+
+- a connection failure,
+- a timeout (120 seconds without an answer),
+- a 429,
+- any 5xx.
+
+The provider is tried `retries` more times, waiting 200 ms, 400 ms, 800 ms and so on between tries. If every try fails, the request goes to `fallback`, with the fallback's own `retries`. A fallback's own `fallback` is not followed. If the fallback fails too, the caller gets the last answer or refusal.
+
+Never retried:
+
+- Anything after the first byte of an answer has reached the caller. A stream that breaks halfway breaks for the caller.
+- A caller's own error: any 4xx other than 429. It is never sent to the fallback either.
+
+## Fallback rules
+
+The fallback must take the same requests as the provider it backs:
+
+| Provider kinds | Take |
+|---|---|
+| `anthropic`, `bedrock`, `vertex_anthropic` | Messages |
+| `openai`, `azure` | Chat completions |
+| `gemini`, `vertex` | Chat completions, translated to generateContent |
+
+It must also serve each model of the provider it backs: under the same name on `openai` and `anthropic`, or through its `deployments` or `model_ids` on `azure` and `bedrock`. It does not list those models in its `models`, because a model is served by one provider.
+
+`gantry check` refuses a fallback that does not exist, names itself, speaks another API, or has no name for one of the models:
+
+```text
+gantry.policy.yaml:22: fallback names provider "bedrok", and there is none. The providers are: groq, azure, anthropic, bedrock.
+```
+
+## Audit records
+
+The request record is written before anything is sent, so it names the first provider. When more than one try was made, an `attempts` record with the same `id` follows:
+
+```json
+{"n":12,"event":"attempts","id":"01M7...","time":"2026-11-13T03:30:02.114Z","attempts":[{"provider":"anthropic","outcome":"529"},{"provider":"anthropic","outcome":"529"},{"provider":"anthropic","outcome":"529"},{"provider":"bedrock","outcome":"200"}],"prev":"...","hash":"..."}
+```
+
+`outcome` is the provider's status, or the refusal code for a try that got no answer: `upstream_unreachable`, `upstream_failed` or `upstream_timeout`. The usage record follows when the answer ends, and names the provider that answered. `gantry audit verify` counts attempts records apart.
+
+<Aside type="tip">
+Clients retry on their own too. Gantry sets `x-should-retry: true` only on `busy`, `rate_limited` and the `upstream_*` codes, so Claude Code and the SDKs resend only what may clear. Codex needs `stream_max_retries = 0`; see [Codex](/gantry/integrations/codex/#retries).
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Aliases" href="/gantry/routing/aliases/" description="Load balancing, cooldown and named fallbacks." />
+	<LinkCard title="Audit log" href="/gantry/governance/audit-log/" description="Request, attempts and usage records." />
+</CardGrid>

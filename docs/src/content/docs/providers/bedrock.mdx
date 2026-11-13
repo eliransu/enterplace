@@ -1,0 +1,100 @@
+---
+title: Amazon Bedrock
+description: Serve Claude on Amazon Bedrock through Gantry's messages route, signed with AWS Signature Version 4 from Gantry's environment.
+sidebar:
+  order: 5
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A provider of `kind: bedrock` serves Claude models on Amazon Bedrock. Claude Code and the Anthropic SDKs call Gantry's `POST /v1/messages` as usual; Gantry rewrites the body for InvokeModel, signs it, and streams Bedrock's answer back in Anthropic's format.
+
+## Setup
+
+<Steps>
+
+1. Map each model name callers send to a Bedrock model ID, inference profile ID or ARN your account has access to (from the Bedrock console):
+
+    ```yaml title="gantry.policy.yaml"
+    version: 1
+    providers:
+      - name: bedrock
+        kind: bedrock
+        region: us-east-1
+        models: [claude-sonnet-5-5, claude-haiku-5-5]
+        model_ids:                                 # model name: Bedrock model ID
+          claude-sonnet-5-5: us.anthropic.claude-sonnet-5-5-v1:0
+          claude-haiku-5-5: us.anthropic.claude-haiku-5-5-v1:0
+    rules:
+      - name: everyone
+        principals: { any: true }
+        models: [claude-sonnet-5-5, claude-haiku-5-5]
+    ```
+
+2. Give Gantry AWS credentials in its environment and start it:
+
+    ```bash
+    export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...   # and AWS_SESSION_TOKEN for temporary credentials
+    gantry serve gantry.policy.yaml
+    ```
+
+</Steps>
+
+Gantry reads the credentials from its own environment, as the AWS SDKs do. It never runs the `aws` command and reads no AWS config file.
+
+## Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `region` | string | required | The AWS region, for example `us-east-1`. Needs a restart to change. |
+| `model_ids` | map | required | Model name to Bedrock model ID, inference profile ID or ARN. Every model in `models` needs an entry. |
+| `url` | string | `https://bedrock-runtime.<region>.amazonaws.com` | Set it for a VPC endpoint. |
+| `key_env` | | not allowed | Bedrock is signed with AWS credentials, not a key. |
+
+## What Gantry sends
+
+A request for `claude-sonnet-5-5` goes to InvokeModel, or InvokeModelWithResponseStream when the body says `"stream": true`:
+
+```text
+POST https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-5-5-v1%3A0/invoke
+POST https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-5-5-v1%3A0/invoke-with-response-stream
+```
+
+The body is changed as Bedrock's Anthropic format requires:
+
+- `model` and `stream` are removed, because the path carries both.
+- `anthropic_version: bedrock-2023-05-31` is added.
+- The values of the `anthropic-beta` header become the `anthropic_beta` list.
+
+Every other field goes as it came. The request is signed with AWS Signature Version 4 (service `bedrock`), implemented in Gantry and tested against AWS's published test vectors.
+
+## Answers and errors
+
+Bedrock streams its answer as an AWS event stream. Gantry checks each message's checksums and turns each `chunk` into the Anthropic server-sent event it holds, so Claude Code and the Anthropic SDKs read it unchanged.
+
+A Bedrock error, streamed or not, reaches the caller in Anthropic's error shape with Bedrock's message:
+
+```json
+{"type":"error","error":{"type":"invalid_request_error","message":"Amazon Bedrock ValidationException: ..."}}
+```
+
+## Limits
+
+- `POST /v1/messages/count_tokens` is refused with `wrong_route` for a Bedrock model. Gantry does not call Bedrock's CountTokens.
+- Betas are passed on as sent. A beta Bedrock does not offer comes back as Bedrock's 400.
+- `accept_chat: true` lets chat completions clients reach these models, translated. See [Translation](/gantry/routing/translation/).
+
+## Errors from gantry check
+
+```text
+gantry.policy.yaml:26: a bedrock provider takes no key_env. Gantry signs its requests with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, for temporary credentials, AWS_SESSION_TOKEN from its environment. Remove the line.
+```
+
+A provider without `region` or `model_ids` is refused the same way, naming the missing field.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Retries and fallbacks" href="/gantry/routing/retries-and-fallbacks/" description="Fall back from Anthropic to Bedrock." />
+	<LinkCard title="Claude Code" href="/gantry/integrations/claude-code/" description="Run Claude Code on Bedrock through Gantry." />
+</CardGrid>

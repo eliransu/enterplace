@@ -39,10 +39,16 @@ if [ "$bench" = 1 ]; then
   done
   [ "$passed" = 1 ] || { echo "the bench gate failed in all 3 attempts"; exit 1; }
 fi
-step "docs and website build"
-# The design system lives outside this repository. Without it the pages cannot be styled, so this step says so.
+step "docs build"
+# The docs site needs Node. Without it this step says so instead of failing a Rust-only machine.
+if command -v npm >/dev/null; then
+  (cd docs && npm ci --no-audit --no-fund && npm run build)
+else
+  echo "skipped: npm is not installed."
+fi
+step "website build"
+# The website's design lives outside this repository. Without it the page cannot be built, so this step says so.
 if { [ -d ../design-system/project ] && [ -d ../design-screens ]; } || { [ -d ../../design-system/project ] && [ -d ../../design-screens ]; }; then
-  python3 scripts/docs.py
   python3 scripts/site.py
 else
   echo "skipped: the design system (design-system, design-screens) is not beside this checkout or its parent."

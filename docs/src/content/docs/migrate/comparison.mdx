@@ -1,0 +1,75 @@
+---
+title: Gantry, LiteLLM and Bifrost
+description: How Gantry compares with the LiteLLM and Bifrost open source gateways, capability by capability, and what each does better.
+sidebar:
+  order: 2
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+This page compares Gantry 0.0.1 with LiteLLM v1.109.1 and Bifrost v2.5.1 (open source editions), from a hands-on review run in Docker against a mock provider on 2026-11-12 and from their public documentation; measured figures come from one machine and are not benchmarks.
+
+Gantry is much younger than both and does less. It covers fewer providers and APIs, and runs on one node. Where it leads is governance: a verified record of every request, a policy that fails on any unknown key, and nothing dropped from a request silently.
+
+## Side by side
+
+| | Gantry 0.0.1 | LiteLLM v1.109.1 | Bifrost v2.5.1 |
+|---|---|---|---|
+| Language | Rust | Python, routing moving to Rust | Go |
+| Storage | Files | Postgres for keys and budgets | SQLite or Postgres |
+| Image, user | A single static binary in an image built `FROM scratch`, uid 65532 | 1.33 GB, root | 286 MB, uid 1000 |
+| Memory, measured | 3.4 MiB idle | 628 to 922 MiB | 219 to 442 MiB |
+| Identity per request | Gantry key per person or workload | Virtual key | Virtual key |
+| Policy | File, first matching rule by team, person or anyone | Per key, team, org via API | Per key, team, customer via API |
+| Budgets, rate limits | Budgets per team, person or key; requests per minute per person; tokens per minute per team, person or key | Yes | Yes |
+| Aliases, load balancing | Aliases over deployments, weighted round robin or least busy, cooldown, context window and content policy fallbacks; rules decide on the alias | Yes, more strategies | Yes |
+| Guardrails | Open source: built-in secrets and personal data detectors (block, mask, warn); seven vendors built in (OpenAI moderation, Presidio, Lakera Guard, Bedrock guardrails, Azure Content Safety and Prompt Shields, Llama Guard or any chat model as a classifier), each fail open or closed; any other service by webhook. On requests and on whole answers. | Yes, some enterprise | Enterprise |
+| Request audit log in open source | Yes, hash-chained, verified at start | No | No (request log, not tamper-evident) |
+| Unknown config keys | Refused with line and suggestion | Accepted silently | Accepted silently |
+| Unknown request parameters | Forwarded unchanged; unknown query refused | Some standard fields dropped | Dropped |
+| Providers | OpenAI chat completions, Responses, embeddings, images, audio, moderations and rerank; Anthropic messages; Azure OpenAI; Bedrock for Claude; Claude on Vertex AI; Gemini and Vertex AI. Chat translated to messages (per provider) and to Gemini; messages translated to chat and Gemini (per provider, for Claude Code) | 140+, translated | Many, translated |
+| SSO, roles | Open source: console sign-in by OpenID Connect (PKCE, RS256 and ES256), admin and read-only roles from a claim, every sign-in recorded; SAML and SCIM planned | SSO free to 5 users, then enterprise | Enterprise |
+| Developer sign-in for coding tools | `gantry login`: SSO in the browser, personal key named by the email, expiry from policy, recorded; `gantry logout` revokes it | UI login, keys copied by hand | Enterprise |
+| Kill switch | Person, team, key, model or everyone; reason required and shown to the caller; within 1 second on every node sharing the files; recorded | No (block a key or team by API) | No |
+| Metrics | Prometheus `/metrics` on its own address, off by default; audit log as JSONL for any log shipper | Prometheus, many callbacks | Prometheus, OpenTelemetry |
+| Multi-node | No | Yes, Redis for shared limits | Enterprise clustering |
+
+## What LiteLLM does better
+
+- **Providers.** Over 140 providers, with translation between their APIs. Gantry has no Cohere, no Bedrock models other than Claude, and no batch or files routes.
+- **Spend control breadth.** Budgets per key, team and organization. Gantry has budgets per team, person or key, and none per organization or tag.
+- **Time to a first request.** 8 seconds from `docker run` with a five-line config and no database, measured in the review. Gantry's image answers its first governed request within a second of `docker run`, but needs a policy file and a key first.
+- **Routing breadth.** More routing strategies (latency and cost based), and cooldowns shared across instances through Redis. Gantry keeps cooldowns per process.
+- **Admin UI and client guides.** A fuller admin UI, and guides for more coding agents, Gemini CLI among them. Gantry has a small console (audit log, people and keys, policy, spend) and no Gemini CLI guide.
+- **Fails closed on a database outage** by default, as Gantry does on an audit failure.
+
+## What Bifrost does better
+
+- **Speed of forwarding with features on.** About 1 ms added at p50 in the review's Docker setup, with routing, budgets and logging.
+- **Governance objects in open source.** Customers, teams and virtual keys with budgets and rate limits, and immediate key deactivation through its API.
+- **More APIs.** It translated `/anthropic/v1/messages` and `/v1/responses` to a chat-only server. Gantry refuses a messages or Responses request to a provider that does not speak it, except messages to a chat provider that opts in with `accept_messages`.
+- **MCP gateway**, with tool filtering per virtual key, deny by default. Gantry has nothing for MCP.
+- **Response headers** naming the provider and resolved model, and a latency split per request in its log.
+- **Coding-agent guides** for 13 tools, and a device product for laptops (enterprise).
+
+## What Gantry does better
+
+- **A record before every request, in the open source edition.** Every request, allowed or refused, gets a hash-chained audit record before it is forwarded, and `gantry audit verify` checks the chain. LiteLLM writes no audit rows without an enterprise license, and its audit log covers admin changes, not requests. Bifrost's audit log, with an HMAC per row, is enterprise only.
+- **Fail closed on the record.** If the record cannot be written, the request is refused. In the review, LiteLLM kept forwarding while its per-request spend rows went missing for 6,498 load-test requests.
+- **Unknown config is an error.** `gantry check` names the file, line and nearest known word for every mistake. Both others accept misspelled keys silently and start.
+- **Nothing dropped silently.** The body is forwarded byte for byte and an unknown query parameter is refused by name. LiteLLM removed the standard `user` and `metadata` fields; Bifrost dropped an unknown parameter.
+- **Keys shown once, stored hashed.** Bifrost's list API returns every key's full value on every read.
+- **No prompt text in the log.** Bifrost stores prompts and answers by default for 365 days.
+- **Small footprint.** A single static binary in an image built `FROM scratch`, running as a non-root user, at about 3.4 MiB of memory idle. LiteLLM's image is 1.33 GB and runs as root, using 628 to 922 MiB plus Postgres; Bifrost's is 286 MB, using 219 to 442 MiB.
+- **Refusals a person can act on.** Each names the cause, the fix and a decision ID, in the error shape the client already shows.
+
+<Aside type="note">
+No source code of LiteLLM or Bifrost was read for this comparison. Their figures come from the hands-on review and from these public pages: [LiteLLM pricing](https://www.litellm.ai/pricing), [LiteLLM audit logs](https://docs.litellm.ai/docs/proxy/audit_logs), [LiteLLM admin UI SSO](https://docs.litellm.ai/docs/proxy/admin_ui_sso), [Bifrost audit logs](https://docs.getbifrost.ai/enterprise/audit-logs.md), [Bifrost pricing](https://www.getmaxim.ai/bifrost/pricing), [Bifrost MCP filtering](https://docs.getbifrost.ai/mcp/filtering.md).
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Migrate from LiteLLM" href="/gantry/migrate/from-litellm/" description="Turn a LiteLLM config into a Gantry policy." />
+	<LinkCard title="Project status" href="/gantry/getting-started/status/" description="What is built, what is planned, and what was tested against what." />
+</CardGrid>

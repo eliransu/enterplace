@@ -1,0 +1,202 @@
+---
+title: Admin API
+description: Issue, list and revoke keys and set kill switches over HTTP while Gantry runs, with the request and response shape of every /admin route.
+sidebar:
+  order: 4
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+The admin API issues and revokes keys and sets kill switches while Gantry runs, on the gateway's own address. The keys file stays the one source of truth: every change is a change to that file, reloaded as a hand edit would be.
+
+## Authentication
+
+Send an admin key, one whose entry in the keys file says `admin: true`, as `Authorization: Bearer gantry_...` or `x-api-key: gantry_...`. Make the first one on the command line:
+
+```bash
+gantry key new noa.bar --team platform --admin
+```
+
+| Caller | Result |
+|---|---|
+| No key | 401 `no_key` |
+| Unknown key | 401 `unknown_key` |
+| Valid key, not an admin's | 403 `not_admin` |
+| Admin key | Allowed |
+
+`DELETE /admin/keys/self` is the one exception: any valid key may revoke itself.
+
+Every call, allowed or refused, is an `admin` record in the audit log, written before anything is done. A call that cannot be recorded is refused with 503 `audit_unavailable`. Every response carries `X-Gantry-Decision`. Errors use the OpenAI shape in [Refusal codes](/gantry/reference/refusal-codes/#response-shape).
+
+The admin API exists only when Gantry serves from a keys file. Under `gantry serve --unchecked` every `/admin` route is refused with `unknown_route`.
+
+## Routes
+
+| Method | Path | `action` | Does |
+|---|---|---|---|
+| `GET` | `/admin/keys` | `list_keys` | Lists the keys in use |
+| `POST` | `/admin/keys` | `issue_key` | Issues a key |
+| `DELETE` | `/admin/keys/<prefix>` | `revoke_key` | Revokes a key by its hash prefix |
+| `DELETE` | `/admin/keys/self` | `revoke_own_key` | Revokes the key that sends the request |
+| `GET` | `/admin/kills` | `list_kills` | Lists the kill switches that are on |
+| `POST` | `/admin/kills` | `set_kill` | Turns a kill switch on |
+| `DELETE` | `/admin/kills` | `clear_kill` | Turns a kill switch off |
+
+Any other method or path under `/admin` is refused with 404 `unknown_route` and recorded.
+
+## GET /admin/keys
+
+Lists the keys of the version in use, sorted by name. Never a key.
+
+```bash
+curl http://127.0.0.1:8080/admin/keys -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+```
+
+```json title="200"
+{"keys":[{"name":"maya.cohen","team":"payments","sha256_prefix":"5d1e4a07","admin":false,"expires":"2026-12-31","budget":{"usd":20.0,"per":"month"},"models":null,"tpm":null}]}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `name`, `team` | string | As in the keys file |
+| `sha256_prefix` | string | The first 8 hex characters of the key's SHA-256 |
+| `admin` | boolean | Whether it is an admin key |
+| `expires` | string or null | UTC date or time |
+| `budget` | object or null | `{"usd": number, "per": "day" or "month"}` |
+| `models` | array or null | The key's own model list |
+| `tpm` | integer or null | The key's own tokens-per-minute limit |
+
+## POST /admin/keys
+
+Issues a key and appends its hash to the end of the keys file, exactly as `gantry key new` does. The key works as soon as the answer arrives. The admin API issues non-admin keys only; make admin keys with `gantry key new --admin` or in the console.
+
+```bash
+curl -X POST http://127.0.0.1:8080/admin/keys \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"maya.cohen","team":"payments","expires":"2026-12-31","budget":{"usd":20,"per":"month"}}'
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Letters, digits, dots, dashes, underscores and `@`, at most 100 characters |
+| `team` | string | yes | Same characters |
+| `expires` | string | no | `2026-12-31` or `2026-12-31T18:00:00Z`, UTC |
+| `budget` | object | no | `{"usd": 20, "per": "month"}`. `usd` above 0, `per` is `day` or `month` |
+| `models` | array of strings | no | At least one. Each must be a model or alias the policy serves, or `"*"` |
+| `tpm` | integer | no | 1 to 1000000000 |
+
+Unknown fields are refused with `invalid_request`.
+
+```json title="201"
+{"key":"gantry_3f9a...","name":"maya.cohen","team":"payments","sha256_prefix":"5d1e4a07","rotated":false,"status":{"in_effect":true},"message":"This key is shown once and is not stored anywhere. Only its hash is in the keys file."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | string | The key. Shown once |
+| `sha256_prefix` | string | The first 8 hex characters of its hash |
+| `rotated` | boolean | `true` when the name already had a key. Both work until the old entry is removed |
+| `status` | object | Whether the change is in effect (below) |
+
+### status
+
+| Field | Type | Description |
+|---|---|---|
+| `in_effect` | boolean | `true` when the new keys file is in use |
+| `problems` | array of strings | Only when `false`: the files on disk fail the check for another reason, so Gantry keeps the version it has |
+| `message` | string | Only when `false`: what to do. The change applies within 2 seconds of the files passing |
+
+## DELETE /admin/keys/&lt;prefix&gt;
+
+Removes the entry whose hash starts with `<prefix>` from the keys file, only if nobody changed the file meanwhile, and stops the key at once. The prefix is 8 to 64 hex characters, as `GET /admin/keys` lists it.
+
+```bash
+curl -X DELETE http://127.0.0.1:8080/admin/keys/5d1e4a07 -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+```
+
+```json title="200"
+{"revoked":{"name":"maya.cohen","team":"payments","sha256_prefix":"5d1e4a07"},"status":{"in_effect":true}}
+```
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `invalid_request` | The prefix is not 8 to 64 hex characters |
+| 400 | `ambiguous_key` | More than one hash starts with the prefix |
+| 404 | `no_such_key` | No hash starts with it, or someone else removed it meanwhile |
+| 409 | `keys_file` | The keys file cannot be read or written |
+
+## DELETE /admin/keys/self
+
+Revokes the key the request is sent with. Any valid key may call it. `gantry logout` uses it.
+
+```bash
+curl -X DELETE http://127.0.0.1:8080/admin/keys/self -H "Authorization: Bearer $GANTRY_KEY"
+```
+
+The response is that of `DELETE /admin/keys/<prefix>`.
+
+## GET /admin/kills
+
+```bash
+curl http://127.0.0.1:8080/admin/kills -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+```
+
+```json title="200"
+{"kills":[{"scope":"team","value":"payments","reason":"runaway agent, investigating","by":"noa.bar","at":"2026-11-13T10:02:11.482Z"}]}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `scope` | string | `person`, `team`, `key_prefix`, `model` or `all` |
+| `value` | string | The name, team, hash prefix or model. Empty for `all` |
+| `reason` | string | Shown to the people stopped |
+| `by` | string | The admin who set it |
+| `at` | string | When, UTC |
+
+## POST /admin/kills
+
+Turns a kill switch on. Gantry refuses matching requests with `killed` at once, and within 1 second on every node serving the same files. `gantry kill` calls this route.
+
+```bash
+curl -X POST http://127.0.0.1:8080/admin/kills \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"scope":"team","value":"payments","reason":"runaway agent, investigating"}'
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `scope` | string | yes | `person`, `team`, `key_prefix`, `model` or `all` |
+| `value` | string | yes, except for `all` | A name or team as the keys file names it, at least the first 8 hex characters of a key hash, or a model as clients send it (at most 200 characters). `all` takes no value |
+| `reason` | string | yes | 1 to 500 characters |
+| `force` | boolean | no | Set the switch even when it matches no key, team or served model |
+
+```json title="201"
+{"kill":{"scope":"team","value":"payments","reason":"runaway agent, investigating","by":"noa.bar","at":"2026-11-13T10:02:11.482Z"},"replaced":null,"in_effect":true}
+```
+
+`replaced` is the switch this one replaced, when one on the same scope and value was already on, or `null`. A switch that would stop nothing is refused with 400 `kill_matches_nothing`, naming close matches.
+
+## DELETE /admin/kills
+
+Turns a kill switch off. `gantry unkill` calls this route.
+
+```bash
+curl -X DELETE http://127.0.0.1:8080/admin/kills \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"scope":"team","value":"payments"}'
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `scope` | string | yes | As for `POST` |
+| `value` | string | yes, except for `all` | As for `POST` |
+
+```json title="200"
+{"cleared":{"scope":"team","value":"payments","reason":"runaway agent, investigating","by":"noa.bar","at":"2026-11-13T10:02:11.482Z"},"in_effect":true}
+```
+
+No switch on for that scope and value is 404 `no_such_switch`. A kill switch file that cannot be read or written is 409 `kills_file`.
+
+<Aside type="caution">
+An admin key can issue keys and stop all traffic. Keep admin keys in your secret manager, and revoke one the moment it may have leaked.
+</Aside>

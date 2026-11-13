@@ -19,6 +19,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       # fmt, clippy -D warnings, tests, release build, the policy examples, the bench gate and the docs build:
       # the same script a developer runs before pushing, so CI and a laptop cannot disagree.
       # Shared CI machines are noisy, so the bench runs at 1,000 requests a second rather than the 5,000 used locally.

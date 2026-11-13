@@ -1,0 +1,238 @@
+---
+title: Quickstart
+description: Build Gantry, write a policy, issue a key and send your first governed request in about five minutes.
+sidebar:
+  order: 1
+---
+
+import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+
+This guide takes you from source to a governed request: one policy, one key, one request, one verified audit record.
+
+## Prerequisites
+
+- Rust 1.88 or later. The repository pins it in `rust-toolchain.toml`, so `rustup` installs it on the first build.
+- Docker, if you want to run the container image instead of the binary.
+- A key for at least one provider (OpenAI in this guide).
+
+## 1. Install
+
+<Tabs syncKey="install">
+<TabItem label="From source">
+
+```bash
+git clone https://github.com/ggantry/gantry.git
+cd gantry
+cargo build --release
+```
+
+The binary is `target/release/gantry`. Put it on your `PATH`:
+
+```bash
+export PATH="$PWD/target/release:$PATH"
+gantry version
+```
+
+</TabItem>
+<TabItem label="Docker">
+
+```bash
+git clone https://github.com/ggantry/gantry.git
+cd gantry
+scripts/release.sh image
+```
+
+This builds a static musl binary into an image tagged `gantry:local`. The image holds the binary and nothing else and runs as user `65532`.
+
+</TabItem>
+</Tabs>
+
+## 2. Write a policy
+
+Save this as `gantry.policy.yaml`. It defines one provider and two rules: the `payments` team may use `gpt-4o-mini`, everyone else may use nothing.
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-4o-mini, gpt-4o]
+rules:
+  - name: payments-team
+    principals: { team: payments }
+    models: [gpt-4o-mini]
+  - name: everyone-else
+    principals: { any: true }
+    models: []
+```
+
+The provider key never appears in the policy. `key_env` names the environment variable that holds it.
+
+<Tabs syncKey="install">
+<TabItem label="From source">
+
+```bash
+gantry check gantry.policy.yaml
+```
+
+</TabItem>
+<TabItem label="Docker">
+
+```bash
+docker run --rm -v "$PWD:/work" -w /work gantry:local check gantry.policy.yaml
+```
+
+</TabItem>
+</Tabs>
+
+```text
+gantry.policy.yaml is valid: 2 rules, 0 keys, 1 provider: openai (openai) at https://api.openai.com.
+```
+
+Any mistake is reported with its file, line and the fix. Unknown fields are errors, not warnings.
+
+## 3. Issue a key
+
+<Tabs syncKey="install">
+<TabItem label="From source">
+
+```bash
+gantry key new maya.cohen --team payments
+```
+
+</TabItem>
+<TabItem label="Docker">
+
+```bash
+mkdir -p keys
+docker run --rm -v "$PWD/keys:/work" -w /work --user "$(id -u)" \
+  gantry:local key new maya.cohen --team payments --keys /work/gantry.keys.yaml
+```
+
+</TabItem>
+</Tabs>
+
+The key (`gantry_` followed by 64 hex characters) is printed once, together with the environment variables that point Claude Code and the OpenAI SDKs at Gantry. Only its SHA-256 is written to `gantry.keys.yaml`.
+
+<Aside type="caution">
+Hand keys over through your secret manager. Gantry cannot show a key again: lose it and issue a new one.
+</Aside>
+
+## 4. Start the gateway
+
+<Tabs syncKey="install">
+<TabItem label="From source">
+
+```bash
+OPENAI_PROVIDER_KEY=sk-... gantry serve gantry.policy.yaml
+```
+
+```text
+gantry 0.0.1 listening on http://127.0.0.1:8080
+Console: http://127.0.0.1:8080/console (sign in with an admin key)
+Audit log: gantry-audit.jsonl is new. The chain starts at record 1.
+2 rules, 1 key, 1 provider: openai (openai) at https://api.openai.com.
+```
+
+</TabItem>
+<TabItem label="Docker">
+
+In the container the audit log must live on the volume, because `/etc/gantry` is mounted read-only. Add this line to `gantry.policy.yaml`:
+
+```yaml
+audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+```
+
+```bash
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -v "$PWD/gantry.policy.yaml:/etc/gantry/gantry.policy.yaml:ro" \
+  -v "$PWD/keys:/etc/gantry/keys" \
+  -v gantry-audit:/var/lib/gantry \
+  -e OPENAI_PROVIDER_KEY \
+  gantry:local \
+  serve /etc/gantry/gantry.policy.yaml --keys /etc/gantry/keys/gantry.keys.yaml --listen 0.0.0.0:8080
+```
+
+On Linux, give user `65532` the keys folder first: `sudo chown -R 65532 keys`.
+
+</TabItem>
+</Tabs>
+
+Gantry listens on `127.0.0.1:8080` by default. It refuses to start if a provider's `key_env` variable is not set.
+
+## 5. Send a request
+
+<Tabs syncKey="lang">
+<TabItem label="curl">
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer $GANTRY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hello."}]}'
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```bash
+export OPENAI_BASE_URL=http://127.0.0.1:8080/v1
+export OPENAI_API_KEY=gantry_...
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI()  # reads OPENAI_BASE_URL and OPENAI_API_KEY
+answer = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Say hello."}],
+)
+print(answer.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem label="TypeScript">
+
+```bash
+export OPENAI_BASE_URL=http://127.0.0.1:8080/v1
+export OPENAI_API_KEY=gantry_...
+```
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI(); // reads OPENAI_BASE_URL and OPENAI_API_KEY
+const answer = await client.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages: [{ role: "user", content: "Say hello." }],
+});
+console.log(answer.choices[0].message.content);
+```
+
+</TabItem>
+</Tabs>
+
+The answer is the provider's, unchanged, with an `X-Gantry-Decision` header added. Now ask for `gpt-4o` with the same key: Gantry refuses with `model_not_allowed`, because the `payments-team` rule allows only `gpt-4o-mini`. The refusal message carries the decision ID, so the person can quote it and an admin can find the record.
+
+## 6. Verify the audit log
+
+```bash
+gantry audit verify gantry-audit.jsonl
+```
+
+```text
+gantry-audit.jsonl: 2 records in an unbroken chain from record 1 to record 2.
+Last hash: 1ae338b7...
+```
+
+Both requests are in the log: the allowed one and the refused one. Keep the last hash somewhere the Gantry host cannot write, and check it later with `--expect-last`. See [Audit log](/gantry/governance/audit-log/).
+
+## Next steps
+
+- [Connect Claude Code](/gantry/integrations/claude-code/) and route your team's coding sessions through Gantry.
+- [Policy file](/gantry/governance/policy/): budgets, rate limits, guardrails and caching per rule.
+- [Keys and identity](/gantry/governance/keys/): expiry, budgets per key, and self-service keys with `gantry login`.
+- [Deployment](/gantry/operations/deployment/): run Gantry on a shared host with TLS.

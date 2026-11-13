@@ -1,0 +1,87 @@
+---
+title: Gemini
+description: Serve Google's Gemini API to chat completions clients, with requests and answers translated to and from generateContent.
+sidebar:
+  order: 7
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A provider of `kind: gemini` serves Google's Gemini API. Callers use the chat completions route as for any OpenAI model; Gantry translates each request to Gemini's generateContent body and the answer back.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: gemini
+    kind: gemini
+    url: https://generativelanguage.googleapis.com/v1beta
+    key_env: GEMINI_API_KEY
+    models: [gemini-2.5-flash, gemini-2.5-pro]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [gemini-2.5-flash]
+```
+
+A chat request for `gemini-2.5-flash` goes to:
+
+```text
+POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse   (with "stream": true)
+x-goog-api-key: <the value of GEMINI_API_KEY>
+```
+
+A `url` without a path gets `/v1beta`.
+
+## Translation
+
+| Chat completions | Gemini |
+|---|---|
+| Leading `system` and `developer` messages | `systemInstruction` |
+| `user` text, images (base64 data URL or URL), PDF files (base64) | `contents` with role `user`: `text`, `inlineData`, `fileData` |
+| `assistant` text and `tool_calls` | Role `model`: `text` and `functionCall` (`id`, `name`, `args`) |
+| `tool` messages | Role `user`: `functionResponse` with the function's name, `response: {"content": <text>}` |
+| `tools` (function) | `tools[0].functionDeclarations`, `parameters` as `parametersJsonSchema` |
+| `tool_choice` `none`, `auto`, `required`, a named function | `toolConfig.functionCallingConfig` `NONE`, `AUTO`, `ANY`, `ANY` with `allowedFunctionNames` |
+| `temperature`, `top_p`, `max_tokens`/`max_completion_tokens`, `stop`, `seed`, `presence_penalty`, `frequency_penalty` | `generationConfig` `temperature`, `topP`, `maxOutputTokens`, `stopSequences`, `seed`, `presencePenalty`, `frequencyPenalty` |
+| `response_format` `json_object`, `json_schema` | `responseMimeType: application/json`, and `responseJsonSchema` |
+
+### Answers
+
+- A whole answer comes back as a `chat.completion` with text, `tool_calls` and `usage` from `usageMetadata`.
+- `finish_reason` comes from Gemini's `finishReason`: `STOP` is `stop` (or `tool_calls` when the model called a function), `MAX_TOKENS` is `length`, the safety reasons are `content_filter`.
+- A stream comes back as `chat.completion.chunk` events ending in `data: [DONE]`, with a usage chunk when the request asked for `stream_options.include_usage`.
+- A Gemini error comes back in OpenAI's error shape, with its `status` (such as `RESOURCE_EXHAUSTED`) as the type.
+
+### Refused with untranslatable
+
+A field that cannot be carried across is refused with `untranslatable`, naming it, never dropped. Examples: `logprobs`, `n` above 1, `parallel_tool_calls: false`, `reasoning_effort`, audio, a tool with `strict: true`, or a system message after the conversation has started.
+
+Gemini finish reasons that mean the answer failed, such as `MALFORMED_FUNCTION_CALL`, are reported the same way. The fields dropped on purpose (`user`, thought parts and others) are listed with their reasons in `gantry_core::gemini::SAFE_TO_DROP`.
+
+## Usage and cost
+
+- Prompt tokens are `promptTokenCount` plus `toolUsePromptTokenCount`, less `cachedContentTokenCount`, which is counted as cache reads.
+- Output tokens are `candidatesTokenCount` plus `thoughtsTokenCount`.
+- Gemini prices are built in. Run `gantry prices gemini-2.5-pro` to see one. See [Pricing](/gantry/routing/pricing/).
+
+## Behavior
+
+- Guardrails, cache and budgets work on the request in its chat form, before translation. A masked message is masked in what Gemini receives.
+- A `gemini` provider can fall back to another `gemini` or a `vertex` provider, and to no other kind.
+- With `accept_messages: true`, Claude Code can use Gemini models: messages are translated to chat, then to generateContent. See [Translation](/gantry/routing/translation/).
+
+<Aside type="note">
+Gemini 3 models return a `thoughtSignature` with function calls and may ask for it back on the next turn. A chat client has no place to keep it, so it is dropped, and multi-turn function calling on those models can end with `MISSING_THOUGHT_SIGNATURE`. Code execution, Google Search grounding and cached contents are not translated.
+</Aside>
+
+Gemini also offers an OpenAI-compatible endpoint, which a `kind: openai` provider can reach without translation. See [OpenAI and compatible vendors](/gantry/providers/openai/).
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Vertex AI" href="/gantry/providers/vertex/" description="Gemini and Claude on Google Cloud." />
+	<LinkCard title="Translation" href="/gantry/routing/translation/" description="accept_chat and accept_messages." />
+</CardGrid>

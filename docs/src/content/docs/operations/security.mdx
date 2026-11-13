@@ -1,0 +1,133 @@
+---
+title: Security model
+description: What Gantry protects, the threats it is built against, how it strips headers and stores keys, and what it does not protect.
+sidebar:
+  order: 6
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Gantry's job is to make sure no AI request leaves without a known caller, a policy decision and a record. This page states what it protects, how, and where its protection stops.
+
+## Threat model
+
+| Threat | Defense |
+|---|---|
+| A caller uses a model, a budget or a provider account they were not given | Identity on every request, first-match rules, budgets reserved at admission, provider credentials owned by Gantry |
+| A caller's tool leaks the provider key | The caller never holds it. Gantry swaps its own key in and strips the caller's credentials |
+| A request is sent and never recorded | Fail closed: the record is written before forwarding, and a request that cannot be recorded is refused |
+| Someone edits, removes or reorders audit records | A hash chain, verified at every start and by `gantry audit verify`, plus a last hash kept elsewhere |
+| A caller smuggles something past the policy check | One credential, one `model` key, no compressed bodies, unknown query parameters refused, the body forwarded as checked |
+| A secret or personal data leaves in a prompt | Guardrails that block, mask or record, before the request is recorded and sent |
+| One caller exhausts the gateway | Bounded body size, memory per caller and in total, and bounded waits |
+
+## Fail closed
+
+A request that cannot be identified, decided and recorded is not forwarded.
+
+- If the audit log cannot be written, every request is refused with `audit_unavailable` and `/healthz` answers 503 until an admin restarts Gantry.
+- Gantry does not start on an audit log whose chain does not hold, on a policy or keys file with any problem, or without every provider key.
+- A kill switch file that cannot be read refuses every request with `kills_unreadable`.
+- An admin call or console action that cannot be recorded is not done.
+
+## Gantry keys
+
+- 256 random bits from the operating system, prefixed `gantry_` so secret scanners recognize them: `gantry_` and 64 hex characters.
+- Shown once. Only the SHA-256 is stored, in a keys file created with mode `0600`.
+- Looked up by hash, so Gantry never compares secret bytes one at a time.
+- A key can carry an expiry, a budget, a model list and a tokens-per-minute limit of its own. See [Keys and identity](/gantry/governance/keys/).
+
+## Provider keys
+
+- Read from the environment variable each provider's `key_env` names, never from a file Gantry reads or writes.
+- Held in memory marked as sensitive and never printed or recorded.
+- Sent only to the provider that needs it, in that provider's header: `Authorization: Bearer` for `openai`, `vertex` and `vertex_anthropic`, `x-api-key` for `anthropic`, `api-key` for `azure`, `x-goog-api-key` for `gemini`. Requests to `bedrock` are signed with AWS Signature Version 4.
+
+## What the provider sees
+
+Gantry removes from every forwarded request:
+
+- any header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project`, except `idempotency-key`, so a caller cannot choose the provider account or project,
+- any header whose name starts with `x-amz`, `x-amzn-*` included: AWS headers are Gantry's to sign and set,
+- any header that carries the caller's Gantry key in its name or value, compared without regard to case, with or without the `gantry_` prefix. A hand-made key shorter than 16 characters is found only where it stands as a word of its own,
+- `Cookie`, `Host` and the hop-by-hop headers (`Connection` and the headers it names, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`).
+
+`anthropic-*` and `x-claude-code-*` headers pass unchanged to Anthropic-API providers. The full list per route is in [HTTP routes](/gantry/reference/http-routes/#headers).
+
+**One credential, one model.** Two different credentials on one request are refused with `ambiguous_key`, so Gantry never checks one credential and forwards another. A body with a second spelling of the `model` key (such as `Model`) is refused, so the policy cannot check one model while the provider runs another.
+
+**What was checked is what is sent.** A body with a `Content-Encoding` other than `identity` is refused. Unknown query parameters are refused by name, never dropped. The body is forwarded byte for byte, except where the policy changes it: a guardrail that masks, a translation the provider opts in to, and the body Bedrock expects.
+
+## The audit chain
+
+Each record holds the hash of the one before. `gantry audit verify` finds a changed, inserted, removed or reordered record and names it. Records hold no prompt or answer text and no keys. Each names the SHA-256 of the policy and keys files that decided it. Strings from the caller are cut to 200 characters, so a caller cannot choose the size of a record.
+
+## Guardrails
+
+A rule's guardrails read the text of each request it allows before the request is recorded and sent. The record, the refusal and Gantry's log name the guardrail, the kind of finding and where it was, never the matched text. A webhook's free-text `reason` is not shown or recorded either, because it may quote the prompt. What they catch:
+
+- **Pattern detectors.** `secrets` finds keys with a known shape: AWS access key IDs, GitHub and Slack tokens, JWTs, `sk-` keys, Gantry keys and PEM private keys. `pii` finds email addresses, phone numbers, card numbers that pass Luhn, IBANs that pass mod 97, Israeli IDs that pass their check digit and US SSNs. A password, a credentialed database URL, a name, an address or a date of birth is not found. Use a vendor or webhook guardrail for those.
+- **False positives.** Any 9-digit number with a valid Israeli ID check digit, and some long digit runs that pass Luhn, are reported. Start with `warn` before you `block` or `mask`.
+- **Text parts only.** System prompts, text messages and blocks, tool results, text documents, search results, and on `/v1/responses` a tool's output and a stored prompt's variables. Tool arguments, images and files are not read.
+- **Plain text only.** Anything encoded, split across messages, spelled out or translated is not found by the built-in detectors.
+- **Each key once.** On a rule with guardrails, a body that names the same key twice in any object is refused with `unreadable_request`.
+- **Answers only on request.** A guardrail with `on: [answer]` reads whole answers. A streamed answer passes as it arrives and is recorded `not_run`, unless the rule sets `buffer_stream: true`.
+- **A webhook is as strong as its `on_failure`.** `fail_open` forwards requests unchecked while the service is down and records `skipped` for each.
+- **Masking re-serializes.** A masked request is written from its parsed JSON, keeping key order and numbers. A request with nothing masked is forwarded byte for byte.
+
+See [Guardrails](/gantry/governance/guardrails/).
+
+## Stored Responses state
+
+A `/v1/responses` request that names `previous_response_id`, `conversation` or a stored `prompt` makes the provider add text Gantry never sees, so guardrails do not check it. Every person's stored responses sit under Gantry's one provider key, so anyone who learns another person's response ID can continue that conversation through Gantry. Send `store: false` and the whole conversation in `input`, as Codex does. Under a budget, such a request is refused with `stored_context` unless the model's price sets `max_context`.
+
+## Console and sign-in
+
+- Console sign-in takes an admin key or OpenID Connect single sign-on. The browser holds a random session ID, never a key or token.
+- Single sign-on uses the authorization code flow with PKCE (S256), a `state` bound to the browser and usable once within 10 minutes, and a `nonce`. ID tokens must be signed RS256 or ES256 and pass `iss`, `aud`, `azp`, `exp` (60 seconds of clock skew) and `nonce` checks. There is no default role.
+- Starting a sign-in stores nothing on the server, so a flood of starts locks nobody out. Floods are summed into one audit record a minute.
+- `gantry login` never puts a key in the browser. A one-use code valid for two minutes returns to a listener on `127.0.0.1`, and only the CLI holding the PKCE verifier can trade it for the key. The CLI sends a key only to an https address (plain http only to this machine) and saves it in a file only its owner can read.
+
+See [Admin console](/gantry/operations/console/) and [Single sign-on](/gantry/governance/single-sign-on/).
+
+## Exposure
+
+- Gantry binds `127.0.0.1` unless told otherwise and warns when it listens on another address without TLS.
+- `--tls-cert` and `--tls-key` serve HTTPS with TLS 1.2 and 1.3.
+- `--unchecked` refuses to bind anything but loopback.
+- `/metrics` is only on its own address, and Gantry warns when that address is not loopback.
+- Provider URLs on this machine or a private network are refused unless the provider says `allow_private: true`, so a policy cannot point Gantry at internal services by mistake.
+- A caller who is not identified is refused before their body is read.
+
+## The container
+
+One static binary, no shell, no package manager, no other files. It runs as user `65532`. The policy is mounted read-only; only the keys folder and `/var/lib/gantry` are writable. On Kubernetes the pod also drops every capability, uses a read-only root filesystem and mounts no service account token.
+
+## What is not protected
+
+<Aside type="caution">
+Anyone who can write the policy file or the keys file decides who may do what. Anyone who can write the audit log can rewrite the whole chain consistently. Protect these files like the provider keys, and keep the last hash where the Gantry host cannot write.
+</Aside>
+
+- **Records removed from the end** leave an unbroken chain. Compare against a last hash kept elsewhere.
+- **Up to a second of records** can be lost on a power failure. They are synced to disk once a second.
+- **The decision record is of the decision.** A usage record follows each answer, and an `attempts` record each retried request. A request that got no answer at all, an `upstream_*` failure, has neither.
+- **Plain HTTP** unless Gantry serves TLS itself or sits behind a TLS proxy. Keys travel in the clear otherwise.
+- **Private addresses are judged by what is written.** A public host name that resolves to a private address is not caught.
+- **The key search is a text match.** A Gantry key split across headers or encoded is not found. Such a header still has to pass the name filter.
+- **A key removed by hand works for up to 2 seconds**, until the reload. Revoking through the console or the admin API stops it at once.
+- **One node.** Budgets, rate limits, the cache and console sessions live in one process. A restart signs everyone out of the console. Behind a load balancer, the identity provider's callback must reach the node that started the sign-in.
+- **Kill switches across nodes.** In force on the node that sets them before it answers, and on every node serving the same files within 1 second. Two nodes changing switches at the same instant can lose one change.
+- **A request the HTTP library rejects as malformed** gets a bare 400 with no decision ID and no record.
+- **`client` in the record** is the address of the connection, so behind a proxy it is the proxy's.
+
+## Reporting a problem
+
+Report a security problem privately to the maintainers, not in a public issue.
+
+## Next
+
+<CardGrid>
+	<LinkCard title="HTTP routes" href="/gantry/reference/http-routes/" description="Routes, query parameters and headers." />
+	<LinkCard title="Project status" href="/gantry/getting-started/status/" description="What is built and what is planned." />
+</CardGrid>

@@ -1,0 +1,105 @@
+---
+title: Local models
+description: Serve models from Ollama, vLLM or LM Studio through Gantry with allow_private, with or without a key.
+sidebar:
+  order: 8
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Local model servers speak OpenAI's API, so each one is a `kind: openai` provider. Because the server is on this machine or a private network, the provider needs `allow_private: true`, and may leave out `key_env`.
+
+## Setup
+
+<Tabs>
+<TabItem label="Ollama">
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: ollama
+    kind: openai
+    url: http://127.0.0.1:11434/v1
+    allow_private: true
+    models: [gpt-oss:20b]      # the name `ollama list` shows
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [gpt-oss:20b]
+```
+
+Ollama ignores the key, so Gantry sends none. It serves chat, Responses (without `previous_response_id`) and embeddings.
+
+</TabItem>
+<TabItem label="vLLM">
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: vllm
+    kind: openai
+    url: http://127.0.0.1:8000
+    allow_private: true
+    key_env: VLLM_API_KEY      # the value given to vllm serve --api-key
+    models: [local-llm]        # vllm serve <model> --served-model-name local-llm
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [local-llm]
+```
+
+`vllm serve` listens on port 8000. The model name clients send is `--served-model-name`, or the `--model` value if that is not set. Leave out `key_env` when vLLM runs without `--api-key`. vLLM serves chat, Responses, embeddings and rerank.
+
+</TabItem>
+<TabItem label="LM Studio">
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: lmstudio
+    kind: openai
+    url: http://127.0.0.1:1234/v1
+    allow_private: true
+    models: [local-model]      # the model name LM Studio serves
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [local-model]
+```
+
+LM Studio serves chat, Responses and embeddings, with no key.
+
+</TabItem>
+</Tabs>
+
+## Behavior
+
+- Without `key_env`, Gantry sends no `Authorization` header to the server, and never the caller's Gantry key.
+- Only an `openai` provider with `allow_private: true` may leave out `key_env`. Every other provider needs it.
+- Give local models a zero price, so a rule with a budget can reach them:
+
+```yaml
+prices:
+  gpt-oss:20b: { input: 0, output: 0 }
+```
+
+- With `accept_messages: true`, Claude Code can run on a local model. See [Translation](/gantry/routing/translation/).
+
+<Aside type="tip">
+In the container, `127.0.0.1` is the container itself. Use the host's address, for example `http://host.docker.internal:11434` with `--add-host host.docker.internal:host-gateway`, and keep `allow_private: true` if the address is private.
+</Aside>
+
+## Errors from gantry check
+
+Without `allow_private: true`, a private address is refused:
+
+```text
+gantry.policy.yaml:5: the provider url points at this machine or a private network. If that is intended, for example a local model server, add `allow_private: true` to the provider.
+```
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Providers overview" href="/gantry/providers/overview/" description="What counts as a private address." />
+	<LinkCard title="Pricing" href="/gantry/routing/pricing/" description="Set prices for models Gantry does not know." />
+</CardGrid>

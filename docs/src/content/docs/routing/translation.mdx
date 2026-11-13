@@ -1,0 +1,110 @@
+---
+title: Translation
+description: Let chat completions clients use Claude with accept_chat, and Claude Code use GPT, Gemini or a local model with accept_messages.
+sidebar:
+  order: 3
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+By default a request reaches only providers that speak its API. Translation is an opt-in per provider: `accept_chat` lets chat completions clients use Claude, and `accept_messages` lets Claude Code and the Anthropic SDKs use any chat model.
+
+| Field | Set on | Takes | Sends |
+|---|---|---|---|
+| `accept_chat: true` | `anthropic`, `bedrock`, `vertex_anthropic` | `POST /v1/chat/completions` | Messages |
+| `accept_messages: true` | `openai`, `azure`, `gemini`, `vertex` | `POST /v1/messages` | Chat completions (and on to generateContent for Gemini and Vertex AI) |
+
+Without the field, a request on the other route is refused with `wrong_route`. Both change without a restart.
+
+## Example
+
+<Tabs>
+<TabItem label="accept_chat">
+
+```yaml
+providers:
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_PROVIDER_KEY
+    models: [claude-sonnet-5-5]
+    accept_chat: true
+```
+
+Cursor, Continue, Aider and the OpenAI SDKs can now ask for `claude-sonnet-5-5`.
+
+</TabItem>
+<TabItem label="accept_messages">
+
+```yaml
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-5, gpt-5-mini]
+    accept_messages: true
+```
+
+Claude Code can now run with `ANTHROPIC_MODEL=gpt-5` and `ANTHROPIC_SMALL_FAST_MODEL=gpt-5-mini`. See [Claude Code](/gantry/integrations/claude-code/).
+
+</TabItem>
+</Tabs>
+
+## Nothing is dropped silently
+
+A field that cannot be carried across is refused with `untranslatable`, naming it:
+
+```text
+Refused (untranslatable): The parameter "n" set to 2 has no equivalent in Anthropic's messages API, so Gantry cannot translate it. Remove it, or use a model whose provider speaks the client's format. Decision 01M7....
+```
+
+The translation is decided before the record is written, so an untranslatable request is a recorded refusal. The record of a translated request says `"translated": true`. The few fields dropped on purpose are listed with their reasons in `gantry_core::translate::SAFE_TO_DROP`.
+
+## Chat to messages (accept_chat)
+
+- A whole answer comes back as a `chat.completion`.
+- A stream comes back as `chat.completion.chunk` events ending in `data: [DONE]`, with a final usage chunk when the request asked for `stream_options.include_usage`.
+- Errors come back in OpenAI's error shape.
+- A translated request to an `anthropic` provider carries `anthropic-version: 2023-06-01`.
+- Dropped on purpose: `seed`, thinking blocks and a few others in `SAFE_TO_DROP`.
+
+## Messages to chat (accept_messages)
+
+**Carried over:** system prompts, images (base64 or URL), tools and tool results, `tool_choice`, `stop_sequences`, `temperature`, `top_p`, `metadata.user_id` (sent as `safety_identifier`; one longer than OpenAI's 64 characters, such as Claude Code's, is sent as its SHA-256) and `output_config.effort` (sent as `reasoning_effort`).
+
+**Whole answers** become a `message`: text and `tool_use` blocks (arguments parsed to `input`), usage, and `stop_reason` from `finish_reason`:
+
+| `finish_reason` | `stop_reason` |
+|---|---|
+| `stop` | `end_turn` |
+| `length` | `max_tokens` |
+| `tool_calls` | `tool_use` |
+| `content_filter`, or a refusal | `refusal` |
+
+**Streams** become Anthropic's events in the order Claude Code reads them: `message_start`; for each text or tool call `content_block_start`, `content_block_delta` (`text_delta`, or `input_json_delta` for tool arguments) and `content_block_stop`; then `message_delta` with `stop_reason` and usage; then `message_stop`. Gantry asks the provider for `stream_options.include_usage`, so usage carries the provider's counts. A provider error in the stream becomes an `error` event. A stream cut before `data: [DONE]` is broken off, not ended as if complete.
+
+**Errors** come back in Anthropic's error shape, typed by status (429 is `rate_limit_error`), with the message `Provider "<name>" answered <status>: <the provider's message> Decision <id>.`, the decision ID in `decision`, the provider's own `Retry-After`, and `x-should-retry: true` for 408, 409, 429 and 5xx (`false` otherwise).
+
+**Refused with `untranslatable`:** thinking of type `enabled` (adaptive thinking is let through), server tools (web search, code execution), `context_management` edits other than clearing thinking, document and other non-text tool result blocks, and any field Gantry does not know.
+
+**Dropped on purpose:** `cache_control`, thinking blocks, `defer_loading` on tools, `context_management` that only clears thinking, and the `anthropic-*` headers.
+
+`POST /v1/messages/count_tokens` for these models is refused with `wrong_route`.
+
+<Aside type="caution">
+Claude Code sends `output_config.effort` on every request, which Gantry sends as `reasoning_effort`. A model that is not a reasoning model may refuse that field, and its 400 reaches Claude Code as the provider gave it.
+</Aside>
+
+## Order on the request path
+
+Guardrails, cache, rate limits and budgets see the request in the form actually sent: translated when it was translated, masked when a guardrail masked it. A cached answer is the provider's own; a translated caller gets the hit translated, as the first answer was. Usage is read from the provider's answer before it is translated, so a translated chat stream sent without `stream_options.include_usage` still has its tokens and cost recorded.
+
+For Gemini and Vertex AI, chat requests are always translated to generateContent. See [Gemini](/gantry/providers/gemini/).
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Claude Code" href="/gantry/integrations/claude-code/" description="Run Claude Code on GPT, Gemini or a local model." />
+	<LinkCard title="Providers overview" href="/gantry/providers/overview/" description="Which routes each kind serves." />
+</CardGrid>

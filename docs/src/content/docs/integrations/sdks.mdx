@@ -1,0 +1,169 @@
+---
+title: OpenAI and Anthropic SDKs
+description: Point the OpenAI and Anthropic SDKs at Gantry by base URL, and read Gantry's refusal code and decision ID from their errors.
+sidebar:
+  order: 8
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+OpenAI's and Anthropic's SDKs reach Gantry through their base URL. Give the client Gantry's address and a Gantry key in place of a provider key; nothing else in your code changes.
+
+## At a glance
+
+| SDK | Base URL | Variables | Routes |
+|---|---|---|---|
+| OpenAI | `http://127.0.0.1:8080/v1` | `OPENAI_BASE_URL`, `OPENAI_API_KEY` | `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/models`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank` |
+| Anthropic | `http://127.0.0.1:8080` | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` | `/v1/messages`, `/v1/messages/count_tokens` |
+
+The OpenAI SDKs take the address with `/v1`. The Anthropic SDKs take it without, because they add `/v1/messages` themselves.
+
+## What every client needs
+
+- **Key.** Gantry reads the key from `Authorization: Bearer gantry_...` or from `x-api-key: gantry_...`. If both are sent they must hold the same value, or the request is refused with `ambiguous_key`. A provider key (one that starts with `sk-`) is refused with `unknown_key` and a hint.
+- **Route.** The model must be on a provider the route fits. Chat requests reach `openai`, `azure`, `gemini` and `vertex` providers. Responses and embeddings reach `openai` only. Messages requests reach `anthropic`, `bedrock` and `vertex_anthropic`. Any other pairing is refused with `wrong_route`, which names the right route, unless the provider opts in to [translation](/gantry/routing/translation/).
+- **Anthropic headers.** The Anthropic SDKs send `api_key` (`ANTHROPIC_API_KEY`) as `x-api-key` and `auth_token` (`ANTHROPIC_AUTH_TOKEN`) as `Authorization: Bearer`. Set only one of them, to the Gantry key.
+
+## Send a request
+
+<Tabs syncKey="lang">
+<TabItem label="OpenAI, Python">
+
+```bash
+export OPENAI_BASE_URL=http://127.0.0.1:8080/v1
+export OPENAI_API_KEY=gantry_...
+```
+
+```python
+import openai
+
+client = openai.OpenAI()  # reads OPENAI_BASE_URL and OPENAI_API_KEY
+try:
+    answer = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Say hello."}],
+    )
+    print(answer.choices[0].message.content)
+except openai.APIStatusError as e:
+    print(e.status_code, e.code, e.body["decision"])
+```
+
+`openai.OpenAI(base_url=..., api_key=...)` sets both in code. `client.responses.create(...)` goes to `/v1/responses` and `client.embeddings.create(...)` to `/v1/embeddings`, for models on an `openai` provider.
+
+</TabItem>
+<TabItem label="OpenAI, TypeScript">
+
+```bash
+export OPENAI_BASE_URL=http://127.0.0.1:8080/v1
+export OPENAI_API_KEY=gantry_...
+```
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI(); // reads OPENAI_BASE_URL and OPENAI_API_KEY
+try {
+  const answer = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: "Say hello." }],
+  });
+  console.log(answer.choices[0].message.content);
+} catch (err) {
+  if (!(err instanceof OpenAI.APIError)) throw err;
+  console.log(err.status, err.code, err.error?.decision);
+}
+```
+
+`new OpenAI({ baseURL, apiKey })` sets both in code.
+
+</TabItem>
+<TabItem label="Anthropic, Python">
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+export ANTHROPIC_API_KEY=gantry_...
+```
+
+```python
+import anthropic
+
+client = anthropic.Anthropic()  # reads ANTHROPIC_BASE_URL and ANTHROPIC_API_KEY
+try:
+    message = client.messages.create(
+        model="claude-sonnet-5-5",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "Say hello."}],
+    )
+    print(message.content[0].text)
+except anthropic.APIStatusError as e:
+    print(e.status_code, e.body["gantry_code"], e.body["decision"])
+```
+
+`anthropic.Anthropic(base_url=..., api_key=...)` sets both in code. `e.type` holds Anthropic's error type for the code, for example `permission_error`.
+
+</TabItem>
+<TabItem label="Anthropic, TypeScript">
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+export ANTHROPIC_API_KEY=gantry_...
+```
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic(); // reads ANTHROPIC_BASE_URL and ANTHROPIC_API_KEY
+try {
+  const message = await client.messages.create({
+    model: "claude-sonnet-5-5",
+    max_tokens: 1024,
+    messages: [{ role: "user", content: "Say hello." }],
+  });
+  console.log(message.content[0].text);
+} catch (err) {
+  if (!(err instanceof Anthropic.APIError)) throw err;
+  console.log(err.status, err.error?.gantry_code, err.error?.decision);
+}
+```
+
+`new Anthropic({ baseURL, apiKey })` sets both in code.
+
+</TabItem>
+</Tabs>
+
+## Handle refusals
+
+A refusal is an HTTP error, so each SDK raises its status error. The status picks the class: 400 `BadRequestError`, 401 `AuthenticationError`, 403 `PermissionDeniedError`, 404 `NotFoundError`, 429 `RateLimitError`, 500 and above `InternalServerError`. All are subclasses of `APIStatusError` (Python) or `APIError` (TypeScript).
+
+The message ends with `Decision <id>.`. The Gantry code and the decision ID sit in a different place per SDK:
+
+| SDK | Gantry code | Decision ID |
+|---|---|---|
+| OpenAI, Python | `e.code` | `e.body["decision"]` |
+| OpenAI, TypeScript | `err.code` | `err.error.decision` |
+| Anthropic, Python | `e.body["gantry_code"]` | `e.body["decision"]` |
+| Anthropic, TypeScript | `err.error.gantry_code` | `err.error.decision` |
+
+The OpenAI SDKs keep the inner `error` object of OpenAI's shape. The Anthropic SDKs keep the whole body of Anthropic's shape, where Gantry puts `gantry_code` and `decision` at the top level.
+
+Every response also carries the decision ID in the `X-Gantry-Decision` header: `e.response.headers["x-gantry-decision"]` in Python, `err.headers.get("x-gantry-decision")` in TypeScript.
+
+### Retries
+
+All four SDKs retry 408, 409, 429 and 5xx answers twice by default, but obey the `x-should-retry` header when present. Gantry sets it on every refusal:
+
+- `false` on most codes, so the refusal is raised at once and recorded once.
+- `true` on `busy`, `rate_limited` and the `upstream_*` codes, which the SDK resends on its own.
+
+`max_retries` (Python) or `maxRetries` (TypeScript) changes the count.
+
+<Aside type="note">
+The SDK names on this page come from each SDK's documentation and published source. The refusal bodies they parse were checked against a running Gantry on both routes.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Refusal codes" href="/gantry/reference/refusal-codes/" description="Every code, its status and Anthropic error type." />
+	<LinkCard title="Providers" href="/gantry/providers/overview/" description="Which provider kinds each route reaches." />
+</CardGrid>

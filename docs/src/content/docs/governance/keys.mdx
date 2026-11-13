@@ -1,0 +1,290 @@
+---
+title: Keys
+description: Issue, limit, list, rotate and revoke the Gantry keys that give every person and workload an identity.
+sidebar:
+  order: 2
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A Gantry key identifies one person or one workload. Callers send it in place of a provider key, and the provider keys stay with Gantry.
+
+Each key carries a name and a team, which the [policy](/gantry/governance/policy/) rules match on. It can also carry an expiry, a budget, a model list and a tokens-per-minute limit of its own.
+
+## Issue a key
+
+<Tabs syncKey="admin">
+<TabItem label="CLI">
+
+```bash
+gantry key new maya.cohen --team payments --url https://gantry.example.com
+```
+
+```text
+Key for maya.cohen, team payments. It is shown once and is not stored anywhere:
+
+  gantry_3f9c...(64 hex characters)
+
+To hand it over, send these lines through your secret manager, never in chat. Claude Code and the OpenAI SDKs read them:
+
+export ANTHROPIC_BASE_URL=https://gantry.example.com
+export ANTHROPIC_API_KEY=gantry_3f9c...
+export OPENAI_BASE_URL=https://gantry.example.com/v1
+export OPENAI_API_KEY=gantry_3f9c...
+
+Its hash was added to /srv/gantry/gantry.keys.yaml. A running `gantry serve` accepts it within 2 seconds. `gantry serve` reads the keys file beside its policy file unless `--keys` names another.
+```
+
+The block is ready for a shell profile, a `.env` file or a secret manager entry. `--quiet` prints the key alone, for a pipe:
+
+```bash
+gantry key new ci.bot --team platform --quiet | vault kv put secret/gantry key=-
+```
+
+</TabItem>
+<TabItem label="Console">
+
+Sign in to `/console` as an admin and open **People and workloads**. Fill in the name and team, and optionally an expiry, a budget and the admin flag. The console shows the key once and saves its hash to the keys file. Gantry uses it within 2 seconds.
+
+See [Admin console](/gantry/operations/console/).
+
+</TabItem>
+<TabItem label="Admin API">
+
+```bash
+curl -X POST https://gantry.example.com/admin/keys \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"maya.cohen","team":"payments","expires":"2026-12-31","budget":{"usd":20,"per":"month"}}'
+```
+
+The answer (`201`) holds the key once, with `name`, `team` and `sha256_prefix`. The key works as soon as the answer arrives, because the admin API reloads the keys file before it answers. See [Admin API](/gantry/reference/admin-api/).
+
+</TabItem>
+</Tabs>
+
+<Aside type="caution">
+A key is shown once. Hand it over through your secret manager or device management, never in chat or email. Lose it and issue a new one.
+</Aside>
+
+### Options
+
+| Flag | Admin API field | Console | Description |
+|---|---|---|---|
+| `--team <team>` | `team` | yes | Required. The team rules match on. |
+| `--admin` | none | yes | May sign in to the console and call the admin API. |
+| `--expires <date>` | `expires` | yes | UTC date (`2026-12-31`: refused from the start of that day) or time (`2026-12-31T18:00:00Z`). |
+| `--budget <usd>/<day\|month>` | `budget` | yes | What this key alone may spend, for example `20/month`. |
+| `--models <a,b>` | `models` | no | Narrows the rule's models for this key. |
+| `--tpm <n>` | `tpm` | no | Tokens per minute for this key, 1 to 1000000000. |
+| `--url <url>` | none | no | The address printed in the env lines. Default `http://127.0.0.1:8080`. |
+| `--quiet` | none | no | Print the key alone. |
+| `--keys <file>` | none | no | The keys file. Default `gantry.keys.yaml` in the current directory. |
+
+`gantry serve` looks for the keys file beside the policy file. Run `key new` in that folder, or pass the same `--keys` to both.
+
+Names and teams use letters, digits, `.`, `-`, `_` and `@`, up to 100 characters.
+
+### The first admin
+
+The admin API cannot make admin keys, so the first admin is made on the machine that holds the keys file:
+
+```bash
+gantry key new noa.bar --team platform --admin
+```
+
+This writes `admin: true` on the entry. After that, admins issue keys, including more admin keys, from the console. People can also sign in to the console through [single sign-on](/gantry/governance/single-sign-on/).
+
+## Limits per key
+
+```bash
+gantry key new ci.release --team platform --expires 2026-12-31 --budget 20/month
+gantry key new ci.agent --team platform --models gpt-4o-mini,o3 --tpm 200000
+```
+
+| Limit | Behavior | Refusal |
+|---|---|---|
+| `expires` | The key stops working at that date or time. The record names whose key it was. | `key_expired` (401) |
+| `budget` | Counted like a rule's budget, and on top of it: a request must fit both. | `key_budget_exceeded` (429) |
+| `models` | Narrows the rule, never widens it. `/v1/models` shows only what both allow. | `model_not_allowed`, naming the key and its list |
+| `tpm` | Counted for this key alone, on top of the rule's `tpm`. | `rate_limited` (429) |
+
+Use `budget` and `expires` for a CI job or an agent that shares a team with people. The admin API refuses a `models` entry the policy does not serve, and refuses an expiry in the past. All four are written to the key's entry, and editing the entry changes them within 2 seconds, without a restart.
+
+See [Budgets and rate limits](/gantry/governance/budgets-and-rate-limits/) for how spend and tokens are counted.
+
+## The keys file
+
+```yaml title="gantry.keys.yaml"
+# Keys Gantry accepts. Only the SHA-256 of each key is kept here. Add keys with `gantry key new`.
+keys:
+  - name: maya.cohen
+    team: payments
+    sha256: 5d1e...
+  - name: ci.release
+    team: platform
+    sha256: 41e0...
+    expires: 2026-12-31
+    budget: { usd: 20, per: month }
+  - name: ci.agent
+    team: platform
+    sha256: 7c2e...
+    models: [gpt-4o-mini, o3]
+    tpm: 200000
+  - name: noa.bar
+    team: platform
+    sha256: 9b74...
+    admin: true
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | required | Person or workload. |
+| `team` | string | required | Team. |
+| `sha256` | string | required | SHA-256 of the key, 64 hex characters. |
+| `admin` | boolean | `false` | Console and admin API access. |
+| `expires` | string | none | UTC date or time. |
+| `budget` | map | none | `{ usd: <above 0>, per: day \| month }`. |
+| `models` | list | none | Models this key may use, within its rule's. |
+| `tpm` | integer | none | Tokens per minute for this key. |
+
+How keys are stored:
+
+- A key is `gantry_` followed by 256 random bits in hex, from the operating system's random source. With no randomness available, no key is made.
+- The `gantry_` prefix lets secret scanners recognize a leaked key.
+- Only the SHA-256 is written. The key itself is kept nowhere.
+- The file is created with mode `0600`.
+- `key new` appends its entry to the end and never rewrites what is there, so a key removed by hand stays removed. It shows the key only after finding its entry in the file. If an editor saved an older copy at the same moment, `key new` says so and makes no key: run it again.
+- A list written on one line (`keys: [...]`) is refused with that cause.
+
+## Send a key
+
+A client sends the key in either header:
+
+```text
+Authorization: Bearer gantry_...
+x-api-key: gantry_...
+```
+
+Both may be present only if they hold the same value. Two different credentials are refused with `ambiguous_key`. A value starting with `sk-` that identifies nobody is refused with `unknown_key` and a hint that it looks like a provider key.
+
+Gantry removes the key from every header before forwarding, under any header name, compared without regard to case, with or without the `gantry_` prefix.
+
+## List keys
+
+<Tabs syncKey="admin">
+<TabItem label="CLI">
+
+```bash
+gantry key list
+```
+
+```text
+name	team	key	admin	expires	budget	models	tpm
+noa.bar	platform	9b74c1d2	admin	-	-	-	-
+ci.release	platform	41e0a7f3	-	2026-12-31	$20.00 a month	-	-
+ci.agent	platform	7c2e90aa	-	-	-	gpt-4o-mini,o3	200000
+```
+
+</TabItem>
+<TabItem label="Console">
+
+The **People and workloads** page lists the same, with each key's last request.
+
+</TabItem>
+<TabItem label="Admin API">
+
+```bash
+curl https://gantry.example.com/admin/keys -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+```
+
+Returns `{"keys": [...]}` with name, team, `sha256_prefix`, admin, expiry, budget, models and tpm.
+
+</TabItem>
+</Tabs>
+
+Each lists hashes, never a key. A key is named everywhere by the first 8 hex characters of its SHA-256.
+
+## Revoke a key
+
+<Tabs syncKey="admin">
+<TabItem label="Keys file">
+
+Delete the entry from `gantry.keys.yaml` and save. Gantry stops accepting the key within 2 seconds.
+
+</TabItem>
+<TabItem label="Console">
+
+Revoke the key on the **People and workloads** page. The console saves the file and Gantry uses the change within 2 seconds.
+
+</TabItem>
+<TabItem label="Admin API">
+
+```bash
+curl -X DELETE https://gantry.example.com/admin/keys/41e0a7f3 \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+```
+
+Stops the key at once, because the API reloads the keys file before it answers. `404 no_such_key` if no entry has that prefix, `400 ambiguous_key` if more than one does (send more of the hash).
+
+</TabItem>
+</Tabs>
+
+A request with a revoked key is refused with `unknown_key`. Its record holds the first 8 hex characters of the key's hash: enough to tell two unknown keys apart, far too little to recover the key. A request already in flight finishes, stream included.
+
+## Rotate a key
+
+<Steps>
+
+1. Run `gantry key new` with the same name and team. It says `maya.cohen already had a key. Both work until you remove the old entry from the file.`
+
+2. Hand the new key over. Both keys work.
+
+3. Watch the audit log. Every record names the key it came with by its hash prefix (`key`), so you see when the old one stops being used.
+
+4. Revoke the old key: the entry with the older `sha256`, higher in the file.
+
+</Steps>
+
+## Prune expired keys
+
+Expired keys, such as old [`gantry login`](/gantry/governance/single-sign-on/#developer-keys-with-gantry-login) keys, stay in the file. Serving refuses them with `key_expired`, and `gantry check` lists each as a warning, so a check in CI keeps passing.
+
+```bash
+gantry key prune --keys gantry.keys.yaml
+```
+
+`key prune` removes every expired entry, each the same safe way `DELETE /admin/keys` removes one, and keeps every other line. It is safe while Gantry runs.
+
+## Roll out to a team
+
+<Steps>
+
+1. Make the first admin key with `--admin`, on the machine that holds the keys file.
+
+2. Issue each person's key with the admin API in a loop, or `gantry key new <name> --team <team> --quiet` per person, straight into your secret manager. Or turn on [self-service keys](/gantry/governance/single-sign-on/#developer-keys-with-gantry-login).
+
+3. Give each workload (CI job, agent) its own key with `--expires` and `--budget`.
+
+4. Rotate by issuing a new key under the same name, then revoking the old one once the audit log shows it unused.
+
+</Steps>
+
+## Errors
+
+| Code | Status | Cause |
+|---|---|---|
+| `no_key` | 401 | The request carries no key. |
+| `unknown_key` | 401 | The key was never issued or has been revoked. |
+| `ambiguous_key` | 400 | Two different credentials on one request. |
+| `key_expired` | 401 | The key's `expires` has passed. |
+| `not_admin` | 403 | An admin API call with a key that is not `admin: true`. |
+| `no_such_key` | 404 | `DELETE /admin/keys/<prefix>` matched no entry. |
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Single sign-on" href="/gantry/governance/single-sign-on/" description="Console roles and self-service keys with gantry login." />
+	<LinkCard title="Kill switches" href="/gantry/governance/kill-switches/" description="Stop a person, team, key or model at once." />
+	<LinkCard title="Admin API" href="/gantry/reference/admin-api/" description="Every admin route and its answers." />
+</CardGrid>

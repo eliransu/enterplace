@@ -1,0 +1,207 @@
+---
+title: Observability
+description: Scrape Prometheus metrics from Gantry with --metrics, and ship the audit log with Vector, Fluent Bit or the OpenTelemetry Collector.
+sidebar:
+  order: 4
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Gantry gives you two signals: Prometheus metrics for dashboards and alerts, and the audit log for what happened to each request. The audit log is the record; metrics are counts.
+
+## Metrics
+
+```bash
+gantry serve gantry.policy.yaml --metrics 127.0.0.1:9464
+```
+
+```text
+Metrics: http://127.0.0.1:9464/metrics
+```
+
+`GET /metrics` is served in the Prometheus text format on that address only. It is off unless `--metrics` names an address, and that address must differ from `--listen`. The gateway's own address never serves `/metrics`, so a caller with a Gantry key cannot read it. Scrapes are not written to the audit log.
+
+<Aside type="caution">
+`/metrics` takes no key and shows team, model and provider names and what each team spent. Keep it on loopback or a network only your scraper reaches. Gantry warns at start when the metrics address is not loopback.
+</Aside>
+
+### Metric reference
+
+| Metric | Type | Labels | Counts |
+|---|---|---|---|
+| `gantry_requests_total` | counter | `route`, `verdict`, `code`, `provider` | Every decision, as the audit log records it |
+| `gantry_upstream_responses_total` | counter | `provider`, `outcome` | Every attempt at a provider, retries and fallbacks included |
+| `gantry_upstream_seconds` | histogram | `provider` | Time from sending to a provider to its answer's headers |
+| `gantry_overhead_seconds` | histogram | none | Gantry's own time on a forwarded request: identify, decide, guardrails, record, and handing the answer back. The same figure as the `Server-Timing: gantry;dur=` header |
+| `gantry_audit_write_seconds` | histogram | none | Time of each write to the audit log. Under load one write carries many records |
+| `gantry_audit_queue_depth` | gauge | none | Records waiting for the audit writer |
+| `gantry_audit_broken` | gauge | none | `1` when the audit log cannot be written and every request is refused until a restart |
+| `gantry_spend_usd_total` | counter | `team`, `model` | US dollars charged since Gantry started, as usage records write them |
+
+| Label | Values |
+|---|---|
+| `route` | `chat_completions`, `messages`, `count_tokens`, `responses`, `embeddings`, `models`, or `other` for every other path |
+| `verdict` | `allow` or `refused` |
+| `code` | The [refusal code](/gantry/reference/refusal-codes/), empty when allowed |
+| `outcome` | The provider's HTTP status, or the Gantry code when it gave none, such as `upstream_timeout` |
+
+Histogram buckets run from 100 microseconds to 60 seconds: `0.0001`, `0.00025`, `0.0005`, `0.001`, `0.0025`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5`, `10`, `30`, `60` and `+Inf`.
+
+Counters start at zero when Gantry starts. Spend that counts against budgets is read back from the audit log at start, so budgets survive a restart even though `gantry_spend_usd_total` does not.
+
+The metrics never hold a prompt, a key, a person's name or a decision ID.
+
+### Scrape and alert
+
+```yaml title="prometheus.yml"
+scrape_configs:
+  - job_name: gantry
+    static_configs:
+      - targets: ["127.0.0.1:9464"]
+```
+
+```yaml title="gantry-alerts.yml"
+groups:
+  - name: gantry
+    rules:
+      - alert: GantryAuditLogBroken
+        expr: gantry_audit_broken == 1
+        annotations:
+          summary: Gantry cannot write its audit log and refuses every request. Look at the disk and restart it.
+      - alert: GantryRefusalRateHigh
+        expr: sum(rate(gantry_requests_total{verdict="refused"}[10m])) / sum(rate(gantry_requests_total[10m])) > 0.2
+        for: 10m
+        annotations:
+          summary: More than a fifth of requests are refused. Group by code to see why.
+      - alert: GantryTeamSpendHigh
+        expr: sum by (team) (increase(gantry_spend_usd_total[1d])) > 500
+        annotations:
+          summary: A team spent more than $500 in a day.
+```
+
+## Shipping the audit log
+
+The audit log is a file of JSON lines, `gantry-audit.jsonl` or the `audit: { path: ... }` in the policy. Gantry only appends to it, so any shipper that tails a file can send it to Loki, Elasticsearch, Splunk or Datadog. Ship each line as it is: the `hash` and `prev` fields chain every record to the one before, and that chain is what `gantry audit verify` checks.
+
+Fields worth indexing: `event` (absent on request records), `id`, `person`, `team`, `key`, `verdict`, `code`, `model`, `provider`, `charged_usd`. Every field is in [Audit records](/gantry/reference/audit-records/).
+
+The recipes below read the file from its start and keep their place across restarts. They print to stdout: point the sink at your log system, and check the configuration against the version of the tool you run.
+
+### Vector
+
+```yaml title="vector.yaml"
+sources:
+  gantry_audit:
+    type: file
+    include: [/var/lib/gantry/gantry-audit.jsonl]
+    read_from: beginning
+transforms:
+  gantry_parsed:
+    type: remap
+    inputs: [gantry_audit]
+    # Keeps the original line in .line, so the chain can be checked from what was shipped.
+    source: |
+      .line = .message
+      . = merge!(., object!(parse_json!(.message)))
+sinks:
+  out:
+    type: console
+    inputs: [gantry_parsed]
+    encoding:
+      codec: json
+```
+
+### Fluent Bit
+
+```yaml title="fluent-bit.yaml"
+pipeline:
+  inputs:
+    - name: tail
+      path: /var/lib/gantry/gantry-audit.jsonl
+      read_from_head: true
+      db: /var/lib/fluent-bit/gantry-audit.db
+      parser: json
+      tag: gantry.audit
+  outputs:
+    - name: stdout
+      match: gantry.audit
+      format: json_lines
+```
+
+`parser: json` is the `json` parser from Fluent Bit's stock `parsers.conf`. To keep each line unparsed as well, leave the parser out and parse in the log system.
+
+### OpenTelemetry Collector
+
+Gantry has no OTLP exporter of its own. The Collector's `filelog` receiver, in the contrib distribution `otelcol-contrib`, turns each audit line into an OpenTelemetry log record and sends it on over OTLP.
+
+```yaml
+receivers:
+  filelog/gantry:
+    include: [/var/lib/gantry/gantry-audit.jsonl]
+    start_at: beginning
+    storage: file_storage
+    operators:
+      - type: json_parser
+        parse_to: attributes
+        timestamp:
+          parse_from: attributes.time
+          layout_type: gotime
+          layout: "2006-01-02T15:04:05.000Z07:00"
+extensions:
+  file_storage:
+    directory: /var/lib/otelcol/storage
+processors:
+  batch: {}
+exporters:
+  otlphttp:
+    endpoint: https://otel.example.com:4318
+  debug:
+    verbosity: detailed
+service:
+  extensions: [file_storage]
+  pipelines:
+    logs:
+      receivers: [filelog/gantry]
+      processors: [batch]
+      exporters: [otlphttp, debug]
+```
+
+- Each record's fields become log attributes (`attributes.person`, `attributes.code`). The original line stays in the log record's body: export that for verification.
+- The record's `time`, always UTC with milliseconds such as `2026-11-12T14:02:11.482Z`, becomes the log record's timestamp.
+- `file_storage` keeps the receiver's place across Collector restarts, so records are neither skipped nor sent twice. Its folder must exist and be writable by the Collector.
+- `otlphttp` sends to `<endpoint>/v1/logs`. Replace the endpoint with your backend's and drop `debug` once it works. Recent Collector releases name this exporter `otlp_http` and accept `otlphttp` as a deprecated alias.
+
+On Kubernetes, run the shipper as a second container in the Gantry pod. See [Kubernetes](/gantry/operations/kubernetes/#ship-the-audit-log-from-the-pod).
+
+## Verify what was shipped
+
+A copy in a log system can be edited or lose records like any other copy. Check it the same way as the file.
+
+<Steps>
+
+1. On Gantry's host, verify the log and keep the last hash where the host cannot change it, such as the log system or a ticket.
+
+   ```bash
+   gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+   ```
+
+2. Export the original lines from the log system (the `line` field from Vector, or the log record body from the Collector), sorted by `n`, into a file.
+
+3. Verify the export against the kept hash.
+
+   ```bash
+   gantry audit verify exported.jsonl --expect-last <hash kept in step 1>
+   ```
+
+   It passes only if every record up to that hash is there, unchanged and in order.
+
+</Steps>
+
+A shipped copy that starts in the middle of the log does not verify on its own. Export from record 1, or verify the file on the host.
+
+## Next
+
+<CardGrid>
+	<LinkCard title="Audit records" href="/gantry/reference/audit-records/" description="The schema of every record type." />
+	<LinkCard title="Audit log" href="/gantry/governance/audit-log/" description="How the chain works and how to keep the last hash." />
+</CardGrid>

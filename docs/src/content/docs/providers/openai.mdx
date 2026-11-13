@@ -1,0 +1,208 @@
+---
+title: OpenAI and compatible vendors
+description: Configure OpenAI and OpenAI-compatible vendors such as Groq, Mistral, Together, Fireworks, DeepSeek and OpenRouter as kind openai providers.
+sidebar:
+  order: 2
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A provider of `kind: openai` serves OpenAI's API: chat completions, Responses, embeddings, images, audio, moderations and rerank. The same kind reaches any vendor with an OpenAI-compatible endpoint; only the `url`, `key_env` and model names change.
+
+## OpenAI
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-4o-mini, gpt-4o]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [gpt-4o-mini]
+```
+
+Gantry sends the key as `Authorization: Bearer <key>` and forwards the body byte for byte, so the model name the client sends is the one OpenAI receives.
+
+## OpenAI-compatible vendors
+
+Every vendor below is `kind: openai`. Write the vendor's documented base URL as `url`: Gantry adds the route after `/v1` (see [How the URL is built](/gantry/providers/overview/#how-the-url-is-built)).
+
+| Vendor | `url` | Routes the vendor documents |
+|---|---|---|
+| Groq | `https://api.groq.com/openai/v1` | chat, Responses |
+| Mistral | `https://api.mistral.ai` | chat, embeddings |
+| Together AI | `https://api.together.ai/v1` | chat, Responses, embeddings |
+| Fireworks AI | `https://api.fireworks.ai/inference/v1` | chat |
+| DeepSeek | `https://api.deepseek.com` | chat (see the DeepSeek tab) |
+| OpenRouter | `https://openrouter.ai/api/v1` | chat, Responses |
+| xAI | `https://api.x.ai` | Responses, chat |
+| Gemini (compatible endpoint) | `https://generativelanguage.googleapis.com/v1beta/openai/` | chat |
+
+Gantry forwards each route to any `openai` provider. A route the vendor does not serve comes back as the vendor's 404.
+
+<Tabs>
+<TabItem label="Groq">
+
+```yaml
+providers:
+  - name: groq
+    kind: openai
+    url: https://api.groq.com/openai/v1
+    key_env: GROQ_API_KEY
+    models: [llama-3.3-70b-versatile]
+```
+
+Gantry calls `https://api.groq.com/openai/v1/chat/completions`. Use Groq's model IDs as listed on its Models page.
+
+</TabItem>
+<TabItem label="Mistral">
+
+```yaml
+providers:
+  - name: mistral
+    kind: openai
+    url: https://api.mistral.ai
+    key_env: MISTRAL_API_KEY
+    models: [mistral-small-latest, mistral-large-latest]
+```
+
+Chat goes to `https://api.mistral.ai/v1/chat/completions`.
+
+</TabItem>
+<TabItem label="Together AI">
+
+```yaml
+providers:
+  - name: together
+    kind: openai
+    url: https://api.together.ai
+    key_env: TOGETHER_API_KEY
+    models: [MiniMaxAI/MiniMax-M3]
+```
+
+Model names carry the organization. OpenAI names such as `gpt-4o` return 404 there.
+
+</TabItem>
+<TabItem label="Fireworks AI">
+
+```yaml
+providers:
+  - name: fireworks
+    kind: openai
+    url: https://api.fireworks.ai/inference/v1
+    key_env: FIREWORKS_API_KEY
+    models: [accounts/fireworks/models/llama-v3p1-8b-instruct]
+```
+
+Gantry calls `https://api.fireworks.ai/inference/v1/chat/completions`. Model names are account paths.
+
+</TabItem>
+<TabItem label="DeepSeek">
+
+```yaml
+providers:
+  - name: deepseek
+    kind: openai
+    url: https://api.deepseek.com
+    key_env: DEEPSEEK_API_KEY
+    models: [deepseek-flash, deepseek-v4-pro]
+```
+
+DeepSeek's documentation posts to `https://api.deepseek.com/chat/completions`, without `/v1`. Gantry calls `https://api.deepseek.com/v1/chat/completions`, with either `url: https://api.deepseek.com` or `url: https://api.deepseek.com/v1`. DeepSeek's current page does not say whether it serves that path: send one request through before relying on it.
+
+</TabItem>
+<TabItem label="OpenRouter">
+
+```yaml
+providers:
+  - name: openrouter
+    kind: openai
+    url: https://openrouter.ai/api/v1
+    key_env: OPENROUTER_API_KEY
+    models: [anthropic/claude-sonnet-latest]
+```
+
+Gantry calls `https://openrouter.ai/api/v1/chat/completions`. Models are `vendor/model`. A leading `~` marks a latest alias, and YAML needs that name in quotes.
+
+</TabItem>
+<TabItem label="xAI">
+
+```yaml
+providers:
+  - name: xai
+    kind: openai
+    url: https://api.x.ai
+    key_env: XAI_API_KEY
+    models: [grok-4.7]
+```
+
+xAI's documentation leads with the Responses API (`POST /v1/responses`), which Gantry forwards to `openai` providers. For chat, Gantry calls `https://api.x.ai/v1/chat/completions`, a path xAI's page mentions without giving it: send one request through before relying on it.
+
+</TabItem>
+<TabItem label="Gemini">
+
+```yaml
+providers:
+  - name: gemini
+    kind: openai
+    url: https://generativelanguage.googleapis.com/v1beta/openai/
+    key_env: GEMINI_API_KEY
+    models: [gemini-4-hydrogen]
+```
+
+Gantry calls `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` with the key in `Authorization: Bearer`. For tool calls, system instructions and Gemini's own usage counts, the native [`gemini` kind](/gantry/providers/gemini/) is the better choice.
+
+</TabItem>
+</Tabs>
+
+For Ollama, vLLM and LM Studio, see [Local models](/gantry/providers/local-models/).
+
+## Responses and embeddings
+
+`POST /v1/responses` (OpenAI's Responses API, used by Codex and newer OpenAI SDKs) and `POST /v1/embeddings` go to the `openai` provider that lists the request's `model`, as their original bytes. They are governed as chat requests are: identified, decided, checked by guardrails, cached, rate limited, counted against budgets, recorded before they are sent, retried and sent to the fallback.
+
+| Route | Guardrails read | Usage read from |
+|---|---|---|
+| `/v1/responses` | `instructions`, every `input` text (a string, or `input_text` parts), the `output` of `function_call_output` items, string values of `prompt.variables` | `usage`: `input_tokens` less `input_tokens_details.cached_tokens` and `cache_write_tokens` (counted apart), and `output_tokens`. For a stream, from `response.completed`, `response.incomplete` or `response.failed`. |
+| `/v1/embeddings` | `input` strings. Token ID arrays are not text and are not checked. | `usage.prompt_tokens` |
+
+A Responses request's `max_output_tokens` sizes its budget reservation.
+
+- A request with `previous_response_id` or `store: true` leaves the conversation stored at OpenAI under Gantry's provider key. The record shows the request; Gantry does not track what the provider stored.
+- Under a budget, a request that names stored context (`previous_response_id`, `conversation` or `prompt`) is refused with `stored_context`, unless the model's price sets `max_context`. See [Pricing](/gantry/routing/pricing/).
+- Other Responses routes (`GET` and `DELETE /v1/responses/{id}`, input items, cancel) are refused with `unknown_route`.
+
+## Images, audio, moderations and rerank
+
+These routes go to the `openai` provider that serves the request's `model`, or an alias's deployment, as their original bytes, to the same path under its `url`. Each is governed as chat is.
+
+| Route | Body | Guardrails read | Usage and cost |
+|---|---|---|---|
+| `POST /v1/images/generations` | JSON | `prompt` (a string; any other shape is refused under a rule with guardrails) | `usage` when reported (gpt-image models), else `per_image` times the images in `data` |
+| `POST /v1/audio/transcriptions` | `multipart/form-data`, parsed strictly, forwarded byte for byte | Every text field but `model`, such as `prompt`. Not the audio. | `usage` when reported, else the reservation |
+| `POST /v1/audio/speech` | JSON; the audio answer streams through | `input` and `instructions` (strings; any other shape is refused under a rule with guardrails) | None reported: charged its reservation under a budget |
+| `POST /v1/moderations` | JSON | `input`: a string, a list of strings, or `text` items | None reported |
+| `POST /v1/rerank` | JSON, Cohere style, for a provider that serves it (vLLM, Cohere's compatible endpoint) | Every string in `query` and each document, structured fields included | None reported |
+
+- A request with no `model` is refused with `unreadable_request`. This includes a moderation request, which OpenAI would otherwise send to its default model. A form with no `model` field, or with two, is refused the same way.
+- A transcription form is parsed strictly, so the field Gantry decides on is the one every parser reads. A form with an extended `name*=` parameter, spaces around `=`, a backslash or single quotes in a parameter, a folded header line, or bytes after the closing boundary is refused with `unreadable_request`.
+- A guardrail mask on a transcription's text fields is written back into the form. A form with no text field is forwarded, and its record says `"guardrails": "not_run: the body is audio"`.
+- Image edits and variations, audio translations, batches and files are refused with `unknown_route`.
+
+<Aside type="caution">
+Guardrails never read the audio of a transcription. Do not give transcription models to a rule whose guardrails must see what is spoken.
+</Aside>
+
+Image and speech models priced by the token need `max_output` in their price under a budget or a tokens-per-minute limit; image models priced by the image need `per_image`. See [Pricing](/gantry/routing/pricing/).
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Providers overview" href="/gantry/providers/overview/" description="Kinds, fields, URLs and private addresses." />
+	<LinkCard title="Codex" href="/gantry/integrations/codex/" description="Codex CLI over the Responses route." />
+	<LinkCard title="Translation" href="/gantry/routing/translation/" description="Serve Claude Code from GPT with accept_messages." />
+</CardGrid>

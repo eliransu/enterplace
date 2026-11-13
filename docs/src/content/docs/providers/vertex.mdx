@@ -1,0 +1,100 @@
+---
+title: Vertex AI
+description: Serve Claude and Gemini on Google Cloud Vertex AI through Gantry, with kinds vertex_anthropic and vertex.
+sidebar:
+  order: 6
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Gantry reaches two model families on Vertex AI. `kind: vertex_anthropic` serves Claude through the messages route. `kind: vertex` serves Gemini through the chat completions route, translated.
+
+## Setup
+
+<Tabs>
+<TabItem label="Claude">
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: claude-vertex
+    kind: vertex_anthropic
+    url: https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic
+    key_env: VERTEX_ACCESS_TOKEN     # export VERTEX_ACCESS_TOKEN=$(gcloud auth print-access-token)
+    models: [claude-sonnet-4-6, claude-haiku-4-5]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [claude-sonnet-4-6, claude-haiku-4-5]
+```
+
+The `url` must end in `/publishers/anthropic`.
+
+</TabItem>
+<TabItem label="Gemini">
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: vertex
+    kind: vertex
+    url: https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google
+    key_env: VERTEX_ACCESS_TOKEN     # export VERTEX_ACCESS_TOKEN=$(gcloud auth print-access-token)
+    models: [gemini-2.5-pro]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [gemini-2.5-pro]
+```
+
+The `url` must end in `/publishers/google`.
+
+</TabItem>
+</Tabs>
+
+<Aside type="caution">
+`key_env` holds an OAuth access token, which Google issues for about an hour. Gantry reads it at start and does not sign in with a service account itself, so an expired token means a restart with a new one.
+</Aside>
+
+## Claude on Vertex AI
+
+Claude Code or any messages client reaches these models through `POST /v1/messages`. Gantry sends the body to `<url>/models/<model>:rawPredict`, or `:streamRawPredict` when the body says `"stream": true`, with `Authorization: Bearer <token>`.
+
+- `model` is removed from the body, because the path carries it.
+- `"anthropic_version": "vertex-2023-10-16"` is added.
+- The answer is Anthropic's own format, streamed or whole, and goes back unchanged.
+- `anthropic-beta` headers are passed on as sent. Whether Vertex AI honours a beta is up to Vertex AI.
+- `POST /v1/messages/count_tokens` is refused with `wrong_route` for these models.
+- `accept_chat: true` lets chat completions clients reach them too, translated. See [Translation](/gantry/routing/translation/).
+
+### Model names
+
+Vertex AI names Claude models without Anthropic's date suffix (`claude-sonnet-4-6`). When Claude Code sends another name, map it with an alias:
+
+```yaml
+aliases:
+  - name: claude-sonnet-5-5
+    deployments:
+      - { provider: claude-vertex, model: claude-sonnet-4-6 }
+```
+
+See [Aliases](/gantry/routing/aliases/).
+
+## Gemini on Vertex AI
+
+Callers use `POST /v1/chat/completions`. Gantry applies the same translation as the [`gemini` kind](/gantry/providers/gemini/) and sends it to `<url>/models/<model>:generateContent`, or `:streamGenerateContent?alt=sse` for a stream, with `Authorization: Bearer <token>`.
+
+A `vertex` provider can fall back to a `gemini` or another `vertex` provider. With `accept_messages: true`, Claude Code can use these Gemini models too.
+
+## Errors from gantry check
+
+```text
+gantry.policy.yaml:5: a vertex provider's url ends in /publishers/google, for example https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google.
+```
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Gemini" href="/gantry/providers/gemini/" description="The Gemini API and the full translation table." />
+	<LinkCard title="Claude Code" href="/gantry/integrations/claude-code/" description="Run Claude Code on Vertex AI through Gantry." />
+</CardGrid>

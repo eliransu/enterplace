@@ -1,0 +1,72 @@
+---
+title: Azure OpenAI
+description: Configure Azure OpenAI deployments as a provider, mapping each model name to a deployment and an api-version.
+sidebar:
+  order: 4
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A provider of `kind: azure` serves Azure OpenAI chat completions. Callers send the model name; Gantry maps it to your deployment and calls Azure's deployment URL with the `api-key` header.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: azure
+    kind: azure
+    url: https://acme.openai.azure.com        # https://<resource>.openai.azure.com
+    key_env: AZURE_OPENAI_API_KEY
+    api_version: 2024-10-21
+    models: [gpt-4o, gpt-4o-mini]
+    deployments:                               # model name: deployment name
+      gpt-4o: prod-gpt-4o
+      gpt-4o-mini: prod-gpt-4o-mini
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [gpt-4o-mini]
+```
+
+A chat request for `gpt-4o` goes to:
+
+```text
+POST https://acme.openai.azure.com/openai/deployments/prod-gpt-4o/chat/completions?api-version=2024-10-21
+api-key: <the value of AZURE_OPENAI_API_KEY>
+```
+
+## Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `url` | string | required | `https://<resource>.openai.azure.com`. A `url` with a path is put in front of `/openai/deployments/...`. |
+| `key_env` | string | required | The variable that holds the Azure OpenAI key, sent as `api-key`. |
+| `api_version` | string | required | A date, such as `2024-10-21`, or a date with `-preview`, such as `2025-04-01-preview`. Needs a restart to change. |
+| `deployments` | map | required | Model name to deployment name. Every model in `models` needs an entry. |
+
+## Behavior
+
+- Callers use `POST /v1/chat/completions`. Messages requests are refused with `wrong_route` unless the provider sets `accept_messages: true`. See [Translation](/gantry/routing/translation/).
+- The body goes as it came, `model` included. The deployment in the path decides what runs.
+- `deployments` changes without a restart; `api_version` needs one.
+- An `azure` provider can be the fallback of an `openai` provider, and the reverse. The fallback serves each model through its own `deployments`. See [Retries and fallbacks](/gantry/routing/retries-and-fallbacks/).
+- A content filter error from Azure (`content_filter`) can send an alias request to its `content_policy_fallback`. See [Aliases](/gantry/routing/aliases/).
+
+<Aside type="note">
+Microsoft Entra tokens and Azure's newer `/openai/v1` API are not supported. Use the resource key and the deployment URL.
+</Aside>
+
+## Errors from gantry check
+
+```text
+gantry.policy.yaml:12: api_version is a date, as Azure writes it: 2024-10-21, or 2025-04-01-preview for a preview version.
+gantry.policy.yaml:14: model "gpt-4o" has no entry in deployments, so Gantry would not know what to call it at provider "azure". Add `gpt-4o: <name>` under deployments.
+```
+
+## Related
+
+<CardGrid>
+	<LinkCard title="OpenAI" href="/gantry/providers/openai/" description="OpenAI and compatible vendors." />
+	<LinkCard title="Aliases" href="/gantry/routing/aliases/" description="Spread one model name over several Azure deployments." />
+</CardGrid>

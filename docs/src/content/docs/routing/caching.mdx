@@ -1,0 +1,74 @@
+---
+title: Caching
+description: Serve the same answer again for an identical request, per rule, without calling the provider.
+sidebar:
+  order: 4
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A rule with `cache` serves a stored answer to a request identical to one answered before. A hit costs nothing and never reaches the provider, but is still identified, decided and recorded.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-4o-mini]
+rules:
+  - name: support-bot
+    principals: { name: support.bot }
+    models: [gpt-4o-mini]
+    cache: { ttl_seconds: 300 }
+```
+
+## Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `cache.ttl_seconds` | integer | none | 1 to 86400. How long an answer is served again. Without `cache`, nothing is cached. |
+
+## What is a hit
+
+A request is a hit when it has the same provider, model, route (path and query) and request body, byte for byte, and the same `anthropic-beta` and `anthropic-version` headers, as a stored answer within its TTL.
+
+Never cached:
+
+- streamed requests (`"stream": true`),
+- requests with `Cache-Control: no-store`,
+- `count_tokens` requests,
+- Responses requests that name stored context (`previous_response_id`, `conversation` or `prompt`), because the conversation can change at the provider while the body stays the same,
+- answers without a 2xx status, or that did not end whole.
+
+The cache is in memory, 64 MiB across all rules, least recently used out first. It is kept across a policy reload and empties on restart.
+
+## Records and headers
+
+| Where | Hit | Miss |
+|---|---|---|
+| Decision record | `"cache": "hit"` | `"cache": "miss"` |
+| Usage record | Cost 0 | The provider's usage |
+| Response header | `x-gantry-cache: hit` | none |
+
+A request answered from the cache does not count against the rule's `rpm` limit.
+
+<Aside type="caution">
+Two people whose requests are identical byte for byte get the same answer. Give a rule a cache only where that is acceptable.
+</Aside>
+
+## Order on the request path
+
+Guardrails run before the cache. A cached answer is served only to a request that passes the guardrails in force now, so a guardrail added by a reload also covers answers cached before it. A request a guardrail blocks never reads the cache.
+
+The cache key is the body actually sent: masked if a guardrail masked it, translated if it was translated. A translated chat caller gets the hit translated, as the first answer was. A webhook guardrail is called on a cache hit too.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Policy file" href="/gantry/governance/policy/" description="Every field of a rule." />
+	<LinkCard title="Guardrails" href="/gantry/governance/guardrails/" description="What runs before the cache." />
+</CardGrid>

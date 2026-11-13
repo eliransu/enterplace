@@ -1,0 +1,84 @@
+---
+title: How it works
+description: The path every request takes through Gantry, from identity to audit record to provider, and the refusal code each step can return.
+sidebar:
+  order: 2
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Gantry is a reverse proxy with a fixed order of checks. Each request is identified, decided and recorded before any byte reaches a provider. A request that cannot be recorded is refused.
+
+## The request path
+
+```text
+client (Claude Code, Codex, an SDK, an agent)
+   |  Authorization: Bearer gantry_...   or   x-api-key: gantry_...
+   v
+Gantry
+   1. identify    look up the key's SHA-256 in gantry.keys.yaml
+   2. route       is this a method and path Gantry serves?
+   3. read body   within 32 MiB, 30 seconds and the memory budget
+   4. decide      the first rule that names the person or team
+      kill        a kill switch on the person, team, key or model
+   5. provider    the one provider that lists the model
+   6. query       only parameters the route allows
+   7. guardrails  built-in detectors first, then vendors and webhooks
+   8. cache       an identical request answered from the rule's cache
+   9. rate        requests and tokens per minute
+  10. budget      reserve the most the request could cost
+  11. record      one audit line, chained to the one before
+  12. forward     provider key in, caller key out, retries and fallback
+   v
+provider (OpenAI, Anthropic, Azure OpenAI, Bedrock, Vertex AI, Gemini, a local server)
+```
+
+Step 11 runs for every request, including those refused earlier: a refusal is recorded with the code that refused it. A cache hit is recorded and answered without step 12. When the answer ends, a second record follows with its tokens and cost.
+
+## Refusals by step
+
+| Step | Refusal codes |
+|---|---|
+| 1. identify | `no_key`, `ambiguous_key`, `unknown_key`, `key_expired` |
+| 2. route | `unknown_route` |
+| 3. read body | `body_too_large`, `body_timeout`, `busy`, `unreadable_request` |
+| 4. decide | `no_rule`, `model_not_allowed`, `killed` |
+| 5. provider | `unknown_model`, `wrong_route`, `untranslatable` |
+| 6. query | `unknown_query` |
+| 7. guardrails | `guardrail_blocked` |
+| 9. rate | `rate_limited` |
+| 10. budget | `budget_exceeded`, `key_budget_exceeded` |
+| 11. record | `audit_unavailable` |
+| 12. forward | `upstream_unreachable`, `upstream_failed`, `upstream_timeout` |
+
+Every response carries `X-Gantry-Decision` with the decision ID. Every refusal repeats that ID in its message and uses the error shape the client already understands, so Claude Code and the SDKs show the cause and the fix to the person. See [Refusal codes](/gantry/reference/refusal-codes/).
+
+## What reaches the provider
+
+The request body is forwarded byte for byte, except where the policy changes it: a guardrail that masks, a request translated for a provider that opts in, and the body Amazon Bedrock expects. Gantry never drops or rewrites an unknown field silently. An unknown query parameter is refused by name.
+
+Credentials are swapped, not passed through. Gantry removes every request header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), every `x-amz*` header, and any header carrying the caller's Gantry key, then adds the provider's key.
+
+The provider's answer, streamed or not, including the provider's own errors, comes back as sent, with `X-Gantry-Decision` added.
+
+## State is files
+
+| File | Holds | Written by |
+|---|---|---|
+| `gantry.policy.yaml` | Providers, rules, guardrails, prices, console settings | You, reviewed like code |
+| `gantry.keys.yaml` | The SHA-256, name, team and limits of each key | `gantry key new`, the console, the admin API |
+| `gantry-audit.jsonl` | One hash-chained JSON record per request, usage and admin action | Gantry only |
+| `gantry.kills.json` | Active kill switches | `gantry kill`, the console, the admin API |
+
+Gantry reloads the policy and keys within 2 seconds of a save, without a restart. A change that fails `gantry check` is not applied: Gantry keeps the version it has and records the rejection in the audit log.
+
+<Aside type="note">
+Gantry is pre-1.0 and runs as a single node. See [Project status](/gantry/getting-started/status/) for what is built and what is planned.
+</Aside>
+
+## Next
+
+<CardGrid>
+	<LinkCard title="Policy file" href="/gantry/governance/policy/" description="Rules, budgets, rate limits, guardrails and caching." />
+	<LinkCard title="Audit log" href="/gantry/governance/audit-log/" description="The record format and how to verify the chain." />
+</CardGrid>

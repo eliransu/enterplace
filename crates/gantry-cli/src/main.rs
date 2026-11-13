@@ -511,7 +511,7 @@ fn key_new(
     );
     let url = url.unwrap_or("http://127.0.0.1:8080").trim_end_matches('/');
     println!(
-        "To hand it over, send these lines through your secret manager, never in chat. Claude Code and the OpenAI SDKs read them:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_API_KEY={key}\nexport OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\n\nFor Codex, put the key in GANTRY_KEY and see docs/codex.md for its provider settings.\n",
+        "To hand it over, send these lines through your secret manager, never in chat. Claude Code and the OpenAI SDKs read them:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_API_KEY={key}\nexport OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\n\nFor Codex, put the key in GANTRY_KEY and see https://ggantry.github.io/gantry/integrations/codex/ for its provider settings.\n",
         key = issued.key
     );
     println!(
@@ -561,7 +561,7 @@ fn import_litellm(config: &Path, keys: Option<&Path>, out: &Path) -> Result<Exit
             println!("  - {line}");
         }
     }
-    println!("See docs/migrate-litellm.md. Checking it now:");
+    println!("See https://ggantry.github.io/gantry/migrate/from-litellm/. Checking it now:");
     Ok(check(out, None))
 }
 
@@ -948,7 +948,7 @@ async fn login(url: &str, no_browser: bool) -> Result<(), String> {
     let env = path.with_file_name("env");
     save_credentials(&env, &env_lines(&url, &got.key))?;
     println!(
-        "Point your tools at Gantry: Claude Code and the OpenAI SDKs read these variables, and Codex reads GANTRY_KEY (see docs/codex.md). They are in {env}, which the next `gantry login` rewrites. Add this line to your shell profile, and run it now in this shell:\n\n  . {env}\n\nThe key works within 2 seconds. Every request with it is recorded under {}.",
+        "Point your tools at Gantry: Claude Code and the OpenAI SDKs read these variables, and Codex reads GANTRY_KEY (see https://ggantry.github.io/gantry/integrations/codex/). They are in {env}, which the next `gantry login` rewrites. Add this line to your shell profile, and run it now in this shell:\n\n  . {env}\n\nThe key works within 2 seconds. Every request with it is recorded under {}.",
         got.name,
         env = env.display()
     );

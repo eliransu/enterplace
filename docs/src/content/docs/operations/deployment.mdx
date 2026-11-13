@@ -1,0 +1,232 @@
+---
+title: Deployment
+description: Run Gantry as a binary, a container image or a Linux tarball, serve HTTPS with --tls-cert and --tls-key, and put it on a shared host for a team.
+sidebar:
+  order: 1
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Gantry is one static binary with no database. You run it the same way everywhere: a policy file, a keys file, an audit log, and the provider keys in environment variables.
+
+## Build what you ship
+
+`scripts/release.sh` builds every release artifact on the machine you run it on. Nothing is published to a registry: you build and push to your own.
+
+| Command | Output |
+|---|---|
+| `cargo build --release` | `target/release/gantry` for this machine |
+| `scripts/release.sh tarball` | `dist/gantry-<version>-<src>-<target>.tar.gz` for this machine, with a `.sha256` and a `.BUILD` file holding the `gantry version` line |
+| `scripts/release.sh linux` | The same tarballs for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, built through Docker |
+| `scripts/release.sh image` | Image `gantry:<version>` and `gantry:local` for this machine's platform |
+| `scripts/release.sh images` | Image for `linux/amd64` and `linux/arm64` (needs `docker buildx`) |
+| `scripts/release.sh smoke` | Runs the image against a local mock. Passes when the image is under 50 MB, runs as non-root, prints the same `gantry version` line as `target/release/gantry` and answers a governed request within 60 seconds |
+
+`<src>` is the source hash that `gantry version` prints. Each tarball holds the binary, `LICENSE` and `README.md`. A run deletes the earlier tarballs of the targets it builds, so a stale one cannot survive.
+
+```bash
+gantry version
+```
+
+```text
+gantry 0.0.1 (src d88a5ce58bfa, built 2026-11-13)
+```
+
+## Run it
+
+<Tabs syncKey="install">
+<TabItem label="Binary">
+
+```bash
+OPENAI_PROVIDER_KEY=sk-... gantry serve gantry.policy.yaml
+```
+
+The keys file is `gantry.keys.yaml` beside the policy file unless `--keys` names another. The audit log is `gantry-audit.jsonl` beside the policy file unless the policy sets `audit: { path: ... }`.
+
+</TabItem>
+<TabItem label="Container">
+
+```bash
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -v "$PWD/gantry.policy.yaml:/etc/gantry/gantry.policy.yaml:ro" \
+  -v "$PWD/keys:/etc/gantry/keys" \
+  -v gantry-audit:/var/lib/gantry \
+  -e OPENAI_PROVIDER_KEY \
+  gantry:local \
+  serve /etc/gantry/gantry.policy.yaml --keys /etc/gantry/keys/gantry.keys.yaml --listen 0.0.0.0:8080
+```
+
+The policy must put the audit log on the volume:
+
+```yaml title="gantry.policy.yaml"
+audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+```
+
+</TabItem>
+</Tabs>
+
+Gantry refuses to start when the policy or keys file has any problem, when a provider's `key_env` variable is unset or empty, when the audit log's chain does not hold, or when a TLS file is missing or does not match. Each error names the cause and the fix.
+
+```text
+gantry 0.0.1 listening on http://127.0.0.1:8080
+Console: http://127.0.0.1:8080/console (sign in with an admin key)
+Audit log: gantry-audit.jsonl holds 42 records, all verified. The chain continues at record 43.
+2 rules, 3 keys, 1 provider: openai (openai) at https://api.openai.com.
+Changes to gantry.policy.yaml and gantry.keys.yaml are used within 2 seconds, or at once on SIGHUP.
+```
+
+## The container image
+
+The image holds `/gantry` and nothing else: no shell, no package manager, no C library. TLS root certificates are compiled into the binary.
+
+| Path | Mode | Holds |
+|---|---|---|
+| `/gantry` | read-only | The binary, the image's entrypoint |
+| `/etc/gantry` | read-only | The policy file, mounted by you |
+| `/etc/gantry/keys` | writable mount | The keys file. The console and the admin API issue and revoke keys there, so a read-only keys file makes both fail |
+| `/var/lib/gantry` | volume, owned by `65532` | The audit log |
+
+The image runs as user and group `65532`, exposes port `8080`, and its default command is `serve /etc/gantry/gantry.policy.yaml --listen 0.0.0.0:8080`.
+
+On Linux, give user `65532` the keys folder before the first start:
+
+```bash
+sudo chown -R 65532 keys
+```
+
+Run any other command through the same image, for example a key for the first admin:
+
+```bash
+docker run --rm -v "$PWD/keys:/work" -w /work --user "$(id -u)" \
+  gantry:local key new noa.bar --team platform --admin --keys /work/gantry.keys.yaml
+```
+
+<Aside type="caution">
+Two containers that share one audit folder both run as process 1 and cannot tell each other's lock file apart. Give each container its own audit path.
+</Aside>
+
+## Listening address
+
+Gantry listens on `127.0.0.1:8080` unless `--listen` names another address. The value is an IP address and port: host names, including `localhost`, are refused.
+
+| `--listen` | Reachable from |
+|---|---|
+| `127.0.0.1:8080` | This machine only (the default) |
+| `0.0.0.0:8080` | Every network interface |
+| `127.0.0.1:0` | This machine, on a port the system picks. The start line prints it |
+
+On an address other machines can reach without TLS, Gantry starts and warns that keys travel over plain HTTP.
+
+## HTTPS
+
+Gantry serves HTTPS itself when you give it a certificate and its key.
+
+```bash
+gantry serve gantry.policy.yaml --listen 0.0.0.0:8443 \
+  --tls-cert /etc/gantry/tls/tls.crt --tls-key /etc/gantry/tls/tls.key
+```
+
+| Flag | Value |
+|---|---|
+| `--tls-cert` | PEM file: the server certificate first, then any intermediates |
+| `--tls-key` | The matching unencrypted PEM private key: PKCS#8, PKCS#1 or SEC1 |
+
+- Give both flags or neither. One without the other is refused, never served as plain HTTP.
+- TLS 1.2 and 1.3, through rustls. Gantry serves HTTP/1.1 over TLS too.
+- A plain HTTP request to the TLS port gets no answer.
+- The files are read once at start. Restart Gantry to use a renewed certificate.
+- The console marks its session cookie `Secure` on a TLS connection.
+
+A certificate for a test:
+
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+  -keyout key.pem -out cert.pem -days 30 \
+  -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1"
+```
+
+### A proxy in front
+
+You can keep Gantry on loopback and let a proxy end TLS. The proxy must stream answers without buffering and send `X-Forwarded-Proto: https`, which the console needs to mark its cookie `Secure`.
+
+<Tabs>
+<TabItem label="Caddy">
+
+```text title="Caddyfile"
+gantry.example.com {
+    reverse_proxy 127.0.0.1:8080 {
+        flush_interval -1
+    }
+}
+```
+
+Caddy gets and renews its own certificate and sets `X-Forwarded-Proto` itself.
+
+</TabItem>
+<TabItem label="nginx">
+
+```text title="gantry.conf"
+server {
+    listen 443 ssl;
+    server_name gantry.example.com;
+    ssl_certificate     /etc/ssl/gantry.pem;
+    ssl_certificate_key /etc/ssl/gantry.key;
+    client_max_body_size 32m;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 600s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+Behind a proxy, the `client` field of every audit record is the proxy's address.
+
+## A shared host for a team
+
+<Steps>
+
+1. Put the policy and keys files in version control. Gantry does not know who edited a file; your history does.
+
+2. Make the first admin key and hand it over through your secret manager.
+
+   ```bash
+   gantry key new noa.bar --team platform --admin --url https://gantry.example.com
+   ```
+
+3. Start Gantry with TLS, or behind a TLS proxy, and metrics on loopback.
+
+   ```bash
+   gantry serve /etc/gantry/gantry.policy.yaml \
+     --keys /var/lib/gantry/gantry.keys.yaml \
+     --listen 0.0.0.0:8443 \
+     --tls-cert /etc/gantry/tls/tls.crt --tls-key /etc/gantry/tls/tls.key \
+     --metrics 127.0.0.1:9464
+   ```
+
+4. Point your load balancer's health check at `GET /healthz`. It answers 503 when the audit log cannot be written.
+
+5. Issue keys from the console at `/console`, or let developers get their own with `gantry login` through [single sign-on](/gantry/governance/single-sign-on/).
+
+6. Keep the last hash of the audit log off the host, on a schedule. See [Running in production](/gantry/operations/operations/#backups).
+
+</Steps>
+
+<Aside type="note">
+Gantry runs as one process per audit log. Budgets, rate limits, the cache and console sessions live in its memory. See [Project status](/gantry/getting-started/status/).
+</Aside>
+
+## Next
+
+<CardGrid>
+	<LinkCard title="Kubernetes" href="/gantry/operations/kubernetes/" description="The Helm chart and plain manifests." />
+	<LinkCard title="Running in production" href="/gantry/operations/operations/" description="Reload, signals, backups, a full disk and upgrades." />
+	<LinkCard title="Security model" href="/gantry/operations/security/" description="What Gantry protects and where it stops." />
+	<LinkCard title="CLI reference" href="/gantry/reference/cli/" description="Every flag of gantry serve." />
+</CardGrid>

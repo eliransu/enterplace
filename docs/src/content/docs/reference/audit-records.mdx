@@ -1,0 +1,237 @@
+---
+title: Audit records
+description: The JSON schema of every record type in the Gantry audit log, with field tables and an example of each.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The audit log is a file of JSON lines, one record per line, in one hash chain. Every record type shares the chain fields; the `event` field tells the types apart.
+
+| `event` | Record | Written |
+|---|---|---|
+| absent | [Request decision](#request-decision) | For each request Gantry decides, allowed or refused, before anything is forwarded |
+| `usage` | [Usage](#usage) | When a forwarded request's answer ends |
+| `attempts` | [Attempts](#attempts) | After a request that was tried more than once |
+| `answer_guardrails` | [Answer guardrails](#answer-guardrails) | After a request whose rule checks answers |
+| `config_loaded` | [Configuration loaded](#config_loaded) | At start, and when a change to the policy or keys file is used |
+| `config_rejected` | [Configuration rejected](#config_rejected) | When a change fails the check |
+| `admin` | [Admin](#admin) | For each admin API call and console action |
+| `audit_repaired` | [Repair](#audit_repaired) | When `gantry audit repair --yes` removes a cut last line |
+
+Not recorded: `GET /healthz`, `HEAD /api/hello`, `GET /metrics`, and a request so malformed that the HTTP library rejects it before Gantry sees it.
+
+## Chain fields
+
+Every record starts with `n` and ends with `prev` and `hash`.
+
+| Field | Type | Description |
+|---|---|---|
+| `n` | integer | Record number, from 1, one more than the record before |
+| `prev` | string | The `hash` of the record before, or 64 zeros for record 1 |
+| `hash` | string | SHA-256, in hex, of this line's text up to and including `prev` and its value, closed with `}` |
+
+`gantry audit verify` recomputes each hash and link. Times are UTC with millisecond precision, such as `2026-11-13T00:53:10.132Z`. Strings that come from the caller are cut to 200 characters. No record holds prompt text, answer text, a Gantry key or a provider key.
+
+## Request decision
+
+One per request Gantry decides. It records the decision, not the provider's answer.
+
+```json
+{"n":1,"id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-13T00:53:10.132Z","person":"maya.cohen","team":"payments","client":"127.0.0.1","key":"5d1e4a07","method":"POST","path":"/v1/chat/completions","model":"gpt-4o-mini","verdict":"allow","code":null,"rule":"payments-team","rule_line":16,"provider":"openai","policy_sha256":"6d0782...","keys_sha256":"37b02a...","prev":"0000000000000000000000000000000000000000000000000000000000000000","hash":"84347ac2..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | The decision ID: 26 characters, sortable by time (ULID layout). The same ID is in `X-Gantry-Decision` and in every refusal message |
+| `time` | string | When the record was made |
+| `person` | string | The name the key was issued to, or `unknown` when the caller was not identified |
+| `team` | string or null | The key's team |
+| `client` | string or null | The IP address of the connection. Behind a proxy, the proxy's |
+| `key` | string or null | The first 8 hex characters of the SHA-256 of the key the request came with, issued or not. `null` when it carried no key |
+| `method`, `path` | string | As the request came, without the query |
+| `model` | string or null | The `model` field of the body. `null` when refused before the body was read |
+| `verdict` | string | `allow` or `refused` |
+| `code` | string or null | The [refusal code](/gantry/reference/refusal-codes/) |
+| `rule`, `rule_line` | string, integer, or null | The rule that decided and its line in the policy file |
+| `provider` | string or null | The provider the request was sent to. `null` when refused before one was chosen |
+| `policy_sha256`, `keys_sha256` | string | SHA-256 of the policy and keys files that decided it |
+
+Fields present only in some cases:
+
+| Field | Type | Present when |
+|---|---|---|
+| `cache` | string | The rule has a cache: `hit` when the answer came from the cache, `miss` when it could have and did not |
+| `translated` | `true` | The request was translated for the provider (`accept_chat`, `accept_messages`, Gemini, Vertex AI) |
+| `alias`, `deployment` | string | The model is an alias: the alias sent, and the deployment tried first as `provider/model` |
+| `limit` | object | Refused by a rate limit: `{"kind":"rpm","of":"rule","value":60}`, or `{"kind":"tpm","of":"rule","value":1000,"request_could_use":1228}` where `of` is `rule` or `key` |
+| `key_models` | `true` | A `model_not_allowed` refusal by the key's own `models:` list |
+| `guardrails` | array or string | The rule has guardrails. One entry per guardrail and kind found; an empty list means they ran and found nothing. The string `not_run: the body is audio` for a transcription |
+
+A `guardrails` entry:
+
+| Field | Type | Description |
+|---|---|---|
+| `guardrail` | string | The guardrail's name in the policy |
+| `detector` | string | What found it, such as `secrets`, `pii` or a webhook |
+| `kind` | string | The kind of finding, such as `aws_access_key` or `email_address` |
+| `action` | string | `block`, `mask`, `warn`, or `skipped` when a `fail_open` webhook did not answer |
+| `count` | integer | How many were found |
+
+## Usage
+
+Written when a forwarded request's answer ends: its whole body sent, its stream finished, or the caller gone. Usage is read from the provider's own answer, before translation back. When a request fell back to another provider, `provider` names the one that answered. A request that got no answer at all (an `upstream_*` failure) has no usage record, and its budget reservation is given back.
+
+```json
+{"n":2,"event":"usage","id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-13T00:53:11.020Z","person":"maya.cohen","team":"payments","key":"5d1e4a07","model":"claude-sonnet-5-5","provider":"anthropic","status":200,"ended":"complete","usage":"reported","input_tokens":100,"output_tokens":20,"cache_read_tokens":1000,"cache_write_tokens":0,"price":"known","price_source":"builtin","cost_usd":0.0004,"reserved_usd":0.0412,"charged_usd":0.0004,"policy_sha256":"6d0782...","keys_sha256":"37b02a...","prev":"84347ac2...","hash":"..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event` | string | `usage` |
+| `id` | string | The decision ID of the request |
+| `person`, `team`, `key`, `model`, `provider` | string | As decided |
+| `status` | integer or null | The provider's HTTP status. `null` when the caller left before the answer started |
+| `ended` | string | `complete`, or `cut_off` when the caller went before the answer ended |
+| `cache` | string | `hit`, only for an answer served from the cache |
+| `usage` | string | `reported`, `partial`, `estimated`, `not_reported`, `caller_left` or `cache_hit` (below) |
+| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | integer or null | As the provider reported them. Input excludes cache reads and writes. `null` when not reported, `0` for a cache hit |
+| `price` | string | `known`, or `none` for a model with no price |
+| `price_source` | string or null | `policy`, `builtin` or `litellm` |
+| `cost_usd` | number or null | What the answer cost at the model's price. `null` when the usage or price is unknown, never a guess. `0` for a cache hit |
+| `reserved_usd` | number or null | What the request reserved against its budget. `null` without one |
+| `charged_usd` | number | What counts against budgets (below) |
+| `policy_sha256`, `keys_sha256` | string | The version that decided the request |
+
+| `usage` | Meaning |
+|---|---|
+| `reported` | The provider reported the counts |
+| `partial` | Cut off before the event that carries the final counts. The tokens are what was generated before the cut |
+| `estimated` | A stream without a budget that finished without usage, such as an OpenAI stream without `stream_options.include_usage`. Charged from its streamed text |
+| `not_reported` | Any other answer without usage, or an error. Under a budget, an unreported stream is charged its reservation |
+| `caller_left` | The caller hung up after forwarding and before the answer started. No counts, charged the reservation (or the estimate of the most it could cost) and counted in full against tokens per minute |
+| `cache_hit` | Served from the cache |
+
+`charged_usd` for a 2xx answer is `cost_usd` when usage is whole, the larger of `cost_usd` and the reservation when `partial`, and the reservation when no usage was reported (without a budget, the estimate of the most the request could cost). Otherwise it is `cost_usd`, or `0`. At start, Gantry sums `charged_usd` over the current period to restore budgets.
+
+## Attempts
+
+Follows a request record, with the same `id`, when the request was tried more than once through `retries`, a `fallback` or an alias.
+
+```json
+{"n":3,"event":"attempts","id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-13T00:53:12.411Z","attempts":[{"provider":"openai","outcome":"503"},{"provider":"openai-backup","outcome":"200"}],"prev":"...","hash":"..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event` | string | `attempts` |
+| `id` | string | The decision ID of the request |
+| `attempts` | array | Every try in order, each `{"provider", "outcome"}`. `outcome` is the HTTP status, or the code when the provider gave none, such as `upstream_timeout`. For an alias, `provider` names the deployment |
+
+## Answer guardrails
+
+Follows a request record, with the same `id`, when its rule has guardrails with `on: [answer]`.
+
+```json
+{"n":4,"event":"answer_guardrails","id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-13T00:53:12.902Z","verdict":"block","guardrails":[{"guardrail":"no-secrets","detector":"secrets","kind":"aws_access_key","action":"block","count":1}],"prev":"...","hash":"..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event` | string | `answer_guardrails` |
+| `id` | string | The decision ID of the request |
+| `verdict` | string | `block` (the answer was withheld with `guardrail_blocked`), `mask`, `pass`, or `not_run` |
+| `guardrails` | array or string | Entries as on the request record, or `not_run: the answer is streamed` for a streamed answer on a rule without `buffer_stream: true` |
+
+## config_loaded
+
+Written at start and when a change to the policy or keys file passes the check, before any request is decided with it.
+
+```json
+{"n":5,"event":"config_loaded","time":"2026-11-13T00:50:02.004Z","trigger":"file_change","policy_sha256_before":"6d0782...","keys_sha256_before":"37b02a...","policy_sha256":"6d0782...","keys_sha256":"9c4e11...","policy":"version: 1\nproviders:\n...","keys_added":[{"name":"maya.cohen","team":"payments","sha256_prefix":"5d1e4a07"}],"keys_removed":[],"prev":"...","hash":"..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event` | string | `config_loaded` |
+| `time` | string | When it was loaded |
+| `trigger` | string | `start`, `file_change` or `signal` (`SIGHUP`) |
+| `policy_sha256_before`, `keys_sha256_before` | string or null | The version before. At start, the last version the log recorded, so a change made while Gantry was stopped shows. `null` on a new log |
+| `policy_sha256`, `keys_sha256` | string | The version now in use |
+| `policy` | string | The whole policy text. It holds no secrets |
+| `keys_added`, `keys_removed` | array | Each `{"name", "team", "sha256_prefix"}` |
+
+## config_rejected
+
+Written once per distinct pair of files that fails the check. Gantry keeps the version it has.
+
+```json
+{"n":6,"event":"config_rejected","time":"2026-11-13T00:51:40.300Z","trigger":"file_change","policy_sha256_before":"6d0782...","keys_sha256_before":"9c4e11...","policy_sha256":"b1a9f0...","keys_sha256":"9c4e11...","problem_count":1,"problems":["/etc/gantry/gantry.policy.yaml:12: \"modles\" is not a key Gantry knows. Did you mean \"models\"?"],"prev":"...","hash":"..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event` | string | `config_rejected` |
+| `time`, `trigger` | string | As on `config_loaded` |
+| `policy_sha256_before`, `keys_sha256_before` | string | The version still in use |
+| `policy_sha256`, `keys_sha256` | string | The rejected files on disk |
+| `problem_count` | integer | How many problems |
+| `problems` | array of strings | Each problem with its file, line and fix |
+
+## admin
+
+One per admin API call and console action, allowed or refused, written before the action. An action that is allowed and then fails gets a second record with the same `id`, `verdict: failed` and an `error`.
+
+```json
+{"n":7,"event":"admin","id":"01M796B2Q8V3K0N7Z5X4R1T9WD","time":"2026-11-13T00:55:01.218Z","person":"noa.bar","team":"platform","client":"127.0.0.1","key":"9b74c2e1","action":"issue_key","target":{"name":"maya.cohen","team":"payments","sha256_prefix":"5d1e4a07"},"verdict":"allow","code":null,"policy_sha256":"6d0782...","keys_sha256":"37b02a...","prev":"...","hash":"..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event` | string | `admin` |
+| `via` | string | `console` for a console action. Absent for the admin API |
+| `id` | string | A decision ID |
+| `time` | string | When the record was made |
+| `person` | string | Who acted: the key's name, the email of a single sign-on, or `unknown` |
+| `team` | string or null | Their team |
+| `client` | string or null | The IP address of the connection |
+| `key` | string or null | The first 8 hex characters of the caller's key hash |
+| `action` | string or null | What was asked (below). `null` for a method and path the admin API does not serve |
+| `target` | object or null | What it acted on: `name`, `team`, `sha256_prefix` (and `admin` in the console) for a key; `scope`, `value` and `reason` for a kill switch; `via` and `role` for a single sign-on |
+| `verdict` | string | `allow`, `refused` or `failed` |
+| `code` | string or null | The refusal code |
+| `error` | string | Only when `failed`: why the action did not happen |
+| `policy_sha256`, `keys_sha256` | string | The version in use |
+
+| `action` | From |
+|---|---|
+| `list_keys`, `issue_key`, `revoke_key`, `revoke_own_key` | `/admin/keys` |
+| `list_kills`, `set_kill`, `clear_kill` | `/admin/kills` |
+| `issue_key`, `revoke_key` | The console's People page |
+| `self_issue_key` | `gantry login` |
+| `console_sign_in`, `console_sign_out` | The console sign-in and sign-out |
+| `console_sso_starts` | 100 or more single sign-on starts in a minute. `target` holds `starts` and `within_seconds` |
+| `console_sso_refusals` | Refused sign-ins from one address past the first 100 in a minute. `target` holds `client`, `refusals`, `codes` and `within_seconds` |
+
+## audit_repaired
+
+Appended by `gantry audit repair --yes` after it removes a cut last line, so the repair is in the chain.
+
+```json
+{"n":1204,"event":"audit_repaired","time":"2026-11-13T09:12:44.017Z","removed_bytes":57,"removed_sha256":"e3b0c4...","removed_text":"{\"n\":1204,\"event\":\"usage\",\"id\":\"01M79...\",\"time\":\"2026-1","prev":"...","hash":"..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event` | string | `audit_repaired` |
+| `time` | string | When the repair was made |
+| `removed_bytes` | integer | Length of the removed line |
+| `removed_sha256` | string | SHA-256 of the removed bytes |
+| `removed_text` | string | The removed line itself |
+
+`gantry audit verify` counts request records, configuration records (`config_loaded`, `config_rejected` and `answer_guardrails`), admin records (`admin` and `audit_repaired`), usage records and attempts records apart.
+
+<Aside type="note">
+The examples shorten hashes with `...`. Real records carry 64 hex characters in `prev`, `hash`, `policy_sha256` and `keys_sha256`.
+</Aside>

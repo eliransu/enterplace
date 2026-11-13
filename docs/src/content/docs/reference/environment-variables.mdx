@@ -1,0 +1,104 @@
+---
+title: Environment variables
+description: Every environment variable Gantry reads, from provider keys and AWS credentials to the variables of gantry serve --unchecked, gantry login and gantry kill.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Gantry keeps secrets out of files: every provider key, guardrail credential and client secret comes from an environment variable that the policy names. A handful of fixed variables configure the CLI.
+
+## Variables the policy names
+
+The policy file holds the name of a variable, never its value. `gantry serve` reads each one at start and refuses to start while one is unset or empty. A value is trimmed of surrounding spaces.
+
+| Policy field | Holds | Read by |
+|---|---|---|
+| `providers[].key_env` | The provider's API key. For `vertex` and `vertex_anthropic`, an OAuth access token | `gantry serve`, at start |
+| `guardrails[].key_env` | A guardrail vendor's API key | `gantry serve`, at start and on each reload |
+| `guardrails[].headers_env` | A map of header name to variable: each header sent to a webhook guardrail, with its value from the variable | `gantry serve`, at start and on each reload |
+| `console.sso.client_secret_env` | The OIDC client secret | `gantry serve`, at each single sign-on |
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-4o-mini]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [gpt-4o-mini]
+```
+
+```bash
+OPENAI_PROVIDER_KEY=sk-... gantry serve gantry.policy.yaml
+```
+
+<Aside type="caution">
+Avoid `ANTHROPIC_API_KEY` as a provider's `key_env`. Claude Code reads that variable for its own key, which is a Gantry key.
+</Aside>
+
+Rules for `key_env`:
+
+- A provider of kind `bedrock` takes no `key_env`. It uses the AWS variables below.
+- An `openai` provider on this machine or a private network with `allow_private: true` may leave `key_env` out, and then sends no key.
+- Every other provider needs one.
+- The value is read once. Rotating a provider key means a restart.
+
+If `client_secret_env` is not set, Gantry starts with a warning, and every single sign-on fails until it is set and Gantry restarted. Signing in to the console with an admin key still works.
+
+## AWS credentials
+
+Read for every `bedrock` provider and every guardrail of the `bedrock` vendor. Gantry signs requests with AWS Signature Version 4 itself; it never calls the AWS CLI.
+
+| Variable | Required | Holds |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` | yes | The access key ID |
+| `AWS_SECRET_ACCESS_KEY` | yes | The secret access key |
+| `AWS_SESSION_TOKEN` | for temporary credentials | The session token |
+
+The region comes from the provider's `region` in the policy, not from the environment.
+
+## gantry serve --unchecked
+
+| Variable | Default | Holds |
+|---|---|---|
+| `GANTRY_ADDR` | `127.0.0.1:8080` | The address to listen on, an IP address and port. Must be loopback. A value that is not text stops the start |
+| `GANTRY_UPSTREAM` | none | The server to forward to. Without it, requests are refused with `no_upstream` |
+
+`gantry serve <policy>` does not read these. Its address comes from `--listen`.
+
+## CLI
+
+| Variable | Used by | Holds |
+|---|---|---|
+| `GANTRY_ADMIN_KEY` | `gantry kill`, `gantry unkill` | An admin key. Without it, the key saved by `gantry login` is used |
+| `GANTRY_URL` | `gantry kill`, `gantry unkill` | The gateway, when `--url` is not given. Without either, the URL saved by `gantry login` is used |
+| `XDG_CONFIG_HOME` | `gantry login`, `gantry logout`, `gantry kill`, `gantry unkill` | The credentials folder: `$XDG_CONFIG_HOME/gantry/` |
+| `HOME` | the same | When `XDG_CONFIG_HOME` is unset or empty, the credentials folder is `$HOME/.config/gantry/` |
+
+`gantry login` writes two files there, readable by you only: `credentials` (the key, gateway URL, name, team and expiry) and `env` (the client variables below).
+
+## Variables Gantry prints for clients
+
+`gantry key new` prints these lines with a new key, and `gantry login` writes them to `~/.config/gantry/env`. Gantry does not read them; your tools do.
+
+| Variable | Value | Read by |
+|---|---|---|
+| `ANTHROPIC_BASE_URL` | The gateway URL | Claude Code, Anthropic SDKs |
+| `ANTHROPIC_API_KEY` | The Gantry key | Claude Code, Anthropic SDKs |
+| `OPENAI_BASE_URL` | The gateway URL with `/v1` | OpenAI SDKs |
+| `OPENAI_API_KEY` | The Gantry key | OpenAI SDKs |
+| `GANTRY_KEY` | The Gantry key | Codex, through its `env_key` setting. Written by `gantry login` only |
+
+See [Connect Claude Code](/gantry/integrations/claude-code/).
+
+## Build time
+
+| Variable | Effect |
+|---|---|
+| `SOURCE_DATE_EPOCH` | Sets the build day that `gantry version` prints, for reproducible builds |
