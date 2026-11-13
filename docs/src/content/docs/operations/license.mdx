@@ -32,6 +32,8 @@ gantry-enterprise license show --keys gantry.keys.yaml
 
 It prints the customer, the features, seats used of allowed, the expiry date and whether the license is in its grace period.
 
+`GET /healthz` shows it too, under `license`: `state` (`valid`, `grace`, `lapsed` or `missing`), `customer`, `id`, `features`, `expires` and `grace_days`. Never the token.
+
 ## Nothing calls home
 
 The license is signed by Gantry and checked against a public key built into the binary. The check never uses the network, so it works the same in an air-gapped network.

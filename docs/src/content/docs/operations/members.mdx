@@ -1,0 +1,38 @@
+---
+title: Members and roles
+description: Invite people to the console by one-time link, give them a role (owner, admin, viewer), and remove them with their keys. An enterprise feature, unlocked by the license feature members.
+sidebar:
+  order: 8
+---
+
+With a license that includes `members` (see [License key](/operations/license/)), `gantry-enterprise` adds a **Members** page to the console. People sign in with an email and password beside admin keys and single sign-on. Without the feature the console signs in with admin keys and single sign-on only, as the open source gateway does.
+
+Members are kept in Postgres, in the same database as the [store](/operations/store/). The policy needs a `store:` section; without one the gateway starts and says the feature is off until you add it.
+
+## Roles
+
+| Role | May |
+|---|---|
+| owner | everything, including making, changing and removing owners |
+| admin | invite, change and remove admins and viewers; issue and revoke keys |
+| viewer | look at every page; change nothing |
+
+An admin key acts as an owner: it is the install's root credential. A single sign-on admin acts as an admin, a read-only one as a viewer. The last owner can be neither removed nor demoted: make another member an owner first.
+
+## Invite someone
+
+1. Open **Members** and fill in **Invite a member**: email, role (admin or viewer) and team.
+2. Gantry shows a link once. It does not send email: send the link yourself. It works once, for 7 days.
+3. The person opens it, sets their name and a password of at least 12 characters, and is signed in.
+
+Pending invites are listed under the form; **Revoke invite** stops a link from working. Make someone an owner after they join.
+
+## Sign in
+
+The sign-in page links to **Sign in with email and password**. A wrong password and an unknown email get the same answer. Passwords are kept as PBKDF2-SHA256 hashes (100,000 iterations, a salt per person).
+
+## Remove someone
+
+**Remove member** ends their console session at once and revokes every key whose name is their email, in any case. Gateways on the same database stop accepting those keys within a second. A role change takes effect on their next page, with no new sign-in.
+
+Every invite, acceptance, role change, removal and sign-in is an admin record in the audit log, in the same chain as requests.
