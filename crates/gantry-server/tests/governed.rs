@@ -493,6 +493,21 @@ async fn a_gantry_key_or_an_account_choice_reaches_the_provider_in_no_header_and
         .header("cf-connecting-ip", "203.0.113.7")
         .header("cf-ray", "8a1b2c3d4e5f")
         .header("cdn-loop", "cloudflare")
+        // What Fastly, Azure Front Door, Envoy, App Engine and Akamai-style proxies add.
+        .header("x-client-ip", "203.0.113.7")
+        .header("client-ip", "203.0.113.7")
+        .header("x-true-client-ip", "203.0.113.7")
+        .header("fastly-client-ip", "203.0.113.7")
+        .header("x-cluster-client-ip", "203.0.113.7")
+        .header("x-original-forwarded-for", "203.0.113.7")
+        .header("x-envoy-external-address", "203.0.113.7")
+        .header("x-azure-clientip", "203.0.113.7")
+        .header("x-appengine-user-ip", "203.0.113.7")
+        .header("x-originating-ip", "203.0.113.7")
+        .header("x-remote-addr", "203.0.113.7")
+        .header("x-remote-ip", "203.0.113.7")
+        // Gantry reads every answer (usage, guardrails, translation), so it asks the provider for plain bytes.
+        .header("accept-encoding", "gzip, br")
         .body(Body::from(r#"{"model":"m","messages":[]}"#))?;
     let (status, _, _) = answer(&app, request).await?;
     assert_eq!(status, StatusCode::OK);
@@ -532,6 +547,19 @@ async fn a_gantry_key_or_an_account_choice_reaches_the_provider_in_no_header_and
         "cf-connecting-ip",
         "cf-ray",
         "cdn-loop",
+        "x-client-ip",
+        "client-ip",
+        "x-true-client-ip",
+        "fastly-client-ip",
+        "x-cluster-client-ip",
+        "x-original-forwarded-for",
+        "x-envoy-external-address",
+        "x-azure-clientip",
+        "x-appengine-user-ip",
+        "x-originating-ip",
+        "x-remote-addr",
+        "x-remote-ip",
+        "accept-encoding",
     ] {
         assert!(
             headers.get(name).is_none(),

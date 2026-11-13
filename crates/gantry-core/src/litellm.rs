@@ -500,7 +500,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
             .unwrap_or_default()
         {
             report.push(format!(
-                "{section}.fallbacks: {from} -> {to:?} not mapped. Gantry fails over between the deployments of one alias: add the fallback's deployment to alias {from} (it then also takes a share of traffic), or give each provider of {from} fallback: <provider> for the same model."
+                "{section}.fallbacks: {from} -> {to:?} not mapped. Gantry fails over only between deployments that speak the same API. If {from} and the fallback are both OpenAI-compatible (or both Anthropic), add the fallback's deployment to alias {from} (it then also takes a share of traffic), or give each provider of {from} fallback: <provider> for the same model. A fallback from an OpenAI model to an Anthropic one, or the reverse, has no equivalent: the client retries with the other model."
             ));
         }
     }

@@ -48,7 +48,8 @@ A request that cannot be identified, decided and recorded is not forwarded.
 Gantry removes from every forwarded request:
 
 - any header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project`, except `idempotency-key`, so a caller cannot choose the provider account or project,
-- proxy and CDN headers (`x-forwarded-*`, `forwarded`, `via`, `x-real-ip`, `true-client-ip`, `cf-*`, `cdn-loop`), so the caller's address never reaches the provider,
+- proxy and CDN headers that carry the caller's address: `x-forwarded-*`, `forwarded`, `via`, `cf-*`, `cdn-loop`, `x-envoy-*`, `x-original-forwarded-*`, and any name ending in `-ip` or containing `client-ip`, `clientip` or `remote-addr`, so the caller's address never reaches the provider,
+- `accept-encoding`: Gantry reads every answer (usage, guardrails, translation), so it asks the provider for plain bytes,
 - any header whose name starts with `x-amz`, `x-amzn-*` included: AWS headers are Gantry's to sign and set,
 - any header that carries the caller's Gantry key in its name or value, compared without regard to case, with or without the `gantry_` prefix. A hand-made key shorter than 16 characters is found only where it stands as a word of its own,
 - `Cookie`, `Host` and the hop-by-hop headers (`Connection` and the headers it names, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`).

@@ -144,7 +144,7 @@ These are not mapped. Each appears in the report with what to do in Gantry.
 | LiteLLM | What to do in Gantry |
 |---|---|
 | Other `routing_strategy` values | The alias uses `round_robin`. |
-| `fallbacks` | Gantry fails over between an alias's deployments, or from a provider to its `fallback` provider for the same model. Add the fallback as a deployment of the alias if it may also take a share of traffic. |
+| `fallbacks` | Gantry fails over between an alias's deployments, or from a provider to its `fallback` provider for the same model, only between deployments that speak the same API. Add the fallback as a deployment of the alias if it may also take a share of traffic. A fallback from an OpenAI model to an Anthropic one, or the reverse, has no equivalent: the client retries with the other model. |
 | `rpm`, `tpm` per deployment | Gantry limits people, teams and keys: `rate:` on a rule, `tpm` on a key. See [Budgets and rate limits](/governance/budgets-and-rate-limits/). |
 | `general_settings.master_key` | Make an admin key with `gantry key new <name> --team <team> --admin`. |
 | `general_settings.database_url`, `redis_*` | Not needed. Keys are a file, records are the audit log, cooldowns are in memory on one node. |

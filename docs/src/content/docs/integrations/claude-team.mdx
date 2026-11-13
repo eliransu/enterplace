@@ -1,0 +1,84 @@
+---
+title: Claude Team and Enterprise
+description: See who uses Claude Code on your Claude subscriptions, what it costs and which tools ran, without routing anything. Setup for Team, Enterprise and API key plans.
+sidebar:
+  order: 1
+---
+
+import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+
+When your developers use Claude Code on their own Claude Team or Enterprise seats, their requests cannot go through a gateway. Gantry's watch mode works with them as they are: Claude Code sends its own usage telemetry to Gantry, and you see who uses it, what it costs, which tools ran or were rejected, and which people have not been seen at all.
+
+Watch mode observes. It does not block requests or enforce budgets. To enforce policy, route through a Gantry gateway with an API key or cloud provider access: see [Claude Code](/integrations/claude-code/).
+
+## What you get
+
+| | Claude Team | Claude Enterprise | Gantry watch mode |
+|---|---|---|---|
+| Per-person usage and estimated cost | Spend report (CSV, daily) | Analytics API | Per person, model and day, updated about once a minute |
+| Per-request records | No | Compliance API | Every API request, error and refusal |
+| Tool decisions (accepted, rejected, by whom) | No | Compliance API | Yes |
+| Coverage: members not seen | No | No | Members with no session in 7 days |
+| Your own retention and export | No | Through Anthropic | Yes, with the rest of your Gantry audit data |
+
+Gantry keeps the event metadata: person, session, model, tokens, estimated cost, tool name, decision and errors. It never stores prompt, answer or tool content, even if those are turned on in Claude Code. Claude Code sends this telemetry only to the address you set, never to Anthropic.
+
+## Set it up
+
+<Steps>
+
+1. Sign in to the Gantry app and open **Claude Code**, then **Set up**.
+2. Choose your Claude plan and select **Create setup**. Gantry shows a settings block with your organization's ingest token. Copy it: the token is shown once.
+3. Apply the block for your plan, as below.
+4. Within a few minutes of each developer's next Claude Code session, they move from **not seen** to **reporting**.
+
+</Steps>
+
+<Tabs>
+<TabItem label="Claude Team">
+
+As an Owner, open claude.ai, then **Organization settings**, **Claude Code**, **Managed settings**, paste the block and save. It applies to everyone in the organization, and Claude Code picks it up when it next starts. Nothing is installed on laptops.
+
+```json title="Managed settings"
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "https://gantry-control.eliran.me/otlp/<your-org>/v1/metrics",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "https://gantry-control.eliran.me/otlp/<your-org>/v1/logs",
+    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer gotel_..."
+  }
+}
+```
+
+</TabItem>
+<TabItem label="Claude Enterprise">
+
+The same place and the same block as Team. Enterprise can also apply managed settings to groups only, for a pilot. Gantry's view sits beside Anthropic's Compliance API and Analytics API, with your own retention and coverage.
+
+</TabItem>
+<TabItem label="API key, Bedrock, Vertex AI">
+
+Server-managed settings reach only Team and Enterprise logins. Otherwise, put the block in Claude Code's managed settings file on each machine, through your device management tool:
+
+- macOS: `/Library/Application Support/ClaudeCode/managed-settings.json`
+- Linux: `/etc/claude-code/managed-settings.json`
+- Windows: `C:\Program Files\ClaudeCode\managed-settings.json`
+
+On these plans Claude Code sends no email address, so add `OTEL_RESOURCE_ATTRIBUTES=user.email=<person>` per machine to see names. With an API key you can also route through a Gantry gateway instead, which adds policy and budgets.
+
+</TabItem>
+</Tabs>
+
+<Aside type="note">
+Costs in watch mode are Claude Code's own estimates at list price. Usage within your Team or Enterprise seats is not billed per dollar, so read them as relative usage, not an invoice.
+</Aside>
+
+## What the page shows
+
+- **By person:** sessions, tokens, estimated cost, lines added, commits and pull requests, last seen.
+- **By model:** tokens and estimated cost.
+- **Members not seen in 7 days:** people in your Gantry organization whose Claude Code has not reported, the gap to close first.
+- **Errors, refusals and rejected tool calls:** API errors, refusals, and tool calls a person or a hook rejected.

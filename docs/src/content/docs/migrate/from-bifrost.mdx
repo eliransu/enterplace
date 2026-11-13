@@ -31,7 +31,7 @@ Gantry has no importer for Bifrost. You write the policy by hand from your `conf
 | `keys[].models` | The provider's `models:` list. A model is listed by one provider only. |
 | `keys[].weight` across providers | An [alias](/routing/aliases/) with `deployments` and `weight`. |
 | `network_config` retries | The provider's `retries` (0 to 5). |
-| `fallbacks` in the request body | The provider's `fallback`, or an alias's deployments. See [Retries and fallbacks](/routing/retries-and-fallbacks/). |
+| `fallbacks` in the request body | The provider's `fallback`, or an alias's deployments, between deployments that speak the same API. A fallback across APIs (OpenAI to Anthropic) has no equivalent. See [Retries and fallbacks](/routing/retries-and-fallbacks/). |
 | `provider/model` names such as `openai/gpt-4o-mini` | Bare model names. To keep clients that send the prefixed name, add an alias with that name. |
 | Governance plugin | Built in. The [policy file](/governance/policy/) holds the rules, and every decision is in the audit log. |
 | Logging plugin, `logs.db` | The [audit log](/governance/audit-log/): a hash-chained file of JSON lines with who, which model, the verdict, tokens and cost. It holds no prompt or answer text. |

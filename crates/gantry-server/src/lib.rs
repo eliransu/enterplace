@@ -2545,6 +2545,16 @@ async fn send(
                     || name.starts_with("cf-")
                     || name.starts_with("x-forwarded-")
                     || ["forwarded", "via", "cdn-loop", "x-real-ip", "true-client-ip"].contains(&name)
+                    // The many names other proxies use for the caller's address (Fastly, Azure, Envoy, App Engine).
+                    || name.ends_with("-ip")
+                    || name.contains("client-ip")
+                    || name.contains("clientip")
+                    || name.contains("remote-addr")
+                    || name.starts_with("x-envoy-")
+                    || name.starts_with("x-original-forwarded")
+                    // Gantry reads every answer (usage, guardrails, translation), so the provider must send plain
+                    // bytes: a compressed answer cannot be read, and its tokens and cost would go unrecorded.
+                    || name == "accept-encoding"
                     // Any header named for a credential, whatever the provider calls it. An idempotency key is not one.
                     || name != "idempotency-key"
                     && [

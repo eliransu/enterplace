@@ -1,0 +1,66 @@
+---
+title: Hybrid gateways
+description: Run the gateway in your own network while Gantry's control plane manages its policy and keys. Prompts, answers and provider keys stay with you.
+sidebar:
+  order: 2
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+A hybrid gateway runs in your network, as a container or a binary, and takes its policy and keys from the Gantry control plane. Prompts, answers and provider keys never leave your network. The control plane receives the audit metadata listed below, so the Gantry app shows every gateway's decisions in one place.
+
+Hybrid gateways are part of the commercial product. They run `gantry-enterprise node`, which runs the open source gateway and manages it.
+
+## Set one up
+
+<Steps>
+
+1. In the Gantry app, open **Gateways**, type a name and select **Register gateway**. Copy the node token: it is shown once.
+2. Build the image (there is no public registry yet) from the folder that holds the `gantry` and `gantry-enterprise` repositories:
+
+   ```bash
+   docker buildx build --platform linux/amd64 -f gantry-enterprise/Dockerfile -t gantry-enterprise:0.0.1 --load .
+   ```
+
+3. Run it where your provider keys are:
+
+   ```bash
+   docker run -d --name gantry -p 8080:8080 \
+     -v gantry-data:/var/lib/gantry \
+     -e GANTRY_NODE_TOKEN=gnode_... \
+     -e OPENAI_PROVIDER_KEY=sk-... \
+     gantry-enterprise:0.0.1 \
+     node --control-plane https://gantry-control.eliran.me --dir /var/lib/gantry --listen 0.0.0.0:8080
+   ```
+
+4. Within a minute the gateway shows **Live** on the Gateways page. Point clients at it as at any Gantry gateway.
+
+</Steps>
+
+## Options
+
+| Flag | What it does |
+|---|---|
+| `--control-plane <url>` | The control plane. Required. |
+| `--dir <folder>` | Where the node keeps the policy, keys and audit log. Mount it on a volume so a restart keeps the last config. |
+| `--listen <host:port>` | The gateway's address. Default `127.0.0.1:8080`. |
+| `--interval <seconds>` | How often it asks the control plane for changes. Default 5. |
+| `--max-offline <seconds>` | Stop serving when the control plane has not answered for this long, so a key revoked during an outage cannot be used for longer. Off by default: the gateway keeps serving its last config. |
+| `--pass-env A,B` | Environment variables the gateway may read besides `*_PROVIDER_KEY`, such as `AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY` for Bedrock. The gateway's environment otherwise starts empty. |
+| `--secrets NAME=<source>` | Read a provider key from `file:`, `env:`, `vault:<url>#field` or `aws-sm:<arn>`, and rotate it without a restart. |
+
+The node reaches the control plane through `HTTPS_PROXY` when it is set. On SIGTERM it ships its last audit records and stops the gateway.
+
+## What leaves your network
+
+Only these audit fields, for each decision: `n`, `event`, `id`, `time`, `person`, `team`, `key` (a hash prefix), `method`, `path`, `model`, `verdict`, `code`, `rule`, `provider`, `status`, `ended`, `input_tokens`, `output_tokens`, `cost_usd`, `charged_usd`, `trigger`, `policy_sha256`, `keys_sha256`, `action`, `prev`, `hash`, and for a rejected config its `problem_count` and `problems`. No prompt or answer text, no client address, no provider key. `person` is the key's name, often an email address.
+
+<Aside type="caution">
+The control plane keeps metadata only, so its copy of the audit log cannot be checked with `gantry audit verify`. The full hash chain is the node's own `gantry-audit.jsonl`: keep that volume, and verify it there.
+</Aside>
+
+## When the control plane is unreachable
+
+The gateway keeps serving the policy and keys it last received, and ships the audit records it held back once the control plane answers again. A key revoked during the outage stays usable on that gateway until it reconnects, unless `--max-offline` is set.
+
+Run one replica per gateway: budgets, rate limits and the cache are counted per process. Terraform modules for Kubernetes and Amazon ECS come with the commercial product.
