@@ -73,10 +73,52 @@ Guardrails run before the cache, the rate limit and the budget. See [Order of ch
 
 | Type | Kinds found |
 |---|---|
-| `secrets` | `private_key` (the whole PEM block), `aws_access_key`, `github_token`, `slack_token`, `gantry_key`, `jwt`, `api_key` (`sk-...`) |
+| `secrets` | `private_key` (the whole PEM or PGP block), `aws_access_key`, `github_token`, `slack_token`, `gantry_key`, `jwt`, `api_key` (`sk-...`) |
 | `pii` | `email_address`, `phone_number`, `credit_card` (Luhn checked), `iban` (mod 97 checked), `israeli_id` (check digit), `us_ssn`, `medical_record_number` and `date_of_birth` (only after a label such as `MRN:` or `DOB:`) |
 
 These are pattern detectors. A password, a database URL with credentials, a key with no known prefix, a name, an address, or a date of birth or record number with no label is not found. Text that is encoded, split across messages, spelled out or translated is not found either. Any 9-digit number with a valid Israeli ID check digit, and some long digit runs that pass Luhn, are reported. Use a vendor such as Presidio for names, addresses and anything else beyond these patterns.
+
+### Measured precision and recall
+
+{/* detector-corpus-table:start */}
+
+Measured on the `gantry-detectors-v1` corpus.
+
+| Kind | Type | Positives | Negatives | Precision | Recall |
+|---|---|---|---|---|---|
+| `private_key` | `secrets` | 42 | 40 | 100.0% | 100.0% |
+| `aws_access_key` | `secrets` | 50 | 40 | 100.0% | 100.0% |
+| `github_token` | `secrets` | 50 | 40 | 100.0% | 100.0% |
+| `slack_token` | `secrets` | 40 | 40 | 97.6% | 100.0% |
+| `gantry_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `jwt` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `api_key` | `secrets` | 40 | 40 | 95.2% | 100.0% |
+| `email_address` | `pii` | 50 | 40 | 86.2% | 100.0% |
+| `phone_number` | `pii` | 50 | 40 | 80.4% | 90.0% |
+| `credit_card` | `pii` | 50 | 40 | 94.3% | 100.0% |
+| `iban` | `pii` | 42 | 40 | 100.0% | 95.2% |
+| `israeli_id` | `pii` | 40 | 40 | 92.7% | 95.0% |
+| `us_ssn` | `pii` | 40 | 40 | 78.7% | 92.5% |
+| `medical_record_number` | `pii` | 40 | 40 | 97.4% | 95.0% |
+| `date_of_birth` | `pii` | 40 | 40 | 97.3% | 90.0% |
+
+{/* detector-corpus-table:end */}
+
+`gantry-detectors-v1` is 1,223 labelled lines in the repository at `crates/gantry-core/tests/corpus/gantry-detectors-v1.jsonl` (Apache-2.0), made by `scripts/make_detector_corpus.py`. Each kind has realistic positives in prose, chat, code, logs and JSON, and hard negatives that look like it: public keys and certificates, IAM IDs, commit hashes, base64 JSON that is not a token, order numbers, timestamps, values with a broken checksum, and labels with no value. Every value is synthetic or a published example: AWS's example key, the card networks' test numbers, RFC 2606 mail domains, fictional phone ranges. A positive is a value a careful reader would report; precision counts a finding on any line, recall counts the values found.
+
+`cargo test` measures the corpus and fails when this table differs from the measurement, or when a kind falls below its floor. A new corpus is a new version; v1 is not edited to move its numbers.
+
+What the corpus shows the detectors miss or over-report:
+
+- `phone_number`: national formats without a country code outside the US and Israel (`07700 900123`, `0491 570 146`) are missed. Order numbers shaped like a US number (`123-456-7890`) are reported.
+- `email_address`: `git@github.com`, an image name such as `logo@2x.png`, and a token in a URL's login part are reported.
+- `us_ssn`: an SSN without dashes is missed. Any number shaped like an issued SSN is reported, such as a part number.
+- `israeli_id`, `credit_card`: any 9-digit number with a valid check digit, and digit runs that pass Luhn (an IMEI, some millisecond timestamps), are reported. An ID written with its check digit apart (`12345678-2`) is missed.
+- `iban`: an IBAN in lowercase is missed.
+- `medical_record_number`, `date_of_birth`: a value after another label (`D.O.B.`, `birth date`, an HL7 `PID` segment) or a date written in words is missed. A labelled word (`MRN: UNKNOWN`) or `born on` before any date is reported.
+- `api_key`, `slack_token`: a URL slug starting `sk-` and a placeholder such as `xoxb-your-token` are reported.
+
+The corpus does not cover names, postal addresses, passwords, database URLs, secrets with no fixed prefix, or values that are encoded, split across messages, spelled out or translated. The detectors do not find those, so no number here speaks for them.
 
 ## Vendors
 
