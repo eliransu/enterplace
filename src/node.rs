@@ -92,6 +92,8 @@ fn gateway_env(
         .filter(|(k, _)| {
             BASE_ENV.contains(&k.as_str())
                 || k.ends_with("_PROVIDER_KEY")
+                // Trace export settings: where spans go, never anything a policy reads.
+                || k.starts_with("OTEL_")
                 || opts.pass_env.iter().any(|p| p == k)
         })
         .filter(|(k, _)| !k.starts_with("GANTRY_NODE") && !k.starts_with("GANTRY_DEVICE"))

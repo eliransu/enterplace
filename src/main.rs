@@ -17,7 +17,7 @@ const USAGE: &str = "usage:
       --secrets-interval seconds (default 60), rotated without restarting the gateway. Sources:
       file:/path, env:OTHER, vault:<KV v2 URL>#field (token in VAULT_TOKEN),
       aws-sm:<secret ARN>[#field] (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN).
-      The gateway's environment starts empty: it gets PATH, HOME, TZ, LANG, SSL_CERT_*, every *_PROVIDER_KEY,
+      The gateway's environment starts empty: it gets PATH, HOME, TZ, LANG, SSL_CERT_*, OTEL_*, every *_PROVIDER_KEY,
       and the names in --pass-env A,B (for example AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY for Bedrock).
       --max-offline <seconds> stops serving when the control plane has not answered for that long (fail closed).
       --metrics <host:port> serves Prometheus metrics at GET /metrics on that address.
