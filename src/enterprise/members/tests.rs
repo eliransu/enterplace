@@ -1,6 +1,6 @@
 //! The members behaviour of the Cloudflare app (cloud/tests/test_members.py and test_members_links.py), against a
-//! real Postgres, plus the license gate. SCIM, the password links for people SCIM makes and the admin API's add
-//! member come with the SCIM port.
+//! real Postgres, plus the license gate. SCIM and the password links for people SCIM makes are tested in
+//! `scim/tests.rs`; the admin API's add member has no counterpart in a one-org install.
 
 use axum::http::StatusCode;
 

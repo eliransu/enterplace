@@ -7,7 +7,7 @@
 //! An admin key is the install's root credential, so its sessions act as an owner; single sign-on acts as admin, or
 //! viewer when read only. The last owner can be neither removed nor demoted.
 //!
-//! SCIM and the password links for people SCIM makes come with the SCIM port.
+//! SCIM provisioning and the password links for people SCIM makes are in `scim.rs`, on these tables.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -57,21 +57,21 @@ CREATE TABLE enterprise_invites (
 
 const NAV: &str = "Members";
 const INVITE_DAYS: i32 = 7;
-const MIN_PASSWORD: usize = 12;
+pub(super) const MIN_PASSWORD: usize = 12;
 /// PBKDF2-SHA256 at 100,000 iterations with a 16-byte salt per person, as the Cloudflare app hashes, so its
 /// accounts carry over with their passwords.
 const ITERATIONS: u32 = 100_000;
 const LAST_OWNER: &str = "This is the last owner. Make another member an owner first.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Role {
+pub(super) enum Role {
     Owner,
     Admin,
     Viewer,
 }
 
 impl Role {
-    fn parse(word: &str) -> Option<Self> {
+    pub(super) fn parse(word: &str) -> Option<Self> {
         match word {
             "owner" => Some(Self::Owner),
             "admin" => Some(Self::Admin),
@@ -80,7 +80,7 @@ impl Role {
         }
     }
 
-    fn word(self) -> &'static str {
+    pub(super) fn word(self) -> &'static str {
         match self {
             Self::Owner => "owner",
             Self::Admin => "admin",
@@ -89,7 +89,7 @@ impl Role {
     }
 
     /// The role of whoever is signed in, however they signed in.
-    fn of(admin: &Admin) -> Self {
+    pub(super) fn of(admin: &Admin) -> Self {
         match &admin.via {
             Via::Key => Self::Owner,
             Via::Sso if admin.read_only => Self::Viewer,
@@ -100,10 +100,10 @@ impl Role {
 }
 
 #[derive(Clone)]
-struct Members {
-    db: Arc<Db>,
+pub(super) struct Members {
+    pub(super) db: Arc<Db>,
     /// The keys file's path: keys are read and revoked through it, from the store.
-    keys: PathBuf,
+    pub(super) keys: PathBuf,
 }
 
 /// Adds the members pages, the invite links, password sign-in and the accounts it opens to the console.
@@ -161,7 +161,7 @@ pub fn locked(extension: &mut gantry_server::Extension, status: &Status) {
 
 // ---------------------------------------------------------------- passwords
 
-fn random_hex(bytes: usize) -> Result<String, String> {
+pub(super) fn random_hex(bytes: usize) -> Result<String, String> {
     use ring::rand::SecureRandom;
     let mut out = vec![0u8; bytes];
     ring::rand::SystemRandom::new()
@@ -193,7 +193,7 @@ fn derive(password: &str, salt: &[u8]) -> [u8; 32] {
 }
 
 /// A new salt and the hash of `password` under it, both hex, as the Cloudflare app keeps them.
-fn hash_password(password: &str) -> Result<(String, String), String> {
+pub(super) fn hash_password(password: &str) -> Result<(String, String), String> {
     let salt = random_hex(16)?;
     let bytes = unhex(&salt).ok_or("the salt did not read back")?;
     Ok((salt, gantry_core::id::hex(&derive(password, &bytes))))
@@ -214,7 +214,7 @@ fn password_matches(password: &str, salt: &str, hash: &str) -> bool {
     .is_ok()
 }
 
-fn valid_email(email: &str) -> bool {
+pub(super) fn valid_email(email: &str) -> bool {
     let Some((local, domain)) = email.split_once('@') else {
         return false;
     };
@@ -226,7 +226,7 @@ fn valid_email(email: &str) -> bool {
         && !email.chars().any(char::is_whitespace)
 }
 
-fn valid_team(team: &str) -> bool {
+pub(super) fn valid_team(team: &str) -> bool {
     (1..=64).contains(&team.len())
         && team
             .chars()
@@ -258,7 +258,7 @@ fn person(row: &Row) -> Result<Person, tokio_postgres::Error> {
 
 const PERSON: &str = "SELECT id, email, name, role, team, to_char(created_at, 'YYYY-MM-DD') AS joined FROM enterprise_people";
 
-fn db_error(err: impl std::fmt::Display) -> String {
+pub(super) fn db_error(err: impl std::fmt::Display) -> String {
     format!(
         "The members tables could not be read or written: {err}. Check that Postgres is up and the store's connection string is right, then try again. Nothing was changed."
     )
@@ -267,7 +267,7 @@ fn db_error(err: impl std::fmt::Display) -> String {
 impl Members {
     /// Who the account `id` is now, for its console session. `None` when removed, or when the database cannot say:
     /// a session the database cannot vouch for ends.
-    async fn account(&self, id: &str) -> Option<Admin> {
+    pub(super) async fn account(&self, id: &str) -> Option<Admin> {
         let client = self.db.client().await.ok()?;
         let row = client
             .query_opt(&format!("{PERSON} WHERE id = $1"), &[&id])
@@ -306,7 +306,7 @@ impl Members {
 
     /// Changes a role and team, or removes the person (`to` is `None`), unless that leaves no owner. The owners are
     /// locked for the check, so two changes at once cannot both take the last one away.
-    async fn change(
+    pub(super) async fn change(
         &self,
         id: &str,
         to: Option<(Role, &str)>,
@@ -345,7 +345,7 @@ impl Members {
     }
 
     /// Hashes of the keys named with `email`, in any case: the person's keys.
-    fn keys_of(&self, email: &str) -> Result<Vec<String>, String> {
+    pub(super) fn keys_of(&self, email: &str) -> Result<Vec<String>, String> {
         let text = gantry_core::config::read_keys(&self.keys)?.unwrap_or_default();
         let entries = gantry_core::config::key_entries(&self.keys, &text)
             .map_err(|errors| errors.join("; "))?;
@@ -355,12 +355,23 @@ impl Members {
             .map(|e| e.sha256)
             .collect())
     }
+
+    /// Revokes the keys with these hashes through the store, which every gateway reads within a second.
+    pub(super) async fn revoke(&self, keys: Vec<String>) -> Result<(), String> {
+        let path = self.keys.clone();
+        tokio::task::spawn_blocking(move || {
+            keys.iter()
+                .try_for_each(|sha| gantry_core::keyfile::revoke(&path, sha).map(|_| ()))
+        })
+        .await
+        .unwrap_or_else(|err| Err(err.to_string()))
+    }
 }
 
 // ---------------------------------------------------------------- pages
 
 /// A Banner, read out when the page opens. `text` is markup.
-fn banner(text: &str, error: bool) -> String {
+pub(super) fn banner(text: &str, error: bool) -> String {
     let edge = if error {
         r#" style="border-color: var(--flame)""#
     } else {
@@ -369,7 +380,7 @@ fn banner(text: &str, error: bool) -> String {
     format!(r#"<div class="g-banner" role="alert"{edge}><span class="t-body">{text}</span></div>"#)
 }
 
-fn select(name: &str, label: &str, options: &[Role], chosen: Role) -> String {
+pub(super) fn select(name: &str, label: &str, options: &[Role], chosen: Role) -> String {
     let options: String = options
         .iter()
         .map(|r| {
@@ -386,20 +397,27 @@ fn select(name: &str, label: &str, options: &[Role], chosen: Role) -> String {
     )
 }
 
-fn hidden(name: &str, value: &str) -> String {
+pub(super) fn hidden(name: &str, value: &str) -> String {
     format!(
         r#"<input type="hidden" name="{name}" value="{}">"#,
         esc(value)
     )
 }
 
-fn small_button(label: &str) -> String {
+pub(super) fn small_button(label: &str) -> String {
     format!(
         r#"<button class="g-btn g-btn--quiet g-btn--sm t-small" type="submit">{label}</button>"#
     )
 }
 
-fn text_field(id: &str, name: &str, label: &str, value: &str, extra: &str, hint: &str) -> String {
+pub(super) fn text_field(
+    id: &str,
+    name: &str,
+    label: &str,
+    value: &str,
+    extra: &str,
+    hint: &str,
+) -> String {
     html::field(&Field {
         id,
         name,
@@ -442,7 +460,7 @@ fn unavailable(console: &Console, admin: &Admin, uri: &Uri, err: &str) -> Respon
 }
 
 /// Who may change things, signed in, or the answer to give instead.
-async fn editor(
+pub(super) async fn editor(
     console: &Console,
     headers: &HeaderMap,
     uri: &Uri,
@@ -608,7 +626,7 @@ async fn members_main(members: &Members, admin: &Admin, notice: &str) -> Result<
 }
 
 /// The address the browser reached the console at, for a link to send to someone.
-fn origin(headers: &HeaderMap, tls: &Tls) -> String {
+pub(super) fn origin(headers: &HeaderMap, tls: &Tls) -> String {
     let https = tls.is_some()
         || headers
             .get("x-forwarded-proto")
@@ -890,14 +908,7 @@ async fn remove(
     }
     // The person is gone, so they cannot sign in again; their keys go too, through the store, which every gateway
     // reads within a second.
-    let path = members.keys.clone();
-    let revoked = tokio::task::spawn_blocking(move || {
-        keys.iter()
-            .try_for_each(|sha| gantry_core::keyfile::revoke(&path, sha).map(|_| ()))
-    })
-    .await
-    .unwrap_or_else(|err| Err(err.to_string()));
-    match revoked {
+    match members.revoke(keys).await {
         Ok(()) => redirect("/console/members"),
         Err(err) => refuse(
             StatusCode::SERVICE_UNAVAILABLE,

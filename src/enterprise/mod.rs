@@ -5,6 +5,7 @@
 //! How a feature registers is written up in docs/porting.md.
 
 mod members;
+mod scim;
 
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ use crate::license::{self, State, Status};
 /// The enterprise tables, one migration per entry, applied in order under the namespace `enterprise` (its own
 /// version row in `gantry_migrations`, apart from the gateway's tables). Never edit an entry that has shipped: add
 /// one. Every feature's tables are here, so one version says where a database is.
-const MIGRATIONS: &[&str] = &[members::MIGRATION];
+const MIGRATIONS: &[&str] = &[members::MIGRATION, scim::MIGRATION];
 
 /// What the enterprise binary adds to the gateway it serves, for `status` (the license loaded at start).
 pub fn extend(status: &Status, host: Host<'_>) -> Result<Extension, String> {
@@ -29,6 +30,7 @@ pub fn extend(status: &Status, host: Host<'_>) -> Result<Extension, String> {
     };
     if !status.unlocked(members::FEATURE) {
         members::locked(&mut extension, status);
+        scim::locked(&mut extension, status);
         return Ok(extension);
     }
     // The license never stops traffic: a feature that cannot run says why and the gateway starts without it.
@@ -40,7 +42,12 @@ pub fn extend(status: &Status, host: Host<'_>) -> Result<Extension, String> {
     };
     pg.migrate("enterprise", MIGRATIONS)?;
     let db = Arc::new(Db::new(pg.clone()));
-    members::register(&mut extension, db, host.keys.to_path_buf());
+    members::register(&mut extension, db.clone(), host.keys.to_path_buf());
+    if status.unlocked(scim::FEATURE) {
+        scim::register(&mut extension, db.clone(), host.keys.to_path_buf());
+    } else {
+        scim::locked(&mut extension, status);
+    }
     Ok(extension)
 }
 

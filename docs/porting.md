@@ -11,7 +11,7 @@ The open source crates expose these extension points. Nothing in them knows abou
 |---|---|---|
 | Startup | `gantry_server::serve_policy_with(.., extend)`, `governed_with` | `extend(Host)` runs once the files are checked and the store is open, and returns a `gantry_server::Extension`. `src/main.rs` passes `enterprise::extend`. |
 | Console pages | `gantry_console::Extension { nav, routes, sign_in, accounts }` | Routes nested at `/console`, handlers take `State<Console>`. `Console::signed_in` gives who is signed in (`Admin`, with `via` and `role`), `Console::page` draws the shell with the nav, `Console::audit` writes an admin record, `Console::sign_in_account` opens a session the feature vouches for through `accounts`. Markup comes from `gantry_console::html`. |
-| Gateway routes | `gantry_server::Extension::routes` | Routes outside the console (an API such as SCIM). Merged into the gateway's router. |
+| Gateway routes | `gantry_server::Extension::routes` | Routes outside the console. Merged into the gateway's router. Their handlers have no `Console`, so they cannot write admin records: an API whose changes must be audited (SCIM, at `/console/scim/v2`) is a console route that answers JSON. |
 | Tables | `Host::postgres`: `PgStore::migrate(namespace, migrations)`, `PgStore::connect()` | Every enterprise table is created by `enterprise::MIGRATIONS`, applied under the namespace `enterprise`. `enterprise::Db` holds a connection of the features' own, so transactions are safe. |
 | /healthz | `gantry_server::Extension::health` | Already used for the license; add fields only when an operator needs them to tell the feature is working. |
 
