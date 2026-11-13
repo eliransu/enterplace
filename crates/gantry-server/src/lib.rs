@@ -234,6 +234,8 @@ pub struct Config {
     pub aliases: Vec<gantry_core::config::Alias>,
     /// Where OpenTelemetry traces go. `None` traces nothing.
     pub traces: Option<TraceExport>,
+    /// The token of the one-time setup link, offered while the keys file has no admin key.
+    pub setup: Option<String>,
     /// Upstream MCP servers whose tools are served at `/mcp`. Empty serves no `/mcp`.
     pub mcp: Vec<McpRoute>,
 }
@@ -518,7 +520,10 @@ fn build(
         None => router,
     };
     let router = match console {
-        Some(console) => router.nest("/console", gantry_console::router(console)),
+        Some(console) => router.nest(
+            "/console",
+            gantry_console::router_with_setup(console, config.setup.clone()),
+        ),
         None => router,
     };
     Ok((router, reloader, metrics))
@@ -4045,6 +4050,17 @@ pub async fn serve_policy(
     // The port the system gave, when --listen asked for port 0.
     let addr = listener.local_addr().unwrap_or(addr);
     println!("{name} listening on {scheme}://{addr}");
+    if let Some(token) = &started.setup {
+        // A wildcard address is not one a browser can open: show the same port on this machine.
+        let shown = if addr.ip().is_unspecified() {
+            SocketAddr::from(([127, 0, 0, 1], addr.port()))
+        } else {
+            addr
+        };
+        println!(
+            "First run: no admin key yet. Open {scheme}://{shown}/console/setup/{token} to make the first one. The link works once."
+        );
+    }
     println!(
         "Console: {scheme}://{addr}/console (sign in with an admin key{})",
         if loaded.sso.is_some() {

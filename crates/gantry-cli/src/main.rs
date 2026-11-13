@@ -40,6 +40,11 @@ Commands:
   prices <model> [--policy <file>]
         Print the price Gantry charges for a model and where it came from: the policy's prices:, Gantry's
         own table, or the table generated from LiteLLM's price map (with its source and date).
+  init [--provider <id>] [--models <a,b>] [--out <policy file>]
+        Write a starter policy (default gantry.policy.yaml, never over an existing file) for one provider of
+        the catalog (default openai, see `gantry providers`) and the models it serves (--models; openai defaults
+        to gpt-4o-mini): everyone may use them. Then set
+        the provider key it names and run `gantry serve`, which prints a one-time link to make the first admin.
   providers [--markdown]
         List the provider catalog: id, name, kind and URL. A policy provider may say `preset: <id>` in place
         of its url and kind. --markdown prints the reference page of the docs.
@@ -294,6 +299,14 @@ async fn main() -> ExitCode {
                 _ => None,
             }
         }
+        ["init", rest @ ..] => match options(rest, &["--provider", "--models", "--out"]) {
+            Some((positional, named)) if positional.is_empty() => Some(init(
+                named.get("--provider").copied().unwrap_or("openai"),
+                named.get("--models").copied(),
+                Path::new(named.get("--out").copied().unwrap_or("gantry.policy.yaml")),
+            )),
+            _ => None,
+        },
         ["providers"] => {
             print!("{}", gantry_core::catalog::table());
             Some(ExitCode::SUCCESS)
@@ -340,6 +353,7 @@ async fn main() -> ExitCode {
             ),
             ["audit", "repair", ..] => Some("gantry audit repair [<file>] [--yes]"),
             ["providers", ..] => Some("gantry providers [--markdown]"),
+            ["init", ..] => Some("gantry init [--provider <id>] [--models <a,b>] [--out <policy file>]"),
             ["login", ..] => Some("gantry login <gantry url> [--no-browser]"),
             ["logout", ..] => Some("gantry logout"),
             ["kill", ..] => Some(
@@ -1101,6 +1115,71 @@ async fn switch(
         println!("Kill switch off for {what}. Traffic flows again within 1 second on every node.");
     }
     Ok(())
+}
+
+/// `gantry init`: a starter policy for one catalog provider, and the steps to the first governed call.
+fn init(provider: &str, models: Option<&str>, out: &Path) -> ExitCode {
+    let Some(preset) = gantry_core::catalog::find(provider) else {
+        eprintln!(
+            "error: there is no provider \"{provider}\" in the catalog. Run `gantry providers` to see them, then gantry init --provider <id>."
+        );
+        return ExitCode::from(2);
+    };
+    let models: Vec<&str> = match (models, preset.id) {
+        (Some(list), _) => list
+            .split(',')
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .collect(),
+        (None, "openai") => vec!["gpt-4o-mini"],
+        (None, _) => Vec::new(),
+    };
+    if models.is_empty() || models.contains(&"*") {
+        eprintln!(
+            "error: name the models {} serves that people may use, for example gantry init --provider {} --models <model>,<model>. A provider lists exact model names.",
+            preset.name, preset.id
+        );
+        return ExitCode::from(2);
+    }
+    if out.exists() {
+        eprintln!(
+            "error: {} exists, and gantry init never writes over a policy. Give another file with --out, or edit that one.",
+            out.display()
+        );
+        return ExitCode::from(2);
+    }
+    let variable = format!(
+        "{}_PROVIDER_KEY",
+        preset.id.to_ascii_uppercase().replace('-', "_")
+    );
+    let private = if preset.local {
+        "    allow_private: true\n"
+    } else {
+        ""
+    };
+    let policy = format!(
+        "# Written by gantry init. Reference: https://gantry-docs.eliran.me/governance/policy/\nversion: 1\nproviders:\n  - name: {id}\n    preset: {id}\n{private}    key_env: {variable}\n    models: [{list}]\nrules:\n  - name: everyone\n    principals: {{ any: true }}\n    models: [{list}]\n",
+        id = preset.id,
+        list = models.join(", ")
+    );
+    if let Err(err) = std::fs::write(out, policy) {
+        eprintln!("error: could not write {}: {err}", out.display());
+        return ExitCode::from(1);
+    }
+    let local = if preset.local {
+        ""
+    } else {
+        "\n  export {variable}=<your {name} API key>"
+    };
+    println!(
+        "Wrote {out} for {name}. Next:\n{local}\n  gantry serve {out}\n  then open the setup link it prints: it makes your admin key and shows how to point Claude Code and the OpenAI SDKs at Gantry.",
+        out = out.display(),
+        name = preset.name,
+        local = local
+            .replace("{variable}", &variable)
+            .replace("{name}", preset.name),
+    );
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]

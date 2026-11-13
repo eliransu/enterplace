@@ -97,6 +97,8 @@ pub struct Governed {
     pub loaded: Loaded,
     /// Serves `GET /metrics`, for a listener of its own (`gantry serve --metrics`).
     pub metrics: Router,
+    /// The one-time setup link's token, when the keys file had no admin key at start.
+    pub setup: Option<String>,
 }
 
 /// Name, team and first 8 hex characters of each key's hash: how a record names a key without giving it away.
@@ -298,6 +300,9 @@ pub fn governed(
                 loaded.audit_path.display()
             )
         })?;
+    // First run: no one can sign in to the console yet, so a one-time link makes the first admin.
+    let setup =
+        (!loaded.policy.entries().any(|(_, p)| p.admin)).then(|| gantry_core::id::random_hex(24));
     let config = Config {
         providers,
         audit: Some(Audit {
@@ -318,6 +323,7 @@ pub fn governed(
         aliases: loaded.aliases.clone(),
         // From the process environment: `provider_key` answers for provider keys, and tests stub it.
         traces: crate::TraceExport::from_env(|name| std::env::var(name).ok())?,
+        setup: setup.clone(),
         mcp,
         ..Config::default()
     };
@@ -349,6 +355,7 @@ pub fn governed(
         log,
         loaded,
         metrics,
+        setup,
     })
 }
 

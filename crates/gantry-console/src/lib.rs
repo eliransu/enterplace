@@ -99,6 +99,8 @@ struct Inner {
     verified: Mutex<Option<Verified>>,
     /// Codes handed to `gantry login` and not traded yet, by code.
     codes: Mutex<HashMap<String, Pending>>,
+    /// The one-time setup link's token, and whether it was used.
+    setup: Mutex<Option<(String, bool)>>,
 }
 
 /// A person who signed in for `gantry login`, until their CLI trades the code for a key.
@@ -256,6 +258,11 @@ async fn record(
 
 /// The console's routes, to be nested at `/console`.
 pub fn router(config: ConsoleConfig) -> Router {
+    router_with_setup(config, None)
+}
+
+/// The console's routes, with a one-time setup link at `/console/setup/<token>` that makes the first admin key.
+pub fn router_with_setup(config: ConsoleConfig, setup: Option<String>) -> Router {
     let state = Console(Arc::new(Inner {
         config,
         sessions: Mutex::default(),
@@ -272,8 +279,10 @@ pub fn router(config: ConsoleConfig) -> Router {
         client: sso::client(),
         verified: Mutex::default(),
         codes: Mutex::default(),
+        setup: Mutex::new(setup.map(|token| (token, false))),
     }));
     Router::new()
+        .route("/setup/{token}", get(setup_page).post(setup_done))
         .route("/", get(root))
         .route("/sign-in", get(sign_in_page).post(sign_in))
         .route("/sign-out", get(sign_out))
@@ -1806,6 +1815,162 @@ async fn font(Path(file): Path<String>) -> Response {
         Body::from(body),
     )
         .into_response()
+}
+
+// ---- First run ----
+
+/// Where the setup link stands for this token.
+enum SetupState {
+    Open,
+    Used,
+    Unknown,
+}
+
+fn setup_state(console: &Console, token: &str) -> SetupState {
+    let setup = console
+        .0
+        .setup
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match setup.as_ref() {
+        Some((known, used))
+            if id::sha256_hex(known.as_bytes()) == id::sha256_hex(token.as_bytes()) =>
+        {
+            if *used {
+                SetupState::Used
+            } else {
+                SetupState::Open
+            }
+        }
+        _ => SetupState::Unknown,
+    }
+}
+
+fn setup_closed(state: SetupState) -> Response {
+    match state {
+        SetupState::Used => page(
+            StatusCode::GONE,
+            pages::setup_message(
+                "This setup link was used",
+                "The first admin key was made with it, and it works once. Sign in to the console with that key, or make another with gantry key new <name> --team <team> --admin.",
+            ),
+        ),
+        _ => page(
+            StatusCode::NOT_FOUND,
+            pages::setup_message(
+                "No such setup link",
+                "Use the link gantry serve printed when it started. It is offered only while no admin key exists.",
+            ),
+        ),
+    }
+}
+
+async fn setup_page(State(console): State<Console>, Path(token): Path<String>) -> Response {
+    match setup_state(&console, &token) {
+        SetupState::Open => page(StatusCode::OK, pages::setup_form(&token, "")),
+        other => setup_closed(other),
+    }
+}
+
+async fn setup_done(
+    State(console): State<Console>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    let form = Form::parse(&body);
+    let (name, team) = (
+        form.get("name").trim().to_string(),
+        form.get("team").trim().to_string(),
+    );
+    if !config::valid_name(&name) || !config::valid_name(&team) {
+        return match setup_state(&console, &token) {
+            SetupState::Open => page(
+                StatusCode::BAD_REQUEST,
+                pages::setup_form(
+                    &token,
+                    "A name and a team use letters, digits, dots, dashes and underscores only, for example maya.cohen and platform.",
+                ),
+            ),
+            other => setup_closed(other),
+        };
+    }
+    // Taken under the lock, so two submissions at once make one key.
+    {
+        let mut setup = console
+            .0
+            .setup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match setup.as_mut() {
+            Some((known, used)) if *known == token && !*used => *used = true,
+            Some((known, true)) if *known == token => return setup_closed(SetupState::Used),
+            _ => return setup_closed(SetupState::Unknown),
+        }
+    }
+    let reopen = || {
+        if let Some((_, used)) = console
+            .0
+            .setup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            *used = false;
+        }
+    };
+    let act = Act {
+        action: "first_setup",
+        by: None,
+        key: None,
+        target: json!({ "name": name, "team": team, "admin": true }),
+    };
+    // Recorded before the key exists: Gantry does not make what it cannot record.
+    if record(&console, &act, None, None).await.is_err() {
+        reopen();
+        return page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            pages::setup_message("Not done", NOT_RECORDED),
+        );
+    }
+    let attributes = keyfile::Attributes {
+        admin: true,
+        ..keyfile::Attributes::default()
+    };
+    let issued = match keyfile::issue_with(&name, &team, &attributes, &console.config().keys) {
+        Ok(issued) => issued,
+        Err(err) => {
+            reopen();
+            return page(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                pages::setup_message("Not done", &err),
+            );
+        }
+    };
+    let origin = headers
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .map_or_else(
+            || "http://127.0.0.1:8080".to_string(),
+            |host| format!("http://{host}"),
+        );
+    // A model this policy serves, for the test call.
+    let model = config::load(&console.config().policy, Some(&console.config().keys))
+        .ok()
+        .and_then(|l| {
+            l.providers
+                .iter()
+                .flat_map(|p| p.models.clone())
+                .find(|m| m != "*")
+        })
+        .unwrap_or_else(|| "<model>".to_string());
+    page(
+        StatusCode::OK,
+        pages::setup_result(&issued.key, &origin, &model),
+    )
 }
 
 #[cfg(test)]

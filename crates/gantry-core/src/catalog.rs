@@ -984,7 +984,10 @@ mod tests {
     fn the_docs_page_matches_the_catalog() -> TestResult {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../docs/src/content/docs/reference/providers.mdx");
-        let written = std::fs::read_to_string(&path).unwrap_or_default();
+        // A Windows checkout may turn the page's line ends into CRLF: the text is what must match.
+        let written = std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
         assert!(
             written == page(),
             "{} is out of date. Run `cargo run -p gantry-cli -- providers --markdown > docs/src/content/docs/reference/providers.mdx`.",

@@ -47,6 +47,20 @@ This builds a static musl binary into an image tagged `gantry:local`. The image 
 </TabItem>
 </Tabs>
 
+## The short way: gantry init
+
+Two commands and a link take you to a governed request:
+
+```bash
+gantry init --provider openai          # writes gantry.policy.yaml; --models a,b for other providers
+export OPENAI_PROVIDER_KEY=sk-...
+gantry serve gantry.policy.yaml
+```
+
+With no admin key yet, `gantry serve` prints a one-time link, `http://127.0.0.1:8080/console/setup/<token>`. Open it, give your name and team, and it makes your admin key (shown once), shows the lines that point Claude Code and the OpenAI SDKs at Gantry, and a `curl` to try. The link works once, and the setup is recorded in the audit log. `gantry providers` lists the providers `--provider` takes.
+
+The steps below do the same by hand, and say what each part of the policy means.
+
 ## 2. Write a policy
 
 Save this as `gantry.policy.yaml`. It defines one provider and two rules: the `payments` team may use `gpt-4o-mini`, everyone else may use nothing.

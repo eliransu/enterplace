@@ -344,6 +344,19 @@ The cost is latency: the caller sees no token until the model has written its la
 `check_stream_every: <characters>` is the middle way. Gantry passes the stream on a window at a time: it holds each window until the answer guardrails, webhooks included, have read the whole text so far, then sends it. When a guardrail blocks, the stream stops there. The caller has the text checked before it, then an error event in its API's shape (`code: guardrail_blocked`), and the provider's stream is dropped. Blocked text never reaches the caller.
 
 ```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-4o-mini]
+guardrails:
+  - name: vendor
+    type: webhook
+    url: https://guard.example.com/check
+    on_failure: fail_closed
+    on: [answer]
 rules:
   - name: everyone
     principals: { any: true }

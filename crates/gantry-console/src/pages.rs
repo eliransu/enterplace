@@ -3679,6 +3679,102 @@ fn money_cents(usd: f64) -> String {
     )
 }
 
+// ---- First run ----
+
+fn setup_shell(title: &str, inner: &str) -> String {
+    document(
+        title,
+        &format!(
+            r#"<div class="g-shell"><main class="g-shell__main"><div class="g-stack g-measure" style="gap: var(--space-8); padding: var(--space-10)">
+<a class="g-nav__brand" href="/console/sign-in" style="padding: 0"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
+{inner}</div></main></div>"#
+        ),
+    )
+}
+
+/// A setup link that is closed, or a setup that could not be done.
+pub fn setup_message(title: &str, text: &str) -> String {
+    setup_shell(
+        title,
+        &format!(
+            r#"<h1 class="t-lg" style="margin: 0">{}</h1><p class="t-lead g-muted" style="margin: 0">{}</p>"#,
+            esc(title),
+            esc(text)
+        ),
+    )
+}
+
+/// Step 1 of 4: who the first admin is.
+pub fn setup_form(token: &str, error: &str) -> String {
+    let error = if error.is_empty() {
+        String::new()
+    } else {
+        alert(error)
+    };
+    setup_shell(
+        "Set up Gantry",
+        &format!(
+            r#"<h1 class="t-lg" style="margin: 0">Set up Gantry</h1>
+<p class="t-lead g-muted" style="margin: 0">Step 1 of 4. No one can sign in yet: this link makes the first admin key, once.</p>
+{error}<form class="g-stack" style="gap: var(--space-6)" method="post" action="/console/setup/{token}">
+{name}{team}<div class="g-head__actions">{button}</div></form>"#,
+            token = enc(token),
+            name = field(&Field {
+                id: "name",
+                name: "name",
+                label: "Your name",
+                value: "",
+                mono: false,
+                extra: r#" required autofocus autocomplete="off""#,
+                hint: "As it will appear in the audit log, for example maya.cohen.",
+                error: ""
+            }),
+            team = field(&Field {
+                id: "team",
+                name: "team",
+                label: "Your team",
+                value: "",
+                mono: false,
+                extra: r#" required autocomplete="off""#,
+                hint: "Rules can name a team, for example platform.",
+                error: ""
+            }),
+            button = button("Make my admin key", "", "submit", ""),
+        ),
+    )
+}
+
+/// Steps 2 to 4: the key, shown once, how to point a client at Gantry, and a governed call to try.
+pub fn setup_result(key: &str, origin: &str, model: &str) -> String {
+    let block = |lines: &str| {
+        format!(
+            r#"<pre class="g-code t-mono" style="white-space: pre-wrap; margin: 0">{}</pre>"#,
+            esc(lines)
+        )
+    };
+    setup_shell(
+        "Gantry is set up",
+        &format!(
+            r#"<h1 class="t-lg" style="margin: 0">Gantry is set up</h1>
+<h2 class="t-sm" style="margin: 0">Step 2 of 4. Your admin key</h2>
+<p class="g-muted" style="margin: 0">Shown once. Only its hash is kept, in the keys file. It signs in to the console and makes requests.</p>
+{key}
+<h2 class="t-sm" style="margin: 0">Step 3 of 4. Point your tools at Gantry</h2>
+{env}
+<h2 class="t-sm" style="margin: 0">Step 4 of 4. Make a governed call</h2>
+{curl}
+<p style="margin: 0"><a href="/console/sign-in">Sign in to the console</a> with the key to see the call in the audit log and issue keys for your team under People.</p>"#,
+            key = block(key),
+            env = block(&format!(
+                "# Claude Code\nexport ANTHROPIC_BASE_URL={origin}\nexport ANTHROPIC_API_KEY={key}\n\n# OpenAI SDKs and Codex\nexport OPENAI_BASE_URL={origin}/v1\nexport OPENAI_API_KEY={key}"
+            )),
+            curl = block(&format!(
+                "curl {origin}/v1/chat/completions \\\n  -H \"Authorization: Bearer {key}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{{\"model\":\"{model}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hello\"}}]}}'"
+            )),
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

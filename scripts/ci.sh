@@ -21,6 +21,8 @@ cargo build --release --locked
 ./target/release/gantry version
 step "the binary refuses to forward unchecked unless asked by name"
 if ./target/release/gantry serve 2>/dev/null; then echo "serve started without --unchecked"; exit 1; fi
+step "first run: init, serve, the setup link and a governed call, in under 60 seconds"
+python3 scripts/first_run_check.py target/release/gantry
 step "every policy example in README and the docs passes gantry check"
 python3 scripts/check_examples.py target/release/gantry
 if [ "$bench" = 1 ]; then
