@@ -92,7 +92,15 @@ async fn the_setup_link_makes_the_first_admin_once_and_that_key_makes_a_governed
         .find(|w| w.starts_with("gantry_") && w.len() == 71)
         .ok_or("no key on the page")?
         .to_string();
-    for step in ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "curl", "/console"] {
+    for step in [
+        "ANTHROPIC_BASE_URL",
+        "OPENAI_BASE_URL",
+        "curl",
+        "/console",
+        "Copy for your agent",
+        "GANTRY_API_KEY",
+        "model-a",
+    ] {
         assert!(page.contains(step), "the page shows {step}");
     }
 

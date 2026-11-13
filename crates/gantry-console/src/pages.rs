@@ -3745,7 +3745,45 @@ pub fn setup_form(token: &str, error: &str) -> String {
 }
 
 /// Steps 2 to 4: the key, shown once, how to point a client at Gantry, and a governed call to try.
-pub fn setup_result(key: &str, origin: &str, model: &str) -> String {
+/// The prompt for a coding agent (Claude Code, Cursor, Codex) inside a project: find every model call and point it at
+/// Gantry. It names the gateway and the models, never a key. The same text as the Gantry app's Connect page and the
+/// docs' "Connect a project".
+pub fn agent_prompt(origin: &str, models: &[String]) -> String {
+    let base = origin.trim_end_matches('/');
+    let list = if models.is_empty() {
+        "(none yet: ask your Gantry admin which models your rule allows)".to_string()
+    } else {
+        models.join(", ")
+    };
+    let first = models.first().map_or("<model>", String::as_str);
+    format!(
+        "Connect this project to Gantry, our AI gateway, so every LLM call goes through it.
+
+Gantry gateway: {base}
+OpenAI-compatible base URL: {base}/v1
+Anthropic base URL: {base}
+The API key is in the environment variable GANTRY_API_KEY. Never write a key into a file that is committed.
+Models this project may use through Gantry: {list}
+
+Do this:
+1. Find every place this project calls a model provider: the OpenAI, Anthropic, Azure OpenAI, Google Gemini or Bedrock SDKs, LangChain, LlamaIndex, the Vercel AI SDK, LiteLLM, raw HTTP calls to api.openai.com or api.anthropic.com, and their config and environment files. List them before changing anything.
+2. Point each one at Gantry:
+   - OpenAI SDKs and OpenAI-compatible clients: base URL {base}/v1, API key from GANTRY_API_KEY.
+   - Anthropic SDKs: base URL {base}, API key from GANTRY_API_KEY.
+   - Where a client reads its base URL from the environment (OPENAI_BASE_URL, ANTHROPIC_BASE_URL), prefer setting it there over code changes.
+   - Azure OpenAI, Gemini and Bedrock clients: switch them to the OpenAI-compatible client against {base}/v1 with a model from the list above, keeping the same prompts and parameters.
+3. Use only the models listed above. Where the code names another model, replace it with the closest one from the list and tell me each replacement.
+4. Remove provider keys (OPENAI_API_KEY, ANTHROPIC_API_KEY and the like) from code and committed files. Add GANTRY_API_KEY to .env.example or the project's equivalent, with no value.
+5. Do not change prompts, retries, streaming or anything else about how the calls behave.
+6. Run the project's tests and build. Then show me the diff and a short list: each call site changed, each model replaced, and any call you could not move and why.
+
+To try one call by hand after the change:
+curl {base}/v1/chat/completions -H \"Authorization: Bearer $GANTRY_API_KEY\" -H \"Content-Type: application/json\" -d '{{\"model\":\"{first}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hello\"}}]}}'"
+    )
+}
+
+pub fn setup_result(key: &str, origin: &str, models: &[String]) -> String {
+    let model = models.first().map_or("<model>", String::as_str);
     let block = |lines: &str| {
         format!(
             r#"<pre class="g-code t-mono" style="white-space: pre-wrap; margin: 0">{}</pre>"#,
@@ -3763,7 +3801,12 @@ pub fn setup_result(key: &str, origin: &str, model: &str) -> String {
 {env}
 <h2 class="t-sm" style="margin: 0">Step 4 of 4. Make a governed call</h2>
 {curl}
+<h2 class="t-sm" style="margin: 0">Then: connect a project</h2>
+<p class="g-muted" style="margin: 0">Paste this into your coding agent (Claude Code, Cursor, Codex) inside a project. It moves the project's model calls to Gantry. It holds no key: set GANTRY_API_KEY where the project runs.</p>
+<pre id="agent-prompt" class="g-code t-mono" style="white-space: pre-wrap; margin: 0">{prompt}</pre>
+<div class="g-head__actions"><button class="g-btn" type="button" data-copy="agent-prompt">Copy for your agent</button></div>
 <p style="margin: 0"><a href="/console/sign-in">Sign in to the console</a> with the key to see the call in the audit log and issue keys for your team under People.</p>"#,
+            prompt = esc(&agent_prompt(origin, models)),
             key = block(key),
             env = block(&format!(
                 "# Claude Code\nexport ANTHROPIC_BASE_URL={origin}\nexport ANTHROPIC_API_KEY={key}\n\n# OpenAI SDKs and Codex\nexport OPENAI_BASE_URL={origin}/v1\nexport OPENAI_API_KEY={key}"

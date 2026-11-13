@@ -1,0 +1,61 @@
+---
+title: Connect a project
+description: A prompt for your coding agent that moves a project's model calls to Gantry, with the right base URLs, the key in an environment variable, and only the models your rule allows.
+sidebar:
+  order: 0
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Your project calls OpenAI or Anthropic in a few places: an SDK client here, a LangChain wrapper there, a raw request in a script. Rather than finding them by hand, give your coding agent (Claude Code, Cursor, Codex) a prompt and let it make the change, then read the diff.
+
+<Steps>
+
+1. Get the prompt.
+   - Gantry app: **Connect** in the navigation. The prompt names your gateway and the models your rule allows. Select **Copy for your agent**.
+   - Your own gateway: the one-time setup page that `gantry serve` links to on first run ends with the same prompt and button.
+   - Or copy the template below and fill in the gateway URL and models.
+
+2. In your project, paste it into your coding agent.
+
+3. Read the diff and the list it reports: each call site it changed, each model it replaced, and any call it could not move.
+
+4. Set `GANTRY_API_KEY` where the project runs, to a key issued for the project (a workload key, such as `svc-billing`, rather than your own).
+
+</Steps>
+
+<Aside type="note">
+The prompt never holds a key. The agent reads the key from `GANTRY_API_KEY` and adds the variable to `.env.example` with no value.
+</Aside>
+
+## The template
+
+```text
+Connect this project to Gantry, our AI gateway, so every LLM call goes through it.
+
+Gantry gateway: https://gantry.example.com
+OpenAI-compatible base URL: https://gantry.example.com/v1
+Anthropic base URL: https://gantry.example.com
+The API key is in the environment variable GANTRY_API_KEY. Never write a key into a file that is committed.
+Models this project may use through Gantry: gpt-4o-mini, claude-sonnet-5-5
+
+Do this:
+1. Find every place this project calls a model provider: the OpenAI, Anthropic, Azure OpenAI, Google Gemini or Bedrock SDKs, LangChain, LlamaIndex, the Vercel AI SDK, LiteLLM, raw HTTP calls to api.openai.com or api.anthropic.com, and their config and environment files. List them before changing anything.
+2. Point each one at Gantry:
+   - OpenAI SDKs and OpenAI-compatible clients: base URL https://gantry.example.com/v1, API key from GANTRY_API_KEY.
+   - Anthropic SDKs: base URL https://gantry.example.com, API key from GANTRY_API_KEY.
+   - Where a client reads its base URL from the environment (OPENAI_BASE_URL, ANTHROPIC_BASE_URL), prefer setting it there over code changes.
+   - Azure OpenAI, Gemini and Bedrock clients: switch them to the OpenAI-compatible client against https://gantry.example.com/v1 with a model from the list above, keeping the same prompts and parameters.
+3. Use only the models listed above. Where the code names another model, replace it with the closest one from the list and tell me each replacement.
+4. Remove provider keys (OPENAI_API_KEY, ANTHROPIC_API_KEY and the like) from code and committed files. Add GANTRY_API_KEY to .env.example or the project's equivalent, with no value.
+5. Do not change prompts, retries, streaming or anything else about how the calls behave.
+6. Run the project's tests and build. Then show me the diff and a short list: each call site changed, each model replaced, and any call you could not move and why.
+```
+
+## Why each step is there
+
+- **List first.** A project often has a call nobody remembers, in a script or a test fixture. Seeing the list before the edit tells you what the agent found.
+- **Base URL from the environment.** Most SDKs read `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`. Setting them there keeps the code the same in every environment, and moving back is one variable.
+- **Only allowed models.** A model your rule does not allow is refused with `model_not_allowed`. Replacing it now saves finding out in production.
+- **One client for Azure, Gemini and Bedrock.** Gantry speaks the OpenAI chat API to every provider kind, so the project needs one client, and Gantry holds the Azure, Google and AWS credentials.
+- **Behavior unchanged.** The point is governance, not a refactor: same prompts, same retries, same streaming.

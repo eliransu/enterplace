@@ -1957,19 +1957,21 @@ async fn setup_done(
             || "http://127.0.0.1:8080".to_string(),
             |host| format!("http://{host}"),
         );
-    // A model this policy serves, for the test call.
-    let model = config::load(&console.config().policy, Some(&console.config().keys))
-        .ok()
-        .and_then(|l| {
-            l.providers
-                .iter()
-                .flat_map(|p| p.models.clone())
-                .find(|m| m != "*")
-        })
-        .unwrap_or_else(|| "<model>".to_string());
+    // The models this policy serves, for the test call and the prompt for a coding agent.
+    let mut models: Vec<String> =
+        config::load(&console.config().policy, Some(&console.config().keys))
+            .map(|l| {
+                l.providers
+                    .iter()
+                    .flat_map(|p| p.models.clone())
+                    .filter(|m| m != "*")
+                    .collect()
+            })
+            .unwrap_or_default();
+    models.dedup();
     page(
         StatusCode::OK,
-        pages::setup_result(&issued.key, &origin, &model),
+        pages::setup_result(&issued.key, &origin, &models),
     )
 }
 

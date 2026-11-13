@@ -7,6 +7,14 @@
 })();
 
 document.addEventListener("DOMContentLoaded", function () {
+  // A button that copies the text of the element its data-copy names, such as the prompt for a coding agent.
+  document.querySelectorAll("button[data-copy]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var source = document.getElementById(button.getAttribute("data-copy"));
+      if (!source || !navigator.clipboard) return;
+      navigator.clipboard.writeText(source.innerText).then(function () { button.textContent = "Copied"; });
+    });
+  });
   // A filter that is a select applies when it changes, as the pills do when pressed.
   document.querySelectorAll("select[data-submit]").forEach(function (select) {
     select.addEventListener("change", function () { select.form.submit(); });
