@@ -336,3 +336,37 @@ fn store_import_moves_a_keys_file_in_once() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn check_names_a_credential_the_store_does_not_hold() -> TestResult {
+    let Some(url) = database("check_credential")? else {
+        return Ok(());
+    };
+    let dir = workdir("check-credential")?;
+    let policy = path(&dir, "gantry.policy.yaml");
+    std::fs::write(
+        &policy,
+        POLICY.replace(
+            "key_env: GANTRY_TEST_PROVIDER_KEY",
+            "credential: openai-prod",
+        ),
+    )?;
+    let master = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    let out = gantry(
+        &["check", &policy],
+        &[("DATABASE_URL", &url), ("GANTRY_MASTER_KEY", master)],
+    )?;
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{said}");
+    assert!(
+        said.contains("credential \"openai-prod\", which is not in the store")
+            && said.contains("POST /admin/credentials"),
+        "{said}"
+    );
+    // Without the store's variable the names cannot be checked: a warning, not a failure.
+    let out = gantry(&["check", &policy], &[("DATABASE_URL", "")])?;
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{said}");
+    assert!(said.contains("credential names were not checked"), "{said}");
+    Ok(())
+}

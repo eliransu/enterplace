@@ -301,10 +301,11 @@ tokio::task_local! {
     pub(crate) static EXTRA: std::sync::Arc<Extra>;
 }
 
-const NAV: [(&str, &str); 4] = [
+const NAV: [(&str, &str); 5] = [
     ("/console/audit", "Audit log"),
     ("/console/policy", "Policy"),
     ("/console/people", "People and workloads"),
+    ("/console/credentials", "Provider credentials"),
     ("/console/spend", "Spend"),
 ];
 

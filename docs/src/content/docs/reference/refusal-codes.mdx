@@ -51,6 +51,9 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`tool_not_allowed`](#tool_not_allowed) | 200 (MCP) | |
 | [`unknown_tool`](#unknown_tool) | 200 (MCP) | |
 | [`model_not_allowed`](#model_not_allowed) | 403 | `permission_error` |
+| [`caller_provider_key_not_allowed`](#caller_provider_key_not_allowed) | 403 | `invalid_request_error` |
+| [`caller_provider_key_unsupported`](#caller_provider_key_unsupported) | 400 | `invalid_request_error` |
+| [`caller_provider_key_invalid`](#caller_provider_key_invalid) | 400 | `invalid_request_error` |
 | [`unknown_model`](#unknown_model) | 403 | `permission_error` |
 | [`wrong_route`](#wrong_route) | 400 | `invalid_request_error` |
 | [`untranslatable`](#untranslatable) | 400 or 502 | `invalid_request_error` or `api_error` |
@@ -187,6 +190,24 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 
 **Fix:** use an allowed model, or ask an admin to change the policy.
 
+### caller_provider_key_not_allowed
+
+**403.** The request carries `x-gantry-provider-key`, and the caller's rule does not set `caller_provider_key: allowed`. The request is not forwarded, with that key or with Gantry's.
+
+**Fix:** send it without the header, or ask an admin to set `caller_provider_key: allowed` on the rule. See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key).
+
+### caller_provider_key_unsupported
+
+**400.** The model is served on Amazon Bedrock, whose requests Gantry signs with AWS keys, so a caller's provider key cannot be used.
+
+**Fix:** send it without `x-gantry-provider-key`.
+
+### caller_provider_key_invalid
+
+**400.** `x-gantry-provider-key` is empty or holds a character that cannot go in an HTTP header. Sent twice, it is `ambiguous_key` instead.
+
+**Fix:** send the provider key alone, once.
+
 ### unknown_model
 
 **403.** The rule allows the model, but no provider lists it, or an alias has no deployment Gantry can reach. It is 403, not 404, because Claude Code replaces the message of a 404 with its own and retries a 400.
@@ -304,7 +325,7 @@ With `retries` or a `fallback` on the provider, an `upstream_*` failure, a 429 o
 
 ## Admin API codes
 
-These come from `/admin/keys` and `/admin/kills`, in OpenAI's shape. `no_key`, `ambiguous_key`, `unknown_key`, `unknown_route`, `busy`, `body_too_large`, `body_timeout` and `audit_unavailable` apply there too. See [Admin API](/reference/admin-api/).
+These come from `/admin/keys`, `/admin/kills` and `/admin/credentials`, in OpenAI's shape. `no_key`, `ambiguous_key`, `unknown_key`, `unknown_route`, `busy`, `body_too_large`, `body_timeout` and `audit_unavailable` apply there too. See [Admin API](/reference/admin-api/).
 
 ### not_admin
 
@@ -347,6 +368,36 @@ These come from `/admin/keys` and `/admin/kills`, in OpenAI's shape. `no_key`, `
 **409.** The kill switch file could not be read or written.
 
 **Fix:** check `gantry.kills.json` and its permissions, then try again.
+
+### credentials_need_store
+
+**404.** A `/admin/credentials` call on a gateway whose policy has no `store:`.
+
+**Fix:** keep provider keys in `key_env` or `key_file`, or add `store:` and set `GANTRY_MASTER_KEY`.
+
+### no_master_key
+
+**409.** A `/admin/credentials` call on a gateway started without `GANTRY_MASTER_KEY`.
+
+**Fix:** set `GANTRY_MASTER_KEY` (the same on every gateway on the store) and restart.
+
+### credential_exists
+
+**409.** `POST /admin/credentials` with a name the store already holds.
+
+**Fix:** rotate it with `PUT /admin/credentials/<name>`, or choose another name.
+
+### no_such_credential
+
+**404.** No credential has that name.
+
+**Fix:** `GET /admin/credentials` lists them.
+
+### credential_in_use
+
+**409.** A provider of the policy in use names the credential, so it is not removed.
+
+**Fix:** point the provider at another credential or `key_env` first, or rotate this one.
 
 ### no_randomness
 

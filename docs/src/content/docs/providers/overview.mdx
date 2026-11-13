@@ -78,6 +78,7 @@ See [Translation](/routing/translation/).
 | `url` | string | required | The base URL. See [How the URL is built](#how-the-url-is-built). Optional for `bedrock`. |
 | `key_env` | string | required | The name of the environment variable that holds the provider key. Not allowed on `bedrock`. Optional on a local `openai` provider with `allow_private: true`. |
 | `key_file` | string | none | Instead of `key_env`: the path of a file that holds the provider key. Not allowed on `bedrock`. See [Provider keys](#provider-keys). |
+| `credential` | string | none | Instead of `key_env` or `key_file`: the name of a provider credential kept in the store, sealed under the master key. Needs `store:`. Not allowed on `bedrock`. See [Provider credentials](/governance/provider-credentials/). |
 | `models` | list | required | The exact model names this provider serves. Not empty, no `"*"`. |
 | `allow_private` | bool | `false` | Lets `url` point at this machine or a private network. |
 | `retries` | integer | `0` | 0 to 5. See [Retries and fallbacks](/routing/retries-and-fallbacks/). |
@@ -128,6 +129,10 @@ Gantry reads the file at start, and refuses to start while it is missing or empt
 <Aside type="caution">
 Do not name a provider key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be a Gantry key.
 </Aside>
+
+To manage keys in the console and rotate them on every gateway at once, keep them in the store and name one with `credential:`. See [Provider credentials](/governance/provider-credentials/).
+
+A rule may also let callers send their own provider key in `x-gantry-provider-key`, with `caller_provider_key: allowed`. See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key).
 
 A `bedrock` provider takes no `key_env`: Gantry signs with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` from its environment.
 

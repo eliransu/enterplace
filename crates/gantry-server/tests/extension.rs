@@ -125,6 +125,8 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
     )?;
     let env = |variable: &str| match variable {
         "GANTRY_STORE_URL" => Some(url.clone()),
+        // No master key: these gateways keep no provider credentials.
+        "GANTRY_MASTER_KEY" | "GANTRY_MASTER_KEY_FILE" => None,
         _ => Some("provider-secret".into()),
     };
     // The extension gets the store at start, migrates its namespace, and keeps the store for its handlers.
@@ -157,12 +159,12 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
         .collect::<Result<_, tokio_postgres::Error>>()?;
     assert_eq!(rows, vec![("demo".to_string(), 1)]);
-    // The gateway's own schema version is untouched by the namespace.
+    // The gateway's own schema version is untouched by the namespace: its two migrations, keys and credentials.
     let core: i32 = client
         .query_one("SELECT max(version) FROM gantry_schema", &[])
         .await?
         .try_get(0)?;
-    assert_eq!(core, 1);
+    assert_eq!(core, 2);
 
     // Its own connection, so a transaction is safe on it.
     let tx = client.transaction().await?;

@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::{
     guard::{self, Guardrail, GuardrailFile},
     id::sha256_hex,
-    policy::{Budget, Limits, Models, Period, Policy, Principal, Rule, Who},
+    policy::{Budget, CallerKey, Limits, Models, Period, Policy, Principal, Rule, Who},
     usage::{PriceOverrides, price_for},
 };
 
@@ -109,6 +109,8 @@ const KNOWN: &[&str] = &[
     "tools",
     "store",
     "postgres_url_env",
+    "credential",
+    "caller_provider_key",
 ];
 /// Keys whose value is a map whose keys the user chooses: model names, or header names under `headers_env`.
 /// Those names are not Gantry keys, so the unknown-key scan never reads them.
@@ -230,6 +232,9 @@ struct ProviderFile {
     // Instead of key_env, for a key that changes while Gantry runs: the file is read again once a second.
     #[serde(default)]
     key_file: Option<String>,
+    // Instead of key_env or key_file: a provider credential kept sealed in the store, by its name.
+    #[serde(default)]
+    credential: Option<String>,
     #[serde(default)]
     allow_private: bool,
     #[serde(default)]
@@ -274,6 +279,8 @@ struct RuleFile {
     passthrough: Vec<PassthroughFile>,
     #[serde(default)]
     tools: Vec<String>,
+    #[serde(default)]
+    caller_provider_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -821,6 +828,9 @@ pub struct Provider {
     /// A file that holds the provider key, in place of `key_env`. Gantry reads it at start and again whenever it
     /// changes, so the key can be rotated without a restart. A relative path is read from where Gantry runs.
     pub key_file: Option<PathBuf>,
+    /// The name of a provider credential kept in the store, sealed under the master key, in place of `key_env`.
+    /// A rotation in the console or the admin API reaches every gateway without a restart.
+    pub credential: Option<String>,
     pub allow_private: bool,
     /// The name the provider knows each model by: the Azure deployment or the Bedrock model ID.
     pub upstream_models: BTreeMap<String, String>,
@@ -1603,6 +1613,18 @@ fn limits(rule: &RuleFile, at: &dyn Fn(&str) -> String, errors: &mut Vec<String>
         }
     }
     limits.buffer_stream = rule.buffer_stream;
+    limits.caller_provider_key = match rule.caller_provider_key.as_deref() {
+        None | Some("refused") => CallerKey::Refused,
+        Some("allowed") => CallerKey::Allowed,
+        Some("allowed_budgeted") => CallerKey::AllowedBudgeted,
+        Some(other) => {
+            errors.push(format!(
+                "{}: caller_provider_key is \"{other}\". It is refused (the default: a request that carries x-gantry-provider-key is refused), allowed (the caller's own provider key is sent, and what it spends is recorded but not counted against budgets) or allowed_budgeted (as allowed, and counted against budgets).",
+                at("caller_provider_key")
+            ));
+            CallerKey::Refused
+        }
+    };
     if let Some(every) = rule.check_stream_every {
         match u32::try_from(every) {
             Ok(every @ 50..=100_000) => limits.check_stream_every = Some(every),
@@ -2120,6 +2142,31 @@ fn providers(
             }
             None => String::new(),
         };
+        if let Some(name) = &entry.credential {
+            if bedrock {
+                errors.push(format!(
+                    "{}: a bedrock provider takes no credential. Gantry signs its requests with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, for temporary credentials, AWS_SESSION_TOKEN from its environment. Remove the line.",
+                    at("credential")
+                ));
+            } else if entry.key_env.is_some() || entry.key_file.is_some() {
+                errors.push(format!(
+                    "{}: provider \"{}\" takes one of key_env, key_file or credential. Keep the one that holds its key and remove the others.",
+                    at("credential"),
+                    entry.name
+                ));
+            } else if !valid_name(name) {
+                errors.push(format!(
+                    "{}: credential is the name of a provider credential kept in the store, for example openai-prod: letters, digits, dots, dashes, underscores and @ only. The key itself never goes in this file.",
+                    at("credential")
+                ));
+            } else if parsed.store.is_none() {
+                errors.push(format!(
+                    "{}: provider \"{}\" takes its key from credential \"{name}\", and credentials are kept in the store, which this policy does not name. Add `store: {{ postgres_url_env: DATABASE_URL }}`, or keep the key in an environment variable with `key_env:`.",
+                    at("credential"),
+                    entry.name
+                ));
+            }
+        }
         if let Some(path) = &entry.key_file {
             if bedrock {
                 errors.push(format!(
@@ -2156,9 +2203,9 @@ fn providers(
             }
             // A model server on this machine or a private network, such as Ollama or vLLM, often takes no key.
             (None, false) if entry.allow_private && kind == Some(Kind::OpenAi) => {}
-            (None, false) if entry.key_file.is_some() => {}
+            (None, false) if entry.key_file.is_some() || entry.credential.is_some() => {}
             (None, false) => errors.push(format!(
-                "{}:{line}: provider \"{}\" has no key_env. Add the name of the environment variable that holds its key, for example `key_env: OPENAI_API_KEY`, or `key_file:` with the path of a file that holds it. A model server of kind openai on this machine with `allow_private: true` may leave it out.",
+                "{}:{line}: provider \"{}\" has no key_env. Add the name of the environment variable that holds its key, for example `key_env: OPENAI_API_KEY`, or `key_file:` with the path of a file that holds it, or `credential:` with the name of a provider credential kept in the store. A model server of kind openai on this machine with `allow_private: true` may leave it out.",
                 file.display(),
                 entry.name
             )),
@@ -2261,6 +2308,7 @@ fn providers(
                 url,
                 key_env: entry.key_env.clone().unwrap_or_default(),
                 key_file: entry.key_file.as_ref().map(PathBuf::from),
+                credential: entry.credential.clone(),
                 allow_private: entry.allow_private,
                 upstream_models,
                 api_version: entry.api_version.clone(),
@@ -2448,6 +2496,22 @@ pub fn names_store(policy_text: &str) -> bool {
         && from_yaml::<Probe>(policy_text).is_ok_and(|probe| probe.store.is_some())
 }
 
+/// The providers that name a credential, with its name, from the policy file as it is now. Empty when it does not
+/// load: `gantry check` says why.
+pub fn credentials_named(policy_path: &Path) -> Vec<(String, String)> {
+    std::fs::read_to_string(policy_path)
+        .ok()
+        .and_then(|text| load_texts(policy_path, &text, policy_path, "").ok())
+        .map(|loaded| {
+            loaded
+                .providers
+                .into_iter()
+                .filter_map(|p| p.credential.map(|c| (p.name, c)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The `store:` section, checked: the name of the variable that holds the connection string.
 fn store_setting(
     file: &Path,
@@ -2592,6 +2656,11 @@ pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
                     .as_deref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default(),
+            ),
+            (
+                "credential",
+                provider.credential.clone().unwrap_or_default(),
+                now.credential.clone().unwrap_or_default(),
             ),
             (
                 "api_version",
@@ -3001,6 +3070,7 @@ rules:
                 cache_ttl_seconds: Some(300),
                 buffer_stream: false,
                 check_stream_every: None,
+                caller_provider_key: CallerKey::Refused,
             }
         );
         assert_eq!(
@@ -3681,6 +3751,67 @@ rules:
         assert!(
             reasons.contains("the key_file of provider \"groq\""),
             "{reasons}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_provider_key_may_be_a_credential_in_the_store_and_a_rule_may_take_the_callers()
+    -> TestResult {
+        let named = MORE.replace("    key_env: GROQ_API_KEY\n", "    credential: groq-prod\n");
+        // Credentials are kept in the store: without one the fix is named.
+        let text = errors(check("credential-no-store", &named, None)?)?;
+        assert!(
+            text.contains("credential \"groq-prod\"") && text.contains("store:"),
+            "{text}"
+        );
+        let stored = format!("store: {{ postgres_url_env: DATABASE_URL }}\n{named}");
+        let loaded = check("credential", &stored, None)?.map_err(|e| e.join("\n"))?;
+        let groq = loaded
+            .providers
+            .iter()
+            .find(|p| p.name == "groq")
+            .ok_or("groq")?;
+        assert_eq!(groq.credential.as_deref(), Some("groq-prod"));
+        let both = stored.replace(
+            "    credential: groq-prod\n",
+            "    credential: groq-prod\n    key_env: GROQ_API_KEY\n",
+        );
+        let text = errors(check("credential-both", &both, None)?)?;
+        assert!(
+            text.contains("takes one of key_env, key_file or credential"),
+            "{text}"
+        );
+        let new = check(
+            "credential-renamed",
+            &stored.replace("groq-prod", "groq-next"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        assert!(
+            needs_restart(&loaded, &new)
+                .join("\n")
+                .contains("the credential of provider \"groq\""),
+        );
+
+        let rule = |value: &str| {
+            format!(
+                "version: 1\nproviders:\n  - name: openai\n    kind: openai\n    url: https://api.openai.com\n    key_env: K\n    models: [gpt-4o]\nrules:\n  - name: byok\n    principals: {{ team: data }}\n    models: [gpt-4o]\n    caller_provider_key: {value}\n"
+            )
+        };
+        for (value, wanted) in [
+            ("allowed", CallerKey::Allowed),
+            ("allowed_budgeted", CallerKey::AllowedBudgeted),
+            ("refused", CallerKey::Refused),
+        ] {
+            let loaded = check("caller-key", &rule(value), None)?.map_err(|e| e.join("\n"))?;
+            let byok = loaded.policy.rule_list().first().ok_or("rule")?;
+            assert_eq!(byok.limits.caller_provider_key, wanted);
+        }
+        let text = errors(check("caller-key-bad", &rule("yes"), None)?)?;
+        assert!(
+            text.contains(":12: caller_provider_key is \"yes\"") && text.contains("allowed"),
+            "{text}"
         );
         Ok(())
     }

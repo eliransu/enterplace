@@ -12,6 +12,7 @@ Without a store, each Gantry process keeps its keys in a file, its kill switches
 - A key issued on any replica is accepted by all within 2 seconds. A revoked key is refused by all within 2 seconds.
 - A kill switch set on any replica stops traffic on all within 1 second.
 - A budget is enforced once across all replicas: what they charge together never passes it by more than one request's estimate.
+- With `GANTRY_MASTER_KEY` set, provider keys can be kept here too, sealed with AES-256-GCM, and a rotation reaches all within 2 seconds. See [Provider credentials](/governance/provider-credentials/).
 
 ## When to use it
 
@@ -91,6 +92,7 @@ This copies every key of the file, and the kill switches in `gantry.kills.json` 
 | Keys: name, team, the SHA-256 of the key, admin, expiry, budget, models, tpm. Never a key itself. | The policy. It stays a file, reviewed in git, and every replica reads its own copy. |
 | Kill switches, with their reason, who set them and when. | Prompts and answers. Gantry never stores them, here or anywhere. |
 | Spend and reservations, per team, person and key, per day and month. | The audit log. Each replica keeps its own hash-chained file. |
+| Provider credentials, sealed with AES-256-GCM under the master key, with their name, vendor, last 4 characters and who added and rotated them. | The master key. It stays in each replica's environment or a file it names. |
 | | Rate limits (`rpm`, `tpm`) and the answer cache. They are counted per replica. |
 | | Console sessions. A sign-in is good on the replica that made it. |
 
