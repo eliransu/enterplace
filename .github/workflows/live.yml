@@ -4,6 +4,9 @@ name: live
 # and its live-matrix artifact; docs/src/data/live-matrix.json is updated from an artifact by hand (see the docs page
 # Providers > Live test matrix), so no workflow writes to main.
 on:
+  # A change to the suite runs it on its branch: workflow_dispatch only works once this file is on main.
+  push:
+    paths: [scripts/live_matrix.py, .github/workflows/live.yml]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
