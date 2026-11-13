@@ -173,10 +173,26 @@ fn take_lock(path: &Path) -> Result<Option<PathBuf>, String> {
     Ok(Some(lock))
 }
 
+/// FILE_SHARE_READ | FILE_SHARE_WRITE, without FILE_SHARE_DELETE.
+#[cfg(windows)]
+const FILE_SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+
+/// Whether Windows marks the file as a device (FILE_ATTRIBUTE_DEVICE). Unix devices are already not `is_file`.
+#[cfg(windows)]
+fn is_device(meta: &std::fs::Metadata) -> bool {
+    std::os::windows::fs::MetadataExt::file_attributes(meta) & 0x40 != 0
+}
+
+#[cfg(not(windows))]
+fn is_device(_: &std::fs::Metadata) -> bool {
+    false
+}
+
 /// Whether a process with this ID runs. Without unsafe code: /proc on Linux, `ps` elsewhere. When neither can
 /// tell, it is taken as running, so a second writer is refused and the message names the file to delete.
 // ponytail: two containers sharing one log folder both run as process 1 and cannot see each other; give each
 // container its own audit path.
+#[cfg(not(windows))]
 fn process_alive(pid: u32) -> bool {
     if Path::new("/proc/self").exists() {
         return Path::new("/proc").join(pid.to_string()).exists();
@@ -187,6 +203,20 @@ fn process_alive(pid: u32) -> bool {
         .stderr(std::process::Stdio::null())
         .status()
         .map_or(true, |status| status.success())
+}
+
+/// Windows has neither /proc nor a `ps` that knows Windows process IDs, so it asks `tasklist`, which ships with
+/// Windows. When that cannot run, the process is taken as running, as above.
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        // A match is a CSV row whose second field is the ID; no match prints an INFO line and still exits 0.
+        .map_or(true, |out| {
+            String::from_utf8_lossy(&out.stdout).contains(&format!(",\"{pid}\","))
+        })
 }
 
 /// The file beside an audit log that says a Gantry process holds it: `gantry audit repair` refuses while it exists.
@@ -377,6 +407,11 @@ impl AuditLog {
         // A new log is readable by its owner only: it names every caller and what each asked for.
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        // Windows has no inode to compare, so it cannot tell a replaced log from the one it opened. Without
+        // FILE_SHARE_DELETE nobody can delete, rename or replace the log while this handle is open; writers and readers
+        // are still let in, and a log cut short is caught by its length as on Unix.
+        #[cfg(windows)]
+        std::os::windows::fs::OpenOptionsExt::share_mode(&mut options, FILE_SHARE_READ_WRITE);
         let mut file = options
             .open(path)
             .map_err(|err| {
@@ -387,14 +422,18 @@ impl AuditLog {
             })?;
         let io_err =
             |err: io::Error| format!("the audit log at {} cannot be read: {err}.", path.display());
-        let meta = file.metadata().map_err(io_err)?;
-        if !meta.is_file() {
-            // A device or a pipe would swallow records and still report success.
-            return Err(format!(
-                "the audit log at {} is not a regular file, so records written to it would not be kept. Point `audit: {{ path: ... }}` at a file.",
-                path.display()
-            ));
-        }
+        // A device or a pipe would swallow records and still report success. Windows can fail to describe a device
+        // such as NUL at all, so there that failure counts as not a regular file.
+        let meta = match file.metadata() {
+            Ok(meta) if meta.is_file() && !is_device(&meta) => meta,
+            Err(err) if !cfg!(windows) => return Err(io_err(err)),
+            _ => {
+                return Err(format!(
+                    "the audit log at {} is not a regular file, so records written to it would not be kept. Point `audit: {{ path: ... }}` at a file.",
+                    path.display()
+                ));
+            }
+        };
         let len = meta.len();
         let (mut n, mut prev) = (0, GENESIS.to_string());
         // A configuration record holds the whole policy file, so the last line can be long. The window grows to fit it.
@@ -607,6 +646,13 @@ impl AuditLog {
                 (std::fs::metadata(path), open.metadata()),
                 (Ok(named), Ok(open)) if named.ino() == open.ino() && named.dev() == open.dev() && open.len() >= self.len.load(Ordering::Relaxed)
             );
+        }
+        // Elsewhere the log is opened so it cannot be deleted or replaced (see `open`): only its length can change.
+        #[cfg(not(unix))]
+        if let (Some(_), Some(open)) = (&self.path, &self.syncer) {
+            return !open
+                .metadata()
+                .is_ok_and(|open| open.len() >= self.len.load(Ordering::Relaxed));
         }
         false
     }
@@ -1268,7 +1314,9 @@ mod tests {
 
     #[test]
     fn a_device_is_not_accepted_as_an_audit_log() {
-        let err = AuditLog::open(Path::new("/dev/null")).err();
+        // NUL is Windows' /dev/null.
+        let device = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        let err = AuditLog::open(Path::new(device)).err();
         assert!(err.is_some_and(|e| e.contains("not a regular file")));
     }
 
@@ -1298,6 +1346,23 @@ mod tests {
             let path = temp(name);
             let log = AuditLog::open(&path)?;
             log.append(&entry("A"))?;
+            if cfg!(windows) && damage < 2 {
+                // Windows: the log cannot be deleted or replaced while it is held, so no record can go to a lost file.
+                let other = path.with_extension("other");
+                std::fs::write(&other, "")?;
+                assert!(
+                    std::fs::remove_file(&path).is_err()
+                        && std::fs::rename(&path, path.with_extension("moved")).is_err()
+                        && std::fs::rename(&other, &path).is_err(),
+                    "{name}: a held log was deleted, moved or replaced"
+                );
+                std::fs::remove_file(&other)?;
+                assert!(!log.is_broken(), "{name}: the refused delete broke the log");
+                log.append(&entry("B"))?;
+                drop(log);
+                assert_eq!(verify(&path)?.0, 2, "{name}: a record was lost");
+                continue;
+            }
             match damage {
                 0 => std::fs::remove_file(&path)?,
                 1 => {

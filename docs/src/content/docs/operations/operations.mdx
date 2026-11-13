@@ -18,7 +18,7 @@ GET /healthz
 | Status | Body `status` | Meaning |
 |---|---|---|
 | 200 | `ok` | Gantry can do its job |
-| 503 | `the audit log cannot be written` | A write failed, or the log was deleted, moved, replaced or cut short. Every request is refused until a restart |
+| 503 | `the audit log cannot be written` | A write failed, or the log was deleted, moved, replaced or cut short (on Windows the log cannot be deleted, moved or replaced while Gantry holds it). Every request is refused until a restart |
 
 The body also names the versions in use and any rejected version on disk:
 
