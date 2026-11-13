@@ -116,6 +116,8 @@ pub struct Rule {
     pub limits: Limits,
     /// Native provider paths the rule may reach through `/passthrough/<provider>/...`. Empty reaches none.
     pub passthrough: Vec<Passthrough>,
+    /// MCP tools the rule allows, as `<server>.<tool>`, `<server>.*` or `*`. Empty allows none.
+    pub tools: Vec<String>,
 }
 
 /// One provider and the path prefixes of its own API a rule may reach as sent.
@@ -232,6 +234,7 @@ impl Policy {
             guardrails: Vec::new(),
             limits: Limits::default(),
             passthrough: Vec::new(),
+            tools: Vec::new(),
         });
         self
     }

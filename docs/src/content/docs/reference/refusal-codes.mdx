@@ -48,6 +48,8 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`stored_context`](#stored_context) | 400 | `invalid_request_error` |
 | [`max_tokens_needed`](#max_tokens_needed) | 400 | `invalid_request_error` |
 | [`no_rule`](#no_rule) | 403 | `permission_error` |
+| [`tool_not_allowed`](#tool_not_allowed) | 200 (MCP) | |
+| [`unknown_tool`](#unknown_tool) | 200 (MCP) | |
 | [`model_not_allowed`](#model_not_allowed) | 403 | `permission_error` |
 | [`unknown_model`](#unknown_model) | 403 | `permission_error` |
 | [`wrong_route`](#wrong_route) | 400 | `invalid_request_error` |
@@ -165,6 +167,18 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 **403.** No rule names the caller's name or team.
 
 **Fix:** an admin adds a rule. See [Policy file](/governance/policy/).
+
+### tool_not_allowed
+
+**JSON-RPC error on `/mcp`.** The first rule that names the caller does not list the MCP tool. The message names the rule and the tools it allows.
+
+**Fix:** call an allowed tool, or ask an admin to add it to the rule's `tools:`. See [MCP gateway](/governance/mcp-gateway/).
+
+### unknown_tool
+
+**JSON-RPC error on `/mcp`.** The rule allows the name, and it is not `<server>.<tool>` of a server the policy lists.
+
+**Fix:** run `tools/list` for the names.
 
 ### model_not_allowed
 

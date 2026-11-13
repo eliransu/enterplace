@@ -250,6 +250,24 @@ pub fn governed(
             accept_messages: provider.accept_messages,
         });
     }
+    let mut mcp = Vec::new();
+    for server in &loaded.mcp {
+        let mut headers = Vec::new();
+        for (header, variable) in &server.headers_env {
+            let value = provider_key(variable).filter(|v| !v.trim().is_empty()).ok_or_else(|| {
+                format!(
+                    "MCP server \"{}\" sends header {header} from the environment variable {variable}, which is not set. Set it (`export {variable}=...`) and start again.",
+                    server.name
+                )
+            })?;
+            headers.push((header.clone(), Secret::new(value.trim())));
+        }
+        mcp.push(crate::McpRoute {
+            name: server.name.clone(),
+            url: server.url.clone(),
+            headers,
+        });
+    }
     let log = Arc::new(AuditLog::open(&loaded.audit_path)?);
     // The whole chain is checked before serving: Gantry does not add records to a log it cannot vouch for.
     // ponytail: this reads the whole file at every start. When logs grow past a few gigabytes, checkpoint the verified prefix.
@@ -300,6 +318,7 @@ pub fn governed(
         aliases: loaded.aliases.clone(),
         // From the process environment: `provider_key` answers for provider keys, and tests stub it.
         traces: crate::TraceExport::from_env(|name| std::env::var(name).ok())?,
+        mcp,
         ..Config::default()
     };
     let prints = (

@@ -246,7 +246,7 @@ An unknown key stops the check of that file at that point, because the rest cann
 |---|---|
 | Misspelled key | `gantry.policy.yaml:18: "modles" is not a key Gantry knows. Did you mean "models"?` |
 | Unknown key | `"colour" is not a key Gantry knows. Remove it, or check the spelling.` |
-| Key not enforced | `"tools" is not enforced by this version of Gantry. Remove the line: a policy file must not promise what Gantry does not do yet.` |
+| MCP tool on no server | `tool "gitlab.create_issue" is on MCP server "gitlab", which is not defined under mcp. The MCP servers are: github, docs.` |
 | Key in the wrong place | `"retries" does not belong here. The keys here are name, principals, models, ... Move it to where it belongs, or remove it.` |
 | Missing key | `"url" is missing here. Add it.` |
 | Wrong type | `budget is integer 5. Write it as budget: { usd: 20, per: month }.` |
@@ -274,7 +274,7 @@ Each message starts with `<file>:<line>: `, shortened in the table.
 **Warnings** do not stop the file from loading: a model a rule names that no provider serves, a provider model name with spaces at its ends or holding `*`, two provider model names that differ only in case or spaces, and a key whose expiry has passed. `gantry serve` and a reload accept expired keys, because keys expire while Gantry runs.
 
 <Aside type="note">
-`tools` appears in Gantry's designs but is not enforced. A policy file that contains it is refused, so the file never promises a control Gantry does not apply.
+A rule's `tools:` list and the `mcp:` servers it names are described in [MCP gateway](/governance/mcp-gateway/).
 </Aside>
 
 ## Related

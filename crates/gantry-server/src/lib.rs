@@ -32,10 +32,12 @@ use gantry_core::{
 
 mod admin;
 mod alias;
+mod mcp;
 mod metrics;
 mod reload;
 mod spend;
 mod traces;
+pub use mcp::McpRoute;
 pub use traces::TraceExport;
 
 use http_body_util::BodyExt;
@@ -232,6 +234,8 @@ pub struct Config {
     pub aliases: Vec<gantry_core::config::Alias>,
     /// Where OpenTelemetry traces go. `None` traces nothing.
     pub traces: Option<TraceExport>,
+    /// Upstream MCP servers whose tools are served at `/mcp`. Empty serves no `/mcp`.
+    pub mcp: Vec<McpRoute>,
 }
 
 /// A configuration the server refuses to start with. The message names the cause and the fix.
@@ -507,7 +511,12 @@ fn build(
             .route("/admin/keys/{prefix}", any(admin::handle))
             .route("/admin/kills", any(admin::handle));
     }
+    let mcp = mcp::router(&state, config.mcp)?;
     let router = router.fallback(handle).with_state(state);
+    let router = match mcp {
+        Some(mcp) => router.merge(mcp),
+        None => router,
+    };
     let router = match console {
         Some(console) => router.nest("/console", gantry_console::router(console)),
         None => router,

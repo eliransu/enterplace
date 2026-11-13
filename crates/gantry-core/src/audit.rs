@@ -657,7 +657,7 @@ pub struct Summary {
     pub admin: u64,
     /// Follow-ups to a request record that list each provider tried when one failed before answering.
     pub attempts: u64,
-    /// Records of what a forwarded request used and cost, written when its answer ends.
+    /// Records of what a forwarded request used and cost, or how an MCP tool call ended, written when its answer ends.
     pub usage: u64,
     pub last_hash: String,
     /// The number of the record with the hash that was asked for.
@@ -883,7 +883,8 @@ fn walk(reader: impl BufRead, path: &Path, expect: Option<&str>) -> Result<Summa
             None => summary.requests += 1,
             Some("admin" | "audit_repaired") => summary.admin += 1,
             Some("attempts") => summary.attempts += 1,
-            Some("usage") => summary.usage += 1,
+            // An MCP tool call's outcome follows its decision as a usage record follows a model request's.
+            Some("usage" | "mcp_result") => summary.usage += 1,
             Some(event) => {
                 summary.configuration += 1;
                 if event == "config_loaded" {

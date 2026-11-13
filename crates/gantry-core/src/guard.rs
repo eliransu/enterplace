@@ -1981,6 +1981,7 @@ rules:
             guardrails: hooks,
             limits: crate::policy::Limits::default(),
             passthrough: Vec::new(),
+            tools: Vec::new(),
         };
         let missing = unset_webhook_env(std::slice::from_ref(&rule), &|_| false).join("\n");
         assert!(
@@ -2123,6 +2124,7 @@ rules:
                 guardrails: parse(yaml)?.map_err(|e| e.to_string())?,
                 limits: crate::policy::Limits::default(),
                 passthrough: Vec::new(),
+                tools: Vec::new(),
             })
         };
         let missing = unset_webhook_env(&[rule(ok[0].0)?, rule(ok[2].0)?], &|_| false).join("\n");

@@ -11,6 +11,7 @@ pub mod id;
 pub mod keyfile;
 pub mod kill;
 pub mod litellm;
+pub mod mcp;
 pub mod metrics;
 pub mod policy;
 pub mod sigv4;

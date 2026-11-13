@@ -1,0 +1,185 @@
+---
+title: MCP gateway
+description: Put your MCP servers behind Gantry, so each person sees only the tools their rule allows and every tool call is recorded.
+sidebar:
+  order: 9
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Gantry serves the tools of your upstream MCP servers at one endpoint, `/mcp`. A caller connects with their Gantry key, sees only the tools their rule allows, and every `tools/call` is checked against the rule and written to the audit log before it reaches a server.
+
+## Policy
+
+List the servers under `mcp:` and give each rule a `tools:` list.
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_PROVIDER_KEY
+    models: [claude-sonnet-5-5]
+mcp:
+  - name: github
+    url: https://api.githubcopilot.com/mcp
+    headers_env: { Authorization: GITHUB_MCP_AUTHORIZATION }
+  - name: docs
+    url: http://127.0.0.1:9000/mcp
+    allow_private: true
+rules:
+  - name: payments-team
+    principals: { team: payments }
+    models: [claude-sonnet-5-5]
+    tools: [github.create_issue, github.list_issues, docs.*]
+  - name: everyone-else
+    principals: { any: true }
+    models: [claude-sonnet-5-5]
+```
+
+### Servers
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | yes | Letters, digits, `-` and `_`, no dot. Callers see the server's tools as `<name>.<tool>`. |
+| `url` | yes | The server's MCP endpoint (Streamable HTTP), for example `https://mcp.example.com/mcp`. |
+| `headers_env` | no | Headers sent with every request to the server, each taken from an environment variable: `{ Authorization: GITHUB_MCP_AUTHORIZATION }`. The variable holds the whole header value, `Bearer ...` included. The value never goes in the file. |
+| `allow_private` | no | Allow a url on this machine or a private network, as for providers. |
+
+The variables are read when Gantry starts, and Gantry does not start when one is unset. Adding, removing or changing a server needs a restart; a rule's `tools:` changes within 2 seconds, like the rest of the policy.
+
+### Tools in a rule
+
+| Entry | Allows |
+|---|---|
+| `github.create_issue` | That one tool |
+| `docs.*` | Every tool of server `docs`, including tools it adds later |
+| `*` | Every tool of every server. List it alone |
+
+A rule with no `tools:` allows no MCP tool. As for models, the first rule that names the caller decides: in the example `everyone-else` can use the model and no tool.
+
+`gantry check` names every mistake with its file and line: a tool on a server that is not defined, a tool without a server, a server name with a dot, a private url without `allow_private`, a `headers_env` value that is not a variable name.
+
+## Connect a client
+
+The endpoint is `<gantry url>/mcp`. Send your Gantry key as `Authorization: Bearer <key>`, as on the model routes.
+
+<Tabs>
+<TabItem label="Claude Code">
+
+```bash
+claude mcp add --transport http gantry https://gantry.example.com/mcp \
+  --header "Authorization: Bearer $GANTRY_KEY"
+```
+
+Or in the project's `.mcp.json`, with the key taken from the environment:
+
+```json title=".mcp.json"
+{
+  "mcpServers": {
+    "gantry": {
+      "type": "http",
+      "url": "https://gantry.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${GANTRY_KEY}" }
+    }
+  }
+}
+```
+
+Claude Code lists the tools under the name you gave the server, `gantry`.
+
+</TabItem>
+<TabItem label="Other MCP clients">
+
+Any client that speaks MCP's Streamable HTTP transport and can send a header works:
+
+```json
+{
+  "url": "https://gantry.example.com/mcp",
+  "headers": { "Authorization": "Bearer gantry_..." }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## What Gantry answers
+
+| Method | Answer |
+|---|---|
+| `initialize` | Gantry's own: the `tools` capability, server name `gantry`. Protocol versions `2025-11-25`, `2025-06-18` and `2025-03-26`. |
+| `ping` | An empty result |
+| `tools/list` | The tools of every server that the caller's rule allows, named `<server>.<tool>`, all in one page. A server that does not answer is left out, with a line on Gantry's standard error. |
+| `tools/call` | Checked against the rule, then forwarded to the server with the tool's own name. The server's result or error comes back with the caller's id. |
+| Notifications | `202 Accepted` |
+| Any other method | JSON-RPC error `-32601` |
+
+`GET` and `DELETE` on `/mcp` answer `405`: Gantry opens no stream of its own and keeps no session per caller.
+
+A refusal is a JSON-RPC error with code `-32001`, a message that names the cause and the fix, and `data.gantry_code` and `data.decision`:
+
+```json
+{"jsonrpc":"2.0","id":9,"error":{"code":-32001,"message":"Refused (tool_not_allowed): rule \"payments-team\" does not allow tool \"github.delete_repo\" for \"maya.cohen\" of team \"payments\". It allows: github.create_issue, github.list_issues, docs.*. Ask a Gantry admin to add it to the rule's tools if you need it. Decision 01J....","data":{"gantry_code":"tool_not_allowed","decision":"01J..."}}}
+```
+
+A missing or unknown key is refused with HTTP 401 before the message is read. Every other refusal comes with HTTP 200, so the client shows its message as the answer to that call. The codes are those of the model routes (`no_key`, `unknown_key`, `key_expired`, `killed`, `no_rule`, `audit_unavailable`), plus:
+
+- `tool_not_allowed`: the caller's rule does not list the tool.
+- `unknown_tool`: the name is not `<server>.<tool>` of a configured server. Run `tools/list` for the names.
+
+When a server gives no answer, the error has code `-32603` and `data.gantry_code` `upstream_` followed by the outcome its `mcp_result` record names, for example `upstream_timeout`. The tool may or may not have run.
+
+### Kill switches
+
+A switch on a person, a team, a key or everyone stops their tool calls and tool lists too. A switch on a model named like a tool stops that one tool for everyone:
+
+```bash
+gantry kill --model github.delete_repo --reason "deleting repositories is paused"
+```
+
+### Upstream servers
+
+Gantry is one MCP client to each server. It opens a session with `initialize` the first time a server is needed, shares that session among all callers, and opens a new one when the server ends it (HTTP 404). Each request to a server gets an id of Gantry's own, and the answer goes back with the caller's id.
+
+A server may answer with JSON or with an event stream (`text/event-stream`). Gantry reads the stream until the answer to its request arrives and returns that answer as JSON. Progress notifications in the stream are not passed on, and requests a server sends inside a stream (sampling, elicitation) are not relayed to the caller.
+
+A call waits for the server as long as a model request waits for its first byte, 120 seconds.
+
+## What is recorded
+
+Every `tools/call` writes a decision record before it is forwarded, in the shape of a [model request's](/reference/audit-records/#request-decision), with `path: "/mcp"` and three fields more:
+
+| Field | Value |
+|---|---|
+| `mcp_method` | `tools/call` |
+| `server` | The server, for example `github` |
+| `tool` | The tool's own name on that server, for example `create_issue` |
+
+```json
+{"n":42,"id":"01J...","time":"2026-11-13T09:14:02.120Z","person":"maya.cohen","team":"payments","client":"10.0.0.7","key":"3f9a1c2e","method":"POST","path":"/mcp","model":null,"verdict":"allow","code":null,"rule":"payments-team","rule_line":18,"provider":null,"policy_sha256":"...","keys_sha256":"...","mcp_method":"tools/call","server":"github","tool":"create_issue","prev":"...","hash":"..."}
+```
+
+If the record cannot be written, the call is refused with `audit_unavailable` and never reaches the server.
+
+When the server has answered, an `mcp_result` record follows with the same `id`:
+
+| Field | Value |
+|---|---|
+| `event` | `mcp_result` |
+| `id`, `time`, `person`, `team`, `key`, `server`, `tool` | As on the decision |
+| `duration_ms` | From forwarding the call to its answer |
+| `outcome` | `ok`, `tool_error` (the tool ran and reported `isError`), `rpc_error` (the server answered with a JSON-RPC error, its code in `upstream_code`), `unreachable`, `timeout`, `http_error`, `unreadable_answer`, `session_ended` or `initialize_refused` |
+
+Refused calls, and refusals of any other `/mcp` message (an unknown key, a killed person asking for `tools/list`), get a decision record with `verdict: "refused"` and the code. `initialize`, `ping` and allowed `tools/list` are not recorded.
+
+The arguments of a call and its result are never recorded. `gantry audit verify` counts `mcp_result` records with the usage records.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Policy file" href="/governance/policy/" description="Rules, principals and first match." />
+	<LinkCard title="Kill switches" href="/governance/kill-switches/" description="Stop a person, a team, a key or a tool at once." />
+	<LinkCard title="Audit log" href="/governance/audit-log/" description="The hash chain and gantry audit verify." />
+	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Route Claude Code's model requests through Gantry too." />
+</CardGrid>
