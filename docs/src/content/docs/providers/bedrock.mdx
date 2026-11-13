@@ -1,6 +1,6 @@
 ---
 title: Amazon Bedrock
-description: Serve Claude on Amazon Bedrock through Gantry's messages route, signed with AWS Signature Version 4 from Gantry's environment.
+description: Serve Claude on Amazon Bedrock through Gantry's messages route, signed with AWS Signature Version 4 with the role Gantry runs as or AWS keys in its environment.
 sidebar:
   order: 5
 ---
@@ -31,16 +31,81 @@ A provider of `kind: bedrock` serves Claude models on Amazon Bedrock. Claude Cod
         models: [claude-sonnet-5-5, claude-haiku-5-5]
     ```
 
-2. Give Gantry AWS credentials in its environment and start it:
+2. Run Gantry where it has an AWS role (EKS, ECS or EC2), or give it AWS keys in its environment, and start it:
 
     ```bash
-    export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...   # and AWS_SESSION_TOKEN for temporary credentials
     gantry serve gantry.policy.yaml
+    ```
+
+    The start line says which credentials it found, never their value:
+
+    ```text
+    gantry: provider "bedrock" signs with AWS credentials from the container credentials endpoint http://169.254.170.2/v2/credentials/... (the ECS task role or EKS Pod Identity).
     ```
 
 </Steps>
 
-Gantry reads the credentials from its own environment, as the AWS SDKs do. It never runs the `aws` command and reads no AWS config file.
+## Credentials
+
+Gantry looks for AWS credentials in the order of the AWS SDKs' default chain, and the first source that answers is used:
+
+| Order | Source | Set up by |
+|---|---|---|
+| 1 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and, for temporary keys, `AWS_SESSION_TOKEN` | You |
+| 2 | `AWS_WEB_IDENTITY_TOKEN_FILE` and `AWS_ROLE_ARN`, traded at STS with AssumeRoleWithWebIdentity | IRSA on EKS |
+| 3 | `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, or `AWS_CONTAINER_CREDENTIALS_FULL_URI` with `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` | The ECS task role; EKS Pod Identity |
+| 4 | The EC2 instance metadata service, IMDSv2 | The EC2 instance profile |
+
+Credentials from sources 2 to 4 expire after an hour or a few. Gantry renews them in the background five minutes before they expire (or halfway through, for shorter ones) and keeps signing with the current ones meanwhile, so no request waits and nothing restarts. A failed renewal is printed and tried again every 30 seconds while the current credentials still hold. When no source answers, Gantry does not start and names each source it tried and what it answered.
+
+Gantry makes these calls itself, as documented by AWS. It never runs the `aws` command and reads no AWS config file, so a profile in `~/.aws/config`, including an IAM Identity Center (SSO) profile, is not read. For local use, export the keys of such a profile into the environment first.
+
+The role needs `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the models and inference profiles it serves.
+
+### IRSA on EKS
+
+Annotate the service account Gantry's pods run as with the role. EKS then sets `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` in the pod:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gantry
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/gantry-bedrock
+```
+
+The role's trust policy allows `sts:AssumeRoleWithWebIdentity` from the cluster's OIDC provider for `system:serviceaccount:<namespace>:gantry`. EKS Pod Identity works too: it sets the container credentials variables (source 3) instead.
+
+### ECS task role
+
+Give the task definition a `taskRoleArn`. ECS sets `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` in each container:
+
+```hcl
+resource "aws_ecs_task_definition" "gantry" {
+  task_role_arn = aws_iam_role.gantry_task.arn   # may call bedrock:InvokeModel*
+  # ...
+}
+```
+
+The execution role (`execution_role_arn`) is not used for this: it only pulls the image and reads secrets at start.
+
+### EC2 instance profile
+
+Attach an instance profile whose role may call Bedrock. Gantry asks IMDSv2 for a session token, then for the role's credentials. Set `AWS_EC2_METADATA_DISABLED=true` to skip this source.
+
+### Another role
+
+`role_arn` on the provider makes Gantry assume that role (STS AssumeRole, signed) with whatever credentials the chain found, for Bedrock in another account:
+
+```yaml
+  - name: bedrock
+    kind: bedrock
+    region: us-east-1
+    role_arn: arn:aws:iam::210987654321:role/bedrock-invoker
+```
+
+STS is called at `https://sts.<region>.amazonaws.com`, the region being `AWS_REGION` or the provider's. `AWS_ENDPOINT_URL_STS` names another endpoint, such as a VPC endpoint.
 
 ## Fields
 
@@ -49,7 +114,8 @@ Gantry reads the credentials from its own environment, as the AWS SDKs do. It ne
 | `region` | string | required | The AWS region, for example `us-east-1`. Needs a restart to change. |
 | `model_ids` | map | required | Model name to Bedrock model ID, inference profile ID or ARN. Every model in `models` needs an entry. |
 | `url` | string | `https://bedrock-runtime.<region>.amazonaws.com` | Set it for a VPC endpoint. |
-| `key_env` | | not allowed | Bedrock is signed with AWS credentials, not a key. |
+| `role_arn` | string | none | An IAM role to assume with the credentials Gantry finds. Needs a restart to change. |
+| `key_env`, `key_file` | | not allowed | Bedrock is signed with AWS credentials, not a key. |
 
 ## What Gantry sends
 
@@ -87,7 +153,7 @@ A Bedrock error, streamed or not, reaches the caller in Anthropic's error shape 
 ## Errors from gantry check
 
 ```text
-gantry.policy.yaml:26: a bedrock provider takes no key_env. Gantry signs its requests with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, for temporary credentials, AWS_SESSION_TOKEN from its environment. Remove the line.
+gantry.policy.yaml:26: a bedrock provider takes no key_env. Gantry signs its requests with the AWS credentials it finds: the role of its pod, task or instance, or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in its environment. Remove the line.
 ```
 
 A provider without `region` or `model_ids` is refused the same way, naming the missing field.

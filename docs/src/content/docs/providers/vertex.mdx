@@ -20,7 +20,6 @@ providers:
   - name: claude-vertex
     kind: vertex_anthropic
     url: https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic
-    key_env: VERTEX_ACCESS_TOKEN     # export VERTEX_ACCESS_TOKEN=$(gcloud auth print-access-token)
     models: [claude-sonnet-4-6, claude-haiku-4-5]
 rules:
   - name: everyone
@@ -39,7 +38,6 @@ providers:
   - name: vertex
     kind: vertex
     url: https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google
-    key_env: VERTEX_ACCESS_TOKEN     # export VERTEX_ACCESS_TOKEN=$(gcloud auth print-access-token)
     models: [gemini-2.5-pro]
 rules:
   - name: everyone
@@ -52,9 +50,75 @@ The `url` must end in `/publishers/google`.
 </TabItem>
 </Tabs>
 
-<Aside type="caution">
-`key_env` holds an OAuth access token, which Google issues for about an hour. Gantry reads it at start and does not sign in with a service account itself, so an expired token means a restart with a new one.
-</Aside>
+## Credentials
+
+Without `key_env`, Gantry signs in to Google Cloud itself, in the order of Application Default Credentials, and the first source that answers is used:
+
+| Order | Source | Set up by |
+|---|---|---|
+| 1 | The file `GOOGLE_APPLICATION_CREDENTIALS` names: a service account key, or a gcloud user sign-in | You |
+| 2 | `~/.config/gcloud/application_default_credentials.json` (under `CLOUDSDK_CONFIG` when set) | `gcloud auth application-default login` |
+| 3 | The metadata server | Compute Engine, GKE Workload Identity, Cloud Run |
+
+A service account key is signed into a token with a JWT (RS256) at Google's token endpoint; the metadata server hands out the token of the service account the workload runs as. Either way the token lasts about an hour, and Gantry renews it in the background five minutes before it expires, so requests never wait and nothing restarts. The start line names the source, never the token:
+
+```text
+gantry: provider "claude-vertex" signs in to Google Cloud with the metadata server at 169.254.169.254 (the service account of the GCE VM, GKE pod with Workload Identity, or Cloud Run service).
+```
+
+When no source answers, Gantry does not start and names each source it tried. The service account needs the Vertex AI User role (`roles/aiplatform.user`) in the project of the `url`. Gantry asks for the `cloud-platform` scope.
+
+### Cloud Run
+
+Run the service as a service account with `roles/aiplatform.user`. Nothing else is needed: the metadata server answers inside every Cloud Run instance.
+
+```bash
+gcloud run deploy gantry --service-account gantry@my-project.iam.gserviceaccount.com ...
+```
+
+### GKE with Workload Identity
+
+Let the Kubernetes service account Gantry runs as act for a Google service account with `roles/aiplatform.user`:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gantry
+  annotations:
+    iam.gke.io/gcp-service-account: gantry@my-project.iam.gserviceaccount.com
+```
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding gantry@my-project.iam.gserviceaccount.com \
+  --role roles/iam.workloadIdentityUser \
+  --member "serviceAccount:my-project.svc.id.goog[gantry/gantry]"
+```
+
+Granting `roles/aiplatform.user` to the Kubernetes service account's principal directly (`principal://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/my-project.svc.id.goog/subject/ns/gantry/sa/gantry`) works the same way.
+
+### Compute Engine
+
+Attach a service account with `roles/aiplatform.user` to the VM, with the `cloud-platform` access scope.
+
+### A service account key file
+
+Outside Google Cloud, point `GOOGLE_APPLICATION_CREDENTIALS` at a JSON key:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gantry-vertex.json
+gantry serve gantry.policy.yaml
+```
+
+A workload identity federation file (`external_account`) is not read yet: Gantry refuses it at start and says so.
+
+### An access token, for local use
+
+`key_env` still takes an OAuth access token, which Google issues for about an hour. Gantry reads it at start and does not renew it, so an expired token means a restart with a new one:
+
+```yaml
+    key_env: VERTEX_ACCESS_TOKEN     # export VERTEX_ACCESS_TOKEN=$(gcloud auth print-access-token)
+```
 
 ## Claude on Vertex AI
 

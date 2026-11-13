@@ -22,6 +22,9 @@ tokio-postgres.workspace = true
 webpki-roots.workspace = true
 # Answers are passed on frame by frame (Bedrock streams decoded, usage read as it passes): that needs a body type of Gantry's own.
 http-body.workspace = true
+# Signs the JWT that trades a Google service account key for a Vertex AI token (RS256). Already in the build through
+# rustls and gantry-console; named here to call it directly.
+ring = "0.17"
 
 [dev-dependencies]
 futures-core = "0.3"

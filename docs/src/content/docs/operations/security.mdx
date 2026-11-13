@@ -43,6 +43,10 @@ A request that cannot be identified, decided and recorded is not forwarded.
 - Held in memory marked as sensitive and never printed or recorded.
 - Sent only to the provider that needs it, in that provider's header: `Authorization: Bearer` for `openai`, `vertex` and `vertex_anthropic`, `x-api-key` for `anthropic`, `api-key` for `azure`, `x-goog-api-key` for `gemini`. Requests to `bedrock` are signed with AWS Signature Version 4.
 
+## Cloud credentials
+
+No static cloud key is needed on AWS or Google Cloud. A `bedrock` provider signs with the role Gantry runs as (IRSA or Pod Identity on EKS, the ECS task role, the EC2 instance profile), and a `vertex` or `vertex_anthropic` provider without `key_env` signs in as the service account Gantry runs as (GKE Workload Identity, Cloud Run, Compute Engine). These credentials last an hour or a few, are renewed in the background before they expire, and are never written to disk, printed or recorded; the start line names where they came from, never their value. Static keys still work: AWS access keys in the environment, a service account key file, or an access token in `key_env`. See [Amazon Bedrock](/providers/bedrock/#credentials) and [Vertex AI](/providers/vertex/#credentials).
+
 ## What the provider sees
 
 Gantry removes from every forwarded request:

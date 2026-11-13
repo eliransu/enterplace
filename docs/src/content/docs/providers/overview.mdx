@@ -129,7 +129,7 @@ Gantry reads the file at start, and refuses to start while it is missing or empt
 Do not name a provider key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be a Gantry key.
 </Aside>
 
-A `bedrock` provider takes no `key_env`: Gantry signs with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` from its environment.
+A `bedrock` provider takes no `key_env`: Gantry signs with the role it runs as on EKS, ECS or EC2, or with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from its environment. A `vertex` or `vertex_anthropic` provider without `key_env` signs in as the service account it runs as on Google Cloud, or with `GOOGLE_APPLICATION_CREDENTIALS`.
 
 ## Private addresses
 
