@@ -36,6 +36,8 @@ const MAYA: &str = "gantry_0123456789abcdef0123456789abcdef0123456789abcdef01234
 struct Mock {
     seen: Mutex<Vec<(String, HeaderMap, Bytes)>>,
     replies: Mutex<VecDeque<(u16, &'static str, Vec<u8>)>>,
+    /// Set by a chaos test: the provider answers every request with a 502 from then on, as a dying one does.
+    dead: std::sync::atomic::AtomicBool,
 }
 
 impl Mock {
@@ -72,6 +74,9 @@ async fn mock(
                 .unwrap_or_default();
             if let Ok(mut seen) = mock.seen.lock() {
                 seen.push((target, headers, body));
+            }
+            if mock.dead.load(std::sync::atomic::Ordering::SeqCst) {
+                return (StatusCode::BAD_GATEWAY, "dead").into_response();
             }
             let reply = match mock.replies.lock() {
                 Ok(mut replies) if replies.len() > 1 => replies.pop_front(),
@@ -983,6 +988,71 @@ async fn a_masking_guardrail_rewrites_a_transcription_prompt_in_place() -> TestR
         headers
             .get(header::CONTENT_LENGTH)
             .is_none_or(|l| l.to_str().ok() == Some(&sent.len().to_string()))
+    );
+    Ok(())
+}
+
+/// Package 4.1's chaos check: one deployment of three dies while traffic runs, and no caller sees an error. After it
+/// dies it gets only the probes the circuit breaker lets through, not a third of the traffic.
+#[tokio::test]
+async fn one_of_three_deployments_dies_under_traffic_and_no_caller_sees_an_error() -> TestResult {
+    let mut mocks = Vec::new();
+    let mut routes = Vec::new();
+    for name in ["east", "west", "north"] {
+        let (addr, mock) = mock(vec![(200, "application/json", CHAT_OK)]).await?;
+        routes.push(route(name, Kind::OpenAi, addr, &["gpt-4o"]));
+        mocks.push(mock);
+    }
+    let mut alias = smart(
+        Balance::RoundRobin,
+        &[
+            ("east", "gpt-4o", 1),
+            ("west", "gpt-4o", 1),
+            ("north", "gpt-4o", 1),
+        ],
+    );
+    alias.cooldown_seconds = 1;
+    let gw = Arc::new(gateway("chaos", routes, vec![alias], everyone())?);
+    let chat = r#"{"model":"smart","messages":[]}"#;
+    let mut errors = Vec::new();
+    let mut seen_at_death = 0;
+    for round in 0..30 {
+        if round == 10 {
+            mocks[1]
+                .dead
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            seen_at_death = mocks[1].seen().len();
+        }
+        // Ten callers at once, as real traffic arrives.
+        let calls: Vec<_> = (0..10)
+            .map(|_| {
+                let gw = gw.clone();
+                tokio::spawn(async move {
+                    post(&gw, "/v1/chat/completions", chat)
+                        .await
+                        .map(|(s, _, b)| (s, b))
+                        .map_err(|e| e.to_string())
+                })
+            })
+            .collect();
+        for call in calls {
+            let (status, body) = call.await??;
+            if status != StatusCode::OK {
+                errors.push(format!("round {round}: {status} {body}"));
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(errors.is_empty(), "callers saw errors: {errors:?}");
+    let after_death = mocks[1].seen().len() - seen_at_death;
+    // 200 requests after the death at an even third would be about 67; the breaker allows a handful of probes.
+    assert!(
+        after_death <= 12,
+        "the dead deployment still got {after_death} requests"
+    );
+    assert!(
+        mocks[0].seen().len() > 80 && mocks[2].seen().len() > 80,
+        "the living two carried the load"
     );
     Ok(())
 }

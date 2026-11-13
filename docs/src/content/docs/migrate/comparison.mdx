@@ -22,7 +22,7 @@ Gantry is much younger than both and does less. It covers fewer providers and AP
 | Identity per request | Gantry key per person or workload | Virtual key | Virtual key |
 | Policy | File, first matching rule by team, person or anyone | Per key, team, org via API | Per key, team, customer via API |
 | Budgets, rate limits | Budgets per team, person or key; requests per minute per person; tokens per minute per team, person or key | Yes | Yes |
-| Aliases, load balancing | Aliases over deployments, weighted round robin or least busy, cooldown, context window and content policy fallbacks; rules decide on the alias | Yes, more strategies | Yes |
+| Aliases, load balancing | Aliases over deployments, weighted round robin or least busy, a circuit breaker per deployment, context window and content policy fallbacks; rules decide on the alias | Yes, more strategies | Yes |
 | Guardrails | Open source: built-in secrets and personal data detectors (block, mask, warn); seven vendors built in (OpenAI moderation, Presidio, Lakera Guard, Bedrock guardrails, Azure Content Safety and Prompt Shields, Llama Guard or any chat model as a classifier), each fail open or closed; any other service by webhook. On requests and on whole answers. | Yes, some enterprise | Enterprise |
 | Request audit log in open source | Yes, hash-chained, verified at start | No | No (request log, not tamper-evident) |
 | Unknown config keys | Refused with line and suggestion | Accepted silently | Accepted silently |

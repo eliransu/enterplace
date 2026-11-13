@@ -21,11 +21,22 @@ pub(crate) struct Pool {
     turns: Mutex<HashMap<String, u64>>,
 }
 
+/// A deployment's circuit: closed (no failure since the last answer), open (cooling down), or half open (the
+/// cooldown is over and one request is out probing it).
 #[derive(Default)]
 struct Deployed {
     cool_until: Option<Instant>,
     busy: Arc<AtomicUsize>,
+    /// Failures since the last answer: each doubles the next cooldown, up to `MAX_BACKOFF` times the base.
+    failures: u32,
+    /// When the probe of a half-open deployment was let through. Another is let through a base cooldown later, so
+    /// a probe that never reports back (its request went elsewhere, or the caller left) cannot shut it out.
+    probe_since: Option<Instant>,
+    base: Duration,
 }
+
+/// How many times the base cooldown a deployment that keeps failing waits at most.
+const MAX_BACKOFF: u32 = 16;
 
 /// The name a deployment is remembered and recorded by.
 pub(crate) fn label(provider: &str, model: &str) -> String {
@@ -54,17 +65,39 @@ impl Pool {
     /// The balance picks the first; the rest follow in the alias's order. Deployments cooling down go last, so a
     /// request still goes somewhere when all have failed lately.
     pub(crate) fn order(&self, alias: &Alias, eligible: &[usize], now: Instant) -> Vec<usize> {
-        let deployments = locked(&self.deployments);
-        let cooling = |i: &usize| {
-            alias.deployments.get(*i).is_some_and(|d| {
-                deployments
-                    .get(&label(&d.provider, &d.model))
-                    .and_then(|s| s.cool_until)
-                    .is_some_and(|until| until > now)
-            })
+        let mut deployments = locked(&self.deployments);
+        // One half-open deployment at most is probed by this request, and it is tried first.
+        let mut probe = None;
+        let mut cooling = |i: &usize| {
+            let Some(d) = alias.deployments.get(*i) else {
+                return false;
+            };
+            let Some(s) = deployments.get_mut(&label(&d.provider, &d.model)) else {
+                return false;
+            };
+            match s.cool_until {
+                None => false,
+                Some(until) if until > now => true,
+                Some(_) => {
+                    let free = s.probe_since.is_none_or(|at| now >= at + s.base);
+                    if free && probe.is_none() {
+                        s.probe_since = Some(now);
+                        probe = Some(*i);
+                        false
+                    } else {
+                        true
+                    }
+                }
+            }
         };
         let (mut warm, cold): (Vec<usize>, Vec<usize>) =
             eligible.iter().copied().partition(|i| !cooling(i));
+        if let Some(probe) = probe {
+            warm.retain(|i| *i != probe);
+            warm.extend(cold);
+            warm.insert(0, probe);
+            return warm;
+        }
         if let Some(first) = match alias.balance {
             Balance::RoundRobin => {
                 let total: u64 = warm
@@ -118,16 +151,24 @@ impl Pool {
 
     /// A deployment failed (no answer, a 429 or a 5xx): it is passed over for `cooldown`.
     pub(crate) fn failed(&self, deployment: &str, cooldown: Duration) {
-        locked(&self.deployments)
-            .entry(deployment.to_string())
-            .or_default()
-            .cool_until = Some(Instant::now() + cooldown);
+        let mut deployments = locked(&self.deployments);
+        let state = deployments.entry(deployment.to_string()).or_default();
+        state.failures = state.failures.saturating_add(1);
+        let factor = 1u32
+            .checked_shl(state.failures - 1)
+            .unwrap_or(MAX_BACKOFF)
+            .min(MAX_BACKOFF);
+        state.base = cooldown;
+        state.cool_until = Some(Instant::now() + cooldown * factor);
+        state.probe_since = None;
     }
 
-    /// A deployment answered: it is in turn again.
+    /// A deployment answered: its circuit closes and its backoff starts over.
     pub(crate) fn answered(&self, deployment: &str) {
         if let Some(state) = locked(&self.deployments).get_mut(deployment) {
             state.cool_until = None;
+            state.failures = 0;
+            state.probe_since = None;
         }
     }
 }
@@ -384,6 +425,86 @@ mod tests {
         assert_eq!(pool.order(&smart, &[0, 1], Instant::now()), [1, 0]);
         pool.answered("p0/m");
         assert_eq!(pool.order(&smart, &[0, 1], Instant::now()).len(), 2);
+    }
+
+    #[test]
+    fn a_deployment_that_keeps_failing_waits_longer_and_comes_back_through_one_probe() {
+        let pool = Pool::default();
+        let smart = alias(Balance::RoundRobin, &[1, 1, 1]);
+        let base = Duration::from_secs(10);
+        let start = Instant::now();
+        pool.failed("p0/m", base);
+        let cold = |at: Instant| pool.order(&smart, &[0, 1, 2], at).last().copied();
+        assert_eq!(
+            cold(start + Duration::from_secs(5)),
+            Some(0),
+            "open: tried last"
+        );
+        // Half open: once the cooldown is over, one request probes it first; the others still pass it over.
+        let probe = pool.order(&smart, &[0, 1, 2], start + Duration::from_secs(11));
+        assert_eq!(
+            probe[0], 0,
+            "the probe goes to the recovering deployment first"
+        );
+        for _ in 0..3 {
+            assert_eq!(
+                cold(start + Duration::from_secs(11)),
+                Some(0),
+                "while one probe is out, others pass it over"
+            );
+        }
+        // The probe failed: open again, for twice as long.
+        pool.failed("p0/m", base);
+        let again = Instant::now();
+        assert_eq!(
+            cold(again + Duration::from_secs(15)),
+            Some(0),
+            "the second cooldown is 20 seconds"
+        );
+        assert_eq!(
+            pool.order(&smart, &[0, 1, 2], again + Duration::from_secs(21))[0],
+            0,
+            "then one probe"
+        );
+        for _ in 0..10 {
+            pool.failed("p0/m", base);
+        }
+        let capped = Instant::now();
+        assert_eq!(
+            pool.order(&smart, &[0, 1, 2], capped + Duration::from_secs(161))[0],
+            0,
+            "capped at 16 times the base"
+        );
+        // The probe answered: closed, in turn with the others again.
+        pool.answered("p0/m");
+        let firsts: Vec<usize> = (0..3)
+            .map(|_| pool.order(&smart, &[0, 1, 2], Instant::now())[0])
+            .collect();
+        assert!(
+            firsts.contains(&0) && firsts.contains(&1) && firsts.contains(&2),
+            "{firsts:?}"
+        );
+        pool.failed("p0/m", base);
+        assert_eq!(cold(Instant::now() + Duration::from_secs(5)), Some(0));
+        assert!(
+            pool.order(&smart, &[0, 1, 2], Instant::now() + Duration::from_secs(11))[0] == 0,
+            "after a success the backoff starts over"
+        );
+    }
+
+    #[test]
+    fn a_probe_that_never_reports_back_does_not_shut_the_deployment_out() {
+        let pool = Pool::default();
+        let smart = alias(Balance::RoundRobin, &[1, 1]);
+        let base = Duration::from_secs(10);
+        pool.failed("p0/m", base);
+        let after = Instant::now() + Duration::from_secs(11);
+        assert_eq!(pool.order(&smart, &[0, 1], after)[0], 0);
+        // That request went elsewhere or was dropped: after another base cooldown a new probe is let through.
+        assert_eq!(
+            pool.order(&smart, &[0, 1], after + Duration::from_secs(11))[0],
+            0
+        );
     }
 
     #[test]
