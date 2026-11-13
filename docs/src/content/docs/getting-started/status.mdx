@@ -1,13 +1,16 @@
 ---
 title: Project status
-description: What Gantry 0.0.1 does today, what is planned, which integrations were tested against what, and the known limits.
+description: What the current Gantry version does today, what is planned, which integrations were tested against what, and the known limits.
 sidebar:
   order: 3
 ---
 
 import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import changelog from '../../../../../CHANGELOG.md?raw';
 
-Gantry is at version 0.0.1. It is pre-1.0 and runs as a single node. This page is the one place that says what the binary does, what is planned, and how each integration was verified. Anything marked planned does not exist in the binary.
+export const current = changelog.match(/^## \[(\d+\.\d+\.\d+[^\]]*)\] - (\S+)/m) ?? ['', 'unknown', 'Unreleased'];
+
+Gantry is at version **{current[1]}**{current[2] === 'Unreleased' ? ', not yet released as a tag' : `, released ${current[2]}`}. See the [changelog](/getting-started/changelog/). It is pre-1.0 and runs as a single node. This page is the one place that says what the binary does, what is planned, and how each integration was verified. Anything marked planned does not exist in the binary.
 
 ## Built and planned
 
@@ -36,6 +39,8 @@ Gantry is at version 0.0.1. It is pre-1.0 and runs as a single node. This page i
 - OpenCode 1.19.5 (`opencode run`) to a mock of the chat completions API: an answer, a `model_not_allowed` refusal and an `unknown_key` refusal, each recorded.
 
 None of these ran against the real OpenAI or Anthropic service.
+
+**Live provider matrix.** `scripts/live_matrix.py` runs every route against each real provider kind (OpenAI, Anthropic, Azure OpenAI, Bedrock, Gemini, Vertex AI, Groq, Mistral) every night, with a token cap per run. Until the provider keys are set, each cell is skipped. The [latest run](/providers/live-matrix/) is published per route and provider.
 
 **Configured from public docs, tested against local mocks only.** These were built from each vendor's public documentation and tested against local mock servers. They have not been run against the real services.
 

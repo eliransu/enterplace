@@ -130,7 +130,7 @@ scripts/           CI, release and example checks
 
 ## Status
 
-Gantry is pre-1.0 (0.0.1) and runs as a single node. See [Project status](https://gantry-docs.eliran.me/getting-started/status/) for what is built, what is planned and what has been verified against which services.
+Gantry is pre-1.0 (0.1.0, see [CHANGELOG.md](CHANGELOG.md)) and runs as a single node. See [Project status](https://gantry-docs.eliran.me/getting-started/status/) for what is built, what is planned and what has been verified against which services.
 
 ## Contributing
 

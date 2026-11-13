@@ -35,6 +35,11 @@ step "the binary refuses to forward unchecked unless asked by name"
 if ./target/release/gantry serve 2>/dev/null; then echo "serve started without --unchecked"; exit 1; fi
 step "first run: init, serve, the setup link and a governed call, in under 60 seconds"
 python3 scripts/first_run_check.py target/release/gantry
+step "the live provider matrix passes every cell against mocks and skips every cell without keys"
+python3 scripts/live_matrix.py --selftest --gantry target/release/gantry > /dev/null
+step "Cargo.toml, CHANGELOG.md and the Helm chart name one version"
+python3 scripts/version.py --selftest
+python3 scripts/version.py
 step "every policy example in README and the docs passes gantry check"
 python3 scripts/check_examples.py target/release/gantry
 if [ "$bench" = 1 ]; then
