@@ -223,6 +223,12 @@ fn two_serve_processes_on_one_database_share_keys_and_kill_switches() -> TestRes
         started.contains("shared through the store named by DATABASE_URL"),
         "{started}"
     );
+    // The test database has no TLS, so the string says sslmode=disable, and serve says what that means.
+    let warned = std::fs::read_to_string(b_dir.join("stderr.txt"))?;
+    assert!(
+        warned.contains("sslmode=disable") && warned.contains("not encrypted"),
+        "{warned}"
+    );
 
     let maya = ok(
         &[

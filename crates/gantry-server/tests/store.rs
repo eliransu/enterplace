@@ -631,3 +631,114 @@ async fn a_budgeted_request_with_the_store_costs_one_round_trip() -> TestResult 
     );
     Ok(())
 }
+
+/// A Postgres that speaks TLS, as a managed database does: the test CA's certificate for 127.0.0.1
+/// (tests/tls) in front of the plain test server. It answers the client's SSLRequest, then relays.
+async fn tls_relay(to: (String, u16)) -> Result<u16, Error> {
+    let fixture = |name: &str| {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/tls")
+            .join(name)
+    };
+    let acceptor = gantry_server::tls_acceptor(&fixture("cert.pem"), &fixture("key.pem"))?;
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
+    tokio::spawn(async move {
+        while let Ok((mut inbound, _)) = listener.accept().await {
+            let (acceptor, to) = (acceptor.clone(), to.clone());
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut request = [0u8; 8];
+                if inbound.read_exact(&mut request).await.is_err()
+                    || inbound.write_all(b"S").await.is_err()
+                {
+                    return;
+                }
+                let Ok(mut tls) = acceptor.accept(inbound).await else {
+                    return;
+                };
+                let Ok(mut outbound) = tokio::net::TcpStream::connect(to).await else {
+                    return;
+                };
+                let _ = tokio::io::copy_bidirectional(&mut tls, &mut outbound).await;
+            });
+        }
+    });
+    Ok(port)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tls_to_the_store_does_what_sslmode_and_sslrootcert_say() -> TestResult {
+    let Some(url) = database("tls").await? else {
+        return Ok(());
+    };
+    let config: tokio_postgres::Config = url.parse()?;
+    let host = match config.get_hosts().first() {
+        Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
+        _ => "127.0.0.1".into(),
+    };
+    let relay = tls_relay((host, config.get_ports().first().copied().unwrap_or(5432))).await?;
+    // The plain string of this test's database, less its sslmode, pointed at the relay.
+    let plain = key_value(
+        &config,
+        Some(relay),
+        config.get_dbname().unwrap_or("postgres"),
+    );
+    let plain = plain.replace(" sslmode=disable", "");
+    let ca = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/tls/ca.pem")
+        .display()
+        .to_string();
+    let port = provider().await?;
+    let start = |name: &str, url: String| -> Result<(), String> {
+        let d = dir(name).map_err(|e| e.to_string())?;
+        gateway(&d, &url, port).map(drop).map_err(|e| e.to_string())
+    };
+
+    // verify-full, the default, against a private CA named by sslrootcert.
+    start(
+        "tls-full",
+        format!("{plain} sslmode=verify-full sslrootcert='{ca}'"),
+    )?;
+    start("tls-default", format!("{plain} sslrootcert='{ca}'"))?;
+    // Without it, the certificate is not trusted, and the refusal names sslrootcert as the fix.
+    let untrusted = start("tls-untrusted", plain.clone())
+        .err()
+        .unwrap_or_default();
+    assert!(
+        untrusted.contains("not signed by a certificate Gantry trusts")
+            && untrusted.contains("sslrootcert=")
+            && untrusted.contains("global-bundle.pem"),
+        "{untrusted}"
+    );
+    // A certificate for 127.0.0.1 reached as localhost: verify-full refuses the name, verify-ca checks the signer.
+    let by_name = plain.replace("host='127.0.0.1'", "host='localhost' hostaddr=127.0.0.1");
+    assert_ne!(by_name, plain, "the host is named in the string");
+    let wrong_name = start("tls-name", format!("{by_name} sslrootcert='{ca}'"))
+        .err()
+        .unwrap_or_default();
+    assert!(
+        wrong_name.contains("does not name the host"),
+        "{wrong_name}"
+    );
+    start(
+        "tls-ca",
+        format!("{by_name} sslmode=verify-ca sslrootcert='{ca}'"),
+    )?;
+    let other_ca = start("tls-ca-mozilla", format!("{by_name} sslmode=verify-ca"))
+        .err()
+        .unwrap_or_default();
+    assert!(other_ca.contains("sslrootcert="), "{other_ca}");
+    // require: encrypted, not checked, as libpq does.
+    start("tls-require", format!("{by_name} sslmode=require"))?;
+    // A server without TLS is refused unless the string says sslmode=disable.
+    let no_tls = key_value(&config, None, config.get_dbname().unwrap_or("postgres"))
+        .replace(" sslmode=disable", "");
+    let refused = start("tls-none", no_tls.clone()).err().unwrap_or_default();
+    assert!(refused.contains("sslmode=disable"), "{refused}");
+    for message in [&untrusted, &wrong_name, &refused] {
+        eprintln!("{message}");
+    }
+    start("tls-disabled", format!("{no_tls} sslmode=disable"))?;
+    Ok(())
+}

@@ -451,6 +451,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-rustls",
  "tower",
+ "webpki-roots",
 ]
 
 [[package]]

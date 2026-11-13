@@ -31,7 +31,7 @@ use gantry_core::{
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::{
     Client, NoTls,
-    config::{Host, SslMode},
+    config::SslMode,
     tls::{ChannelBinding, MakeTlsConnect, TlsConnect, TlsStream},
     types::Type,
 };
@@ -139,8 +139,12 @@ fn write<T>(lock: &RwLock<T>, value: T) {
 /// Connects to the database named by the connection string in `env` (as read by the caller), creates or updates
 /// its tables, and reads the keys and kill switches. Fails, naming the fix, if any of that cannot be done.
 pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
-    let mut config = parse(env, url)?;
-    let tls = tls_for(env, &mut config)?;
+    let (config, tls) = connection(env, url)?;
+    if tls.is_none() {
+        eprintln!(
+            "warning: {env} says sslmode=disable, so the connection to the store is not encrypted: key hashes, kill switches and spend cross the network in plain text. Use it only on a network you trust, such as a cluster's own Postgres; remove sslmode=disable to encrypt it."
+        );
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .thread_name("gantry-store")
@@ -167,12 +171,10 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
     };
     let first = inner.clone();
     store.wait(async move {
-        let mut client = first.connect().await.map_err(|err| {
-            format!(
-                "the store cannot be reached: {err}. Gantry does not start without it. Check that Postgres is up and that {} holds the right connection string (postgres://user:password@host:5432/database).",
-                first.env
-            )
-        })?;
+        let mut client = first
+            .connect()
+            .await
+            .map_err(|err| unreachable(&first.env, &err))?;
         migrate(&mut client).await?;
         write(&first.client, Some(Arc::new(client)));
         first.refresh().await.map_err(|err| {
@@ -192,58 +194,322 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
     Ok(Arc::new(store))
 }
 
-/// The connection string, read as libpq reads it. `verify-full` and `verify-ca` are taken as `require`: Gantry
-/// always checks the server's certificate and name against the Mozilla roots.
-fn parse(env: &str, url: &str) -> Result<tokio_postgres::Config, String> {
-    let url = url
-        .trim()
-        .replace("sslmode=verify-full", "sslmode=require")
-        .replace("sslmode=verify-ca", "sslmode=require");
-    url.parse::<tokio_postgres::Config>().map_err(|err| {
+/// Why the store could not be reached, and what to do about it.
+fn unreachable(env: &str, err: &tokio_postgres::Error) -> String {
+    let mut text = err.to_string();
+    let mut source = std::error::Error::source(err);
+    while let Some(cause) = source {
+        let said = cause.to_string();
+        if !text.contains(&said) {
+            text = format!("{text}: {said}");
+        }
+        source = cause.source();
+    }
+    let name = text.contains("NotValidForName") || text.contains("not valid for name");
+    let fix = if text.contains("invalid peer certificate") && name {
+        format!(
+            "The server's certificate does not name the host in {env}. Connect by the name on the certificate, or add sslmode=verify-ca to {env} to check the certificate's signer only."
+        )
+    } else if text.contains("invalid peer certificate") {
+        format!(
+            "The server's certificate is not signed by a certificate Gantry trusts (the Mozilla roots built in, and sslrootcert if set). Add sslrootcert=/path/to/ca.pem to {env}, naming the CA that signed it: for Amazon RDS, the bundle at https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem."
+        )
+    } else if text.contains("does not support TLS") {
+        format!(
+            "The server offers no TLS. Turn TLS on in Postgres, or, on a network you trust, add sslmode=disable to {env}."
+        )
+    } else {
+        format!(
+            "Check that Postgres is up and that {env} holds the right connection string (postgres://user:password@host:5432/database)."
+        )
+    };
+    format!("the store cannot be reached: {text}. Gantry does not start without it. {fix}")
+}
+
+/// The connection string, and the TLS it asks for. `sslmode` and `sslrootcert` are read here as libpq reads them
+/// (tokio-postgres knows neither verify mode nor root files): `verify-full`, the default, checks the server's
+/// certificate and name; `verify-ca` its signer only; `require` encrypts without checking, unless `sslrootcert`
+/// is given, which makes it `verify-ca`; `disable` sends plain text. `sslrootcert` names a PEM file whose
+/// certificates are trusted besides the Mozilla roots built in, or, for `verify-ca`, instead of them.
+fn connection(env: &str, url: &str) -> Result<(tokio_postgres::Config, Option<Rustls>), String> {
+    let (rest, mode, rootcert) = split_tls(url.trim());
+    let mut config = rest.parse::<tokio_postgres::Config>().map_err(|err| {
         // The error never repeats the string: it holds a password.
         format!(
-            "{env} does not hold a Postgres connection string Gantry can read ({err}). Write it as postgres://user:password@host:5432/database, with ?sslmode=disable only for a database on this machine."
+            "{env} does not hold a Postgres connection string Gantry can read ({err}). Write it as postgres://user:password@host:5432/database?sslmode=verify-full."
         )
-    })
-}
-
-/// Whether every host the string names is this machine, where a connection without TLS is allowed.
-fn local(config: &tokio_postgres::Config) -> bool {
-    let hosts = config.get_hosts().iter().all(|host| match host {
-        Host::Tcp(name) => matches!(name.as_str(), "localhost" | "127.0.0.1" | "::1"),
-        #[cfg(unix)]
-        Host::Unix(_) => true,
-    });
-    hosts && config.get_hostaddrs().iter().all(|ip| ip.is_loopback())
-}
-
-/// TLS for any database not on this machine, with the Mozilla roots built in (RDS, Cloud SQL, Azure Database
-/// present certificates they sign). `None` when the string turns TLS off, which is allowed on this machine only.
-fn tls_for(env: &str, config: &mut tokio_postgres::Config) -> Result<Option<Rustls>, String> {
-    let local = local(config);
-    if config.get_ssl_mode() == SslMode::Disable {
-        if local {
-            return Ok(None);
-        }
+    })?;
+    let mode = mode.as_deref().unwrap_or("verify-full");
+    if !matches!(mode, "disable" | "require" | "verify-ca" | "verify-full") {
         return Err(format!(
-            "{env} says sslmode=disable for a database that is not on this machine. Keys and spend go to the store over TLS: remove sslmode=disable (or write sslmode=require)."
+            "{env} says sslmode={mode}, which Gantry does not take: it never falls back to plain text unasked. Use verify-full (the default), verify-ca, require or disable."
         ));
     }
-    // `prefer`, the default, falls back to plain text when the server offers no TLS: only on this machine.
-    if !local {
-        config.ssl_mode(SslMode::Require);
+    if mode == "disable" {
+        config.ssl_mode(SslMode::Disable);
+        return Ok((config, None));
     }
-    use hyper_rustls::ConfigBuilderExt;
-    let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .map_err(|err| format!("TLS could not be set up: {err}. Report this as a bug."))?
-    .with_webpki_roots()
+    config.ssl_mode(SslMode::Require);
+    let extra = rootcert.map(|path| root_certs(env, &path)).transpose()?;
+    let any_name = mode == "verify-ca" || (mode == "require" && extra.is_some());
+    let mut roots = rustls::RootCertStore::empty();
+    if !(any_name && extra.is_some()) {
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+    for cert in extra.unwrap_or_default() {
+        roots.add(cert).map_err(|err| {
+            format!("a certificate in the sslrootcert file of {env} cannot be used: {err}. Give the CA certificate in PEM form.")
+        })?;
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .map_err(|err| format!("TLS could not be set up: {err}. Report this as a bug."))?;
+    let tls = if mode == "require" && !any_name {
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(Unchecked(provider)))
+    } else if any_name {
+        let verifier =
+            rustls::client::WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider)
+                .build()
+                .map_err(|err| format!("TLS could not be set up from the sslrootcert file of {env}: {err}. Give the CA certificate in PEM form."))?;
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AnyName(verifier)))
+    } else {
+        builder.with_root_certificates(roots)
+    }
     .with_no_client_auth();
-    Ok(Some(Rustls(tokio_rustls::TlsConnector::from(Arc::new(
-        tls,
-    )))))
+    Ok((
+        config,
+        Some(Rustls(tokio_rustls::TlsConnector::from(Arc::new(tls)))),
+    ))
+}
+
+/// The certificates of an `sslrootcert` file.
+fn root_certs(
+    env: &str,
+    path: &str,
+) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    let unreadable = |err: String| {
+        format!(
+            "sslrootcert in {env} names {path}, which cannot be read as PEM certificates: {err}. Give the CA certificate or bundle in PEM form (-----BEGIN CERTIFICATE-----), for Amazon RDS the bundle at https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem."
+        )
+    };
+    let certs = CertificateDer::pem_file_iter(path)
+        .map_err(|err| unreadable(err.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| unreadable(err.to_string()))?;
+    if certs.is_empty() {
+        return Err(unreadable("it holds no certificate".into()));
+    }
+    Ok(certs)
+}
+
+/// Takes `sslmode` and `sslrootcert` out of a connection string, in URL or key=value form. The rest is returned
+/// as written.
+fn split_tls(url: &str) -> (String, Option<String>, Option<String>) {
+    let (mut mode, mut root) = (None, None);
+    let mut take = |key: &str, value: String| match key {
+        "sslmode" => {
+            mode = Some(value);
+            true
+        }
+        "sslrootcert" => {
+            root = Some(value);
+            true
+        }
+        _ => false,
+    };
+    if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+        let Some((base, query)) = url.split_once('?') else {
+            return (url.to_string(), None, None);
+        };
+        let mut kept = Vec::new();
+        for pair in query.split('&') {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            if !take(key, percent_decoded(value)) {
+                kept.push(pair);
+            }
+        }
+        let rest = if kept.is_empty() {
+            base.to_string()
+        } else {
+            format!("{base}?{}", kept.join("&"))
+        };
+        return (rest, mode, root);
+    }
+    // key=value pairs, a value perhaps in single quotes with backslash escapes. Every stop is an ASCII byte, so
+    // each slice falls on a character boundary.
+    let bytes = url.as_bytes();
+    let mut kept = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && bytes[i] != b'=' && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let key = &url[start..i];
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let mut value = Vec::new();
+        if i < bytes.len() && bytes[i] == b'=' {
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i < bytes.len() && bytes[i] == b'\'' {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'\'' {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 1;
+                    }
+                    value.push(bytes[i]);
+                    i += 1;
+                }
+                i += 1;
+            } else {
+                while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                    value.push(bytes[i]);
+                    i += 1;
+                }
+            }
+        }
+        let end = i.min(bytes.len());
+        if !take(key, String::from_utf8_lossy(&value).into_owned()) {
+            kept.push(&url[start..end]);
+        }
+    }
+    (kept.join(" "), mode, root)
+}
+
+/// A URL query value with its %XX escapes decoded.
+fn percent_decoded(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `sslmode=require` without a root file: encrypted, the certificate not checked, as libpq does.
+#[derive(Debug)]
+struct Unchecked(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for Unchecked {
+    fn verify_server_cert(
+        &self,
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &[rustls::pki_types::CertificateDer<'_>],
+        _: &rustls::pki_types::ServerName<'_>,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// `sslmode=verify-ca`: the certificate must be signed by a trusted root, and may name any host.
+#[derive(Debug)]
+struct AnyName(Arc<rustls::client::WebPkiServerVerifier>);
+
+impl rustls::client::danger::ServerCertVerifier for AnyName {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        server_name: &rustls::pki_types::ServerName<'_>,
+        ocsp: &[u8],
+        now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        use rustls::{CertificateError, Error};
+        // The chain is checked before the name, so a name error means the signer was trusted.
+        match self
+            .0
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp, now)
+        {
+            Err(Error::InvalidCertificate(
+                CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. },
+            )) => Ok(rustls::client::danger::ServerCertVerified::assertion()),
+            other => other,
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.supported_verify_schemes()
+    }
 }
 
 /// Creates or updates the tables, one Gantry at a time, and refuses a database a newer Gantry has written.
@@ -791,43 +1057,75 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plain_connections_are_for_this_machine_only() -> Result<(), String> {
-        let mut config = parse(
-            "DATABASE_URL",
-            "postgres://u:p@db.example.com/g?sslmode=disable",
-        )?;
-        let refused = tls_for("DATABASE_URL", &mut config)
+    fn sslmode_and_sslrootcert_are_read_in_either_form() {
+        let (rest, mode, root) = split_tls(
+            "postgres://u:p@db.example.com:5432/g?sslmode=verify-ca&application_name=x&sslrootcert=%2Fetc%2Fca.pem",
+        );
+        assert_eq!(
+            rest,
+            "postgres://u:p@db.example.com:5432/g?application_name=x"
+        );
+        assert_eq!(mode.as_deref(), Some("verify-ca"));
+        assert_eq!(root.as_deref(), Some("/etc/ca.pem"));
+        let (rest, mode, root) = split_tls(
+            "host=db user='u' password='a \\' b' sslmode = require sslrootcert='/a b/ca.pem' dbname=g",
+        );
+        assert_eq!(mode.as_deref(), Some("require"));
+        assert_eq!(root.as_deref(), Some("/a b/ca.pem"));
+        assert!(
+            rest.contains("password='a \\' b'") && rest.ends_with("dbname=g"),
+            "{rest}"
+        );
+        assert!(!rest.contains("ssl"), "{rest}");
+    }
+
+    #[test]
+    fn every_libpq_mode_but_the_fallbacks_is_taken() -> Result<(), String> {
+        for mode in ["require", "verify-ca", "verify-full"] {
+            let (config, tls) = connection(
+                "DATABASE_URL",
+                &format!("postgres://u:p@db.example.com/g?sslmode={mode}"),
+            )?;
+            assert!(tls.is_some(), "{mode}");
+            assert_eq!(config.get_ssl_mode(), SslMode::Require, "{mode}");
+        }
+        // verify-full is the default; disable is taken for any host, when asked for by name.
+        assert!(
+            connection("DATABASE_URL", "postgres://u:p@db.example.com/g")?
+                .1
+                .is_some()
+        );
+        let (config, tls) =
+            connection("DATABASE_URL", "postgres://u:p@10.0.0.7/g?sslmode=disable")?;
+        assert!(tls.is_none());
+        assert_eq!(config.get_ssl_mode(), SslMode::Disable);
+        for mode in ["prefer", "allow", "sometimes"] {
+            let err = connection(
+                "DATABASE_URL",
+                &format!("postgres://u:p@h/g?sslmode={mode}"),
+            )
             .err()
             .unwrap_or_default();
-        assert!(refused.contains("sslmode=disable"), "{refused}");
-        let mut config = parse(
+            assert!(err.contains("verify-full") && err.contains(mode), "{err}");
+        }
+        let err = connection(
             "DATABASE_URL",
-            "postgres://u:p@127.0.0.1:5432/g?sslmode=disable",
-        )?;
-        assert!(tls_for("DATABASE_URL", &mut config)?.is_none());
-        let mut config = parse("DATABASE_URL", "postgres://u:p@db.example.com/g")?;
-        assert!(tls_for("DATABASE_URL", &mut config)?.is_some());
-        assert_eq!(
-            config.get_ssl_mode(),
-            SslMode::Require,
-            "TLS is required off this machine"
+            "postgres://u:p@h/g?sslrootcert=/no/such/ca.pem",
+        )
+        .err()
+        .unwrap_or_default();
+        assert!(
+            err.contains("/no/such/ca.pem") && err.contains("PEM"),
+            "{err}"
         );
-        let mut config = parse(
-            "DATABASE_URL",
-            "postgres://u:p@db.example.com/g?sslmode=verify-full",
-        )?;
-        assert!(tls_for("DATABASE_URL", &mut config)?.is_some());
         Ok(())
     }
 
     #[test]
     fn a_bad_connection_string_is_not_repeated() {
-        let err = parse(
-            "DATABASE_URL",
-            "postgres://u:secret-pw@h/g?sslmode=sometimes",
-        )
-        .err()
-        .unwrap_or_default();
+        let err = connection("DATABASE_URL", "postgres://u:secret-pw@h:notaport/g")
+            .err()
+            .unwrap_or_default();
         assert!(err.contains("DATABASE_URL"), "{err}");
         assert!(!err.contains("secret-pw"), "{err}");
     }

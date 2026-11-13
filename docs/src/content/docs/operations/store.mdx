@@ -33,10 +33,35 @@ export DATABASE_URL='postgres://gantry:...@db.example.com:5432/gantry'
 gantry serve gantry.policy.yaml
 ```
 
-- **TLS.** Gantry connects over TLS and checks the server's certificate and name against the Mozilla roots built into the binary, with no system certificates. `sslmode=require`, `verify-ca` and `verify-full` all mean that. `sslmode=disable` is accepted only for a database on the same machine (`localhost`, `127.0.0.1`, `::1` or a Unix socket), and Gantry refuses to start on it for any other host.
 - **Start.** `gantry serve` refuses to start, naming the fix, if the variable is unset or the database cannot be reached. `gantry check` checks the section without connecting.
 - **Tables.** Gantry creates its tables on first start, in the database the string names. The user needs `CREATE` on it. The schema is versioned in the binary (the `gantry_schema` table); a newer Gantry updates it, and an older Gantry refuses a database a newer one has written, so upgrade every replica to the same version.
 - **Commands.** `gantry key new`, `key list`, `key revoke` and `key prune` change the store when the policy beside the keys file (or `--policy`) has `store:`, with the variable set. `gantry kill` and `unkill`, the admin API and the console change it through any replica.
+
+### TLS
+
+Gantry reads the libpq parameters `sslmode` and `sslrootcert` in the connection string, in URL form (`?sslmode=verify-full&sslrootcert=/etc/gantry/ca.pem`) or key=value form.
+
+| `sslmode` | Encrypted | What is checked |
+|---|---|---|
+| `verify-full` (the default) | yes | The certificate is signed by a trusted root and names the host in the string. |
+| `verify-ca` | yes | The certificate is signed by a trusted root. Any host name. |
+| `require` | yes | Nothing, as libpq does. With `sslrootcert`, it checks as `verify-ca`. |
+| `disable` | no | Nothing. Gantry starts with a warning that the connection is not encrypted. |
+
+`prefer` and `allow` are refused: they fall back to plain text without saying so.
+
+The trusted roots are the Mozilla set built into the binary (no system certificates are read), plus the certificates in the PEM file `sslrootcert` names. For `verify-ca` with `sslrootcert`, the file's certificates are the only roots.
+
+Managed databases often sign with a CA of their own. Amazon RDS does: give its bundle.
+
+```bash
+curl -sSfo /etc/gantry/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+export DATABASE_URL='postgres://gantry:...@mydb.abc123.eu-west-1.rds.amazonaws.com:5432/gantry?sslrootcert=/etc/gantry/rds-global-bundle.pem'
+```
+
+Cloud SQL and Azure Database for PostgreSQL publish their server CA the same way: download it and name it with `sslrootcert`. When the certificate is not trusted, `gantry serve` refuses to start and says to add `sslrootcert`.
+
+A Postgres inside your Kubernetes cluster, on a private address and without TLS, needs `sslmode=disable`. Use it only on a network you trust: key hashes, kill switches and spend then cross it in plain text.
 
 Changing the `store:` section needs a restart. The rest of the policy still reloads within 2 seconds.
 

@@ -35,6 +35,8 @@ regex = { version = "1", default-features = false, features = ["std", "perf"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 # The Postgres store (`store:` in the policy): the wire protocol, async on the tokio runtime Gantry already runs on.
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
+# The Mozilla roots the store trusts, with an sslrootcert file's beside them. Already in the build through hyper-rustls.
+webpki-roots = "1"
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "webpki-tokio", "tls12"] }
 
 [workspace.lints.rust]

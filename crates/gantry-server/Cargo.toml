@@ -19,6 +19,7 @@ hyper-rustls.workspace = true
 tokio-rustls.workspace = true
 http-body-util.workspace = true
 tokio-postgres.workspace = true
+webpki-roots.workspace = true
 # Answers are passed on frame by frame (Bedrock streams decoded, usage read as it passes): that needs a body type of Gantry's own.
 http-body.workspace = true
 
