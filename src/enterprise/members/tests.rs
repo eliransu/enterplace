@@ -518,7 +518,9 @@ async fn a_revoked_invite_link_no_longer_works() -> Result<(), Error> {
 
 #[tokio::test]
 async fn without_the_feature_the_console_keeps_admin_keys_only() -> Result<(), Error> {
-    for (name, status) in [("none", unlicensed()), ("other", licensed(&["siem"]))] {
+    // "reports" is a feature with no tables yet. A license with siem or retention makes every enterprise table,
+    // members' included, since the migrations are one list; that gate is tested in siem/tests.rs.
+    for (name, status) in [("none", unlicensed()), ("other", licensed(&["reports"]))] {
         let test = format!("gate_{name}");
         let Some(url) = database(&test).await? else {
             return Ok(());

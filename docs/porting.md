@@ -67,8 +67,14 @@ GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55433/postgres cargo
 
 The open source checkout must sit beside this one as `../gantry`, since the crates are path dependencies.
 
+## Ported
+
+- Members (`members.rs`).
+- SIEM export and retention with legal hold (`siem.rs`, `siem/sinks.rs`, features `siem` and `retention`). One org
+  per install and one replica per audit log: each replica reads its own chain into `enterprise_audit` and sends it
+  on; retention seals and retires whole segments through `gantry_core::audit::{seal, retire}`.
+
 ## Still to port
 
-SCIM (with its tokens and the one-time password links for people it makes), SIEM export, retention and legal hold,
-policy editing with dry run and approval, reports, workload identity, Claude Code watch mode, devices, TOTP. The
+SCIM (with its tokens and the one-time password links for people it makes), policy editing with dry run and approval, reports, workload identity, Claude Code watch mode, devices, TOTP. The
 admin API's "add an existing user to an org" has no counterpart in a one-org install.
