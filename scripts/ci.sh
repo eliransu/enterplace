@@ -21,7 +21,7 @@ cargo build --release --locked
 ./target/release/gantry version
 step "the binary refuses to forward unchecked unless asked by name"
 if ./target/release/gantry serve 2>/dev/null; then echo "serve started without --unchecked"; exit 1; fi
-step "every policy example in README, docs and the website passes gantry check"
+step "every policy example in README and the docs passes gantry check"
 python3 scripts/check_examples.py target/release/gantry
 if [ "$bench" = 1 ]; then
   step "bench gate (chat, 1,000 requests a second for 5 seconds, p99 overhead under 1,000 us, best of 3)"
@@ -45,12 +45,5 @@ if command -v npm >/dev/null; then
   (cd docs && npm ci --no-audit --no-fund && npm run build)
 else
   echo "skipped: npm is not installed."
-fi
-step "website build"
-# The website's design lives outside this repository. Without it the page cannot be built, so this step says so.
-if { [ -d ../design-system/project ] && [ -d ../design-screens ]; } || { [ -d ../../design-system/project ] && [ -d ../../design-screens ]; }; then
-  python3 scripts/site.py
-else
-  echo "skipped: the design system (design-system, design-screens) is not beside this checkout or its parent."
 fi
 step "all checks passed"

@@ -1,9 +1,9 @@
 {
   "$schema": "../docs/node_modules/wrangler/config-schema.json",
-  // The landing page: static files from `python3 scripts/site.py`, served at gantry.eliran.me.
+  // The landing page: hand-written static files in public/, served at gantry.eliran.me.
   "name": "gantry-site",
   "compatibility_date": "2026-11-01",
-  "assets": { "directory": "./public", "not_found_handling": "none" },
+  "assets": { "directory": "./public", "not_found_handling": "404-page" },
   "routes": [{ "pattern": "gantry.eliran.me", "custom_domain": true }],
   "workers_dev": false
 }

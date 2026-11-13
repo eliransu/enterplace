@@ -3,150 +3,243 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gantry: every AI request on the record</title>
-<meta name="description" content="An open source AI gateway that puts a person, a policy decision and an audit record on every request, before the request leaves.">
-<link rel="stylesheet" href="site.css">
+<title>Gantry: every AI request, on the record</title>
+<meta name="description" content="Gantry is an open source AI gateway. It identifies who sent each model request, decides by your policy, and writes a tamper-evident audit record before anything leaves.">
+<meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<link rel="canonical" href="https://gantry.eliran.me/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://gantry.eliran.me/">
+<meta property="og:title" content="Gantry: every AI request, on the record">
+<meta property="og:description" content="The open source AI gateway built for governance. Identity, policy and a tamper-evident audit record on every model request.">
+<meta property="og:image" content="https://gantry.eliran.me/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/fonts/FamiljenGrotesk-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/styles.css">
 </head>
-<body data-theme="light">
-<div style="background: var(--ground); color: var(--text); overflow-wrap: anywhere">
+<body>
 
-<section class="g-frame" data-theme="dark">
-<nav class="g-nav" aria-label="Website">
-<a class="g-nav__brand" href="#top"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
-<a class="g-nav__item t-body" href="#policy">Product</a>
-<a class="g-nav__item t-body" href="#coverage">Coverage</a>
-<a class="g-nav__item t-body" href="https://gantry-docs.eliran.me/">Docs</a>
-<a class="g-btn g-btn--sm t-small" href="#start">Quickstart</a>
-</nav>
-<div class="g-hero">
-<div class="g-stack" style="gap: var(--space-6)">
-<h1 class="t-hero g-caps" id="top" style="margin: 0; text-wrap: balance">Every AI request on the record</h1>
-<p class="t-lead g-muted g-measure" style="margin: 0">An open source AI gateway for companies rolling out Claude Code and their own agents. It puts a person, a policy decision and an audit record on every request, before the request leaves.</p>
-<div class="g-head__actions"><span class="g-command"><span class="g-command__text t-mono">gantry serve gantry.policy.yaml</span><button class="g-btn g-btn--quiet g-btn--sm t-small" type="button"><svg class="g-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>Copy</button></span><a class="g-btn g-btn--quiet t-body" href="#policy">See a policy file</a></div>
-</div>
-<div class="g-stack" style="gap: var(--space-6); justify-items: start">
-<div class="g-motif" aria-hidden="true"><div class="g-motif__grid" style="--g-cols: 4"><span class="g-disc"></span><span class="g-disc"></span><span class="g-disc"></span><span class="g-disc"></span><span class="g-disc"></span><span class="g-disc"></span><span class="g-disc"></span><span class="g-disc g-disc--flame"></span><span class="g-disc"></span><span class="g-disc"></span><span class="g-disc"></span><span class="g-disc"></span></div><span class="g-gate"></span><div class="g-motif__grid" style="--g-cols: 3"><span class="g-disc g-disc--lime"></span><span class="g-disc g-disc--lime"></span><span class="g-disc g-disc--lime"></span><span class="g-disc g-disc--lime"></span><span class="g-disc g-disc--lime"></span><span></span><span class="g-disc g-disc--lime"></span><span class="g-disc g-disc--lime"></span><span class="g-disc g-disc--lime"></span></div></div>
-<div class="g-panel g-stack" style="gap: var(--space-2); justify-items: start"><span class="g-tag g-tag--refused"><span class="t-tag">Refused</span><span class="t-mono-sm">model_not_allowed</span></span><span class="t-mono-sm">14:02:11 dana.levi, claude-sonnet-5-5</span><span class="t-mono-sm g-muted">decision 01JCM8SWA5RZ43AGXHJNQ3MTM3</span><span class="t-small g-muted">A request that was refused, and the record that proves it.</span></div>
-</div>
-</div>
-</section>
-
-<section class="g-section">
-<div class="g-split">
-<div class="g-stack g-split__wide" style="gap: var(--space-6)">
-<h2 class="t-xl" style="margin: 0; text-wrap: balance">What a team needs to run it safely is free</h2>
-<p class="t-lead g-muted g-measure" style="margin: 0">Under Apache 2.0, for any number of people. The product is what a company adds to prove and operate it across everyone.</p>
-<div class="g-table-wrap"><table class="g-table t-body"><thead class="t-tag"><tr><th>What you get</th><th>In</th></tr></thead><tbody><tr><td style="white-space: normal">Keys per person and workload, a policy file, and a check for it</td><td><span class="g-tag t-tag">Open source</span></td></tr><tr><td style="white-space: normal">A hash-chained audit log: a changed, inserted or reordered record breaks the chain</td><td><span class="g-tag t-tag">Open source</span></td></tr><tr><td style="white-space: normal">Guardrails per rule on requests and answers: secrets, personal data, seven guardrail vendors, and outside services by webhook</td><td><span class="g-tag t-tag">Open source</span></td></tr><tr><td style="white-space: normal">Budgets, requests and tokens per minute and a cache per rule, with the cost of every answer and prices built in for most models; expiry, a budget, models and tokens per minute per key</td><td><span class="g-tag t-tag">Open source</span></td></tr><tr><td style="white-space: normal">Model aliases with load balancing, cooldown and fallbacks; a policy from a LiteLLM config</td><td><span class="g-tag t-tag">Open source</span></td></tr><tr><td style="white-space: normal">An admin console for the audit log, keys, policy and spend</td><td><span class="g-tag t-tag">Open source</span></td></tr><tr><td style="white-space: normal">Console sign-in with your identity provider (OpenID Connect), with admin and read-only roles</td><td><span class="g-tag t-tag">Open source</span></td></tr><tr><td style="white-space: normal">Prometheus metrics, and an audit log your log shipper can tail</td><td><span class="g-tag t-tag">Open source</span></td></tr><tr><td style="white-space: normal">Developer sign-in for their own key (gantry login)</td><td><span class="g-tag t-tag">Open source</span></td></tr><tr><td style="white-space: normal">Claude Code to any model: GPT, Gemini, local models, Claude on Bedrock and Vertex AI</td><td><span class="g-tag t-tag">Open source</span></td></tr><tr><td style="white-space: normal">Kill switches with a reason the people stopped see</td><td><span class="g-tag t-tag">Open source</span></td></tr><tr><td style="white-space: normal">More than one node</td><td><span class="g-tag"><span class="t-tag">Open source</span><span class="t-mono-sm">next</span></span></td></tr><tr><td style="white-space: normal">Coverage and enforcement across a fleet of laptops</td><td><span class="g-tag g-tag--product t-tag">Product</span></td></tr><tr><td style="white-space: normal">Export to your SIEM, retention and legal hold</td><td><span class="g-tag g-tag--product t-tag">Product</span></td></tr><tr><td style="white-space: normal">Policy dry run, versions and approvals</td><td><span class="g-tag g-tag--product t-tag">Product</span></td></tr><tr><td style="white-space: normal">Cloud identity for workloads, SCIM</td><td><span class="g-tag g-tag--product t-tag">Product</span></td></tr></tbody></table></div><p class="t-small g-muted" style="margin: 0">Rows marked next are open source and arrive in the coming releases.</p>
-</div>
-<div class="g-panel g-stack">
-<div class="g-table-wrap"><table class="g-table g-table--stack t-mono-sm"><thead class="t-tag"><tr><th>Person or workload</th><th>Verdict</th></tr></thead><tbody><tr><td>dana.levi<span class="g-table__sub">interns, 14:02:11</span></td><td><span class="g-tag g-tag--refused"><span class="t-tag">Refused</span><span class="t-mono-sm">model_not_allowed</span></span></td></tr><tr><td>unknown<span class="g-table__sub">key 9f3a61c2, 14:02:10</span></td><td><span class="g-tag g-tag--refused"><span class="t-tag">Refused</span><span class="t-mono-sm">unknown_key</span></span></td></tr><tr><td>svc-invoice-bot<span class="g-table__sub">payments, 14:02:09</span></td><td><span class="g-tag g-tag--block"><span class="t-tag">Block</span><span class="t-mono-sm">private_key</span></span></td></tr><tr><td>maya.cohen<span class="g-table__sub">payments, 14:02:08</span></td><td><span class="g-tag g-tag--allow t-tag">Allow</span></td></tr><tr><td>noa.bar<span class="g-table__sub">platform, 14:02:07</span></td><td><span class="g-tag g-tag--allow t-tag">Allow</span></td></tr></tbody></table></div>
-<p class="t-small g-muted" style="margin: 0">Five records from an audit log. Three were refused, and each says why: a model the rule does not allow, a key Gantry never issued, and a request a guardrail stopped before it left. Read them in the console at <span class="t-mono">/console</span>, or check the chain with <span class="t-mono">gantry audit verify</span>.</p>
-</div>
-</div>
-</section>
-
-<section class="g-section" id="policy">
-<header class="g-head">
-<h2 class="g-head__title t-xl">One file. Every rule.</h2>
-<p class="g-head__lead t-lead">Which providers, which models, and who may use them. One file your team reviews like code, and <span class="t-mono">gantry check</span> names every mistake with its line.</p>
+<header class="header" id="header">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Gantry, back to top">
+      <svg width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+      gantry
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#proof">Audit log</a>
+      <a href="#claude-code">Claude Code</a>
+      <a href="#open-source">Open source</a>
+      <a href="https://gantry-docs.eliran.me/">Docs</a>
+    </nav>
+    <div class="header-actions">
+      <a class="btn btn-line btn-sm hide-sm" href="https://github.com/ggantry/gantry">GitHub</a>
+      <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
+    </div>
+  </div>
 </header>
-<div class="g-split">
-<div class="g-panel g-stack g-split__wide">
-<div class="g-pager"><span class="t-mono-lg">gantry.policy.yaml</span><span class="g-tag g-tag--refused"><span class="t-tag">Refused</span><span class="t-mono-sm">line 13</span></span></div>
-<div class="g-code t-mono">
-<div class="g-code__line"><span class="g-code__n">1</span><span></span><span><span class="g-code__c"># Who may use which model.</span></span></div>
-<div class="g-code__line"><span class="g-code__n">2</span><span></span><span>version: <span class="g-code__v">1</span></span></div>
-<div class="g-code__line"><span class="g-code__n">3</span><span></span><span>providers:</span></div>
-<div class="g-code__line"><span class="g-code__n">4</span><span></span><span>  - name: <span class="g-code__v">anthropic</span></span></div>
-<div class="g-code__line"><span class="g-code__n">5</span><span></span><span>    kind: <span class="g-code__v">anthropic</span></span></div>
-<div class="g-code__line"><span class="g-code__n">6</span><span></span><span>    url: <span class="g-code__v">https://api.anthropic.com</span></span></div>
-<div class="g-code__line"><span class="g-code__n">7</span><span></span><span>    key_env: <span class="g-code__v">ANTHROPIC_PROVIDER_KEY</span></span></div>
-<div class="g-code__line"><span class="g-code__n">8</span><span></span><span>    models: <span class="g-code__v">[claude-sonnet-5-5, claude-haiku-5-5]</span></span></div>
-<div class="g-code__line"><span class="g-code__n">9</span><span></span><span>rules:</span></div>
-<div class="g-code__line"><span class="g-code__n">10</span><span></span><span>  - name: <span class="g-code__v">payments-team</span></span></div>
-<div class="g-code__line"><span class="g-code__n">11</span><span></span><span>    principals: <span class="g-code__v">{ team: payments }</span></span></div>
-<div class="g-code__line"><span class="g-code__n">12</span><span></span><span>    models: <span class="g-code__v">[claude-sonnet-5-5, claude-haiku-5-5]</span></span></div>
-<div class="g-code__line g-code__line--hit"><span class="g-code__n">13</span><span></span><span>  - name: <span class="g-code__v">everyone-else</span></span></div>
-<div class="g-code__line"><span class="g-code__n">14</span><span></span><span>    principals: <span class="g-code__v">{ any: true }</span></span></div>
-<div class="g-code__line"><span class="g-code__n">15</span><span></span><span>    models: <span class="g-code__v">[]</span></span></div>
-</div>
-<p class="t-small g-muted" style="margin: 0">Rules are read in order and the first that names the caller decides. A rule can also name guardrails, and set a budget in dollars, a rate limit and a cache.</p>
-</div>
-<dl class="g-points"><div><dt class="t-sm">Line 4, where</dt><dd class="t-body">A provider, the API it speaks and the exact models it serves. Its key stays in an environment variable.</dd></div><div><dt class="t-sm">Line 11, who</dt><dd class="t-body">A team, a person or a workload, or anyone. No anonymous requests.</dd></div><div><dt class="t-sm">Line 12, what</dt><dd class="t-body">The models this team may reach. Anything else is refused with a reason.</dd></div><div><dt class="t-sm">Line 13, everyone else</dt><dd class="t-body">This rule refused the request above. The record names the rule and its line.</dd></div></dl>
-</div>
-</section>
 
-<section class="g-section g-sheet-dark" id="coverage" data-theme="dark">
-<header class="g-head">
-<h2 class="g-head__title t-xl">Laptops and workloads. One gate.</h2>
-<p class="g-head__lead t-lead">A coding agent on a laptop and a job in a cluster pass the same gate, under the same policy, into the same audit log.</p>
-</header>
-<div class="g-panel g-flow" style="padding: var(--space-16) var(--space-6)">
-<div class="g-flow__row"><span class="g-tag t-tag">Claude Code</span><span class="g-tag t-tag">Codex</span><span class="g-tag t-tag">OpenAI clients</span><span class="g-tag t-tag">Your agents</span></div>
-<span class="g-flow__link" aria-hidden="true"></span>
-<span class="g-flow__gate t-md">Identify, check, record</span>
-<span class="g-flow__link" aria-hidden="true"></span>
-<div class="g-flow__row"><span class="g-tag t-tag">Anthropic</span><span class="g-tag t-tag">OpenAI</span><span class="g-tag t-tag">Azure OpenAI</span><span class="g-tag t-tag">Amazon Bedrock</span><span class="g-tag t-tag">Gemini</span><span class="g-tag t-tag">Vertex AI</span><span class="g-tag t-tag">Groq</span><span class="g-tag t-tag">Ollama</span><span class="g-tag t-tag">vLLM</span></div>
-</div>
-<div class="g-split">
-<div class="g-stack">
-<h3 class="t-md" style="margin: 0">On one machine, free</h3>
-<dl class="g-points"><div><dt class="t-mono-lg">gantry key new</dt><dd class="t-body">An admin makes a key for a person or a workload. Every request from their tools then carries their name. Admins sign in to the console with an admin key or through your identity provider.</dd></div></dl>
-<dl class="g-points"><div><dt class="t-sm">Yours to host</dt><dd class="t-body">Prompts, answers and provider keys stay in your environment. The audit log holds no prompt text.</dd></div></dl>
-</div>
-<div class="g-stack">
-<div class="g-toolbar"><h3 class="t-md" style="margin: 0">Across the fleet</h3><span class="g-tag g-tag--product t-tag">Product</span></div>
-<dl class="g-points"><div><dt class="t-sm">Coverage you can prove</dt><dd class="t-body">Each tool on each laptop is configured, verified or enforced, and the report says which.</dd></div><div><dt class="t-sm">Workloads without static keys</dt><dd class="t-body">A job proves who it is with its cloud identity.</dd></div></dl>
-<p class="t-small g-muted" style="margin: 0">The product is in development. Nothing here is for sale yet.</p>
-</div>
-</div>
-</section>
+<main>
+  <section class="wrap hero" id="top">
+    <p class="eyebrow live">Open source AI gateway, Apache 2.0</p>
+    <h1>Every AI request, on the record.</h1>
+    <p class="lead">Gantry sits between your people and the model providers. It knows who sent each request, decides by your policy, and writes a tamper-evident record before anything leaves.</p>
+    <div class="actions">
+      <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-line" href="https://gantry-docs.eliran.me/integrations/claude-code/">Connect Claude Code</a>
+      <div class="command">
+        <span><span class="prompt">$</span> <span id="cmd">gantry serve gantry.policy.yaml</span></span>
+        <button type="button" data-copy="cmd">Copy</button>
+      </div>
+    </div>
+  </section>
 
-<section class="g-section" id="start">
-<header class="g-head">
-<h2 class="g-head__title t-xl">Check the file, make a key, serve</h2>
-<p class="g-head__lead t-lead">One binary and no database. Build it from source, or build the container image: one static binary, 9.1 MB, not root.</p>
-</header>
-<div class="g-split">
-<div class="g-stack g-split__wide">
-<div class="g-terminal t-mono"><span>$ cargo build --release</span><span>$ gantry check gantry.policy.yaml</span><span class="g-terminal__out">gantry.policy.yaml is valid: 2 rules, 0 keys, 1 provider: anthropic (anthropic) at https://api.anthropic.com.</span><span>$ gantry key new maya.cohen --team payments</span><span class="g-terminal__out">Key for maya.cohen, team payments. It is shown once and is not stored anywhere.</span><span>$ export ANTHROPIC_PROVIDER_KEY=...</span><span>$ gantry serve gantry.policy.yaml</span><span class="g-terminal__out">gantry 0.0.1 listening on http://127.0.0.1:8080</span></div>
-<div class="g-terminal t-mono"><span>$ scripts/release.sh image</span><span class="g-terminal__out">gantry:0.0.1: 9056664 bytes, user 65532:65532</span><span>$ docker run --rm -p 127.0.0.1:8080:8080 -v "$PWD/gantry.policy.yaml:/etc/gantry/gantry.policy.yaml:ro" -v "$PWD/keys:/etc/gantry/keys" -v gantry-audit:/var/lib/gantry -e ANTHROPIC_PROVIDER_KEY gantry:local serve /etc/gantry/gantry.policy.yaml --keys /etc/gantry/keys/gantry.keys.yaml --listen 0.0.0.0:8080</span></div>
-</div>
-<div class="g-stack">
-<h3 class="t-md" style="margin: 0">What each one does</h3>
-<dl class="g-points"><div><dt class="t-mono-lg">gantry check</dt><dd class="t-body">Names the file, the line and the word for every mistake, before anything runs.</dd></div><div><dt class="t-mono-lg">gantry key new</dt><dd class="t-body">Prints a key once. Gantry keeps only its hash.</dd></div><div><dt class="t-mono-lg">gantry serve</dt><dd class="t-body">Identifies, checks and records every request, then forwards it with the provider's key.</dd></div><div><dt class="t-mono-lg">gantry audit verify</dt><dd class="t-body">Proves the log is one unbroken chain, and prints the last hash to keep elsewhere.</dd></div></dl>
-<div class="g-head__actions"><a class="g-btn t-body" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a><a class="g-btn g-btn--quiet t-body" href="https://gantry-docs.eliran.me/integrations/claude-code/">Point Claude Code at it</a></div>
-</div>
-</div>
-</section>
+  <div class="wrap">
+    <figure class="gate-panel" aria-label="Requests from four people pass the Gantry gate. One is refused because its model is not allowed." style="margin-inline: 0">
+      <div class="gate-who" aria-hidden="true"><span>maya.cohen</span><span>svc-invoice-bot</span><span>dana.levi</span><span>noa.bar</span></div>
+      <div class="gate-track" aria-hidden="true">
+        <div class="gate-bar"></div>
+        <div class="gate-label">gantry</div>
+        <div class="lane"><span class="disc" style="animation-delay: 0s"></span><span class="disc" style="animation-delay: 3.5s"></span></div>
+        <div class="lane"><span class="disc" style="animation-delay: 1.2s"></span><span class="disc" style="animation-delay: 4.7s"></span></div>
+        <div class="lane"><span class="disc stop" style="animation-delay: 0.6s"></span><span class="refusal" style="animation-delay: 0.6s">refused: model_not_allowed</span></div>
+        <div class="lane"><span class="disc" style="animation-delay: 2.3s"></span><span class="disc" style="animation-delay: 5.8s"></span></div>
+      </div>
+      <div class="gate-to" aria-hidden="true"><span>Anthropic</span><span>OpenAI</span><span>Amazon Bedrock</span><span>Vertex AI</span></div>
+    </figure>
+  </div>
 
-<div style="padding: 0 var(--space-4) var(--space-4)">
-<section class="g-section" style="border-radius: var(--radius-xl); background: var(--lime); color: var(--on-lime)" data-theme="light">
-<h2 class="t-hero g-caps" style="margin: 0; max-width: var(--measure-wide); text-wrap: balance">Put a gate in front of your AI</h2>
-<div class="g-head__actions"><span class="g-command"><span class="g-command__text t-mono">gantry serve gantry.policy.yaml</span><button class="g-btn g-btn--quiet g-btn--sm t-small" type="button"><svg class="g-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>Copy</button></span></div>
-</section>
-</div>
+  <section class="works" aria-label="Works with">
+    <div class="wrap">
+      <span class="eyebrow">Works with</span>
+      <span>Claude Code</span><span>Codex</span><span>Cursor</span><span>OpenAI SDK</span><span>Anthropic SDK</span><span>Azure OpenAI</span><span>Ollama</span><span>vLLM</span>
+    </div>
+  </section>
 
-<footer class="g-footer" data-theme="dark">
-<div class="g-stack g-measure" style="justify-items: start">
-<span class="g-mark" aria-hidden="true"></span>
-<p class="t-sm" style="margin: 0">Every AI request identified, checked and recorded.</p>
-<p class="t-small g-muted" style="margin: 0">Open source under Apache 2.0. Version 0.0.1.</p>
-</div>
-<nav class="g-footer__links" aria-label="Footer">
-<a class="t-lead" href="#policy">Product</a>
-<a class="t-lead" href="#coverage">Coverage</a>
-<a class="t-lead" href="#start">Quickstart</a>
-<a class="t-lead" href="https://gantry-docs.eliran.me/">Docs</a>
-<a class="t-lead" href="https://gantry-docs.eliran.me/operations/security/">Security</a>
-<a class="t-lead" href="https://gantry-docs.eliran.me/migrate/comparison/">Compared with LiteLLM and Bifrost</a>
-</nav>
+  <section class="band" id="how">
+    <div class="wrap">
+      <div class="band-intro">
+        <p class="eyebrow">How it works</p>
+        <h2 class="section-title">Four steps. Every request. No exceptions.</h2>
+        <p>The same fixed order for every call, from a developer's laptop or a production agent. A request that cannot be recorded never leaves.</p>
+      </div>
+      <div class="steps">
+        <article class="step reveal">
+          <div class="step-head"><span>01</span><h3>Identify</h3></div>
+          <p>Each person and workload holds its own Gantry key. The provider's key stays inside the gateway and never reaches a laptop.</p>
+          <pre class="snippet">Authorization: Bearer gantry_8f2c...
+<span class="ok">→</span> maya.cohen, team payments</pre>
+        </article>
+        <article class="step reveal">
+          <div class="step-head"><span>02</span><h3>Decide</h3></div>
+          <p>The first rule that names the caller decides: which models, what budget, how many requests a minute, which guardrails.</p>
+          <pre class="snippet">- name: payments-team
+  principals: { team: payments }
+  models: [claude-sonnet-5-5, claude-haiku-5-5]
+  budget: { usd: 2000, per: month }
+  guardrails: [no-secrets, mask-pii]</pre>
+        </article>
+        <article class="step reveal">
+          <div class="step-head"><span>03</span><h3>Record</h3></div>
+          <p>One line in a hash-chained log, written before anything is forwarded. Refusals are recorded too. If the line cannot be written, the request is refused.</p>
+          <pre class="snippet">{"seq": 119, "person": "maya.cohen", "verdict": "allow",
+ "prev": "6b86b273ff34", "hash": "d4735e3a265e"}</pre>
+        </article>
+        <article class="step reveal">
+          <div class="step-head"><span>04</span><h3>Forward</h3></div>
+          <p>The caller's key comes out, the provider's key goes in. Retries and a fallback provider if the first one fails. The answer comes back as the provider sent it.</p>
+          <div class="chips"><span>Anthropic</span><span>OpenAI</span><span>Azure OpenAI</span><span>Amazon Bedrock</span><span>Vertex AI</span><span>Gemini</span><span>Local models</span></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="proof" id="proof">
+    <div class="wrap">
+      <div class="split-head reveal">
+        <h2 class="section-title">Proof you can check yourself.</h2>
+        <p>Each record carries the hash of the one before it. Change, insert or reorder a line and the chain breaks at that exact record.</p>
+      </div>
+      <div class="terminal reveal" role="img" aria-label="gantry audit verify checks five records, three of them refused or blocked, and reports an unbroken chain.">
+        <div class="terminal-bar">gantry-audit.jsonl</div>
+        <div class="terminal-body" aria-hidden="true">
+          <div><span class="dim">$ </span><span class="typed">gantry audit verify gantry-audit.jsonl</span></div>
+          <div class="gap"></div>
+          <div class="row reveal-line r1"><span class="dim">000118  14:02:07</span>  noa.bar          platform   <span class="mid">allow</span>                      <span class="dim">prev 5feceb66  hash 6b86b273</span></div>
+          <div class="row reveal-line r2"><span class="dim">000119  14:02:08</span>  maya.cohen       payments   <span class="mid">allow</span>                      <span class="dim">prev 6b86b273  hash d4735e3a</span></div>
+          <div class="row reveal-line r3"><span class="dim">000120  14:02:09</span>  svc-invoice-bot  payments   <span class="bad">blocked</span> private_key        <span class="dim">prev d4735e3a  hash 4e074085</span></div>
+          <div class="row reveal-line r4"><span class="dim">000121  14:02:10</span>  unknown key      -          <span class="bad">refused</span> unknown_key        <span class="dim">prev 4e074085  hash 4b227777</span></div>
+          <div class="row reveal-line r5"><span class="dim">000122  14:02:11</span>  dana.levi        interns    <span class="bad">refused</span> model_not_allowed  <span class="dim">prev 4b227777  hash ef2d127d</span></div>
+          <div class="gap"></div>
+          <div class="reveal-line r6"><span class="good">122 records in an unbroken chain from record 1 to record 122.</span><br>Last hash: ef2d127de37b942b <span class="caret"></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap duo" id="claude-code">
+    <div class="duo-text reveal">
+      <p class="eyebrow">Claude Code</p>
+      <h2>Roll out Claude Code without losing track of it.</h2>
+      <p>Two environment variables per developer. Every session goes through Gantry, under their own name, inside their team's budget. When something is refused, they see why in the terminal they already use.</p>
+      <pre class="env">export ANTHROPIC_BASE_URL=https://gantry.internal
+export ANTHROPIC_API_KEY=gantry_...</pre>
+    </div>
+    <div class="terminal reveal">
+      <div class="terminal-bar">claude</div>
+      <div class="session">
+        <div><span class="good">&gt;</span> refactor the invoice parser and add tests</div>
+        <div class="mid">Using claude-opus-5-5</div>
+        <div style="color: #f2f2f2"><span class="bad">API Error: 403</span> Refused (model_not_allowed): the interns team may use claude-sonnet-5-5 and claude-haiku-5-5.<br><span class="mid">Decision 01JCM8SWA5RZ43AGXHJNQ3MTM3</span></div>
+        <div class="mid">/model claude-sonnet-5-5</div>
+        <div><span class="good">●</span> Reading src/invoice/parser.rs</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap plans" id="open-source">
+    <h2 class="section-title reveal">Free to run. Built to grow with you.</h2>
+    <div class="plan-grid">
+      <article class="plan free reveal">
+        <h3>Open source</h3>
+        <p>Apache 2.0, for any number of people. One binary, no database.</p>
+        <ul>
+          <li>Keys per person and workload, with expiry and budgets</li>
+          <li>Policy as code, checked before it loads</li>
+          <li>Hash-chained audit log and a verify command</li>
+          <li>Guardrails on requests and answers</li>
+          <li>Every major provider, with retries and fallbacks</li>
+          <li>Admin console with single sign-on</li>
+        </ul>
+        <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+      </article>
+      <article class="plan paid reveal">
+        <h3>Gantry for companies</h3>
+        <p>What a company adds to prove and operate it across everyone. In development.</p>
+        <ul>
+          <li>Coverage and enforcement across a fleet of laptops</li>
+          <li>SIEM export, retention and legal hold</li>
+          <li>Policy changes with dry runs and approvals</li>
+          <li>A control plane for many gateways</li>
+        </ul>
+        <a class="btn btn-line" href="https://gantry-docs.eliran.me/getting-started/status/">See what is built and planned</a>
+      </article>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="cta-box reveal">
+      <h2>Put a gate in front of your AI.</h2>
+      <div class="actions">
+        <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+        <span class="clone">git clone https://github.com/ggantry/gantry</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="wrap top">
+    <div class="about">
+      <span class="brand" style="font-size: 20px; color: var(--fg)"><svg width="22" height="20" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>gantry</span>
+      <p>The open source AI gateway built for governance.</p>
+    </div>
+    <nav class="cols" aria-label="Footer">
+      <div><strong>Product</strong><a href="#how">How it works</a><a href="#proof">Audit log</a><a href="#open-source">Open source</a></div>
+      <div><strong>Docs</strong><a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a><a href="https://gantry-docs.eliran.me/governance/policy/">Policy file</a><a href="https://gantry-docs.eliran.me/operations/security/">Security model</a></div>
+      <div><strong>Project</strong><a href="https://github.com/ggantry/gantry">GitHub</a><a href="https://gantry-docs.eliran.me/getting-started/status/">Status</a><a href="https://gantry-docs.eliran.me/migrate/comparison/">Compared with LiteLLM</a></div>
+    </nav>
+  </div>
+  <p class="wrap legal">Apache 2.0. Version 0.0.1, pre-1.0.</p>
 </footer>
 
-</div>
-<script>(function(){var t=new URLSearchParams(location.search).get('theme');
-if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.body.dataset.theme=t})();
-document.querySelectorAll('.g-command').forEach(function(c){var b=c.querySelector('button');if(!b)return;b.addEventListener('click',function(){
-var text=c.querySelector('.g-command__text').textContent;if(navigator.clipboard)navigator.clipboard.writeText(text)})})</script>
+<script>
+// Header border once the page scrolls, the current section in the nav, and copy buttons. Nothing else runs here.
+(() => {
+  const header = document.getElementById('header');
+  const onScroll = () => header.classList.toggle('scrolled', window.scrollY > 8);
+  onScroll();
+  window.addEventListener('scroll', onScroll, { passive: true });
+
+  const links = [...document.querySelectorAll('.nav a[href^="#"]')];
+  const seen = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      links.forEach((a) => a.setAttribute('aria-current', String(a.getAttribute('href') === '#' + e.target.id)));
+    }
+  }, { rootMargin: '-45% 0px -50% 0px' });
+  links.forEach((a) => { const s = document.querySelector(a.getAttribute('href')); if (s) seen.observe(s); });
+
+  document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(document.getElementById(b.dataset.copy).textContent); b.textContent = 'Copied'; }
+    catch { b.textContent = 'Press Cmd+C'; }
+    setTimeout(() => { b.textContent = 'Copy'; }, 1600);
+  }));
+})();
+</script>
 </body>
 </html>

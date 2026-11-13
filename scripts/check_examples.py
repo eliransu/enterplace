@@ -1,8 +1,7 @@
 """Runs every policy example a reader can copy through `gantry check`, so no example can drift from the code.
 
 Usage: python3 scripts/check_examples.py [path/to/gantry]
-Checked: every fenced block in README.md and the docs site pages (docs/src/content/docs) with a top-level `version:` line (a whole policy file), and the
-policy the website shows (POLICY in scripts/site.py), whose `gantry check` output the site prints must also match.
+Checked: every fenced block in README.md and the docs site pages (docs/src/content/docs) with a top-level `version:` line (a whole policy file).
 A fragment (a block whose top-level keys are all policy sections, such as `guardrails:` or `providers:` alone) is
 pasted into a minimal policy, replacing that section, and checked the same way. A block written to show a mistake on
 purpose, or holding placeholders, is skipped when the line just above its fence says `<!-- not checked -->`.
@@ -82,16 +81,6 @@ def main() -> int:
         for line, text in blocks(path):
             count += 1
             check(text, f"{path.relative_to(ROOT)}:{line}", failures)
-    site = (ROOT / "scripts" / "site.py").read_text()
-    policy = re.search(r'^POLICY = """\\\n(.*?)"""', site, re.S | re.M)
-    shown = re.search(r'^CHECKED = "(.*?)"', site, re.M)
-    if not policy or not shown:
-        failures.append("scripts/site.py: POLICY or CHECKED is missing, so the website's example cannot be checked.")
-    else:
-        count += 1
-        out = check(policy.group(1), "scripts/site.py POLICY", failures)
-        if out != shown.group(1):
-            failures.append(f"scripts/site.py CHECKED says\n  {shown.group(1)}\nbut gantry check prints\n  {out}")
     for failure in failures:
         print(failure, file=sys.stderr)
     print(f"{count} policy examples checked, {len(failures)} failed.")
