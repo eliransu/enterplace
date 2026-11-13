@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Run by hand on a branch: gh workflow run ci.yml --ref <branch>
+  workflow_dispatch:
 
 permissions:
   contents: read
