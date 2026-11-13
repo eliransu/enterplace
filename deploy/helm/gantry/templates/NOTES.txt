@@ -1,0 +1,11 @@
+Gantry is starting as one replica ({{ include "gantry.fullname" . }}).
+
+Make the first admin key (the image has no shell; the binary runs directly):
+  kubectl exec deploy/{{ include "gantry.fullname" . }} -- /gantry key new admin --team platform --admin --keys /var/lib/gantry/gantry.keys.yaml
+
+Reach it from this machine:
+  kubectl port-forward svc/{{ include "gantry.fullname" . }} 8080:{{ .Values.service.port }}
+  curl {{ if .Values.tls.secretName }}-k https{{ else }}http{{ end }}://127.0.0.1:8080/healthz
+
+Verify the audit chain:
+  kubectl exec deploy/{{ include "gantry.fullname" . }} -- /gantry audit verify /var/lib/gantry/gantry-audit.jsonl

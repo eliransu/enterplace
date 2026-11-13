@@ -1,0 +1,48 @@
+/* The page frame every approved screen carries (design-screens/build.py, page()): the three font files and inherited link color. */
+@font-face{font-family:"Syne";src:url("fonts/Syne-Variable.woff2") format("woff2");font-weight:400 800;font-display:swap}
+@font-face{font-family:"Instrument Sans";src:url("fonts/InstrumentSans-Variable.woff2") format("woff2");font-weight:400 700;font-display:swap}
+@font-face{font-family:"Fragment Mono";src:url("fonts/FragmentMono-Regular.woff2") format("woff2");font-weight:400;font-display:swap}
+a{color:inherit}a:hover{color:inherit}
+/* Round 10 fixes, each with tokens only. The first two belong in the Dialog and Command components upstream. */
+/* A key or a hash never widens its dialog: the track stays the dialog's width and the value wraps, as on a phone. */
+.g-dialog{grid-template-columns:minmax(0,1fr)}
+.g-command--value{flex-wrap:wrap;gap:var(--space-3);border-radius:var(--radius-lg);padding:var(--space-3) var(--space-4)}
+.g-command--value .g-command__text{padding-right:0;white-space:normal;overflow-wrap:anywhere;mask-image:none}
+/* A disabled destructive button is not flame: flame means it will act. */
+.g-btn--flame:disabled{background:transparent;border:var(--hairline) solid var(--line-strong);color:var(--text-muted)}
+/* The focus ring follows the shape of a link in a table. */
+.g-table a:focus-visible{border-radius:var(--radius-sm)}
+/* A date field's own picker icon follows the theme. */
+[data-theme="dark"] .g-input{color-scheme:dark}
+/* The current page in the phone Menu carries the disc the side nav gives it. */
+.g-menu__item[aria-current="page"]{justify-content:flex-start;gap:var(--space-3)}
+.g-menu__item[aria-current="page"]::before{content:"";width:var(--disc);height:var(--disc);flex-shrink:0;border-radius:var(--radius-pill);background:var(--text)}
+/* Round 11. Beside the nav, below 1100px, a console table does not fit: it stacks as on a phone instead of
+   scrolling sideways ("never scrolls sideways on a desktop"), and three Stats keep their one row. */
+@media (min-width:721px) and (max-width:1100px){
+  .g-table--stack thead,.g-table--stack .g-table__wide{display:none}
+  .g-table--stack,.g-table--stack tbody{display:block}
+  .g-table--stack tbody tr:first-child{border-top:0;padding-top:0}
+  .g-table--stack tr{display:grid;grid-template-columns:minmax(0,1fr) fit-content(55%);gap:var(--space-1) var(--space-4);align-items:center;padding:var(--space-3) 0;border-top:var(--hairline) solid var(--line)}
+  .g-table--stack td{padding:0;border:0;white-space:normal}
+  .g-table--stack tbody tr[aria-selected="true"] td:first-child{border-left:0}
+  .g-table--prose tr{grid-template-columns:minmax(0,1fr)}
+  .g-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-4)}
+}
+@media (max-width:1100px){
+  /* An audit row is a line that wraps: the name, then the verdict beside it if it fits and under it if not, then
+     the time and the decision on their own line. Identifiers are never broken mid-word; a name longer than the
+     row breaks only where the markup allows it (an email, after its @ and dots). Only a verdict wider than the
+     row wraps inside its pill. */
+  [data-rows-open]:not(.g-table--prose) tr{display:flex;flex-wrap:wrap;align-items:center}
+  [data-rows-open]:not(.g-table--prose) td:first-child{flex:1 1 auto;min-width:0}
+  [data-rows-open]:not(.g-table--prose) td:nth-child(3){flex-basis:100%}
+  .g-table--stack .g-tag{flex-wrap:wrap;white-space:normal;max-width:100%}
+  /* The whole row opens its record, a 44px target instead of the ID alone. */
+  [data-rows-open] tr{position:relative;min-height:var(--control-md)}
+  [data-rows-open] a::after{content:"";position:absolute;inset:0}
+}
+/* Round 12 (UX m26). Keyboard users skip the nav: the link is the first Tab stop and shows only while it has focus. */
+.g-skip{position:absolute;top:var(--space-4);left:var(--space-4)}
+.g-skip:not(:focus){clip-path:inset(50%);width:1px;height:1px;overflow:hidden;white-space:nowrap}
+.g-shell__main:focus{outline:none}

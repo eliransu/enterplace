@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = ["crates/gantry-core", "crates/gantry-server", "crates/gantry-cli", "crates/gantry-bench", "crates/gantry-console"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+gantry-core = { path = "crates/gantry-core", version = "0.0.1" }
+gantry-server = { path = "crates/gantry-server", version = "0.0.1" }
+gantry-console = { path = "crates/gantry-console", version = "0.0.1" }
+axum = { version = "0.8", default-features = false, features = ["http1", "http2", "tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio", "server-auto", "server-graceful", "service"] }
+http-body-util = "0.1"
+http-body = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+tower = { version = "0.5", features = ["util"] }
+# Policy and keys files are YAML. serde_yaml_ng is the maintained fork of serde_yaml.
+serde_yaml_ng = "0.10"
+# SHA-256 for key hashes and the audit chain.
+sha2 = "0.10"
+# HMAC-SHA256 for AWS Signature Version 4, to sign requests to Amazon Bedrock.
+hmac = "0.12"
+# Operating system randomness for keys and decision IDs.
+getrandom = "0.3"
+# TLS to providers, with the Mozilla root set compiled in so a container needs no system certificates.
+# Guardrail detectors: finite automata, so matching time is linear in the prompt whatever it contains.
+regex = { version = "1", default-features = false, features = ["std", "perf"] }
+# Gantry's own TLS listener (`serve --tls-cert`). Already in the build through hyper-rustls; named here to accept connections.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "webpki-tokio", "tls12"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# Guardrails scan every prompt; unoptimized regex engines would make debug builds and tests misleadingly slow.
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.memchr]
+opt-level = 3
+[profile.dev.package.aho-corasick]
+opt-level = 3

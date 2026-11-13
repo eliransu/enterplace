@@ -1,0 +1,48 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # fmt, clippy -D warnings, tests, release build, the policy examples, the bench gate and the docs build:
+      # the same script a developer runs before pushing, so CI and a laptop cannot disagree.
+      # Shared CI machines are noisy, so the bench runs at 1,000 requests a second rather than the 5,000 used locally.
+      # The limit stays at the plan's target: 1,000 microseconds at p99.
+      - run: scripts/ci.sh
+      - name: The binary answers
+        run: |
+          ./target/release/gantry serve --unchecked &
+          for i in 1 2 3 4 5; do curl -sf http://127.0.0.1:8080/healthz && exit 0; sleep 1; done
+          exit 1
+      - name: The release tarball builds
+        run: scripts/release.sh tarball
+
+  install:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --locked
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

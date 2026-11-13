@@ -1,0 +1,28 @@
+[package]
+name = "gantry-server"
+description = "HTTP server of the Gantry AI gateway."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+gantry-core.workspace = true
+gantry-console.workspace = true
+axum.workspace = true
+tokio.workspace = true
+hyper-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tower.workspace = true
+hyper-rustls.workspace = true
+tokio-rustls.workspace = true
+http-body-util.workspace = true
+# Answers are passed on frame by frame (Bedrock streams decoded, usage read as it passes): that needs a body type of Gantry's own.
+http-body.workspace = true
+
+[dev-dependencies]
+futures-core = "0.3"
+
+[lints]
+workspace = true

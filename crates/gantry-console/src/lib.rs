@@ -1,0 +1,1851 @@
+//! The admin console: server-rendered pages the server mounts at `/console`.
+//!
+//! An admin signs in with a Gantry key whose keys file entry says `admin: true`, or through the identity provider the
+//! policy file names under `console.sso`. The browser gets a random session ID, never the key or a token. Every page
+//! reads the policy, keys and audit files when it is asked for.
+
+pub mod cli;
+mod html;
+mod pages;
+mod sso;
+
+use std::{
+    collections::{BTreeMap, HashMap},
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
+use axum::{
+    Router,
+    body::Body,
+    extract::{ConnectInfo, Path, State},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use gantry_core::{
+    audit::{self, AuditLog},
+    config, id, keyfile,
+};
+use serde_json::{Map, Value, json};
+
+/// The files the console reads and the keys file it writes.
+#[derive(Clone, Debug)]
+pub struct ConsoleConfig {
+    pub policy: PathBuf,
+    pub keys: PathBuf,
+    pub audit: PathBuf,
+    /// The server's open audit log, where sign-ins, issues and revocations are recorded in the same chain as
+    /// requests. `None` refuses every action: the console does not act on what it cannot record.
+    pub log: Option<Arc<AuditLog>>,
+}
+
+const COOKIE: &str = "gantry_console";
+const SESSION: Duration = Duration::from_secs(8 * 60 * 60);
+
+const SSO_COOKIE: &str = "gantry_sso";
+/// Set beside `gantry_sso` when the sign-in was started by `gantry login`: where to hand the code, sealed to that
+/// sign-in's state.
+const CLI_COOKIE: &str = "gantry_cli";
+/// How long `gantry login` has to trade its code for the key.
+const CLI_CODE: Duration = Duration::from_secs(2 * 60);
+/// Most codes waiting to be traded at once.
+const MAX_CODES: usize = 1000;
+/// How long a person has to finish signing in at the identity provider.
+const SSO_PENDING: Duration = Duration::from_secs(10 * 60);
+/// Most finished sign-ins remembered to refuse a second use of their state. A full list forgets the one that expires
+/// first; the provider's code is one use too, so a replay of a forgotten state still fails there.
+const MAX_USED: usize = 10_000;
+/// Sign-ins started within one minute that make the console write one record about it, at most once a minute.
+const FLOOD: u64 = 100;
+
+enum Who {
+    /// Signed in with an admin key, by its hash.
+    Key(String),
+    /// Signed in through single sign-on.
+    Sso { email: String, read_only: bool },
+}
+
+struct Session {
+    who: Who,
+    expires: Instant,
+}
+
+/// The outcome of the last "Verify chain now", and when it ran.
+type Verified = (Instant, Result<(u64, String), String>);
+
+struct Inner {
+    config: ConsoleConfig,
+    // ponytail: sessions live in memory, so a restart signs everyone out and each node has its own. A store comes with more than one node.
+    sessions: Mutex<HashMap<String, Session>>,
+    /// Seals the state cookie of a started sign-in and derives its nonce and PKCE verifier, so starting a sign-in
+    /// keeps nothing on the server and a flood of starts fills nothing. None when the system gave no randomness.
+    // ponytail: one key per process, so a restart ends sign-ins in progress and the callback must reach the node
+    // that started it. A shared key comes with more than one node.
+    seal: Option<ring::hmac::Key>,
+    /// States of sign-ins that finished, until they expire, so each is used once. Only a state whose ID token
+    /// verified is kept: anyone can start and fail a sign-in, so a list of refused ones could be flushed by a flood.
+    used: Mutex<HashMap<String, Instant>>,
+    /// The minute sign-in starts are counted in, and how many so far.
+    starts: Mutex<(Instant, u64)>,
+    /// Refused sign-ins per client address in its current minute, recorded one by one only up to [`FLOOD`] a
+    /// minute per address, so one flooding address hides nobody else's refusals (QA12-3).
+    refusals: Mutex<HashMap<String, Refusals>>,
+    /// Discovery and keys of the identity provider, refetched after `sso::CACHE`.
+    provider: Mutex<Option<Arc<sso::Provider>>>,
+    client: sso::HttpClient,
+    verified: Mutex<Option<Verified>>,
+    /// Codes handed to `gantry login` and not traded yet, by code.
+    codes: Mutex<HashMap<String, Pending>>,
+}
+
+/// A person who signed in for `gantry login`, until their CLI trades the code for a key.
+struct Pending {
+    email: String,
+    team: String,
+    days: u32,
+    /// The PKCE challenge the CLI started with: only the CLI that holds its verifier gets the key.
+    challenge: String,
+    expires: Instant,
+}
+
+/// Where a `gantry login` sign-in hands its code: the CLI's port on 127.0.0.1, its state and its PKCE challenge.
+struct CliStart {
+    port: u16,
+    state: String,
+    challenge: String,
+}
+
+#[derive(Clone)]
+struct Console(Arc<Inner>);
+
+/// One client address's refused sign-ins in its minute.
+struct Refusals {
+    since: tokio::time::Instant,
+    count: u64,
+    codes: BTreeMap<&'static str, u64>,
+}
+
+tokio::task_local! {
+    /// The address of the client whose request is being handled, for its records (MIN-8).
+    static CLIENT: Option<IpAddr>;
+}
+
+/// Runs a console request with its client's address at hand. The server puts the peer address on each request.
+async fn with_client(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let client = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
+    CLIENT.scope(client, next.run(request)).await
+}
+
+fn client() -> Option<IpAddr> {
+    CLIENT.try_with(|c| *c).ok().flatten()
+}
+
+/// The address refusals are counted under. An IPv6 client is counted by its /64, which one host usually holds whole.
+fn flood_key(client: Option<IpAddr>) -> String {
+    match client {
+        Some(IpAddr::V6(v6)) if v6.to_ipv4_mapped().is_none() => {
+            let s = v6.segments();
+            format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+        }
+        Some(IpAddr::V6(v6)) => v6
+            .to_ipv4_mapped()
+            .map_or_else(String::new, |v4| v4.to_string()),
+        Some(IpAddr::V4(v4)) => v4.to_string(),
+        None => "unknown".into(),
+    }
+}
+
+/// The admin a request is signed in as.
+struct Admin {
+    name: String,
+    /// Empty for a person signed in through single sign-on: the identity provider gives no Gantry team.
+    team: String,
+    /// May look but not issue or revoke keys.
+    read_only: bool,
+}
+
+impl Admin {
+    /// How the pages show who is signed in.
+    fn label(&self) -> String {
+        format!(
+            "{}, {}",
+            self.name,
+            if self.read_only { "read only" } else { "admin" }
+        )
+    }
+}
+
+/// What an admin record says: what was done, by whom, to what.
+struct Act<'a> {
+    action: &'static str,
+    by: Option<(&'a str, &'a str)>,
+    /// First 8 hex characters of the hash of a key that is not an admin's, for a refused sign-in.
+    key: Option<String>,
+    target: Value,
+}
+
+const NOT_RECORDED: &str = "Gantry could not write this to its audit log, so nothing was done. Tell whoever runs Gantry: it does not act on what it cannot record.";
+
+/// Writes an admin record, as the admin API does, and waits for it. `Err` means it is not on file.
+async fn record(
+    console: &Console,
+    act: &Act<'_>,
+    code: Option<&str>,
+    error: Option<&str>,
+) -> Result<(), ()> {
+    let Some(log) = &console.config().log else {
+        return Err(());
+    };
+    let verdict = match (code, error) {
+        (None, _) => "allow",
+        (Some(_), None) => "refused",
+        (Some(_), Some(_)) => "failed",
+    };
+    let hash = |path: &std::path::Path| {
+        std::fs::read(path).map_or_else(|_| String::new(), |bytes| id::sha256_hex(&bytes))
+    };
+    let mut record = Map::new();
+    record.insert("event".into(), "admin".into());
+    record.insert("via".into(), "console".into());
+    record.insert("id".into(), id::decision_id().into());
+    record.insert("time".into(), audit::timestamp().into());
+    record.insert("person".into(), act.by.map_or("unknown", |b| b.0).into());
+    record.insert(
+        "team".into(),
+        act.by.map(|b| b.1).filter(|t| !t.is_empty()).into(),
+    );
+    record.insert(
+        "client".into(),
+        client().map_or(Value::Null, |c| c.to_string().into()),
+    );
+    record.insert("key".into(), act.key.clone().into());
+    record.insert("action".into(), act.action.into());
+    record.insert("target".into(), act.target.clone());
+    record.insert("verdict".into(), verdict.into());
+    record.insert("code".into(), code.into());
+    if let Some(error) = error {
+        record.insert("error".into(), error.into());
+    }
+    // The files as they are on disk now, which is what the action read and changed.
+    record.insert(
+        "policy_sha256".into(),
+        hash(&console.config().policy).into(),
+    );
+    record.insert("keys_sha256".into(), hash(&console.config().keys).into());
+    let (tell, written) = tokio::sync::oneshot::channel();
+    log.append_record_then(&record, move |result| {
+        let _ = tell.send(result);
+    });
+    match written.await {
+        Ok(Ok(())) => Ok(()),
+        _ => {
+            eprintln!(
+                "gantry: the audit log could not be written, so console action {} was not done",
+                act.action
+            );
+            Err(())
+        }
+    }
+}
+
+/// The console's routes, to be nested at `/console`.
+pub fn router(config: ConsoleConfig) -> Router {
+    let state = Console(Arc::new(Inner {
+        config,
+        sessions: Mutex::default(),
+        seal: {
+            let mut key = [0u8; 32];
+            getrandom::fill(&mut key)
+                .ok()
+                .map(|()| ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key))
+        },
+        used: Mutex::default(),
+        starts: Mutex::new((Instant::now(), 0)),
+        refusals: Mutex::default(),
+        provider: Mutex::default(),
+        client: sso::client(),
+        verified: Mutex::default(),
+        codes: Mutex::default(),
+    }));
+    Router::new()
+        .route("/", get(root))
+        .route("/sign-in", get(sign_in_page).post(sign_in))
+        .route("/sign-out", get(sign_out))
+        .route("/sso/start", get(sso_start))
+        .route("/sso/callback", get(sso_callback))
+        // `gantry login` opens the browser here: the same sign-in, then a personal key for the CLI instead of a session.
+        .route("/cli/login", get(sso_start))
+        .route("/cli/token", post(cli_token))
+        .route(
+            "/cli/done",
+            get(|uri: Uri| async move {
+                page(
+                    StatusCode::OK,
+                    pages::cli_done(Form::of(&uri).get("ok") == "1"),
+                )
+            }),
+        )
+        .route("/audit", get(audit_page))
+        .route("/audit/verify", post(verify))
+        .route("/people", get(people_page))
+        .route("/people/issue", post(issue))
+        .route("/people/revoke", post(revoke))
+        .route("/policy", get(policy_page))
+        .route("/spend", get(spend_page))
+        .route("/assets/{file}", get(asset))
+        .route("/assets/fonts/{file}", get(font))
+        .fallback(|| async {
+            page(
+                StatusCode::NOT_FOUND,
+                pages::notice(
+                    "No console page here",
+                    "This address is not a page of the console. The audit log is where it starts.",
+                    "/console/audit",
+                    "Open the audit log",
+                ),
+            )
+        })
+        .layer(axum::middleware::from_fn(with_client))
+        .with_state(state)
+}
+
+/// Query or form pairs, decoded.
+pub(crate) struct Form(Vec<(String, String)>);
+
+impl Form {
+    fn parse(text: &str) -> Self {
+        let decode = |part: &str| {
+            let bytes = part.as_bytes();
+            let mut out = Vec::with_capacity(bytes.len());
+            let mut i = 0;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'+' => out.push(b' '),
+                    b'%' if i + 2 < bytes.len() => {
+                        let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+                        match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                            Some(b) => {
+                                out.push(b);
+                                i += 2;
+                            }
+                            None => out.push(b'%'),
+                        }
+                    }
+                    b => out.push(b),
+                }
+                i += 1;
+            }
+            String::from_utf8_lossy(&out).into_owned()
+        };
+        Self(
+            text.split('&')
+                .filter(|pair| !pair.is_empty())
+                .map(|pair| {
+                    let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+                    (decode(k), decode(v))
+                })
+                .collect(),
+        )
+    }
+
+    fn of(uri: &Uri) -> Self {
+        Self::parse(uri.query().unwrap_or(""))
+    }
+
+    /// The last value given for a name, or "".
+    pub(crate) fn get(&self, name: &str) -> &str {
+        self.0
+            .iter()
+            .rev()
+            .find(|(k, _)| k == name)
+            .map_or("", |(_, v)| v.as_str())
+    }
+}
+
+/// Headers every console page carries: nothing of it is cached, framed by another site or run from elsewhere.
+fn guarded(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    let set = [
+        (
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'self'; form-action 'self'; base-uri 'none'",
+        ),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        // Not no-referrer: under it Chrome sends `Origin: null` on the console's own forms, and they are refused.
+        // same-origin still sends nothing to another site.
+        (header::REFERRER_POLICY, "same-origin"),
+        (header::CACHE_CONTROL, "no-store"),
+    ];
+    for (name, value) in set {
+        headers.insert(name, HeaderValue::from_static(value));
+    }
+    response
+}
+
+fn page(status: StatusCode, body: String) -> Response {
+    guarded(
+        (
+            status,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            body,
+        )
+            .into_response(),
+    )
+}
+
+fn redirect(to: &str) -> Response {
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    if let Ok(value) = HeaderValue::from_str(to) {
+        response.headers_mut().insert(header::LOCATION, value);
+    }
+    guarded(response)
+}
+
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .find_map(|pair| {
+            pair.trim()
+                .strip_prefix(&format!("{name}="))
+                .map(str::to_string)
+        })
+}
+
+/// Set on a request by `gantry serve --tls-cert`: the connection is TLS terminated by Gantry itself. An origin-form
+/// request's URI has no scheme to say so (QA14-6).
+type Tls = Option<axum::Extension<axum::http::uri::Scheme>>;
+
+/// The cookie is Secure when the browser reached Gantry over TLS, directly or through a proxy that says so.
+fn secure(headers: &HeaderMap, uri: &Uri, tls: &Tls) -> bool {
+    tls.is_some()
+        || uri.scheme_str() == Some("https")
+        || headers
+            .get("x-forwarded-proto")
+            .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"https"))
+}
+
+/// A form must come from a console page on this same address. SameSite=Strict covers signed-in forms;
+/// this also covers the sign-in form, which has no cookie yet.
+fn same_origin(headers: &HeaderMap) -> bool {
+    let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    match (get("host"), get("origin")) {
+        (Some(host), Some(origin)) if origin != "null" => {
+            origin == format!("http://{host}") || origin == format!("https://{host}")
+        }
+        // A browser may send `Origin: null` (a privacy setting, an old cached page). Its fetch metadata still says
+        // where the form came from, and no page can set that header. With neither, the form is refused.
+        _ => get("sec-fetch-site") == Some("same-origin"),
+    }
+}
+
+fn foreign() -> Response {
+    page(
+        StatusCode::FORBIDDEN,
+        pages::notice(
+            "This form came from somewhere else",
+            "The form was not sent from a console page at this address, so it was refused and nothing was changed. Open the sign-in page and try again from there.",
+            "/console/sign-in",
+            "Open the sign-in page",
+        ),
+    )
+}
+
+impl Console {
+    fn config(&self) -> &ConsoleConfig {
+        &self.0.config
+    }
+
+    fn sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Session>> {
+        // A panic while the lock was held leaves the map as it was: still usable.
+        self.0
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The admin of a signed-in request. The keys file is read every time, so a key revoked or no longer
+    /// marked admin ends its sessions at once.
+    fn admin(&self, headers: &HeaderMap) -> Option<Admin> {
+        let id = cookie_value(headers, COOKIE)?;
+        let who = {
+            let mut sessions = self.sessions();
+            match sessions.get(&id) {
+                Some(s) if s.expires > Instant::now() => match &s.who {
+                    Who::Key(sha) => Who::Key(sha.clone()),
+                    Who::Sso { email, read_only } => Who::Sso {
+                        email: email.clone(),
+                        read_only: *read_only,
+                    },
+                },
+                Some(_) => {
+                    sessions.remove(&id);
+                    return None;
+                }
+                None => return None,
+            }
+        };
+        let admin = match who {
+            Who::Key(sha) => admin_entry(&self.config().keys, &sha).map(|e| Admin {
+                name: e.name,
+                team: e.team,
+                read_only: false,
+            }),
+            // The policy file is read every time, so removing console.sso or a person's email ends their session at once.
+            Who::Sso { email, read_only } => {
+                let domain = email.rsplit_once('@').map_or("", |(_, d)| d);
+                self.sso_config()
+                    .ok()
+                    .flatten()
+                    .filter(|sso| {
+                        sso.allowed_emails.contains(&email)
+                            || sso.allowed_domains.iter().any(|d| d == domain)
+                    })
+                    .map(|_| Admin {
+                        name: email,
+                        team: String::new(),
+                        read_only,
+                    })
+            }
+        };
+        if admin.is_none() {
+            self.sessions().remove(&id);
+        }
+        admin
+    }
+
+    /// `console.sso` from the policy file as it is now. `Err` when the file has problems: no one signs in through it then.
+    fn sso_config(&self) -> Result<Option<config::Sso>, String> {
+        let c = self.config();
+        let text = std::fs::read_to_string(&c.policy)
+            .map_err(|err| format!("{} cannot be read: {err}", c.policy.display()))?;
+        let keys = config::read_keys(&c.keys)?.unwrap_or_default();
+        config::load_texts(&c.policy, &text, &c.keys, &keys)
+            .map(|loaded| loaded.sso)
+            .map_err(|errors| errors.join(" "))
+    }
+
+    fn used(&self) -> std::sync::MutexGuard<'_, HashMap<String, Instant>> {
+        let mut used = self
+            .0
+            .used
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = Instant::now();
+        used.retain(|_, until| *until > now);
+        used
+    }
+
+    /// Marks a verified sign-in's state as used for the `left` seconds its cookie lives. False if it already was.
+    fn remember(&self, state: &str, left: u64) -> bool {
+        let mut used = self.used();
+        // ponytail: past MAX_USED verified sign-ins in 10 minutes the oldest is forgotten early; only an identity
+        // provider's real sign-ins can get there, and its one-use code still refuses a replay.
+        if used.len() >= MAX_USED {
+            let first = used
+                .iter()
+                .min_by_key(|(_, until)| **until)
+                .map(|(s, _)| s.clone());
+            if let Some(first) = first {
+                used.remove(&first);
+            }
+        }
+        used.insert(
+            state.to_string(),
+            Instant::now() + Duration::from_secs(left),
+        )
+        .is_none()
+    }
+
+    /// Counts a sign-in start, and says how many there were when this minute just reached [`FLOOD`].
+    fn refusals(&self) -> std::sync::MutexGuard<'_, HashMap<String, Refusals>> {
+        self.0
+            .refusals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Counts a refused sign-in from one client address and returns how many it has had in its minute. A minute past
+    /// [`FLOOD`] is closed by the task that records its summary, not here.
+    fn count_refusal(&self, key: &str, code: &'static str) -> u64 {
+        let now = tokio::time::Instant::now();
+        let fresh =
+            |r: &Refusals| r.count > FLOOD || now.duration_since(r.since) < Duration::from_secs(60);
+        let mut all = self.refusals();
+        // ponytail: one entry per address seen this minute; many addresses refused at once grow the map until
+        // their minutes end.
+        if all.len() >= 4096 {
+            all.retain(|_, r| fresh(r));
+        }
+        let entry = all.entry(key.to_string()).or_insert_with(|| Refusals {
+            since: now,
+            count: 0,
+            codes: BTreeMap::new(),
+        });
+        if !fresh(entry) {
+            *entry = Refusals {
+                since: now,
+                count: 0,
+                codes: BTreeMap::new(),
+            };
+        }
+        entry.count += 1;
+        *entry.codes.entry(code).or_default() += 1;
+        entry.count
+    }
+
+    fn count_start(&self) -> Option<u64> {
+        (per_minute(&self.0.starts) == FLOOD).then_some(FLOOD)
+    }
+
+    /// Opens a session and returns its ID, or `None` when the system gave no randomness.
+    fn open_session(&self, who: Who) -> Option<String> {
+        let session = random_hex()?;
+        let mut sessions = self.sessions();
+        let now = Instant::now();
+        sessions.retain(|_, s| s.expires > now);
+        sessions.insert(
+            session.clone(),
+            Session {
+                who,
+                expires: now + SESSION,
+            },
+        );
+        Some(session)
+    }
+
+    fn verified(&self) -> Option<Verified> {
+        self.0
+            .verified
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+fn admin_entry(keys: &std::path::Path, sha256: &str) -> Option<config::KeyEntry> {
+    let text = config::read_keys(keys).ok()??;
+    config::key_entries(keys, &text)
+        .ok()?
+        .into_iter()
+        .find(|e| e.admin && e.sha256 == sha256)
+}
+
+async fn root(State(console): State<Console>, headers: HeaderMap) -> Response {
+    match console.admin(&headers) {
+        Some(_) => redirect("/console/audit"),
+        None => redirect("/console/sign-in"),
+    }
+}
+
+async fn sign_in_page(State(console): State<Console>, headers: HeaderMap) -> Response {
+    if console.admin(&headers).is_some() {
+        return redirect("/console/audit");
+    }
+    page(StatusCode::OK, pages::sign_in("", "", console.sso_on()))
+}
+
+async fn sign_in(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    uri: Uri,
+    tls: Tls,
+    body: String,
+) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    let form = Form::parse(&body);
+    let key = form.get("key").trim();
+    let keys = &console.config().keys;
+    let entry = if key.is_empty() {
+        None
+    } else {
+        admin_entry(keys, &id::sha256_hex(key.as_bytes()))
+    };
+    let Some(entry) = entry else {
+        if !key.is_empty() {
+            let act = Act {
+                action: "console_sign_in",
+                by: None,
+                key: Some(id::sha256_hex(key.as_bytes())[..8].to_string()),
+                target: Value::Null,
+            };
+            // The refusal stands whether or not it was recorded.
+            let _ = record(&console, &act, Some("not_admin"), None).await;
+        }
+        // One message for an unknown key and a key that is not an admin's: the page does not tell which keys exist.
+        let error = if key.is_empty() {
+            "Paste a Gantry key. It starts with gantry_.".to_string()
+        } else {
+            format!(
+                "This key is not an admin key in {}. Paste an admin key, or ask an admin to add admin: true under your entry.",
+                html::esc(&keys.display().to_string())
+            )
+        };
+        return page(
+            StatusCode::UNAUTHORIZED,
+            pages::sign_in(&error, "", console.sso_on()),
+        );
+    };
+    let act = Act {
+        action: "console_sign_in",
+        by: Some((&entry.name, &entry.team)),
+        key: None,
+        target: Value::Null,
+    };
+    if record(&console, &act, None, None).await.is_err() {
+        return page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            pages::sign_in("", NOT_RECORDED, console.sso_on()),
+        );
+    }
+    let Some(session) = console.open_session(Who::Key(entry.sha256)) else {
+        return page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            pages::sign_in("", NO_RANDOM, console.sso_on()),
+        );
+    };
+    let mut response = redirect("/console/audit");
+    set_cookie(
+        &mut response,
+        &session_cookie(&session, &headers, &uri, &tls),
+    );
+    response
+}
+
+// A session ID that could be guessed is worse than no session.
+const NO_RANDOM: &str = "The system gave no randomness for a session. Try again in a moment.";
+
+fn random_hex() -> Option<String> {
+    let mut random = [0u8; 32];
+    getrandom::fill(&mut random).ok()?;
+    Some(id::hex(&random))
+}
+
+fn session_cookie(session: &str, headers: &HeaderMap, uri: &Uri, tls: &Tls) -> String {
+    format!(
+        "{COOKIE}={session}; Path=/console; Max-Age={}; HttpOnly; SameSite=Strict{}",
+        SESSION.as_secs(),
+        if secure(headers, uri, tls) {
+            "; Secure"
+        } else {
+            ""
+        }
+    )
+}
+
+fn set_cookie(response: &mut Response, cookie: &str) {
+    if let Ok(value) = HeaderValue::from_str(cookie) {
+        response.headers_mut().append(header::SET_COOKIE, value);
+    }
+}
+
+impl Console {
+    /// Whether the sign-in page offers single sign-on.
+    fn sso_on(&self) -> bool {
+        matches!(self.sso_config(), Ok(Some(_)))
+    }
+
+    /// The identity provider's discovery and keys, from the cache while it is fresh.
+    async fn provider(&self, sso: &config::Sso) -> Result<Arc<sso::Provider>, sso::Refusal> {
+        let cached = self
+            .0
+            .provider
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(p) =
+            cached.filter(|p| p.issuer == sso.issuer && p.fetched.elapsed() < sso::CACHE)
+        {
+            return Ok(p);
+        }
+        let fresh = Arc::new(sso::discover(&self.0.client, sso).await?);
+        self.cache(&fresh);
+        Ok(fresh)
+    }
+
+    fn cache(&self, provider: &Arc<sso::Provider>) {
+        *self
+            .0
+            .provider
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(provider.clone());
+    }
+
+    /// Records a refused single sign-on and shows why on the sign-in page. The refusal stands whether or not it was
+    /// recorded. Anyone can make a sign-in fail, so past [`FLOOD`] in a minute from one client address the rest are
+    /// summed up in one record written when that minute closes, with the true count per refusal code.
+    async fn sso_refused(&self, email: Option<&str>, refusal: &sso::Refusal) -> Response {
+        let key = flood_key(client());
+        let seen = self.count_refusal(&key, refusal.code);
+        if seen <= FLOOD {
+            let act = Act {
+                action: "console_sign_in",
+                by: email.map(|e| (e, "")),
+                key: None,
+                target: json!({ "via": "sso", "reason": refusal.message }),
+            };
+            let _ = record(self, &act, Some(refusal.code), None).await;
+        } else if seen == FLOOD + 1 {
+            let console = self.clone();
+            tokio::spawn(CLIENT.scope(client(), async move {
+                let closes = console
+                    .refusals()
+                    .get(&key)
+                    .map(|r| r.since + Duration::from_secs(60));
+                if let Some(closes) = closes {
+                    tokio::time::sleep_until(closes).await;
+                }
+                let Some(flood) = console.refusals().remove(&key) else {
+                    return;
+                };
+                let act = Act {
+                    action: "console_sso_refusals",
+                    by: None,
+                    key: None,
+                    target: json!({ "via": "sso", "client": key, "refusals": flood.count, "codes": flood.codes, "within_seconds": 60, "reason": "many refused single sign-ons from one client address within a minute, likely a flood. Past the first refusals they are counted here, not recorded one by one; other addresses and sign-ins that finish are recorded as usual." }),
+                };
+                let _ = record(&console, &act, None, None).await;
+            }));
+        }
+        let mut response = page(
+            StatusCode::UNAUTHORIZED,
+            pages::sign_in("", &html::esc(&refusal.message), self.sso_on()),
+        );
+        set_cookie(
+            &mut response,
+            &format!("{SSO_COOKIE}=; Path=/console/sso; Max-Age=0; HttpOnly; SameSite=Lax"),
+        );
+        response
+    }
+}
+
+/// Sends the browser to the identity provider with a fresh state, nonce and PKCE verifier.
+async fn sso_start(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    uri: Uri,
+    tls: Tls,
+) -> Response {
+    let refused = |code, message: String| sso::Refusal { code, message };
+    let cli = match cli_start(&Form::of(&uri)) {
+        Ok(cli) => cli,
+        Err(message) => {
+            // Recorded and counted as any refused sign-in; the page is gantry login's, not the console's.
+            let _ = console
+                .sso_refused(None, &refused("cli_login", message.into()))
+                .await;
+            return page(StatusCode::UNAUTHORIZED, pages::cli_bad_link(message));
+        }
+    };
+    // Anyone can start a sign-in. Each start is not recorded, or a flood would fill the disk; a minute with many is,
+    // once.
+    if let Some(starts) = console.count_start() {
+        let act = Act {
+            action: "console_sso_starts",
+            by: None,
+            key: None,
+            target: json!({ "via": "sso", "starts": starts, "within_seconds": 60, "reason": "many single sign-on starts within a minute: a flood, or many people signing in at once. Starts are not recorded one by one; each finished or refused sign-in is." }),
+        };
+        let _ = record(&console, &act, None, None).await;
+    }
+    let sso = match console.sso_config() {
+        Ok(Some(sso)) => sso,
+        Ok(None) => {
+            let message = "Single sign-on is not set up. Sign in with an admin key, or add a console.sso section to the policy file.".to_string();
+            return console
+                .sso_refused(None, &refused("sso_config", message))
+                .await;
+        }
+        Err(errors) => {
+            let message = format!(
+                "Single sign-on is off because the policy file has problems: {errors} Run gantry check, fix them, and try again."
+            );
+            return console
+                .sso_refused(None, &refused("sso_config", message))
+                .await;
+        }
+    };
+    if cli.is_some() && sso.self_issue.is_none() {
+        let message = "gantry login is off: the policy file has no console.sso.self_issue section. Ask an admin to add one, or for a key.".to_string();
+        return console
+            .sso_refused(None, &refused("sso_self_issue", message))
+            .await;
+    }
+    if std::env::var(&sso.client_secret_env).map_or(true, |v| v.is_empty()) {
+        let message = format!(
+            "Single sign-on is unavailable: the client secret variable {} is not set where Gantry runs. Set it and restart Gantry.",
+            sso.client_secret_env
+        );
+        return console
+            .sso_refused(None, &refused("sso_secret", message))
+            .await;
+    }
+    let provider = match console.provider(&sso).await {
+        Ok(p) => p,
+        Err(refusal) => return console.sso_refused(None, &refusal).await,
+    };
+    let (Some(state), Some(seal)) = (random_hex(), console.0.seal.as_ref()) else {
+        return page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            pages::sign_in("", NO_RANDOM, true),
+        );
+    };
+    let (nonce, verifier) = derived(seal, &state);
+    let target = sso::authorize_url(&provider, &sso, &state, &nonce, &verifier);
+    let expires = unix_now() + SSO_PENDING.as_secs();
+    let sealed = format!("{state}.{expires}");
+    let cookie = format!("{sealed}.{}", mac(seal, &sealed));
+    let mut response = redirect(&target);
+    // Lax, not Strict: the browser comes back from the provider's site, and must bring this cookie with it.
+    set_cookie(
+        &mut response,
+        &format!(
+            "{SSO_COOKIE}={cookie}; Path=/console/sso; Max-Age={}; HttpOnly; SameSite=Lax{}",
+            SSO_PENDING.as_secs(),
+            if secure(&headers, &uri, &tls) {
+                "; Secure"
+            } else {
+                ""
+            }
+        ),
+    );
+    let secure = if secure(&headers, &uri, &tls) {
+        "; Secure"
+    } else {
+        ""
+    };
+    // A console sign-in clears what an abandoned `gantry login` left, so it never ends in a key for the CLI.
+    let cli_cookie = match cli {
+        Some(c) => format!(
+            "{CLI_COOKIE}={}.{}.{}.{}; Path=/console/sso; Max-Age={}; HttpOnly; SameSite=Lax{secure}",
+            c.port,
+            c.state,
+            c.challenge,
+            mac(seal, &cli_seal(&state, &c)),
+            SSO_PENDING.as_secs()
+        ),
+        None => {
+            format!("{CLI_COOKIE}=; Path=/console/sso; Max-Age=0; HttpOnly; SameSite=Lax{secure}")
+        }
+    };
+    set_cookie(&mut response, &cli_cookie);
+    response
+}
+
+/// What the CLI's sign-in cookie is sealed over: the sign-in's own state too, so it fits that sign-in only.
+fn cli_seal(state: &str, c: &CliStart) -> String {
+    format!("cli:{state}:{}:{}:{}", c.port, c.state, c.challenge)
+}
+
+fn url_safe(text: &str) -> bool {
+    text.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// The CLI's parameters of a sign-in `gantry login` started, if it did.
+fn cli_start(query: &Form) -> Result<Option<CliStart>, &'static str> {
+    let (port, state, challenge) = (
+        query.get("cli_port"),
+        query.get("cli_state"),
+        query.get("cli_challenge"),
+    );
+    if port.is_empty() && state.is_empty() && challenge.is_empty() {
+        return Ok(None);
+    }
+    let port = port.parse::<u16>().ok().filter(|p| *p > 0);
+    match port {
+        Some(port)
+            if (16..=128).contains(&state.len())
+                && url_safe(state)
+                && challenge.len() == 43
+                && url_safe(challenge) =>
+        {
+            Ok(Some(CliStart {
+                port,
+                state: state.to_string(),
+                challenge: challenge.to_string(),
+            }))
+        }
+        _ => Err(
+            "This sign-in link from gantry login is incomplete or was changed. Run gantry login again and use the link it opens.",
+        ),
+    }
+}
+
+/// The CLI parameters of the sign-in coming back with `state`, if `gantry login` started it on this browser.
+fn cli_cookie(console: &Console, headers: &HeaderMap, state: &str) -> Option<CliStart> {
+    let cookie = cookie_value(headers, CLI_COOKIE)?;
+    let mut parts = cookie.splitn(4, '.');
+    let c = CliStart {
+        port: parts.next()?.parse().ok()?,
+        state: parts.next()?.to_string(),
+        challenge: parts.next()?.to_string(),
+    };
+    let sig = sso::b64url_decode(parts.next()?)?;
+    ring::hmac::verify(
+        console.0.seal.as_ref()?,
+        cli_seal(state, &c).as_bytes(),
+        &sig,
+    )
+    .ok()?;
+    Some(c)
+}
+
+/// Where the identity provider sends the browser back: checks everything, then opens a session.
+async fn sso_callback(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    uri: Uri,
+    tls: Tls,
+) -> Response {
+    let query = Form::of(&uri);
+    let finished = sso_finish(&console, &headers, &query).await;
+    if let Some(cli) = cli_cookie(&console, &headers, query.get("state")) {
+        return cli_finish(&console, &cli, finished).await;
+    }
+    match finished.and_then(|(claims, sso)| sso::admit(&claims, &sso)) {
+        Ok((email, read_only)) => {
+            let act = Act {
+                action: "console_sign_in",
+                by: Some((&email, "")),
+                key: None,
+                target: json!({ "via": "sso", "role": if read_only { "read_only" } else { "admin" } }),
+            };
+            if record(&console, &act, None, None).await.is_err() {
+                return page(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    pages::sign_in("", NOT_RECORDED, true),
+                );
+            }
+            let Some(session) = console.open_session(Who::Sso { email, read_only }) else {
+                return page(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    pages::sign_in("", NO_RANDOM, true),
+                );
+            };
+            // A page, not a redirect: the browser arrived from the provider's site, and would not send a
+            // SameSite=Strict cookie on a redirect that follows. The refresh starts from this site, so it does.
+            let mut response = page(StatusCode::OK, pages::signed_in_sso());
+            set_cookie(
+                &mut response,
+                &session_cookie(&session, &headers, &uri, &tls),
+            );
+            set_cookie(
+                &mut response,
+                &format!("{SSO_COOKIE}=; Path=/console/sso; Max-Age=0; HttpOnly; SameSite=Lax"),
+            );
+            response
+        }
+        Err((email, refusal)) => console.sso_refused(email.as_deref(), &refusal).await,
+    }
+}
+
+type SsoResult = Result<(Value, config::Sso), (Option<String>, sso::Refusal)>;
+
+/// Ends a sign-in `gantry login` started: the browser goes back to the CLI on 127.0.0.1 with a one-use code, or with
+/// why it was refused. The key itself is only ever handed to the CLI, in exchange for the code and its PKCE verifier.
+async fn cli_finish(console: &Console, cli: &CliStart, finished: SsoResult) -> Response {
+    let back = format!("http://127.0.0.1:{}/callback?state={}", cli.port, cli.state);
+    let to = match finished.and_then(|(claims, sso)| sso::admit_self(&claims, &sso)) {
+        Ok((email, team, days)) => {
+            let Some(code) = random_hex() else {
+                return page(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    pages::sign_in("", NO_RANDOM, true),
+                );
+            };
+            let mut codes = console.codes();
+            if codes.len() >= MAX_CODES {
+                return page(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    pages::sign_in(
+                        "",
+                        "Too many gantry login sign-ins are waiting to finish. Run gantry login again in a few minutes.",
+                        true,
+                    ),
+                );
+            }
+            codes.insert(
+                code.clone(),
+                Pending {
+                    email,
+                    team,
+                    days,
+                    challenge: cli.challenge.clone(),
+                    expires: Instant::now() + CLI_CODE,
+                },
+            );
+            format!("{back}&code={code}")
+        }
+        Err((email, refusal)) => {
+            // Recorded, and counted against floods, as any refused sign-in is. The page it renders is not shown:
+            // the CLI shows the reason in the terminal.
+            let _ = console.sso_refused(email.as_deref(), &refusal).await;
+            format!(
+                "{back}&error={}&message={}",
+                refusal.code,
+                html::enc(&refusal.message)
+            )
+        }
+    };
+    let mut response = redirect(&to);
+    for name in [SSO_COOKIE, CLI_COOKIE] {
+        set_cookie(
+            &mut response,
+            &format!("{name}=; Path=/console/sso; Max-Age=0; HttpOnly; SameSite=Lax"),
+        );
+    }
+    response
+}
+
+impl Console {
+    /// Codes waiting for `gantry login`, without the expired ones.
+    fn codes(&self) -> std::sync::MutexGuard<'_, HashMap<String, Pending>> {
+        let mut codes = self
+            .0
+            .codes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = Instant::now();
+        codes.retain(|_, p| p.expires > now);
+        codes
+    }
+}
+
+fn json_answer(status: StatusCode, body: &Value) -> Response {
+    guarded(
+        (
+            status,
+            [(header::CONTENT_TYPE, "application/json")],
+            body.to_string(),
+        )
+            .into_response(),
+    )
+}
+
+fn cli_refused(status: StatusCode, code: &str, message: &str) -> Response {
+    json_answer(
+        status,
+        &json!({ "error": { "code": code, "message": format!("Refused ({code}): {message}") } }),
+    )
+}
+
+/// Trades a `gantry login` code and its PKCE verifier for a personal key, issued now and recorded first. The code
+/// works once, for two minutes, whatever the outcome.
+async fn cli_token(State(console): State<Console>, body: String) -> Response {
+    let form = Form::parse(&body);
+    let pending = console.codes().remove(form.get("code"));
+    let Some(pending) = pending else {
+        return cli_refused(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "this sign-in code is unknown, used or older than two minutes. Run gantry login again.",
+        );
+    };
+    let digest = ring::digest::digest(&ring::digest::SHA256, form.get("verifier").as_bytes());
+    if sso::b64url(digest.as_ref()) != pending.challenge {
+        return cli_refused(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "the verifier does not match the sign-in this code came from. Run gantry login again.",
+        );
+    }
+    // QA14-13: a key is named by the email, and a name the keys file cannot hold (such as one with +) is refused
+    // here, before the issue is recorded, rather than after.
+    if !gantry_core::config::valid_name(&pending.email) {
+        return cli_refused(
+            StatusCode::BAD_REQUEST,
+            "unusable_email",
+            &format!(
+                "a key is named by your email, and \"{}\" has characters a key name cannot hold (letters, digits, dots, dashes, underscores and @ only). Ask a Gantry admin for a key with gantry key new instead.",
+                pending.email
+            ),
+        );
+    }
+    let key = match id::new_key() {
+        Ok(key) => key,
+        Err(err) => {
+            return cli_refused(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no_randomness",
+                &format!("{err}. Try again."),
+            );
+        }
+    };
+    let later =
+        std::time::SystemTime::now() + Duration::from_secs(u64::from(pending.days) * 86_400);
+    let expires = format!("{}Z", &audit::rfc3339(later)[..19]);
+    let target = json!({
+        "via": "gantry login",
+        "name": pending.email,
+        "team": pending.team,
+        "sha256_prefix": &id::sha256_hex(key.as_bytes())[..8],
+        "expires": expires,
+    });
+    let act = Act {
+        action: "self_issue_key",
+        by: Some((&pending.email, &pending.team)),
+        key: None,
+        target,
+    };
+    if record(&console, &act, None, None).await.is_err() {
+        return cli_refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "audit_unavailable",
+            NOT_RECORDED,
+        );
+    }
+    let (keys, name, team, k) = (
+        console.config().keys.clone(),
+        pending.email.clone(),
+        pending.team.clone(),
+        key.clone(),
+    );
+    let attributes = keyfile::Attributes {
+        expires: Some(expires.clone()),
+        ..keyfile::Attributes::default()
+    };
+    let added = tokio::task::spawn_blocking(move || {
+        keyfile::add_with(&name, &team, &k, &attributes, &keys)
+    })
+    .await
+    .unwrap_or_else(|_| Err("the change stopped before it finished".into()));
+    if let Err(err) = added {
+        // The record above says the key was issued; this one says it was not.
+        let _ = record(&console, &act, Some("keys_file"), Some(&err)).await;
+        return cli_refused(StatusCode::CONFLICT, "keys_file", &err);
+    }
+    json_answer(
+        StatusCode::OK,
+        &json!({ "key": key, "name": pending.email, "team": pending.team, "expires": expires }),
+    )
+}
+
+/// Counts one event in the current minute and returns the count so far.
+fn per_minute(minute: &Mutex<(Instant, u64)>) -> u64 {
+    let mut minute = minute
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = Instant::now();
+    if now.duration_since(minute.0) >= Duration::from_secs(60) {
+        *minute = (now, 0);
+    }
+    minute.1 += 1;
+    minute.1
+}
+
+/// Why a state cookie is refused.
+#[derive(Debug, PartialEq)]
+enum BadState {
+    /// Not sealed by this process, or sealed for another state.
+    Foreign,
+    Expired,
+}
+
+/// Checks a sign-in's state cookie (`state.expires.mac`) against the state the provider sent back, at `now` (Unix
+/// seconds). Returns the seconds it has left.
+fn state_left(
+    seal: &ring::hmac::Key,
+    cookie: &str,
+    state: &str,
+    now: u64,
+) -> Result<u64, BadState> {
+    let expires = (|| {
+        let (sealed, sig) = cookie.rsplit_once('.')?;
+        let (cookie_state, expires) = sealed.split_once('.')?;
+        let sig = sso::b64url_decode(sig)?;
+        ring::hmac::verify(seal, sealed.as_bytes(), &sig).ok()?;
+        (!state.is_empty() && cookie_state == state).then_some(())?;
+        expires.parse::<u64>().ok()
+    })()
+    .ok_or(BadState::Foreign)?;
+    match expires.saturating_sub(now) {
+        0 => Err(BadState::Expired),
+        left => Ok(left),
+    }
+}
+
+/// The base64url HMAC of `text` under the process's seal.
+fn mac(seal: &ring::hmac::Key, text: &str) -> String {
+    sso::b64url(ring::hmac::sign(seal, text.as_bytes()).as_ref())
+}
+
+/// The nonce and the PKCE verifier of a sign-in, from its state. Only this process can make them, and the verifier
+/// (43 characters, as PKCE asks) never leaves it but to the token endpoint.
+fn derived(seal: &ring::hmac::Key, state: &str) -> (String, String) {
+    (
+        mac(seal, &format!("nonce:{state}")),
+        mac(seal, &format!("verifier:{state}")),
+    )
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+async fn sso_finish(console: &Console, headers: &HeaderMap, query: &Form) -> SsoResult {
+    let no = |code, message: &str| {
+        (
+            None,
+            sso::Refusal {
+                code,
+                message: message.to_string(),
+            },
+        )
+    };
+    let state = query.get("state");
+    // The state must be the one this browser was given, under this process's seal: a sign-in started elsewhere,
+    // or a cookie written by anyone else, is never finished here.
+    let cookie = cookie_value(headers, SSO_COOKIE).unwrap_or_default();
+    let checked = console
+        .0
+        .seal
+        .as_ref()
+        .map_or(Err(BadState::Foreign), |seal| {
+            state_left(seal, &cookie, state, unix_now())
+        });
+    const SPENT: &str = "This sign-in has expired or was already used. Start again from the sign-in page and finish within 10 minutes.";
+    let left = match checked {
+        Ok(left) => left,
+        Err(BadState::Expired) => return Err(no("sso_state", SPENT)),
+        Err(BadState::Foreign) => {
+            return Err(no(
+                "sso_state",
+                "The sign-in came back with a state this browser did not start, so it was refused. Start again from the sign-in page; if it repeats, allow cookies for this address.",
+            ));
+        }
+    };
+    if console.used().contains_key(state) {
+        return Err(no("sso_state", SPENT));
+    }
+    let Some(seal) = console.0.seal.as_ref() else {
+        return Err(no("sso_state", NO_RANDOM));
+    };
+    let (nonce, verifier) = derived(seal, state);
+    if !query.get("error").is_empty() {
+        let message = format!(
+            "The identity provider refused the sign-in: {} {}. Fix it at the provider, or ask its admin, then start again.",
+            query.get("error"),
+            query.get("error_description")
+        );
+        return Err((
+            None,
+            sso::Refusal {
+                code: "sso_provider",
+                message,
+            },
+        ));
+    }
+    let code = query.get("code");
+    if code.is_empty() {
+        return Err(no(
+            "sso_provider",
+            "The identity provider sent the browser back without a sign-in code. Start again from the sign-in page.",
+        ));
+    }
+    let sso = match console.sso_config() {
+        Ok(Some(sso)) => sso,
+        _ => {
+            return Err(no(
+                "sso_config",
+                "Single sign-on was turned off or the policy file has problems. Run gantry check and fix them, then start again.",
+            ));
+        }
+    };
+    let secret = std::env::var(&sso.client_secret_env).unwrap_or_default();
+    if secret.is_empty() {
+        let message = format!(
+            "The client secret variable {} is not set where Gantry runs. Set it and restart Gantry.",
+            sso.client_secret_env
+        );
+        return Err((
+            None,
+            sso::Refusal {
+                code: "sso_secret",
+                message,
+            },
+        ));
+    }
+    let provider = console.provider(&sso).await.map_err(|r| (None, r))?;
+    let client = &console.0.client;
+    let token = sso::exchange(client, &provider, &sso, &secret, code, &verifier)
+        .await
+        .map_err(|r| (None, r))?;
+    let claims = match sso::verify(&token, &provider, &sso, &nonce) {
+        // The provider may have rotated its keys since they were cached: fetch them once more.
+        Err(r) if r.code == "sso_unknown_key" => {
+            let fresh = Arc::new(sso::discover(client, &sso).await.map_err(|r| (None, r))?);
+            console.cache(&fresh);
+            sso::verify(&token, &fresh, &sso, &nonce)
+        }
+        other => other,
+    }
+    .map_err(|r| (None, r))?;
+    // Kept only now that the token verified, so only real sign-ins fill the list. Two callbacks of one state that
+    // race past the check above meet here, and the second is refused.
+    if !console.remember(state, left) {
+        return Err(no("sso_state", SPENT));
+    }
+    Ok((claims, sso))
+}
+
+async fn sign_out(State(console): State<Console>, headers: HeaderMap) -> Response {
+    if let Some(admin) = console.admin(&headers) {
+        let act = Act {
+            action: "console_sign_out",
+            by: Some((&admin.name, &admin.team)),
+            key: None,
+            target: Value::Null,
+        };
+        // Signing out goes ahead even if it cannot be recorded: ending a session never needs a record to be safe.
+        let _ = record(&console, &act, None, None).await;
+    }
+    if let Some(id) = cookie_value(&headers, COOKIE) {
+        console.sessions().remove(&id);
+    }
+    let mut response = redirect("/console/sign-in");
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_static(
+            "gantry_console=; Path=/console; Max-Age=0; HttpOnly; SameSite=Strict",
+        ),
+    );
+    response
+}
+
+/// Reads a file the console shows. `None` when it does not exist yet.
+fn read(path: &std::path::Path) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("{} cannot be read: {err}.", path.display())),
+    }
+}
+
+async fn audit_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
+    let Some(admin) = console.admin(&headers) else {
+        return redirect("/console/sign-in");
+    };
+    let config = console.config();
+    // ponytail: the whole audit log is read and parsed on every request. Fine for today's logs; an index or a tail read when they reach many megabytes.
+    let log = read(&config.audit);
+    let policy = read(&config.policy).ok().flatten();
+    let loaded = config::load(&config.policy, Some(&config.keys)).ok();
+    let body = pages::audit(&pages::AuditView {
+        admin: &admin.label(),
+        query: &Form::of(&uri),
+        log: &log,
+        policy: policy.as_deref(),
+        loaded: loaded.as_ref(),
+        verified: console.verified(),
+        read_only: admin.read_only,
+        kills: &gantry_core::kill::read(&gantry_core::kill::path_beside(&config.keys)),
+    });
+    page(StatusCode::OK, body)
+}
+
+async fn verify(State(console): State<Console>, headers: HeaderMap) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    if console.admin(&headers).is_none() {
+        return redirect("/console/sign-in");
+    }
+    let path = console.config().audit.clone();
+    // The same walk as `gantry audit verify`. It reads the whole file, so it runs off the request threads.
+    let result = tokio::task::spawn_blocking(move || {
+        if path.exists() {
+            audit::verify(&path)
+        } else {
+            Ok((0, String::new()))
+        }
+    })
+    .await
+    .unwrap_or_else(|err| Err(format!("the check stopped before it finished: {err}.")));
+    *console
+        .0
+        .verified
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((Instant::now(), result));
+    redirect("/console/audit")
+}
+
+async fn people_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
+    let Some(admin) = console.admin(&headers) else {
+        return redirect("/console/sign-in");
+    };
+    let query = Form::of(&uri);
+    // A read-only person gets no dialog for an action they cannot take, even from a typed address.
+    let dialog = if admin.read_only {
+        pages::Dialog::None
+    } else {
+        pages::Dialog::from_query(&query)
+    };
+    let body = people_body(&console, &admin, &query, dialog);
+    page(StatusCode::OK, body)
+}
+
+fn people_body(console: &Console, admin: &Admin, query: &Form, dialog: pages::Dialog) -> String {
+    let config = console.config();
+    pages::people(&pages::PeopleView {
+        admin: &admin.label(),
+        query,
+        keys_path: &config.keys,
+        keys: read(&config.keys),
+        log: read(&config.audit).ok().flatten(),
+        dialog,
+        read_only: admin.read_only,
+        // A list that cannot be read shows no one stopped here; the audit log's banner says it cannot be read.
+        kills: gantry_core::kill::read(&gantry_core::kill::path_beside(&config.keys))
+            .unwrap_or_default(),
+    })
+}
+
+async fn issue(State(console): State<Console>, headers: HeaderMap, body: String) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    let Some(admin) = console.admin(&headers) else {
+        return redirect("/console/sign-in");
+    };
+    let form = Form::parse(&body);
+    let (name, team) = (
+        form.get("name").trim().to_string(),
+        form.get("team").trim().to_string(),
+    );
+    let admin_key = form.get("admin") == "1";
+    let (expires, budget, per) = (
+        form.get("expires").trim().to_string(),
+        form.get("budget").trim().to_string(),
+        form.get("per").to_string(),
+    );
+    let attributes = keyfile::Attributes {
+        admin: admin_key,
+        expires: (!expires.is_empty()).then(|| expires.clone()),
+        // Text that is not a number becomes NaN, which the keys file refuses with the budget's own message.
+        budget: (!budget.is_empty()).then(|| gantry_core::policy::Budget {
+            usd: budget.parse().unwrap_or(f64::NAN),
+            per: if per == "day" {
+                gantry_core::policy::Period::Day
+            } else {
+                gantry_core::policy::Period::Month
+            },
+        }),
+        ..keyfile::Attributes::default()
+    };
+    if admin.read_only {
+        read_only(&console, &admin, "issue_key").await;
+        return page(
+            StatusCode::BAD_REQUEST,
+            people_body(&console, &admin, &Form(Vec::new()), pages::Dialog::None),
+        );
+    }
+    let made = issued(&console, &admin, &name, &team, attributes).await;
+    let (status, dialog) = match made {
+        Ok((key, rotated)) => (
+            StatusCode::OK,
+            pages::Dialog::Issued {
+                name,
+                team,
+                key,
+                rotated,
+            },
+        ),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            pages::Dialog::Issue {
+                name,
+                team,
+                expires,
+                budget,
+                per,
+                error,
+            },
+        ),
+    };
+    page(
+        status,
+        people_body(&console, &admin, &Form(Vec::new()), dialog),
+    )
+}
+
+/// Makes a key and adds it to the keys file, recorded first: the record names the key by its hash prefix, so the
+/// key is made before the record and shown only after both.
+async fn issued(
+    console: &Console,
+    admin: &Admin,
+    name: &str,
+    team: &str,
+    attributes: keyfile::Attributes,
+) -> Result<(String, bool), String> {
+    let admin_key = attributes.admin;
+    let mut act = Act {
+        action: "issue_key",
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target: json!({ "name": name, "team": team, "admin": admin_key }),
+    };
+    if !config::valid_name(name) || !config::valid_name(team) {
+        let _ = record(console, &act, Some("invalid_request"), None).await;
+        return Err("A name and a team use letters, digits, dots, dashes and underscores only, for example maya.cohen and payments.".into());
+    }
+    let key = id::new_key()?;
+    act.target = json!({ "name": name, "team": team, "sha256_prefix": &id::sha256_hex(key.as_bytes())[..8], "admin": admin_key });
+    record(console, &act, None, None)
+        .await
+        .map_err(|()| NOT_RECORDED.to_string())?;
+    let (n, t, k, path) = (
+        name.to_string(),
+        team.to_string(),
+        key.clone(),
+        console.config().keys.clone(),
+    );
+    let added =
+        tokio::task::spawn_blocking(move || keyfile::add_with(&n, &t, &k, &attributes, &path))
+            .await
+            .unwrap_or_else(|err| Err(format!("The key was not made: {err}. Try again.")));
+    match added {
+        Ok(rotated) => Ok((key, rotated)),
+        Err(error) => {
+            // The record above says it was allowed; this one says it did not happen.
+            let _ = record(console, &act, Some("keys_file"), Some(&error)).await;
+            Err(error)
+        }
+    }
+}
+
+async fn revoke(State(console): State<Console>, headers: HeaderMap, body: String) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    let Some(admin) = console.admin(&headers) else {
+        return redirect("/console/sign-in");
+    };
+    let form = Form::parse(&body);
+    let sha256 = form.get("sha256").to_string();
+    let typed = form.get("confirm").trim().to_string();
+    let keys = console.config().keys.clone();
+    let entry = read(&keys)
+        .ok()
+        .flatten()
+        .and_then(|text| config::key_entries(&keys, &text).ok())
+        .and_then(|entries| entries.into_iter().find(|e| e.sha256 == sha256));
+    let Some(entry) = entry else {
+        return redirect("/console/people");
+    };
+    if admin.read_only {
+        read_only(&console, &admin, "revoke_key").await;
+        return page(
+            StatusCode::BAD_REQUEST,
+            people_body(&console, &admin, &Form(Vec::new()), pages::Dialog::None),
+        );
+    }
+    let error = if typed == entry.name {
+        match revoked(&console, &admin, &entry).await {
+            Ok(()) => {
+                return redirect(&format!(
+                    "/console/people?revoked={}&hash={}",
+                    html::enc(&entry.name),
+                    &entry.sha256[..8]
+                ));
+            }
+            Err(error) => error,
+        }
+    } else {
+        format!("Type {} exactly, to confirm which key goes.", entry.name)
+    };
+    let dialog = pages::Dialog::Revoke { sha256, error };
+    page(
+        StatusCode::BAD_REQUEST,
+        people_body(&console, &admin, &Form(Vec::new()), dialog),
+    )
+}
+
+/// Records a change refused to a read-only person. The page says why in its banner.
+async fn read_only(console: &Console, admin: &Admin, action: &'static str) {
+    let act = Act {
+        action,
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target: json!({ "reason": "signed in read only" }),
+    };
+    let _ = record(console, &act, Some("read_only"), None).await;
+}
+
+/// Removes a key's entry, recorded first. The last admin key is never removed: nobody could sign in again.
+async fn revoked(console: &Console, admin: &Admin, entry: &config::KeyEntry) -> Result<(), String> {
+    let act = Act {
+        action: "revoke_key",
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target: json!({ "name": entry.name, "team": entry.team, "sha256_prefix": &entry.sha256[..8], "admin": entry.admin }),
+    };
+    let keys = console.config().keys.clone();
+    // ponytail: checked here and not inside the file change, so two admins revoking the last two admin keys at the
+    // same moment could both pass. The keys file can always be edited by hand to add one back.
+    let admins = read(&keys)
+        .ok()
+        .flatten()
+        .and_then(|text| config::key_entries(&keys, &text).ok())
+        .map_or(0, |entries| entries.iter().filter(|e| e.admin).count());
+    if entry.admin && admins <= 1 {
+        let _ = record(console, &act, Some("last_admin"), None).await;
+        return Err("This is the only admin key. Mark another key with admin: true in the keys file first, so someone can still sign in.".into());
+    }
+    record(console, &act, None, None)
+        .await
+        .map_err(|()| NOT_RECORDED.to_string())?;
+    let sha256 = entry.sha256.clone();
+    let done = tokio::task::spawn_blocking(move || keyfile::revoke(&keys, &sha256))
+        .await
+        .unwrap_or_else(|err| Err(format!("Nothing was changed: {err}. Try again.")));
+    let error = match done {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => {
+            "The keys file no longer has this key: someone removed it already. Nothing was changed."
+                .to_string()
+        }
+        Err(error) => error,
+    };
+    let _ = record(console, &act, Some("keys_file"), Some(&error)).await;
+    Err(error)
+}
+
+async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
+    let Some(admin) = console.admin(&headers) else {
+        return redirect("/console/sign-in");
+    };
+    let config = console.config();
+    let text = read(&config.policy);
+    let loaded = config::load(&config.policy, Some(&config.keys));
+    let body = pages::policy(
+        &admin.label(),
+        &Form::of(&uri),
+        &config.policy,
+        &text,
+        &loaded,
+    );
+    page(StatusCode::OK, body)
+}
+
+async fn spend_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
+    let Some(admin) = console.admin(&headers) else {
+        return redirect("/console/sign-in");
+    };
+    let config = console.config();
+    // ponytail: the whole audit log is read on every request, as the audit page does.
+    let log = read(&config.audit);
+    let loaded = config::load(&config.policy, Some(&config.keys));
+    page(
+        StatusCode::OK,
+        pages::spend(&pages::SpendView {
+            admin: &admin.label(),
+            query: &Form::of(&uri),
+            log: &log,
+            loaded: &loaded,
+        }),
+    )
+}
+
+/// Static files are served without a session: the sign-in page needs them.
+async fn asset(Path(file): Path<String>) -> Response {
+    let (kind, body): (&str, &'static str) = match file.as_str() {
+        "tokens.css" => (
+            "text/css; charset=utf-8",
+            include_str!("../assets/tokens.css"),
+        ),
+        "bundle.css" => (
+            "text/css; charset=utf-8",
+            include_str!("../assets/bundle.css"),
+        ),
+        "console.css" => (
+            "text/css; charset=utf-8",
+            include_str!("../assets/console.css"),
+        ),
+        "console.js" => (
+            "text/javascript; charset=utf-8",
+            include_str!("../assets/console.js"),
+        ),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let mut response = ([(header::CONTENT_TYPE, kind)], body).into_response();
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+async fn font(Path(file): Path<String>) -> Response {
+    let body: &'static [u8] = match file.as_str() {
+        "Syne-Variable.woff2" => include_bytes!("../assets/fonts/Syne-Variable.woff2"),
+        "InstrumentSans-Variable.woff2" => {
+            include_bytes!("../assets/fonts/InstrumentSans-Variable.woff2")
+        }
+        "FragmentMono-Regular.woff2" => {
+            include_bytes!("../assets/fonts/FragmentMono-Regular.woff2")
+        }
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    (
+        [
+            (header::CONTENT_TYPE, "font/woff2"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        Body::from(body),
+    )
+        .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_sealed_state_cookie_expires_and_only_fits_its_own_state() {
+        // QA11-3: the expiry is checked on a cookie whose seal is valid, not only on one whose seal is broken.
+        let seal = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, b"test seal");
+        let cookie = |state: &str, expires: u64| {
+            let sealed = format!("{state}.{expires}");
+            format!("{sealed}.{}", mac(&seal, &sealed))
+        };
+        let now = 1_800_000_000;
+        assert_eq!(
+            state_left(&seal, &cookie("s1", now + 600), "s1", now),
+            Ok(600)
+        );
+        assert_eq!(
+            state_left(&seal, &cookie("s1", now - 1), "s1", now),
+            Err(BadState::Expired)
+        );
+        assert_eq!(
+            state_left(&seal, &cookie("s1", now), "s1", now),
+            Err(BadState::Expired)
+        );
+        assert_eq!(
+            state_left(&seal, &cookie("s1", now + 600), "s2", now),
+            Err(BadState::Foreign)
+        );
+        let other = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, b"another process");
+        assert_eq!(
+            state_left(&other, &cookie("s1", now + 600), "s1", now),
+            Err(BadState::Foreign)
+        );
+        assert_eq!(
+            state_left(&seal, &cookie("", now + 600), "", now),
+            Err(BadState::Foreign)
+        );
+    }
+}

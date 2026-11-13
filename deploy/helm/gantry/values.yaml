@@ -1,0 +1,87 @@
+# Gantry runs as ONE replica: the audit log is a single hash chain in one file on one volume, and budgets, rate
+# limits and the cache live in that one process. Two replicas would write two chains and count budgets twice.
+# ponytail: single node. Raise this only after audit and budgets are shared across nodes (not built).
+replicaCount: 1
+
+image:
+  repository: gantry
+  tag: local
+  pullPolicy: IfNotPresent
+
+# The policy file, mounted read-only at /etc/gantry/policy/gantry.policy.yaml. `helm upgrade` with a new policy does
+# not restart the pod: the kubelet updates the mounted file (within about a minute) and Gantry checks it and uses it
+# within 2 seconds, or keeps the old one and records config_rejected if it does not pass.
+# The audit path must be on the volume below: everything else in the container is read-only.
+policy: |
+  version: 1
+  providers:
+    - name: openai
+      kind: openai
+      url: https://api.openai.com/v1
+      key_env: OPENAI_PROVIDER_KEY
+      models: [gpt-4o-mini]
+  rules:
+    - name: everyone
+      principals: { any: true }
+      models: [gpt-4o-mini]
+  audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+
+# Secrets whose keys become environment variables, one per provider `key_env`. Make them yourself, for example:
+#   kubectl create secret generic gantry-provider-keys --from-literal=OPENAI_PROVIDER_KEY=sk-...
+# Gantry refuses to start while a key_env variable is unset or empty.
+providerSecrets:
+  - gantry-provider-keys
+
+# Holds the audit log (/var/lib/gantry/gantry-audit.jsonl) and the keys file (/var/lib/gantry/gantry.keys.yaml),
+# which the console and the admin API write to when they issue and revoke keys.
+persistence:
+  size: 10Gi
+  storageClassName: ""
+  # Use a claim you made yourself instead of one made by the chart.
+  existingClaim: ""
+
+# Gantry terminates TLS itself with a kubernetes.io/tls Secret (tls.crt, tls.key). Empty: plain HTTP, for an
+# Ingress or service mesh that ends TLS in front.
+tls:
+  secretName: ""
+
+# A small image with a shell, used once per start to create an empty keys file on a new volume.
+keysInit:
+  image: busybox:1.36.1
+
+service:
+  type: ClusterIP
+  port: 8080
+
+metrics:
+  # Serves GET /metrics on a port of its own. It takes no key and shows team, model and spend: keep it on the
+  # cluster network, never on the Ingress.
+  enabled: false
+  port: 9464
+  serviceMonitor:
+    # Needs the Prometheus Operator's ServiceMonitor CRD in the cluster.
+    enabled: false
+    interval: 30s
+
+ingress:
+  enabled: false
+  className: ""
+  host: gantry.example.com
+  # For ingress-nginx: stream answers instead of buffering them, and allow Gantry's 32 MiB body limit.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-body-size: 32m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+  tlsSecretName: ""
+
+# The full 256 MiB body budget fits in 384 MiB (docs/operations.md, "Memory budget").
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    memory: 384Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

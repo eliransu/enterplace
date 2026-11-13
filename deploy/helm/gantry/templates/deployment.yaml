@@ -1,0 +1,144 @@
+{{- if ne (int .Values.replicaCount) 1 }}
+{{- fail "replicaCount must be 1: each replica would write its own audit chain and count budgets apart. See docs/kubernetes.md." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gantry.fullname" . }}
+  labels:
+    {{- include "gantry.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # The volume holding the audit log is ReadWriteOnce: the old pod lets go of it before the new one starts.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "gantry.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gantry.selector" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # Requests in flight get 30 seconds after SIGTERM (docs/operations.md); this leaves room for the final sync.
+      terminationGracePeriodSeconds: 40
+      initContainers:
+        # `serve --keys` needs the keys file to exist. On a new volume this writes an empty list, which
+        # `gantry key new` then adds the first admin key to. An existing file is never touched.
+        - name: keys-file
+          image: {{ .Values.keysInit.image }}
+          command: ["sh", "-c", "[ -e /var/lib/gantry/gantry.keys.yaml ] || { umask 077; printf 'keys: []\\n' > /var/lib/gantry/gantry.keys.yaml; }"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 8Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/gantry
+      containers:
+        - name: gantry
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - /etc/gantry/policy/gantry.policy.yaml
+            - --keys
+            - /var/lib/gantry/gantry.keys.yaml
+            - --listen
+            - 0.0.0.0:8080
+            {{- if .Values.metrics.enabled }}
+            - --metrics
+            - 0.0.0.0:{{ .Values.metrics.port }}
+            {{- end }}
+            {{- if .Values.tls.secretName }}
+            - --tls-cert
+            - /etc/gantry/tls/tls.crt
+            - --tls-key
+            - /etc/gantry/tls/tls.key
+            {{- end }}
+          {{- with .Values.providerSecrets }}
+          envFrom:
+            {{- range . }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+          # /healthz is 503 when the audit log cannot be written: every request is refused until a restart.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: {{ include "gantry.scheme" . }}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: {{ include "gantry.scheme" . }}
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # A folder, not a subPath: a subPath mount never sees ConfigMap updates, so the policy could not reload.
+            - name: policy
+              mountPath: /etc/gantry/policy
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/gantry
+            {{- if .Values.tls.secretName }}
+            - name: tls
+              mountPath: /etc/gantry/tls
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: policy
+          configMap:
+            name: {{ include "gantry.fullname" . }}-policy
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "gantry.fullname" .)) }}
+        {{- if .Values.tls.secretName }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

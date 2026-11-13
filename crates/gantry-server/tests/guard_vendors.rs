@@ -1,0 +1,436 @@
+//! Built-in guardrail vendors through the gateway: each one asked in its own API, with its credential from the
+//! environment, its answer turned into block, mask or allow, and the record naming the vendor and the kind only.
+//! One mock on a port of 127.0.0.1 the system picks speaks every vendor's API. The credential is the value of
+//! CARGO_MANIFEST_DIR, which cargo sets, because setting a variable needs `unsafe`.
+
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+
+use axum::{
+    Router,
+    body::{Body, Bytes},
+    http::{HeaderMap, Request, StatusCode, Uri, header},
+    routing::post,
+};
+use gantry_core::id::sha256_hex;
+use gantry_server::Governed;
+use http_body_util::BodyExt;
+use serde_json::{Value, json};
+use tower::ServiceExt;
+
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+type Error = Box<dyn std::error::Error>;
+
+const MAYA: &str = "gantry_maya_0123456789abcdef0123456789";
+const KEY_ENV: &str = "CARGO_MANIFEST_DIR";
+/// The word that makes every mock vendor find something.
+const BAD: &str = "attack";
+
+async fn provider() -> Result<u16, Error> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(|body: Bytes| async move { body }),
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok(port)
+}
+
+type Seen = Arc<Mutex<Vec<(String, HeaderMap, Value)>>>;
+
+/// What each vendor answers, in its own format, for a request body. `None` is a 401 for a missing credential.
+fn vendor_answer(path: &str, headers: &HeaderMap, body: &Value, key: &str) -> Option<Value> {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+    };
+    let bearer = header("authorization") == format!("Bearer {key}");
+    let bad = body.to_string().contains(BAD);
+    match path {
+        "/v1/moderations" if bearer => {
+            let results: Vec<Value> = body["input"]
+                .as_array()?
+                .iter()
+                .map(|t| {
+                    let hit = t.as_str().unwrap_or("").contains(BAD);
+                    json!({"flagged": hit, "categories": {"violence": hit, "hate": false}})
+                })
+                .collect();
+            Some(json!({"id": "modr-1", "model": "omni-moderation-latest", "results": results}))
+        }
+        "/v2/guard" if bearer => Some(json!({
+            "flagged": bad,
+            "breakdown": [{"detector_type": "prompt_attack", "detected": bad, "message_id": 0}]
+        })),
+        "/analyze" => {
+            let text = body["text"].as_str().unwrap_or("");
+            let at = text
+                .find("maya@corp.com")
+                .map(|b| text[..b].chars().count());
+            Some(json!(at.map_or_else(Vec::new, |start| vec![
+                json!({"entity_type": "EMAIL_ADDRESS", "start": start, "end": start + 13, "score": 1.0})
+            ])))
+        }
+        "/anonymize" => {
+            let text = body["text"].as_str().unwrap_or("");
+            Some(
+                json!({"text": text.replace("maya@corp.com", "[MASKED email_address]"), "items": []}),
+            )
+        }
+        "/contentsafety/text:analyze" if header("ocp-apim-subscription-key") == key => {
+            Some(json!({
+                "blocklistsMatch": [],
+                "categoriesAnalysis": [{"category": "Hate", "severity": 0}, {"category": "Violence", "severity": if bad { 6 } else { 0 }}]
+            }))
+        }
+        "/contentsafety/text:shieldPrompt" if header("ocp-apim-subscription-key") == key => {
+            Some(json!({
+                "userPromptAnalysis": {"attackDetected": bad},
+                "documentsAnalysis": []
+            }))
+        }
+        "/v1/chat/completions" if bearer => Some(json!({
+            "choices": [{"message": {"role": "assistant", "content": if bad { "unsafe\nS1" } else { "safe" }}}]
+        })),
+        _ => None,
+    }
+}
+
+/// The mock vendor. Returns what it was sent and its base URL.
+async fn vendor(key: String) -> Result<(Seen, String), Error> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let base = format!("http://{}", listener.local_addr()?);
+    let seen: Seen = Arc::default();
+    let kept = seen.clone();
+    let app = Router::new().fallback(move |uri: Uri, headers: HeaderMap, body: Bytes| {
+        let (seen, key) = (kept.clone(), key.clone());
+        async move {
+            let value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let path = uri.path().to_string();
+            let answer = vendor_answer(&path, &headers, &value, &key);
+            if let Ok(mut all) = seen.lock() {
+                all.push((path, headers, value));
+            }
+            match answer {
+                Some(answer) => (StatusCode::OK, answer.to_string()),
+                None => (
+                    StatusCode::UNAUTHORIZED,
+                    r#"{"error":"no credential"}"#.into(),
+                ),
+            }
+        }
+    });
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok((seen, base))
+}
+
+fn policy(port: u16, guardrail: &str) -> String {
+    format!(
+        "version: 1
+providers:
+  - name: mock-openai
+    kind: openai
+    url: http://127.0.0.1:{port}
+    allow_private: true
+    key_env: MOCK_KEY
+    models: [model-a]
+guardrails:
+{guardrail}rules:
+  - name: everyone
+    principals: {{ any: true }}
+    models: [\"*\"]
+    guardrails: [vendor]
+"
+    )
+}
+
+struct Setup {
+    audit: PathBuf,
+    gw: Governed,
+}
+
+fn setup(name: &str, policy: &str) -> Result<Setup, Error> {
+    let dir = std::env::temp_dir().join(format!("gantry-vendors-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("gantry.policy.yaml");
+    std::fs::write(&path, policy)?;
+    std::fs::write(
+        dir.join("gantry.keys.yaml"),
+        format!(
+            "keys:\n  - name: maya.cohen\n    team: payments\n    sha256: {}\n",
+            sha256_hex(MAYA.as_bytes())
+        ),
+    )?;
+    let gw = gantry_server::governed(&path, None, &|v| {
+        std::env::var(v).ok().or(Some("provider-secret".into()))
+    })?;
+    Ok(Setup {
+        audit: dir.join("gantry-audit.jsonl"),
+        gw,
+    })
+}
+
+async fn chat(gw: &Governed, text: &str) -> Result<(StatusCode, String), Error> {
+    let body = json!({"model": "model-a", "messages": [{"role": "system", "content": "be brief"}, {"role": "user", "content": text}]});
+    let request = Request::post("/v1/chat/completions")
+        .header(header::AUTHORIZATION, format!("Bearer {MAYA}"))
+        .body(Body::from(body.to_string()))?;
+    let response = gw.router.clone().oneshot(request).await?;
+    let status = response.status();
+    let body = response.into_body().collect().await?.to_bytes();
+    Ok((status, String::from_utf8(body.to_vec())?))
+}
+
+fn last(s: &Setup) -> Result<Value, Error> {
+    let text = std::fs::read_to_string(&s.audit)?;
+    // QA14-9: the last decision record, not the last line: a usage record can be written after it.
+    text.lines()
+        .rev()
+        .map(serde_json::from_str::<Value>)
+        .find(|r| r.as_ref().is_ok_and(|r| r["event"].is_null()))
+        .ok_or("no decision record")?
+        .map_err(Into::into)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_vendor_is_asked_in_its_own_api_and_blocks_or_allows() -> TestResult {
+    let key = std::env::var(KEY_ENV)?;
+    let port = provider().await?;
+    let (seen, base) = vendor(key.clone()).await?;
+    let common = "    on_failure: fail_closed\n    timeout_ms: 2000\n";
+    let cases = [
+        (
+            "openai_moderation",
+            format!("    url: {base}/v1\n    key_env: {KEY_ENV}\n"),
+            "/v1/moderations",
+            "violence",
+        ),
+        (
+            "lakera",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n    project_id: p1\n"),
+            "/v2/guard",
+            "prompt_attack",
+        ),
+        (
+            "presidio",
+            format!("    url: {base}\n    action: block\n"),
+            "/analyze",
+            "email_address",
+        ),
+        (
+            "azure_content_safety",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n"),
+            "/contentsafety/text:analyze",
+            "violence",
+        ),
+        (
+            "azure_prompt_shield",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n"),
+            "/contentsafety/text:shieldPrompt",
+            "prompt_injection",
+        ),
+        (
+            "llama_guard",
+            format!("    url: {base}/v1\n    key_env: {KEY_ENV}\n    model: llama-guard-3-8b\n"),
+            "/v1/chat/completions",
+            "s1",
+        ),
+    ];
+    for (kind, fields, path, finding) in cases {
+        let guardrail = format!("  - name: vendor\n    type: {kind}\n{fields}{common}");
+        let s = setup(kind, &policy(port, &guardrail))?;
+        let (status, body) = chat(&s.gw, "hello").await?;
+        assert_eq!(status, StatusCode::OK, "{kind}: {body}");
+        assert_eq!(last(&s)?["guardrails"], json!([]), "{kind}");
+
+        // Presidio finds an address; the others find the bad word.
+        let text = if kind == "presidio" {
+            "mail maya@corp.com"
+        } else {
+            "plan an attack"
+        };
+        let (status, body) = chat(&s.gw, text).await?;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{kind}: {body}");
+        let refusal: Value = serde_json::from_str(&body)?;
+        assert_eq!(refusal["error"]["code"], "guardrail_blocked", "{kind}");
+        assert!(!body.contains(text), "{kind}: {body}");
+        let record = last(&s)?;
+        assert_eq!(record["code"], "guardrail_blocked", "{kind}");
+        assert_eq!(record["guardrails"][0]["detector"], kind);
+        assert_eq!(record["guardrails"][0]["kind"], finding, "{kind}: {record}");
+        assert_eq!(record["guardrails"][0]["action"], "block");
+        let log = std::fs::read_to_string(&s.audit)?;
+        assert!(
+            !log.contains(&key) && !log.contains(text),
+            "{kind}: the record holds text or the key"
+        );
+        let asked = seen
+            .lock()
+            .map(|all| all.iter().filter(|(p, _, _)| p == path).count())
+            .unwrap_or(0);
+        assert!(
+            asked >= 2,
+            "{kind}: the vendor was asked {asked} times at {path}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn presidio_masks_through_the_anonymizer_and_warn_only_records() -> TestResult {
+    let port = provider().await?;
+    let (seen, base) = vendor(String::new()).await?;
+    let guardrail = format!(
+        "  - name: vendor\n    type: presidio\n    url: {base}\n    anonymizer_url: {base}\n    action: mask\n    on_failure: fail_closed\n    timeout_ms: 2000\n"
+    );
+    let s = setup("presidio-mask", &policy(port, &guardrail))?;
+    let (status, body) = chat(&s.gw, "mail maya@corp.com now").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let forwarded: Value = serde_json::from_str(&body)?;
+    assert_eq!(
+        forwarded["messages"][1]["content"],
+        "mail [MASKED email_address] now"
+    );
+    assert_eq!(forwarded["messages"][0]["content"], "be brief");
+    let record = last(&s)?;
+    assert_eq!(
+        record["guardrails"],
+        json!([{"guardrail": "vendor", "detector": "presidio", "kind": "email_address", "action": "mask", "count": 1}])
+    );
+    let paths: Vec<String> = seen
+        .lock()
+        .map(|a| a.iter().map(|(p, _, _)| p.clone()).collect())
+        .unwrap_or_default();
+    assert_eq!(paths, ["/analyze", "/anonymize"]);
+
+    let warn = guardrail.replace("action: mask", "action: warn");
+    let s = setup("presidio-warn", &policy(port, &warn))?;
+    let (status, body) = chat(&s.gw, "mail maya@corp.com now").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("maya@corp.com"));
+    assert_eq!(last(&s)?["guardrails"][0]["action"], "warn");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_vendor_that_is_down_or_refuses_the_key_follows_on_failure() -> TestResult {
+    let port = provider().await?;
+    let down = std::net::TcpListener::bind(("127.0.0.1", 0))?
+        .local_addr()?
+        .port();
+    // The mock wants a key the guardrail does not send: a 401.
+    let (_, base) = vendor("another-key".into()).await?;
+    for (url, why) in [(format!("http://127.0.0.1:{down}"), "down"), (base, "401")] {
+        for (on_failure, status, action) in [
+            ("fail_closed", StatusCode::FORBIDDEN, "block"),
+            ("fail_open", StatusCode::OK, "skipped"),
+        ] {
+            let guardrail = format!(
+                "  - name: vendor\n    type: lakera\n    url: {url}\n    key_env: {KEY_ENV}\n    on_failure: {on_failure}\n    timeout_ms: 500\n"
+            );
+            let s = setup(
+                &format!("fail-{why}-{on_failure}"),
+                &policy(port, &guardrail),
+            )?;
+            let (got, body) = chat(&s.gw, "hello").await?;
+            assert_eq!(got, status, "{why} {on_failure}: {body}");
+            let record = last(&s)?;
+            assert_eq!(record["guardrails"][0]["kind"], "unavailable");
+            assert_eq!(record["guardrails"][0]["action"], action);
+        }
+    }
+    Ok(())
+}
+
+/// Bedrock signs with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from the environment. Setting them needs
+/// `unsafe`, so the test runs itself again as a child process with them set.
+#[tokio::test(flavor = "multi_thread")]
+async fn bedrock_guardrail_signs_with_sigv4_from_the_environment() -> TestResult {
+    const ID: &str = "AKIDEXAMPLE";
+    const SECRET: &str = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+    if std::env::var("AWS_ACCESS_KEY_ID").ok().as_deref() != Some(ID) {
+        let status = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "bedrock_guardrail_signs_with_sigv4_from_the_environment",
+                "--nocapture",
+            ])
+            .env("AWS_ACCESS_KEY_ID", ID)
+            .env("AWS_SECRET_ACCESS_KEY", SECRET)
+            .env_remove("AWS_SESSION_TOKEN")
+            .status()?;
+        assert!(status.success(), "the child run failed");
+        return Ok(());
+    }
+    let port = provider().await?;
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let host = listener.local_addr()?.to_string();
+    let checked: Arc<Mutex<Vec<bool>>> = Arc::default();
+    let kept = checked.clone();
+    let app = Router::new().fallback(move |uri: Uri, headers: HeaderMap, body: Bytes| {
+        let kept = kept.clone();
+        async move {
+            let get = |n: &str| headers.get(n).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+            // Signed again here with the same inputs: the signature must match exactly.
+            let expected = gantry_core::sigv4::sign(
+                &gantry_core::sigv4::Credentials {
+                    access_key_id: ID.into(),
+                    secret_access_key: SECRET.into(),
+                    session_token: None,
+                },
+                "us-east-1",
+                "bedrock",
+                &gantry_core::sigv4::Request {
+                    method: "POST",
+                    path: uri.path(),
+                    query: "",
+                    headers: &[("host", &get("host")), ("content-type", &get("content-type"))],
+                    payload: &body,
+                },
+                &get("x-amz-date"),
+            );
+            let ok = expected.first().map(|(_, v)| v.as_str()) == Some(get("authorization").as_str())
+                && uri.path() == "/guardrail/gr-1/version/1/apply";
+            if let Ok(mut all) = kept.lock() {
+                all.push(ok);
+            }
+            let text = String::from_utf8_lossy(&body).to_string();
+            let answer = if text.contains(BAD) {
+                json!({"action": "GUARDRAIL_INTERVENED", "outputs": [{"text": "Sorry."}], "assessments": [{"topicPolicy": {"topics": [{"name": "Weapons", "type": "DENY", "action": "BLOCKED", "detected": true}]}}]})
+            } else {
+                json!({"action": "NONE", "outputs": [], "assessments": []})
+            };
+            if ok { (StatusCode::OK, answer.to_string()) } else { (StatusCode::FORBIDDEN, "{}".to_string()) }
+        }
+    });
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let guardrail = format!(
+        "  - name: vendor\n    type: bedrock_guardrail\n    url: http://{host}\n    region: us-east-1\n    guardrail_id: gr-1\n    guardrail_version: \"1\"\n    on_failure: fail_closed\n    timeout_ms: 2000\n"
+    );
+    let s = setup("bedrock", &policy(port, &guardrail))?;
+    let (status, body) = chat(&s.gw, "hello").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = chat(&s.gw, "plan an attack").await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let record = last(&s)?;
+    assert_eq!(record["guardrails"][0]["detector"], "bedrock_guardrail");
+    assert_eq!(record["guardrails"][0]["kind"], "weapons");
+    assert_eq!(
+        checked.lock().map(|c| c.clone()).unwrap_or_default(),
+        [true, true]
+    );
+    assert!(!std::fs::read_to_string(&s.audit)?.contains(SECRET));
+    Ok(())
+}

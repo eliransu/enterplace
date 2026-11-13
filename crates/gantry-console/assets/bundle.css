@@ -1,0 +1,389 @@
+/* Gantry components. Plain CSS bound to tokens.json: no color, size, radius or duration is written here as a literal.
+   Type comes from the type classes that tokens.css generates (t-body, t-tag and so on), set in the markup.
+   The one literal that cannot be a token is the phone breakpoint, 720px, because CSS cannot read a variable in a media query. */
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--text); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+/* Headings break into lines of even length. */
+.t-hero, .t-xl, .t-lg, .t-md { text-wrap: balance; }
+:focus-visible { outline: var(--focus-ring) solid var(--focus); outline-offset: var(--focus-ring); }
+.g-caps { text-transform: uppercase; }
+.g-muted { color: var(--text-muted); }
+/* Syne draws old-style figures by default, which makes numbers jump. Every Syne style asks for lining figures.
+   They stay proportional: Syne's equal-width "1" has a slab foot that reads as another typeface. Columns of numbers are set in mono. */
+.t-hero, .t-xl, .t-lg, .t-md, .t-sm, .t-numeral, .t-tag { font-variant-numeric: lining-nums proportional-nums; }
+
+/* Icon: one set (Lucide), drawn inline, sized and stroked by tokens. */
+.g-icon { width: var(--icon); height: var(--icon); flex: none; fill: none; stroke: currentColor; stroke-width: var(--icon-stroke); stroke-linecap: round; stroke-linejoin: round; }
+
+/* Panel: the large rounded block. No border, no shadow. */
+.g-panel { background: var(--surface); border-radius: var(--radius-lg); padding: var(--space-6); }
+
+/* Button: every button is a pill. One primary per view. Flame only inside a confirmation. */
+.g-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); min-height: var(--control-md); padding: 0 var(--space-6); border: var(--hairline) solid transparent; border-radius: var(--radius-pill); background: var(--inverse); color: var(--on-inverse); cursor: pointer; white-space: nowrap; text-decoration: none; transition: background-color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard); }
+.g-btn:hover { background: var(--inverse-hover); }
+.g-btn--quiet { background: transparent; color: var(--text); border-color: var(--line-strong); }
+.g-btn--quiet:hover { background: transparent; border-color: var(--text); }
+.g-btn--flame { background: var(--flame); color: var(--on-flame); }
+.g-btn--flame:hover { background: var(--flame-hover); }
+.g-btn--sm { min-height: var(--control-sm); padding: 0 var(--space-4); }
+.g-btn--icon { width: var(--control-md); padding: 0; }
+.g-btn:disabled, .g-btn[aria-disabled="true"] { opacity: var(--opacity-disabled); cursor: not-allowed; }
+.g-btn[aria-busy="true"]::before { content: ""; width: var(--disc); height: var(--disc); border-radius: var(--radius-pill); background: currentColor; animation: g-pulse var(--dur-slow) var(--ease-standard) infinite alternate; }
+@keyframes g-pulse { from { transform: scale(0.5); opacity: var(--opacity-disabled); } to { transform: scale(1); opacity: 1; } }
+
+/* Input: a pill with an outline. */
+.g-field { display: grid; gap: var(--space-2); }
+.g-field__label { color: var(--text-muted); padding-left: var(--space-6); }
+.g-input { min-height: var(--control-md); width: 100%; padding: 0 var(--space-6); border: var(--hairline) solid var(--line-strong); border-radius: var(--radius-pill); background: var(--ground); color: var(--text); transition: border-color var(--dur-fast) var(--ease-standard); }
+.g-panel .g-input { background: var(--well); }
+.g-input::placeholder { color: var(--text-muted); opacity: 1; }
+.g-input:hover, .g-input:focus-visible { border-color: var(--text); }
+.g-input[aria-invalid="true"] { border-color: var(--flame); }
+.g-input:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+.g-field__hint { color: var(--text-muted); padding-left: var(--space-6); }
+.g-field__error { color: var(--flame-text); padding-left: var(--space-6); }
+
+/* Tag. The verdict of a request, or a label. Quiet by default: only a stop is filled. */
+.g-tag { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--tag); padding: 0 var(--space-3); border: var(--hairline) solid var(--line-strong); border-radius: var(--radius-pill); background: transparent; color: var(--text); white-space: nowrap; }
+.g-tag.t-tag, .g-tag .t-tag { text-transform: uppercase; }
+.g-tag--allow { border-color: transparent; padding-left: 0; color: var(--text-muted); }
+/* Block: a guardrail caught something. Filled, the loudest thing in a table. Refused: policy said no. Outlined, so it does not shout. */
+.g-tag--block { border-color: var(--flame); background: var(--flame); color: var(--on-flame); }
+.g-tag--refused { border-color: var(--flame); }
+.g-tag--mask::before { content: ""; width: var(--disc); border-top: var(--focus-ring) solid currentColor; }
+.g-tag--warn::before { content: ""; width: var(--disc); height: var(--disc); border: var(--focus-ring) solid currentColor; border-radius: var(--radius-pill); }
+.g-tag--product { border-style: dashed; color: var(--text-muted); }
+
+/* Table: dense rows inside a panel, separated by hairlines. */
+.g-table-wrap { overflow-x: auto; }
+.g-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.g-table th { padding: var(--space-2) var(--space-4) var(--space-3); color: var(--text-muted); font: inherit; text-align: left; text-transform: uppercase; white-space: nowrap; }
+/* A number column's heading sits over its numbers. */
+.g-table th.g-table__num { text-align: right; }
+.g-table td { padding: var(--space-3) var(--space-4); border-top: var(--hairline) solid var(--line); white-space: nowrap; vertical-align: middle; }
+.g-table td a { text-decoration: underline; text-underline-offset: var(--space-1); }
+/* A button in a table is a button, not a link in running text. */
+.g-table td a.g-btn { text-decoration: none; }
+.g-table tbody tr:hover td { background: var(--well); }
+.g-table tbody tr[aria-selected="true"] td { background: var(--well); }
+.g-table tbody tr[aria-selected="true"] td:first-child { border-left: var(--bar) solid var(--text); }
+.g-table__num { text-align: right; font-variant-numeric: tabular-nums; }
+.g-table__sub { display: block; color: var(--text-muted); }
+/* Words a person wrote, inside a table of machine text: a reason, a description. */
+.g-table .t-body, .g-table .t-small { white-space: normal; }
+
+/* Code: a policy file. The line that decided a request is inverted. A change shows as a removed and an added line. */
+.g-code { background: var(--surface); border-radius: var(--radius-md); padding: var(--space-4) 0; overflow-x: auto; }
+.g-panel .g-code { background: var(--well); }
+.g-code__line { display: grid; grid-template-columns: var(--space-12) var(--space-4) 1fr; padding-right: var(--space-6); white-space: pre; }
+.g-code__n { color: var(--text-muted); text-align: right; padding-right: var(--space-3); user-select: none; }
+.g-code__v { color: var(--text-muted); }
+.g-code__c { color: var(--text-muted); font-style: normal; }
+.g-code__line--hit { background: var(--text); color: var(--ground); }
+.g-code__line--hit .g-code__n, .g-code__line--hit .g-code__v, .g-code__line--hit .g-code__c { color: inherit; }
+.g-code__line--del { color: var(--text-muted); text-decoration: line-through; }
+.g-code__line--add { background: var(--line); }
+.g-code__line--add .g-code__n, .g-code__line--add .g-code__v { color: var(--text); }
+.g-code__line--error { box-shadow: inset var(--bar) 0 0 var(--flame); }
+.g-code__note { padding: var(--space-2) var(--space-6) var(--space-2) calc(var(--space-12) + var(--space-4)); color: var(--flame-text); white-space: normal; }
+
+/* Kill switch: a row that turns flame when traffic is stopped. The switch is on while traffic flows. */
+.g-kill { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-4) var(--space-6); padding: var(--space-4) var(--space-6); border: var(--focus-ring) solid transparent; border-radius: var(--radius-lg); background: var(--surface); }
+.g-kill__meta { display: grid; gap: var(--space-1); flex: 1; min-width: min(100%, var(--col-sm)); }
+.g-kill__state { color: var(--text-muted); }
+.g-kill__confirm { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.g-kill[data-state="armed"] { border-color: var(--flame); }
+.g-kill[data-state="killed"] { background: var(--flame); color: var(--on-flame); }
+.g-kill[data-state="killed"] .g-kill__state { color: inherit; }
+.g-kill[data-state="killed"] .g-btn--quiet { border-color: var(--on-flame); color: var(--on-flame); }
+.g-kill[data-state="killed"] .g-switch { border-color: var(--on-flame); }
+.g-kill[data-state="killed"] .g-switch::after { background: var(--on-flame); }
+.g-switch { position: relative; flex: none; width: var(--space-16); height: var(--space-8); padding: 0; border: var(--hairline) solid var(--line-strong); border-radius: var(--radius-pill); background: transparent; cursor: pointer; }
+.g-switch::after { content: ""; position: absolute; top: calc(var(--space-1) - var(--hairline)); left: calc(var(--space-1) - var(--hairline)); width: var(--space-6); height: var(--space-6); border-radius: var(--radius-pill); background: var(--line-strong); transition: transform var(--dur-base) var(--ease-standard); }
+/* The switch is 32px tall. Its touch target reaches 48px. */
+.g-switch::before { content: ""; position: absolute; inset: calc(var(--space-2) * -1); }
+.g-switch[aria-checked="true"] { border-color: var(--text); }
+.g-switch[aria-checked="true"]::after { background: var(--text); transform: translateX(var(--space-8)); }
+
+/* Mark: a neutral stand-in until the logo is drawn. A disc at a gate. Never flame, never lime. */
+.g-mark { display: inline-flex; align-items: center; gap: var(--space-1); flex: none; }
+.g-mark::before { content: ""; width: var(--space-3); height: var(--space-3); border-radius: var(--radius-pill); background: var(--text); }
+.g-mark::after { content: ""; width: var(--space-2); height: var(--space-6); border-radius: var(--radius-pill); background: var(--text); }
+
+/* Nav. A floating pill on the website, a rounded column in the app. On a phone both become one bar: brand, then one action. */
+.g-nav { display: flex; align-items: center; gap: var(--space-2); width: fit-content; max-width: 100%; padding: var(--space-2); border-radius: var(--radius-pill); background: var(--surface); }
+.g-nav__brand { display: inline-flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-4) 0 var(--space-2); color: var(--text); text-decoration: none; }
+.g-nav__item { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--control-sm); padding: 0 var(--space-4); border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-muted); text-decoration: none; white-space: nowrap; cursor: pointer; }
+.g-nav__item:hover { color: var(--text); }
+.g-nav__item[aria-current="page"] { color: var(--text); }
+.g-nav__item[aria-current="page"]::before { content: ""; width: var(--disc); height: var(--disc); border-radius: var(--radius-pill); background: var(--text); }
+.g-nav__menu { display: none; }
+.g-nav--side { flex-direction: column; align-items: stretch; flex: none; width: var(--nav); padding: var(--space-4); border-radius: var(--radius-lg); }
+.g-nav--side .g-nav__brand { padding: var(--space-2) var(--space-2) var(--space-4); }
+.g-nav__group { padding: var(--space-4) var(--space-4) var(--space-1); color: var(--text-muted); }
+.g-nav__foot { display: grid; gap: var(--space-2); margin-top: var(--space-6); padding: var(--space-4) var(--space-4) var(--space-2); border-top: var(--hairline) solid var(--line); }
+
+/* Live: the one lime signal of a view. A lime disc with an edge, so it reads on light and on dark, and always beside its words. */
+.g-live { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text); }
+.g-live::before { content: ""; width: var(--space-3); height: var(--space-3); border: var(--hairline) solid var(--text); border-radius: var(--radius-pill); background: var(--lime); flex: none; }
+
+/* App shell: the nav beside the page on a desktop, above it on a phone. */
+.g-shell { display: flex; align-items: flex-start; gap: var(--space-4); min-height: 100vh; padding: var(--space-4); background: var(--ground); color: var(--text); }
+.g-shell__main { display: flex; flex-direction: column; gap: var(--space-6); flex: 1; min-width: 0; padding: var(--space-6) var(--space-4); }
+.g-split { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-4); }
+.g-split > * { flex: 1 1 var(--col-md); min-width: 0; }
+.g-split > .g-split__wide { flex: 2 1 var(--col-lg); }
+.g-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.g-toolbar > .g-search { flex: 1 1 var(--col-sm); }
+/* One column that may shrink: without the minmax, a child that will not wrap pushes the column wider than the screen. */
+.g-stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+.g-measure { max-width: var(--measure); }
+
+/* Page header: the title, then one sentence of fact, then the actions. Left aligned, in reading order. */
+.g-head { display: grid; gap: var(--space-4); }
+.g-head__title { margin: 0; }
+.g-head__lead { margin: 0; color: var(--text-muted); max-width: var(--measure); }
+.g-head__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* Tabs: a segmented pill. The selected tab is outlined, not filled, so it never competes with the primary button. */
+.g-tabs { display: inline-flex; flex-wrap: wrap; gap: var(--space-1); max-width: 100%; }
+.g-tab { min-height: var(--control-sm); padding: 0 var(--space-4); border: var(--hairline) solid transparent; border-radius: var(--radius-pill); background: transparent; color: var(--text-muted); white-space: nowrap; cursor: pointer; }
+.g-tab:hover { color: var(--text); }
+.g-tab[aria-selected="true"], .g-tab[aria-pressed="true"] { border-color: var(--text); color: var(--text); }
+
+/* Select, textarea and search build on the input. */
+.g-select-wrap, .g-search { position: relative; }
+.g-select-wrap > .g-icon, .g-search > .g-icon { position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-muted); }
+.g-select-wrap > .g-icon { right: var(--space-6); }
+.g-search > .g-icon { left: var(--space-6); }
+.g-select { appearance: none; padding-right: var(--space-12); cursor: pointer; }
+.g-textarea { height: auto; min-height: calc(var(--control-md) * 3); padding: var(--space-4) var(--space-6); border-radius: var(--radius-lg); resize: vertical; }
+.g-search .g-input { padding-left: var(--space-12); }
+
+/* Choice: checkbox and radio. A checked choice holds a disc. */
+.g-choice { display: inline-flex; align-items: center; gap: var(--space-3); min-height: var(--control-md); cursor: pointer; }
+.g-choice input { appearance: none; display: grid; place-content: center; flex: none; width: var(--space-6); height: var(--space-6); margin: 0; border: var(--hairline) solid var(--line-strong); border-radius: var(--radius-sm); background: var(--ground); cursor: pointer; }
+.g-panel .g-choice input { background: var(--well); }
+.g-choice input[type="radio"] { border-radius: var(--radius-pill); }
+.g-choice input:checked { background: var(--inverse); border-color: var(--inverse); }
+.g-choice input:checked::after { content: ""; width: var(--disc); height: var(--disc); border-radius: var(--radius-pill); background: var(--on-inverse); }
+.g-choice input:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+
+/* Dialog and sheet: a ground surface on a scrim. Flat: the scrim separates it, not a shadow. */
+.g-scrim { position: fixed; inset: 0; display: grid; place-items: center; padding: var(--space-8); background: var(--overlay); }
+.g-scrim--sheet { place-items: stretch end; padding: var(--space-4); }
+/* The edge is what separates a dialog from a dark scrim, where the two fills are almost the same. */
+.g-dialog { display: grid; gap: var(--space-6); width: 100%; max-width: var(--col-lg); padding: var(--space-10); border: var(--hairline) solid var(--line-strong); border-radius: var(--radius-xl); background: var(--ground); color: var(--text); }
+.g-sheet { display: flex; flex-direction: column; gap: var(--space-6); width: 100%; max-width: var(--sheet); padding: var(--space-8); border: var(--hairline) solid var(--line-strong); border-radius: var(--radius-xl); background: var(--ground); color: var(--text); overflow-y: auto; }
+/* The app menu on a phone: the nav items as a sheet. It does not exist on a desktop, where the nav is always visible. */
+.g-menu-sheet { display: none; }
+.g-dialog__title, .g-dialog__body { margin: 0; }
+.g-dialog__body { color: var(--text-muted); }
+.g-dialog__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
+
+/* Toast: an inverse pill. Flame when it reports a failure. */
+/* Toasts sit at the bottom right, away from the page's own closing lines. */
+.g-toasts { position: fixed; right: var(--space-8); bottom: var(--space-8); display: grid; gap: var(--space-2); justify-items: end; }
+.g-toast { display: inline-flex; align-items: center; gap: var(--space-3); min-height: var(--control-md); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-6); border-radius: var(--radius-pill); background: var(--inverse); color: var(--on-inverse); }
+.g-toast__text { padding-right: var(--space-4); }
+.g-toast .g-btn { background: var(--on-inverse); color: var(--inverse); }
+.g-toast--block { background: var(--flame); color: var(--on-flame); }
+.g-toast--block .g-btn { background: var(--on-flame); color: var(--flame); }
+
+/* Menu */
+.g-menu { display: grid; gap: var(--space-1); width: fit-content; min-width: calc(var(--space-24) * 2); padding: var(--space-2); border: var(--hairline) solid var(--line-strong); border-radius: var(--radius-md); background: var(--ground); }
+.g-menu__item { display: flex; align-items: center; justify-content: space-between; gap: var(--space-6); min-height: var(--control-md); padding: 0 var(--space-4); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.g-menu__item:hover { background: var(--surface); }
+.g-menu__item--flame { color: var(--flame-text); }
+.g-menu__hint { color: var(--text-muted); }
+
+/* Pager */
+.g-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-4); }
+.g-pager__buttons { display: flex; gap: var(--space-2); }
+
+/* Motif: requests are discs. They arrive grey, pass the gate lime, and the stopped one is flame.
+   Used for the website hero, empty and error states, and loading. The grid scales with one variable. */
+.g-motif { --g-disc: var(--space-10); display: flex; align-items: stretch; gap: var(--g-disc); max-width: 100%; }
+.g-motif__grid { display: grid; grid-template-columns: repeat(var(--g-cols, 4), var(--g-disc)); gap: calc(var(--g-disc) * 0.6); }
+.g-motif--sm { --g-disc: var(--space-6); }
+.g-disc { width: var(--g-disc, var(--space-6)); height: var(--g-disc, var(--space-6)); border-radius: var(--radius-pill); background: var(--line-strong); flex: none; }
+.g-disc--lime { background: var(--lime); }
+.g-disc--flame { background: var(--flame); }
+.g-disc--empty { background: transparent; border: var(--hairline) dashed var(--line-strong); }
+.g-gate { width: var(--g-disc, var(--space-6)); border-radius: var(--radius-pill); background: var(--lime); flex: none; }
+.g-gate--closed { background: var(--line-strong); }
+.g-discs { display: flex; align-items: center; gap: var(--space-3); }
+.g-discs .g-gate { height: var(--space-16); }
+.g-empty { display: grid; justify-items: start; gap: var(--space-4); padding: var(--space-10); border-radius: var(--radius-lg); background: var(--surface); }
+.g-empty__title, .g-empty__body { margin: 0; }
+.g-empty__body { color: var(--text-muted); max-width: var(--measure); }
+.g-loading { display: flex; align-items: center; gap: var(--space-2); }
+.g-loading i { width: var(--disc); height: var(--disc); border-radius: var(--radius-pill); background: var(--line-strong); animation: g-pulse var(--dur-slow) var(--ease-standard) infinite alternate; }
+.g-loading i:nth-child(2) { animation-delay: var(--dur-fast); }
+.g-loading i:nth-child(3) { animation-delay: var(--dur-base); }
+
+/* Flow: tools above, the gate in the middle, providers below, joined by dashed lines. */
+.g-flow { display: flex; flex-direction: column; align-items: center; gap: var(--space-4); }
+.g-flow__row { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
+.g-flow__link { height: var(--space-10); border-left: var(--hairline) dashed var(--line-strong); }
+.g-flow__gate { display: inline-flex; align-items: center; justify-content: center; min-height: var(--space-16); padding: var(--space-3) var(--space-10); border-radius: var(--radius-pill); background: var(--lime); color: var(--on-lime); text-align: center; text-transform: uppercase; }
+
+/* Command: something to copy into a terminal. */
+.g-command { display: inline-flex; align-items: center; gap: var(--space-4); max-width: 100%; min-height: var(--control-md); padding: var(--space-1) var(--space-1) var(--space-1) var(--space-6); border: var(--hairline) solid var(--line-strong); border-radius: var(--radius-pill); color: var(--text); }
+/* A command too long for its pill scrolls inside it and fades at the edge, so it never looks cut by mistake. */
+.g-command { width: fit-content; gap: 0; }
+/* The fade covers the text's own right padding, so a command that fits is never dimmed. */
+.g-command__text { min-width: 0; padding-right: var(--space-6); overflow-x: auto; white-space: nowrap; scrollbar-width: none; mask-image: linear-gradient(to right, black calc(100% - var(--space-6)), transparent); }
+/* A value to copy that is not a command, such as a URL, has no prompt sign. */
+.g-command--value .g-command__text::before { content: none; }
+.g-command__text::before { content: "$ "; color: var(--text-muted); }
+.g-terminal { display: grid; gap: var(--space-2); padding: var(--space-6); border-radius: var(--radius-lg); background: var(--surface); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A command that wraps continues under its own text, not under the prompt sign. */
+.g-terminal > span:not(.g-terminal__out) { padding-left: 2ch; text-indent: -2ch; }
+.g-terminal__out { color: var(--text-muted); }
+
+/* Stat: a headline figure. Ink. Flame only when the figure counts stops. */
+.g-stats { display: flex; flex-wrap: wrap; gap: var(--space-8) var(--space-16); }
+.g-stat { display: grid; gap: var(--space-2); align-content: start; }
+.g-stat__figure, .g-stat__label { margin: 0; }
+.g-stat__label { color: var(--text-muted); }
+.g-stat--flame .g-stat__figure { color: var(--flame); }
+
+/* Budget meter: an outlined track with a data fill. Flame when spent. */
+.g-meter { display: grid; gap: var(--space-2); }
+.g-meter__row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-1) var(--space-4); }
+.g-meter__track { height: var(--space-3); border: var(--hairline) solid var(--line-strong); border-radius: var(--radius-pill); overflow: hidden; }
+.g-meter__fill { width: var(--g-meter-value); height: 100%; border-radius: var(--radius-pill); background: var(--data); }
+.g-meter[data-state="over"] .g-meter__fill { background: var(--flame); }
+
+/* Bars: one bar per period on a baseline, with round gridlines, a written scale and room for the periods still to come. */
+.g-chart { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2) var(--space-4); }
+.g-chart__scale { display: flex; flex-direction: column; justify-content: space-between; color: var(--text-muted); text-align: right; }
+.g-chart__plot { position: relative; display: flex; align-items: flex-end; gap: var(--space-2); height: calc(var(--space-24) * 2.5); border-bottom: var(--hairline) solid var(--line-strong); }
+.g-chart__grid { position: absolute; left: 0; right: 0; bottom: var(--g-at); border-top: var(--hairline) solid var(--line); }
+.g-chart__pace { position: absolute; left: 0; right: 0; bottom: var(--g-at); border-top: var(--hairline) dashed var(--text); }
+.g-bar { position: relative; flex: 1; min-width: 0; height: var(--g-bar-value); border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: var(--data); }
+.g-bar--empty { height: 0; }
+.g-chart__days { grid-column: 2; display: flex; gap: var(--space-2); color: var(--text-muted); }
+.g-chart__days span { flex: 1; min-width: 0; text-align: center; }
+.g-chart__mark { color: var(--flame-text); }
+.g-chart__mark::before { content: ""; display: block; width: var(--hairline); height: var(--space-2); margin: 0 auto; border-left: var(--focus-ring) solid var(--flame); }
+
+/* Points: a short list of statements separated by rules. For explaining, where cards would only add boxes. */
+.g-points { display: grid; margin: 0; }
+.g-points > div { display: grid; gap: var(--space-1); padding: var(--space-4) 0; border-top: var(--hairline) solid var(--line); }
+.g-points dt, .g-points dd { margin: 0; }
+.g-points dd { color: var(--text-muted); }
+
+/* Facts: label and value pairs for one record. */
+.g-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-3) var(--space-6); margin: 0; }
+.g-facts dt { color: var(--text-muted); text-transform: uppercase; }
+.g-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Row: one thing in a list, with what can be done to it. */
+.g-list { display: grid; gap: var(--space-2); }
+.g-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); padding: var(--space-4) var(--space-6); border-radius: var(--radius-lg); background: var(--surface); }
+.g-panel .g-row { background: var(--well); }
+.g-row__main { display: grid; gap: var(--space-1); flex: 1; min-width: calc(var(--space-24) * 2); }
+.g-row__meta { color: var(--text-muted); }
+.g-row__end { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+
+/* Steps: where the reader is in a short sequence. Done is muted, current is ink with a bar under it, ahead is grey. */
+.g-steps { display: flex; flex-wrap: wrap; gap: var(--space-6); margin: 0; padding: 0; list-style: none; }
+.g-step { display: grid; gap: var(--space-1); padding-bottom: var(--space-2); border-bottom: var(--bar) solid transparent; color: var(--line-strong); }
+.g-step__label { color: var(--text-muted); }
+.g-step[data-state="done"] { color: var(--text-muted); }
+.g-step[aria-current="step"] { color: var(--text); border-bottom-color: var(--text); }
+.g-step[aria-current="step"] .g-step__label { color: var(--text); }
+
+/* Banner: one fact that stays until it is dealt with. */
+/* A banner that reports progress keeps its dots and its text together at the start. */
+.g-banner:has(> .g-loading) { justify-content: flex-start; flex-wrap: nowrap; }
+/* On any screen with a toast, the page ends above it. */
+body:has(.g-toasts) .g-shell__main { padding-bottom: calc(var(--control-md) + var(--space-12)); }
+.g-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3) var(--space-6); padding: var(--space-3) var(--space-6); border: var(--hairline) solid var(--line-strong); border-radius: var(--radius-lg); }
+
+/* Footer of the website. */
+.g-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-16); padding: var(--space-16) var(--space-8) var(--space-24); border-radius: var(--radius-sheet) var(--radius-sheet) 0 0; background: var(--ground); color: var(--text); }
+.g-footer__links { display: grid; gap: var(--space-3); justify-items: start; }
+.g-footer__links a { text-decoration: none; }
+
+/* Website sections. */
+.g-section { display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-24) var(--space-8); }
+/* A dark section on a dark page still has to read as a section: it takes the panel tone. */
+[data-theme="dark"] .g-frame[data-theme="dark"], [data-theme="dark"] .g-sheet-dark[data-theme="dark"], [data-theme="dark"] .g-footer[data-theme="dark"] { background: var(--surface); }
+[data-theme="dark"] .g-frame[data-theme="dark"] .g-panel, [data-theme="dark"] .g-sheet-dark[data-theme="dark"] .g-panel { background: var(--well); }
+.g-frame { margin: var(--space-4); padding: var(--space-6) var(--space-8) var(--space-24); border-radius: var(--radius-xl); background: var(--ground); color: var(--text); }
+.g-sheet-dark { border-radius: var(--radius-sheet); background: var(--ground); color: var(--text); }
+.g-hero { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-16); padding-top: var(--space-24); }
+.g-hero > * { flex: 1 1 var(--col-md); min-width: 0; }
+
+/* Display type steps down on phones. The sizes are tokens: phone-hero-size and so on. */
+@media (max-width: 720px) {
+  .t-hero { font-size: var(--phone-hero-size); line-height: var(--phone-hero-line); }
+  .t-xl { font-size: var(--phone-xl-size); line-height: var(--phone-xl-line); }
+  .t-lg { font-size: var(--phone-lg-size); line-height: var(--phone-lg-line); }
+  .t-numeral { font-size: var(--phone-numeral-size); line-height: var(--phone-numeral-line); }
+  /* Every control is at least a 44px touch target. */
+  .g-btn--sm, .g-tab, .g-nav__item { min-height: var(--control-md); }
+  /* The app nav becomes one bar: the brand and a Menu button. The items live in the menu sheet. */
+  .g-shell { flex-direction: column; align-items: stretch; padding: var(--space-2); }
+  .g-shell__main { padding: var(--space-4) var(--space-2); }
+  .g-nav--side { flex-direction: row; justify-content: space-between; align-items: center; width: auto; padding: var(--space-2); border-radius: var(--radius-pill); }
+  .g-nav--side .g-nav__foot { display: none; }
+  .g-menu-sheet { display: grid; }
+  /* Three figures sit in one row at a smaller size instead of stacking a screen tall. */
+  .g-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+  .g-stats .t-numeral { font-size: var(--phone-lg-size); line-height: var(--phone-lg-line); }
+  .g-chart__plot, .g-chart__days { gap: var(--space-1); }
+  .g-nav--side .g-nav__brand { padding: 0 var(--space-2); }
+  .g-nav--side .g-nav__item, .g-nav--side .g-nav__group, .g-nav .g-nav__item { display: none; }
+  .g-nav--side .g-nav__menu { display: inline-flex; }
+  .g-nav { width: 100%; justify-content: space-between; }
+  /* A table becomes a list of two-line rows: what happened and to whom. Columns marked wide are left for the detail view. */
+  .g-table--stack thead, .g-table--stack .g-table__wide { display: none; }
+  .g-table--stack, .g-table--stack tbody { display: block; }
+  .g-table--stack tbody tr:first-child { border-top: 0; padding-top: 0; }
+  .g-table--stack tr { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(55%); gap: var(--space-1) var(--space-4); align-items: center; padding: var(--space-3) 0; border-top: var(--hairline) solid var(--line); }
+  .g-table--stack td { padding: 0; border: 0; white-space: normal; }
+  .g-table--stack tbody tr[aria-selected="true"] td:first-child { border-left: 0; }
+  .g-frame { margin: var(--space-2); padding: var(--space-2) var(--space-4) var(--space-12); }
+  .g-section { padding: var(--space-16) var(--space-4); gap: var(--space-8); }
+  .g-hero { padding-top: var(--space-12); gap: var(--space-8); }
+  .g-motif { --g-disc: var(--space-6); }
+  .g-scrim, .g-scrim--sheet { padding: var(--space-2); place-items: end stretch; }
+  /* A table whose rows are mostly sentences stacks to one column, so no cell is squeezed to nothing. */
+  .g-table--prose tr { grid-template-columns: minmax(0, 1fr); }
+  /* An overlay never grows past the screen: its content scrolls inside it, and its top stays reachable. */
+  .g-dialog, .g-sheet { max-width: none; max-height: calc(100vh - var(--space-4)); padding: var(--space-6); overflow-y: auto; }
+  /* Code wraps on a phone instead of being cut off at the edge. */
+  .g-code__line { grid-template-columns: var(--space-8) var(--space-3) minmax(0, 1fr); padding-right: var(--space-3); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .g-phone-first { order: -1; }
+  /* On a phone a command wraps in its pill, so the whole value can be read, and Copy sits under it. */
+  .g-command { flex-wrap: wrap; gap: var(--space-3) 0; border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); }
+  .g-command__text { padding-right: 0; white-space: normal; overflow-wrap: anywhere; mask-image: none; }
+  /* A toast floats over the bottom of the page, so the page ends above it. */
+  body:has(.g-toasts) .g-shell__main { padding-bottom: calc(var(--control-md) + var(--space-8)); }
+  /* A switch row keeps its switch beside the text. Only the row being confirmed stacks. */
+  .g-kill:not([data-state="armed"]) { flex-wrap: nowrap; }
+  .g-kill__meta { min-width: 0; }
+  .g-flow__gate { font-size: var(--phone-md-size, 18px); line-height: var(--phone-md-line, 24px); white-space: normal; max-width: 100%; padding-inline: var(--space-4); }
+  /* A wrapped command continues under its own text, not under the prompt sign. */
+  .g-command:not(.g-command--value) .g-command__text { padding-left: 2ch; text-indent: -2ch; }
+  /* A sheet that rises from the bottom edge has no side edges either. */
+  .g-dialog, .g-sheet { border-inline: 0; }
+  /* Filters stay on one line and scroll sideways, instead of wrapping into a second row of pills. */
+  .g-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  /* A sheet or dialog on a phone rises from the bottom edge and is part of it. */
+  .g-scrim, .g-scrim--sheet { padding: var(--space-2) 0 0; }
+  .g-dialog, .g-sheet { border-radius: var(--radius-xl) var(--radius-xl) 0 0; border-bottom: 0; max-height: calc(100vh - var(--space-2)); padding-bottom: var(--space-10); }
+  /* Wrapped code keeps its indent: continuation lines sit under the text, not under the line number. */
+  .g-code__line > span:last-child { padding-left: 2ch; text-indent: -2ch; }
+  .g-toasts { left: var(--space-2); right: var(--space-2); bottom: var(--space-2); }
+  .g-footer { padding: var(--space-12) var(--space-4); gap: var(--space-8); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .g-btn[aria-busy="true"]::before, .g-loading i { animation: none; }
+  .g-switch::after, .g-btn, .g-input { transition: none; }
+}
