@@ -98,7 +98,7 @@ Spend in the store counts requests under a budget (a rule's or a key's). Request
 
 ## How it works
 
-Keys and kill switches are read from memory, as without a store. Each replica polls a version row every 500 ms and reloads them when the version changes, so a request never waits on the database for its key or a switch. A change is applied at once on the replica that made it.
+Keys and kill switches are read from memory, as without a store. Each replica polls a version row every 500 ms and reloads them when the version changes, so a request never waits on the database for its key or a switch. A change reaches every replica, the one that made it included, within about a second.
 
 A request under a budget reserves the most it could cost with one atomic statement, which fails when the reservation would pass the budget. Two replicas reserving at the same moment are ordered by Postgres, so they cannot both pass. When the answer ends, a second statement replaces the reservation with what the request cost. A request with no budget makes no database call. In tests against a local Postgres, a budgeted request took about 0.3 ms longer than the same request without a budget.
 

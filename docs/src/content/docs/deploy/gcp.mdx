@@ -1,0 +1,245 @@
+---
+title: Google Cloud
+description: Deploy Gantry Enterprise on Google Cloud with the gcp-cloud-run Terraform module, Cloud Run with Cloud SQL and Filestore, then verify and run it in production.
+sidebar:
+  label: Google Cloud
+  order: 5
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The module in `deploy/terraform/gcp-cloud-run` of the `gantry-enterprise` repository runs one gateway on Cloud Run, with Cloud SQL Postgres 16 for the store, the audit log on Filestore over NFS, and the policy and secrets in Secret Manager.
+
+## What it creates
+
+| Resource | Why |
+|---|---|
+| Cloud Run service: second generation, one instance, CPU always on | HTTPS on the service URL. CPU stays on because the gateway syncs its audit log and polls the store between requests |
+| Cloud SQL Postgres 16: regional, backups and point-in-time recovery, database and user `gantry` | The store |
+| Cloud SQL connector volume at `/cloudsql` | Gantry connects to the database over a Unix socket |
+| Filestore BASIC_HDD share `gantry`, mounted at `/var/lib/gantry` | The audit log, one folder per revision |
+| Secret Manager secrets `<name>-database-url` and `<name>-policy` | The policy is mounted as `/etc/gantry/gantry.policy.yaml` |
+| Service account `<name>-run`, with `cloudsql.client` and access to each secret | What the gateway runs as |
+| `allUsers` invoker, when `public = true` | Gantry's own keys decide who may call |
+
+**Cloud SQL through the connector.** The connector authenticates with IAM, encrypts to Cloud SQL with mutual TLS, and gives the gateway a local Unix socket. Gantry connects to a socket without TLS of its own, since the traffic never leaves the instance. The database has a public IP with no authorized networks and requires client certificates, so only the connector reaches it.
+
+**Filestore, not Cloud Storage FUSE.** The audit log is one file that Gantry appends to and syncs every second. Cloud Storage FUSE rewrites a whole object on each sync and has no locking, so a crash or a second writer could cut the chain. NFS appends in place.
+
+## Prerequisites
+
+- Terraform 1.6 or later, `git`, Docker, and the `gcloud` command line signed in to the project with Application Default Credentials for Terraform: `gcloud auth application-default login`.
+- A Google Cloud project with billing on, and a role that can enable APIs and create Cloud Run, Cloud SQL, Filestore, Secret Manager secrets, service accounts and project IAM bindings (Owner, or Editor with Project IAM Admin and Secret Manager Admin).
+- A VPC network with a subnetwork in your region. The project's `default` network has one.
+- Read access to the `ggantry/gantry-enterprise` repository and `ghcr.io/ggantry/gantry-enterprise`: a GitHub user and a token with `read:packages`. Both come with your license.
+- Your license key, a provider key, and the image version you were given.
+
+The service URL comes with a Google-managed certificate, so the first deploy needs no certificate of your own.
+
+## Deploy
+
+<Steps>
+
+1. Copy the image into Artifact Registry. Cloud Run pulls from Artifact Registry, not from ghcr.io. `imagetools create` copies both architectures from registry to registry.
+
+   ```bash
+   gcloud config set project my-project
+   gcloud services enable artifactregistry.googleapis.com secretmanager.googleapis.com
+   gcloud artifacts repositories create gantry --repository-format=docker --location=europe
+   gcloud auth configure-docker europe-docker.pkg.dev
+   docker login ghcr.io -u <your GitHub user>
+   docker buildx imagetools create \
+     --tag europe-docker.pkg.dev/my-project/gantry/gantry-enterprise:<version> \
+     ghcr.io/ggantry/gantry-enterprise:<version>
+   ```
+
+2. Put the provider key and the license in Secret Manager. The module only references them by ID, so their values never enter Terraform state.
+
+   ```bash
+   printf '%s' 'sk-...' | gcloud secrets create openai-key --data-file=-
+   printf '%s' 'eyJjdXN0b21lciI6...' | gcloud secrets create gantry-license --data-file=-
+   ```
+
+3. Get the module and a starting policy.
+
+   ```bash
+   mkdir gantry-gcp && cd gantry-gcp
+   git clone https://github.com/ggantry/gantry-enterprise.git
+   cp gantry-enterprise/deploy/compose/gantry.policy.yaml .
+   ```
+
+   The policy must keep its last two lines: the audit log under `/var/lib/gantry` and `store: { postgres_url_env: DATABASE_URL }`.
+
+4. Write `main.tf`.
+
+   ```hcl title="main.tf"
+   terraform {
+     required_version = ">= 1.6"
+   }
+
+   provider "google" {
+     project = "my-project"
+     region  = "europe-west1"
+   }
+
+   module "gantry" {
+     source = "./gantry-enterprise/deploy/terraform/gcp-cloud-run"
+
+     project = "my-project"
+     region  = "europe-west1"
+     zone    = "europe-west1-b"
+     image   = "europe-docker.pkg.dev/my-project/gantry/gantry-enterprise:<version>"
+     policy  = file("gantry.policy.yaml")
+
+     license_secret       = "gantry-license"
+     provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key" }
+   }
+
+   output "gateway_url" {
+     value = module.gantry.gateway_url
+   }
+
+   output "revision" {
+     value = module.gantry.revision
+   }
+
+   output "filestore_ip" {
+     value = module.gantry.filestore_ip
+   }
+   ```
+
+   The database password ends up in Terraform state, because it builds `DATABASE_URL`. Keep the state in an encrypted backend, such as a Cloud Storage bucket.
+
+5. Apply.
+
+   ```bash
+   terraform init
+   terraform apply
+   ```
+
+   Cloud SQL and Filestore are the slowest part of the apply.
+
+</Steps>
+
+### Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `project`, `region` | required | Where Cloud Run and Cloud SQL run |
+| `zone` | required | The Filestore zone, in `region`: BASIC_HDD is zonal |
+| `image` | required | The image in Artifact Registry, pinned to a version |
+| `policy` | required | The policy as text. A change makes a new revision |
+| `provider_key_secrets` | `{}` | The variable each `key_env` names, mapped to a secret ID in this project. The latest version is read |
+| `license_secret` | `null` | Secret ID of the license. Null runs the open source features only |
+| `network`, `subnetwork` | `default`, `default` | For Filestore and the service's Direct VPC egress to it |
+| `cpu`, `memory` | `1`, `1Gi` | The instance's size |
+| `public` | `true` | Let anyone reach the URL. With `false`, callers also need a Google identity token with `run.invoker` |
+| `ingress` | `INGRESS_TRAFFIC_ALL` | Or `INGRESS_TRAFFIC_INTERNAL_ONLY`, `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` |
+| `db_tier`, `db_availability_type` | `db-custom-1-3840`, `REGIONAL` | The database's machine and a standby in a second zone |
+| `filestore_capacity_gb` | `1024` | BASIC_HDD starts at 1024 |
+| `deletion_protection` | `true` | Protects the database and the service |
+| `name`, `labels` | `gantry`, `{}` | Prefix and labels for every resource |
+
+### Outputs
+
+| Output | Holds |
+|---|---|
+| `gateway_url` | The service's HTTPS URL |
+| `service_name` | The Cloud Run service |
+| `revision` | The current revision, and the Filestore folder under `/gantry` holding its audit log |
+| `sql_connection_name` | The Cloud SQL instance's connection name |
+| `database_url_secret` | The secret holding `DATABASE_URL` |
+| `filestore_ip` | The Filestore address, to mount the audit logs for a check or a backup |
+| `service_account` | The service account the gateway runs as |
+
+## Verify
+
+<Steps>
+
+1. Check the gateway answers.
+
+   ```bash
+   export GATEWAY=$(terraform output -raw gateway_url)
+   curl -s $GATEWAY/healthz
+   ```
+
+2. Find the one-time link to make the first admin. The gateway prints it once at start, with the license line before it.
+
+   ```bash
+   gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="gantry" AND textPayload:"First run"' \
+     --limit 1 --format='value(textPayload)'
+   ```
+
+   ```text
+   First run: no admin key yet. Open http://127.0.0.1:8080/console/setup/efe8afe6... to make the first one. The link works once.
+   ```
+
+3. Make the first admin and sign in to the console. Open the link with `http://127.0.0.1:8080` replaced by `gateway_url`. Give your name and team, keep the admin key it shows once, and sign in at `$GATEWAY/console`.
+
+4. Issue a key with the admin API and make a governed call.
+
+   ```bash
+   export GANTRY_ADMIN_KEY=gantry_...
+   KEY=$(curl -s -X POST $GATEWAY/admin/keys \
+     -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H 'Content-Type: application/json' \
+     -d '{"name":"maya.cohen","team":"payments"}' | sed -n 's/.*"key":"\([^"]*\)".*/\1/p')
+   curl -s $GATEWAY/v1/chat/completions \
+     -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+     -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}]}'
+   ```
+
+5. Verify the audit log. In the console, open **Audit log** and select **Verify chain now**, and keep the last hash it shows where the project cannot write. To check with the command line, mount the share read-only on a Compute Engine VM in the same network, with `gantry` and `nfs-common` installed:
+
+   ```bash
+   sudo mkdir -p /mnt/gantry
+   sudo mount -o ro <filestore_ip>:/gantry /mnt/gantry
+   gantry audit verify /mnt/gantry/<revision>/gantry-audit.jsonl
+   ```
+
+</Steps>
+
+## Known limits of the module
+
+- **One instance.** Cloud Run cannot give each instance a volume of its own, and each gateway needs its own chain, so the service runs exactly one instance. For more, run the Helm chart on GKE.
+- **One chain per revision.** A deploy starts the new revision while the old one drains, so the revision is named after a hash of its inputs and writes to its own folder. Every change of image, policy, secrets, CPU or memory starts a new chain; the old chains stay on the share. Verify and back up each folder.
+- **A rotated secret needs a new revision.** Cloud Run reads secret versions when an instance starts, and the module makes a new revision only when its inputs change. To rotate a key, create a new secret (such as `openai-key-2`) and point `provider_key_secrets` at it.
+- **No metrics port.** Cloud Run serves one port, so `/metrics` is not exposed. Use Cloud Run's own request metrics and OpenTelemetry traces.
+- **Filestore BASIC_HDD starts at 1 TiB.** It is the smallest NFS share Filestore offers.
+- **`public = false` blocks most callers.** Coding tools and SDKs send a Gantry key, not a Google identity token. With an organization policy that forbids `allUsers`, put an internal load balancer in front and set `ingress` to match.
+- **Deletion is protected.** Set `deletion_protection = false` and apply before `terraform destroy`.
+
+## Production checklist
+
+- **TLS.** The service URL has a Google-managed certificate. For your own name, put a global external Application Load Balancer with a serverless network endpoint group and a Google-managed certificate in front, and set `ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"`.
+- **Secrets.** Provider keys and the license in Secret Manager, referenced by ID. `DATABASE_URL` is a secret the module writes. Keep the Terraform state encrypted: it holds the database password.
+- **Backups.** Cloud SQL keeps automated backups with point-in-time recovery. Back up the share from the console: **Filestore**, **Backups**, **Create backup**, on a schedule. Keep each revision's last hash outside the project.
+- **Monitoring.** An uptime check on `$GATEWAY/healthz` in Cloud Monitoring, and alerts on the service's 5xx count. For traces, store the collector's address in a secret and add it to the map: `provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key", OTEL_EXPORTER_OTLP_ENDPOINT = "otel-endpoint" }`. The map sets any variable from a secret.
+- **Upgrades.** Take a backup first, since a newer Gantry may update the schema and an older one refuses a database a newer one has written. Then copy the new image into Artifact Registry, change `image` and apply. The new revision starts before the old one drains, so there is no gap.
+
+  ```bash
+  gcloud sql backups create --instance=gantry
+  ```
+
+- **Rollback.** Send the traffic back to the previous revision. It mounts its own folder and continues its own chain. If it refuses the database because the new version changed the schema, restore the backup first.
+
+  ```bash
+  gcloud run revisions list --service gantry --region europe-west1
+  gcloud run services update-traffic gantry --region europe-west1 --to-revisions=<previous revision>=100
+  ```
+
+### What to watch
+
+| Signal | Meaning | Do |
+|---|---|---|
+| Failed startup or liveness probes, `/healthz` 503 | The gateway cannot write its audit log, or cannot reach the store at start | Read the revision's logs: the error names the fix |
+| Refusals with `store_unavailable` | Cloud SQL cannot be reached. Budgeted requests are refused; others are served | Check the instance's state and the connector's logs |
+| Filestore usage | About 1.35 GB per million requests | Grow `filestore_capacity_gb` |
+| License warning in the log | The license is in its 30-day grace period | Add the renewed license as a new secret and point `license_secret` at it |
+
+## Next
+
+<CardGrid>
+	<LinkCard title="Kubernetes" href="/deploy/kubernetes/" description="More than one replica on GKE, with the Helm chart." />
+	<LinkCard title="Observability" href="/operations/observability/" description="Traces and audit log shipping." />
+	<LinkCard title="Connect a project" href="/integrations/connect-a-project/" description="Move a project's model calls to your gateway." />
+</CardGrid>

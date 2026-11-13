@@ -1,0 +1,234 @@
+---
+title: Azure
+description: Deploy Gantry Enterprise on Azure with the azure-container-apps Terraform module, Container Apps with Azure Database for PostgreSQL and Azure Files, then verify and run it.
+sidebar:
+  order: 6
+---
+
+import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The module in `deploy/terraform/azure-container-apps` of the `gantry-enterprise` repository runs one gateway as a Container App with HTTPS ingress, with Azure Database for PostgreSQL Flexible Server 16 for the store, the audit log on Azure Files, and secrets as Key Vault references.
+
+## What it creates
+
+| Resource | Why |
+|---|---|
+| Resource group, virtual network with a subnet for the apps and a delegated subnet for the database | A private network for everything |
+| Container Apps environment (Consumption workload profile) and app: one replica, single revision mode | HTTPS ingress on the app's address, probes on `/healthz` |
+| PostgreSQL Flexible Server 16, private access only, a private DNS zone, database `gantry` | The store, reached from the virtual network only, with `sslmode=require` |
+| Key Vault secret `<name>-database-url` in your vault | The app reads `DATABASE_URL`, the provider keys and the license as Key Vault references |
+| User-assigned identity with Key Vault Secrets User on the vault | What the app reads secrets as |
+| Storage account (ZRS) and Azure Files share `gantry-audit`, mounted at `/var/lib/gantry` | The audit log, one folder per revision |
+| A busybox init container and an EmptyDir volume | Writes the policy to `/etc/gantry/gantry.policy.yaml`: the image has no shell |
+| Log Analytics workspace | The app's logs |
+
+## Prerequisites
+
+- Terraform 1.6 or later, `git`, and the Azure CLI signed in (`az login`). Terraform uses its sign-in.
+- A subscription where you can create resource groups, networks, Container Apps, PostgreSQL Flexible Servers, storage accounts, managed identities and role assignments (Owner, or Contributor with User Access Administrator).
+- A Key Vault with RBAC authorization, outside the resource group the module creates, where you hold Key Vault Secrets Officer: the module adds `DATABASE_URL` to it.
+- Read access to the `ggantry/gantry-enterprise` repository and `ghcr.io/ggantry/gantry-enterprise`: a GitHub user and a token with `read:packages`. Both come with your license.
+- Your license key, a provider key, and the image version you were given.
+
+The app's address comes with a managed certificate, so the first deploy needs no certificate of your own.
+
+## Deploy
+
+<Steps>
+
+1. Make the Key Vault and put the secrets in it. The module only references them by name, so their values never enter Terraform state.
+
+   ```bash
+   az group create --name gantry-secrets --location westeurope
+   az keyvault create --name acme-gantry-kv --resource-group gantry-secrets --location westeurope --enable-rbac-authorization true
+   az role assignment create --role "Key Vault Secrets Officer" \
+     --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+     --scope "$(az keyvault show --name acme-gantry-kv --query id -o tsv)"
+   az keyvault secret set --vault-name acme-gantry-kv --name openai-key --value 'sk-...'
+   az keyvault secret set --vault-name acme-gantry-kv --name gantry-license --value 'eyJjdXN0b21lciI6...'
+   az keyvault secret set --vault-name acme-gantry-kv --name ghcr-token --value '<token with read:packages>'
+   az keyvault show --name acme-gantry-kv --query id -o tsv
+   ```
+
+   A new role assignment can take a few minutes to reach Key Vault. The last line prints the vault's ID for `main.tf`.
+
+2. Get the module and a starting policy.
+
+   ```bash
+   mkdir gantry-azure && cd gantry-azure
+   git clone https://github.com/ggantry/gantry-enterprise.git
+   cp gantry-enterprise/deploy/compose/gantry.policy.yaml .
+   ```
+
+   The policy must keep its last two lines: the audit log under `/var/lib/gantry` and `store: { postgres_url_env: DATABASE_URL }`.
+
+3. Write `main.tf`. `resource_group_name` names a group the module creates, so it must not exist yet.
+
+   ```hcl title="main.tf"
+   terraform {
+     required_version = ">= 1.6"
+   }
+
+   provider "azurerm" {
+     features {}
+     subscription_id = "00000000-0000-0000-0000-000000000000"
+   }
+
+   module "gantry" {
+     source = "./gantry-enterprise/deploy/terraform/azure-container-apps"
+
+     location            = "westeurope"
+     resource_group_name = "gantry"
+     image               = "ghcr.io/ggantry/gantry-enterprise:<version>"
+     policy              = file("gantry.policy.yaml")
+
+     key_vault_id         = "/subscriptions/.../resourceGroups/gantry-secrets/providers/Microsoft.KeyVault/vaults/acme-gantry-kv"
+     license_secret       = "gantry-license"
+     provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key" }
+     registry             = { server = "ghcr.io", username = "<your GitHub user>", password_secret = "ghcr-token" }
+   }
+
+   output "gateway_url" {
+     value = module.gantry.gateway_url
+   }
+
+   output "revision_suffix" {
+     value = module.gantry.revision_suffix
+   }
+
+   output "audit_share" {
+     value = module.gantry.audit_share
+   }
+   ```
+
+   `az account show --query id -o tsv` prints the subscription ID. The database password and the storage account key end up in Terraform state. Keep the state in an encrypted backend, such as an Azure Storage container.
+
+4. Apply.
+
+   ```bash
+   terraform init
+   terraform apply
+   ```
+
+   If the first apply fails to read a secret from the vault, the role assignment has not reached it yet: run `terraform apply` again.
+
+</Steps>
+
+### Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `location` | required | The Azure region |
+| `resource_group_name` | required | The resource group the module creates |
+| `image` | required | The image, pinned to a version |
+| `policy` | required | The policy as text. A change makes a new revision |
+| `key_vault_id` | required | The vault holding the provider keys, the license and the registry token |
+| `provider_key_secrets` | `{}` | The variable each `key_env` names, mapped to a secret name in the vault |
+| `license_secret` | `null` | Secret name of the license. Null runs the open source features only |
+| `registry` | `null` | `server`, `username` and `password_secret` (a secret name in the vault), for ghcr.io |
+| `internal` | `false` | An environment reachable only inside the virtual network |
+| `allowed_cidrs` | `[]` | Address ranges that may reach the app. Empty allows all |
+| `cpu`, `memory` | `1`, `2Gi` | On Consumption, memory is twice the CPU |
+| `vnet_address_space` | `10.40.0.0/16` | The virtual network the module creates |
+| `db_sku`, `db_storage_mb`, `db_high_availability` | `GP_Standard_D2ds_v5`, `32768`, `false` | The database, and a zone-redundant standby |
+| `audit_share_quota_gb` | `100` | The size of the audit share |
+| `log_retention_days` | `30` | Log Analytics retention |
+| `name`, `tags` | `gantry`, `{}` | Prefix for every resource: 3 to 16 lowercase letters and digits, since it also names the storage account |
+
+### Outputs
+
+| Output | Holds |
+|---|---|
+| `gateway_url` | The app's HTTPS address |
+| `container_app_name` | The Container App |
+| `revision_suffix` | The current revision, and the folder on the share holding its audit log |
+| `database_fqdn` | The PostgreSQL server, reachable from the virtual network only |
+| `audit_share` | The storage account and share, as `<account>/gantry-audit` |
+| `outbound_ips` | The addresses the gateway calls providers from, for providers that allow-list callers |
+
+## Verify
+
+<Steps>
+
+1. Check the gateway answers.
+
+   ```bash
+   export GATEWAY=$(terraform output -raw gateway_url)
+   curl -s $GATEWAY/healthz
+   ```
+
+2. Find the one-time link to make the first admin. The gateway prints it once at start, with the license line before it.
+
+   ```bash
+   az containerapp logs show --name gantry --resource-group gantry --tail 100 | grep 'First run'
+   ```
+
+   ```text
+   First run: no admin key yet. Open http://127.0.0.1:8080/console/setup/efe8afe6... to make the first one. The link works once.
+   ```
+
+3. Make the first admin and sign in to the console. Open the link with `http://127.0.0.1:8080` replaced by `gateway_url`. Give your name and team, keep the admin key it shows once, and sign in at `$GATEWAY/console`.
+
+4. Issue a key with the admin API and make a governed call.
+
+   ```bash
+   export GANTRY_ADMIN_KEY=gantry_...
+   KEY=$(curl -s -X POST $GATEWAY/admin/keys \
+     -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H 'Content-Type: application/json' \
+     -d '{"name":"maya.cohen","team":"payments"}' | sed -n 's/.*"key":"\([^"]*\)".*/\1/p')
+   curl -s $GATEWAY/v1/chat/completions \
+     -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+     -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}]}'
+   ```
+
+5. Verify the audit log. In the console, open **Audit log** and select **Verify chain now**, and keep the last hash it shows outside the subscription. To check with the command line, download the file and verify the copy with the open source `gantry`:
+
+   ```bash
+   ACCOUNT=$(terraform output -raw audit_share | cut -d/ -f1)
+   az storage file download --account-name $ACCOUNT --share-name gantry-audit \
+     --path "$(terraform output -raw revision_suffix)/gantry-audit.jsonl" --dest gantry-audit.jsonl \
+     --account-key "$(az storage account keys list --account-name $ACCOUNT --query '[0].value' -o tsv)"
+   gantry audit verify gantry-audit.jsonl
+   ```
+
+</Steps>
+
+## Known limits of the module
+
+- **One replica.** Container Apps cannot give each replica a volume of its own, and each gateway needs its own chain, so the app runs exactly one replica. For more, run the Helm chart on AKS.
+- **One chain per revision.** A deploy starts the new revision while the old one drains, so the revision suffix is a hash of its inputs and the revision writes to its own folder. Every change of image, policy, secret names, registry, CPU or memory starts a new chain; the old chains stay on the share. Verify and back up each folder.
+- **The connection to the database is encrypted, not checked.** The module connects with `sslmode=require`: TLS on, the certificate not verified. The server has no public access and is reached only from the virtual network.
+- **No metrics port.** Ingress serves one port, so `/metrics` is not exposed. Use the app's own metrics in Azure Monitor and OpenTelemetry traces.
+- **Secret state.** The database password and the storage account key are in Terraform state.
+
+## Production checklist
+
+- **TLS.** The app's address has a managed certificate. For your own name, add a custom domain with a managed certificate to the Container App in the portal (**Custom domains**), or put Front Door in front.
+- **Secrets.** Provider keys, the license and the registry token in Key Vault, referenced by name. A new version of a secret is read when the replica restarts:
+
+  ```bash
+  az containerapp revision restart --name gantry --resource-group gantry \
+    --revision "$(az containerapp show --name gantry --resource-group gantry --query properties.latestRevisionName -o tsv)"
+  ```
+
+- **Backups.** The database keeps 7 days of automated backups with point-in-time restore. Back up the share with Azure Backup (in the portal: the storage account, **File shares**, `gantry-audit`, **Backup**). Keep each revision's last hash outside the subscription.
+- **Monitoring.** An availability test on `$GATEWAY/healthz` in Application Insights, and alerts on the app's restarts and 5xx responses. For traces, store the collector's address in the vault and add it to the map: `provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key", OTEL_EXPORTER_OTLP_ENDPOINT = "otel-endpoint" }`. The map sets any variable from a secret.
+- **Upgrades.** Take an on-demand backup of the database first (in the portal: the server, **Backup and restore**, **Backup now**), since a newer Gantry may update the schema and an older one refuses a database a newer one has written. Then change `image` and apply. The new revision starts before the old one drains, so there is no gap.
+- **Rollback.** Set `image` back and apply. If the previous version refuses the database because the new one changed the schema, restore the backup first.
+
+### What to watch
+
+| Signal | Meaning | Do |
+|---|---|---|
+| Probe failures and restarts, `/healthz` 503 | The gateway cannot write its audit log, or cannot reach the store at start | `az containerapp logs show`: the error names the fix |
+| Refusals with `store_unavailable` | The database cannot be reached. Budgeted requests are refused; others are served | Check the server's state in the portal |
+| Share usage | About 1.35 GB per million requests | Raise `audit_share_quota_gb` |
+| License warning in the log | The license is in its 30-day grace period | Set the renewed license in the vault and restart the revision |
+
+## Next
+
+<CardGrid>
+	<LinkCard title="Kubernetes" href="/deploy/kubernetes/" description="More than one replica on AKS, with the Helm chart." />
+	<LinkCard title="Observability" href="/operations/observability/" description="Traces and audit log shipping." />
+	<LinkCard title="Connect a project" href="/integrations/connect-a-project/" description="Move a project's model calls to your gateway." />
+</CardGrid>

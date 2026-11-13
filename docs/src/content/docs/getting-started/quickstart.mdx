@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
 
-This guide takes you from source to a governed request: one policy, one key, one request, one verified audit record.
+This guide takes you from source to a governed request: one policy, one key, one request, one verified audit record. To run Gantry Enterprise for a team, with Postgres and more than one replica, follow a [deploy guide](/deploy/overview/) instead.
 
 ## Prerequisites
 
@@ -250,3 +250,4 @@ Both requests are in the log: the allowed one and the refused one. Keep the last
 - [Policy file](/governance/policy/): budgets, rate limits, guardrails and caching per rule.
 - [Keys and identity](/governance/keys/): expiry, budgets per key, and self-service keys with `gantry login`.
 - [Deployment](/operations/deployment/): run Gantry on a shared host with TLS.
+- [Deploy Gantry Enterprise](/deploy/overview/): Docker Compose, Kubernetes, AWS, Google Cloud or Azure, from nothing to a production gateway.

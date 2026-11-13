@@ -1,0 +1,306 @@
+---
+title: Kubernetes
+description: Install Gantry Enterprise with its Helm chart on EKS, GKE, AKS or any cluster, with a managed Postgres, then scale out, upgrade, roll back and back it up.
+sidebar:
+  order: 3
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The chart in `deploy/helm/gantry` of the `gantry-enterprise` repository runs the gateway as a StatefulSet. Each pod gets its own claim (`data-gantry-0`, `data-gantry-1`, ...) for its audit log, and every pod shares keys, kill switches and budgets through one Postgres database.
+
+## Prerequisites
+
+- A cluster on Kubernetes 1.27 or later, with a default StorageClass that offers `ReadWriteOnce` volumes. EKS, GKE and AKS all do.
+- `kubectl` pointed at the cluster, `helm` 3 or later, and `git`.
+- Postgres 16 that the cluster can reach, with a database `gantry` and a user that has `CREATE` on it. Gantry creates its tables on first start. Use the cloud's managed Postgres.
+- Read access to the `ggantry/gantry-enterprise` repository and the `ghcr.io/ggantry/gantry-enterprise` package: a GitHub user and a token with `read:packages`. Both come with your license.
+- Your license key, a provider key (OpenAI in this guide), and the image version you were given.
+
+## Install
+
+<Steps>
+
+1. Get the chart, and give the install its own namespace.
+
+   ```bash
+   git clone https://github.com/ggantry/gantry-enterprise.git
+   kubectl create namespace gantry
+   kubectl config set-context --current --namespace gantry
+   ```
+
+2. Create the secrets. The chart reads secret values only from Secrets you make: none goes in a values file.
+
+   The image pull secret, because the registry is private:
+
+   ```bash
+   kubectl create secret docker-registry ghcr --docker-server=ghcr.io \
+     --docker-username=<your GitHub user> --docker-password=<token with read:packages>
+   ```
+
+   The gateway's environment: one entry per provider `key_env`, the license, and the database:
+
+   ```bash
+   kubectl create secret generic gantry-secrets \
+     --from-literal=OPENAI_PROVIDER_KEY=sk-... \
+     --from-literal=GANTRY_LICENSE='eyJjdXN0b21lciI6...' \
+     --from-literal=DATABASE_URL='postgres://gantry:<password>@<host>:5432/gantry'
+   ```
+
+   Gantry checks the database's TLS certificate. What `DATABASE_URL` needs depends on where Postgres runs:
+
+   | Postgres | `DATABASE_URL` | Also |
+   |---|---|---|
+   | Azure Database for PostgreSQL | `postgres://gantry:<password>@<server>.postgres.database.azure.com:5432/gantry` | Nothing: its certificate chains to a root built into Gantry |
+   | Amazon RDS (EKS) | `postgres://gantry:<password>@<instance>.<id>.<region>.rds.amazonaws.com:5432/gantry?sslrootcert=/etc/gantry/rds-global-bundle.pem` | The RDS certificate bundle, as below |
+   | Cloud SQL by private IP (GKE) | `postgres://gantry:<password>@<private IP>:5432/gantry?sslmode=verify-ca&sslrootcert=/etc/gantry/cloudsql-server-ca.pem` | The instance's server CA, as below. `verify-ca`, because the certificate does not name the IP |
+   | Postgres in the cluster, without TLS | `postgres://gantry:<password>@<service>.<namespace>.svc:5432/gantry?sslmode=disable` | Nothing. Key hashes and spend cross the cluster network in plain text, and Gantry warns at start |
+
+   Letters and digits in the password keep the string valid without escaping.
+
+3. Write `gantry-values.yaml`. The policy goes in as text; `store:` is what lets more than one replica run.
+
+   ```yaml title="gantry-values.yaml"
+   replicaCount: 2
+   imagePullSecrets:
+     - name: ghcr
+   envFromSecrets:
+     - gantry-secrets
+   policy: |
+     version: 1
+     providers:
+       - name: openai
+         kind: openai
+         url: https://api.openai.com/v1
+         key_env: OPENAI_PROVIDER_KEY
+         models: [gpt-4o-mini]
+     rules:
+       - name: everyone
+         principals: { any: true }
+         models: [gpt-4o-mini]
+     audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+     store: { postgres_url_env: DATABASE_URL }
+   ```
+
+   The chart refuses `replicaCount` above 1 when the policy has no `store:` line.
+
+4. For RDS or Cloud SQL, put the CA file beside the policy. The chart mounts its policy ConfigMap as the folder `/etc/gantry`, so a ConfigMap you make with both files puts the CA where `sslrootcert` names it. Skip this step for Azure and for a Postgres without TLS.
+
+   <Tabs>
+   <TabItem label="Amazon RDS">
+
+   ```bash
+   curl -sSfo rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+   ```
+
+   </TabItem>
+   <TabItem label="Cloud SQL">
+
+   ```bash
+   gcloud sql instances describe <instance> --format='value(serverCaCert.cert)' > cloudsql-server-ca.pem
+   ```
+
+   </TabItem>
+   </Tabs>
+
+   Save the policy text from `gantry-values.yaml` as `gantry.policy.yaml`, then:
+
+   ```bash
+   kubectl create configmap gantry-policy --from-file=gantry.policy.yaml --from-file=rds-global-bundle.pem
+   ```
+
+   (or `--from-file=cloudsql-server-ca.pem`), and add this line to `gantry-values.yaml`. The `policy` value is then not used:
+
+   ```yaml title="gantry-values.yaml"
+   existingPolicyConfigMap: gantry-policy
+   ```
+
+5. Install the chart.
+
+   ```bash
+   export GANTRY_VERSION=<version>
+   helm install gantry ./gantry-enterprise/deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
+   kubectl rollout status statefulset/gantry
+   ```
+
+</Steps>
+
+<Aside type="note">
+`postgres.enabled` starts a one-pod Postgres for trials, but the store cannot use it: its connection string has no `sslmode=disable` and the database has no TLS, so Gantry refuses to start. Use your own Postgres. `keys.existingSecret` seeds a keys file, which Gantry does not read while the policy has `store:`.
+</Aside>
+
+## Verify
+
+<Steps>
+
+1. Read what the first pod started with.
+
+   ```bash
+   kubectl logs gantry-0 -c gantry
+   ```
+
+   ```text
+   License lic_8f2 for Acme: scim, siem, 50 seats, until 2027-11-13.
+   gantry enterprise 0.0.1 listening on http://0.0.0.0:8080
+   First run: no admin key yet. Open http://127.0.0.1:8080/console/setup/efe8afe6... to make the first one. The link works once.
+   Audit log: /var/lib/gantry/gantry-audit.jsonl is new. The chain starts at record 1.
+   Keys, kill switches and budgets are shared through the store named by DATABASE_URL with every Gantry on that database.
+   ```
+
+   A pod that cannot reach the database or does not trust its certificate stops here with the cause and the fix: `sslrootcert`, `sslmode` or the host.
+
+2. Make the first admin and sign in to the console. Each pod prints its own one-time link, so forward to the pod whose link you open:
+
+   ```bash
+   kubectl port-forward pod/gantry-0 8080:8080
+   ```
+
+   Open the link from `gantry-0`'s log in a browser on this machine, give your name and team, and keep the admin key it shows once. Sign in at `http://127.0.0.1:8080/console` with it. Once an admin exists, no pod offers a link again.
+
+3. Issue a key with the admin API and make a governed call. In a second terminal, with the port forward running:
+
+   ```bash
+   export GANTRY_ADMIN_KEY=gantry_...
+   KEY=$(curl -s -X POST http://127.0.0.1:8080/admin/keys \
+     -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H 'Content-Type: application/json' \
+     -d '{"name":"maya.cohen","team":"payments"}' | sed -n 's/.*"key":"\([^"]*\)".*/\1/p')
+   curl -s http://127.0.0.1:8080/v1/chat/completions \
+     -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+     -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}]}'
+   ```
+
+   The key is in Postgres, so every pod accepts it within 2 seconds.
+
+4. Verify the audit log. In the console, open **Audit log** and select **Verify chain now**: the pod you are signed in to walks its whole chain, as `gantry audit verify` does, and shows its last hash. Each pod has its own chain, so do it on each (`kubectl port-forward pod/gantry-1 8080:8080`). The image has no shell and no `audit verify` command; to verify with the command line, ship the log off the pod and verify the copy.
+
+</Steps>
+
+## Expose it
+
+Turn on the Ingress with TLS at the Ingress, and session affinity, because console sign-ins live in the pod that made them. With ingress-nginx, add to `gantry-values.yaml`:
+
+```yaml title="gantry-values.yaml"
+ingress:
+  enabled: true
+  className: nginx
+  host: gantry.example.com
+  tlsSecretName: gantry-tls
+  annotations:
+    nginx.ingress.kubernetes.io/affinity: cookie
+```
+
+`gantry-tls` is a `kubernetes.io/tls` Secret, from cert-manager or `kubectl create secret tls gantry-tls --cert=tls.crt --key=tls.key`. The chart's default annotations stay: buffering off so answers stream, 32m bodies, a 600-second read timeout. For another controller, set the same three things.
+
+```bash
+helm upgrade gantry ./gantry-enterprise/deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
+curl -s https://gantry.example.com/healthz
+```
+
+`networkPolicy.enabled: true` limits who reaches the pods (`networkPolicy.from`) and where they connect (`networkPolicy.egress`, default any host on 443). Add your database's port to `egress` when it is not 443.
+
+## Change the policy
+
+Change `policy` in `gantry-values.yaml` and run the same `helm upgrade`. The pods do not restart: the kubelet updates the mounted file within about a minute, and each pod checks it and uses it within 2 seconds, or keeps the old one and records `config_rejected`. With `existingPolicyConfigMap`, update the ConfigMap instead:
+
+```bash
+kubectl create configmap gantry-policy --from-file=gantry.policy.yaml --from-file=rds-global-bundle.pem \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Changing the `store:` section needs a restart: `kubectl rollout restart statefulset/gantry`.
+
+## Scale out
+
+```bash
+helm upgrade gantry ./gantry-enterprise/deploy/helm/gantry --reuse-values --set replicaCount=3
+```
+
+The new pod gets its own claim and starts its own chain. Scaling down keeps the claims, and scaling up again reuses them, so a returning pod continues its chain. Budgets are enforced once across every pod. Rate limits and the answer cache are counted per pod.
+
+## Upgrade and roll back
+
+<Steps>
+
+1. Back up Postgres. A newer Gantry may update the database schema, and an older one refuses a database a newer one has written.
+
+2. Upgrade.
+
+   ```bash
+   export GANTRY_VERSION=<new version>
+   helm upgrade gantry ./gantry-enterprise/deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
+   kubectl rollout status statefulset/gantry
+   ```
+
+   Pods are replaced one at a time, from the highest number down, so with two or more replicas the gateway keeps serving. Each new pod verifies its chain and continues it: `kubectl logs gantry-0 -c gantry | grep 'Audit log'`.
+
+3. To roll back, return to the previous release.
+
+   ```bash
+   helm history gantry
+   helm rollback gantry
+   ```
+
+   If the previous version refuses the database because the new one changed its schema, restore the backup from step 1 first.
+
+</Steps>
+
+## Backups
+
+| What | How |
+|---|---|
+| Postgres | The managed database's automated backups, with point-in-time recovery on |
+| Audit volumes | A `VolumeSnapshot` of each claim on a schedule, through your CSI driver, or Velero |
+| The audit log, as written | A log shipper as a second container in the pod, the data volume mounted read-only. See [Observability](/operations/observability/#shipping-the-audit-log) |
+| Last hashes | Copy each pod's last hash from **Verify chain now** to a place the cluster cannot write |
+| The policy | `gantry-values.yaml` in version control |
+
+```yaml title="snapshot.yaml"
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: data-gantry-0-2026-11-13
+spec:
+  volumeSnapshotClassName: <your snapshot class>
+  source:
+    persistentVolumeClaimName: data-gantry-0
+```
+
+`helm uninstall gantry` keeps every claim: the audit log is the record of every request. Delete them by hand when you mean to.
+
+## Production checklist
+
+- **TLS.** At the Ingress, as above. The metrics port is never on the Ingress.
+- **Secrets.** In Kubernetes Secrets, ideally synced from the cloud's store (AWS Secrets Manager, Google Secret Manager, Azure Key Vault) by the External Secrets Operator or the Secrets Store CSI driver into `gantry-secrets`. A changed secret needs `kubectl rollout restart statefulset/gantry`.
+- **Backups.** Postgres and every audit claim, as above.
+- **Monitoring.** `metrics.enabled: true` serves `/metrics` on port 9464 in the Service; `metrics.serviceMonitor.enabled: true` adds a Prometheus Operator `ServiceMonitor`. Set `otel` for traces:
+
+  ```yaml title="gantry-values.yaml"
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+  otel:
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318
+    OTEL_SERVICE_NAME: gantry
+  ```
+
+- **Upgrades and rollback.** As above, with a database backup before each.
+- **Resources.** The default 384 MiB memory limit holds the full 256 MiB request-body budget. Raise the CPU request to what your load uses.
+
+### What to watch
+
+| Signal | Meaning | Do |
+|---|---|---|
+| `gantry_audit_broken` is `1`, or `/healthz` answers 503 | The pod cannot write its audit log. The liveness probe restarts it after a minute | Check the claim's free space |
+| Refusals with `store_unavailable` | Postgres cannot be reached. Requests under a budget are refused; others are served | Check the database and the network policy |
+| Claim usage | About 1.35 GB per million requests per pod | Grow the claim, or start a new chain |
+| Pods not ready after an upgrade | `kubectl logs` names the cause | Fix it, or `helm rollback gantry` |
+| License warning at start | The license is in its 30-day grace period | Update `GANTRY_LICENSE` in the Secret and restart |
+
+## Next
+
+<CardGrid>
+	<LinkCard title="Several replicas with a store" href="/operations/store/" description="What the store holds and what happens when Postgres is down." />
+	<LinkCard title="Observability" href="/operations/observability/" description="Metrics, traces and audit log shipping." />
+	<LinkCard title="Connect a project" href="/integrations/connect-a-project/" description="Move a project's model calls to your gateway." />
+</CardGrid>

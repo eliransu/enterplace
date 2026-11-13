@@ -1,0 +1,281 @@
+---
+title: Docker Compose
+description: Run Gantry Enterprise and Postgres on one machine with Docker Compose, make a governed call, sign in to the console, verify the audit log, then harden the VM.
+sidebar:
+  order: 2
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The Compose stack in `deploy/compose` runs the gateway and Postgres 16 on one machine, each with a named volume: `gantry-data` for the audit log and `postgres-data` for the database. It fits a trial on a laptop and a team on one VM.
+
+## Prerequisites
+
+- Docker with Compose v2 (`docker compose version` prints a version).
+- `git`, `curl` and `openssl`.
+- Read access to the `ggantry/gantry-enterprise` repository and the `ghcr.io/ggantry/gantry-enterprise` package. Both come with your license, for a GitHub account or a token with `read:packages`.
+- Your license key, and a key for at least one provider (OpenAI in this guide).
+
+## From nothing to a governed call
+
+<Steps>
+
+1. Get the files. The stack builds the `gantry` command line from the open source repository, so clone both side by side.
+
+   ```bash
+   mkdir gantry-deploy && cd gantry-deploy
+   git clone https://github.com/ggantry/gantry-enterprise.git
+   git clone https://github.com/ggantry/gantry.git
+   cd gantry-enterprise/deploy/compose
+   ```
+
+   Every command below runs in `gantry-enterprise/deploy/compose`.
+
+2. Write the settings. Compose reads `.env` from this folder.
+
+   ```bash
+   cp .env.example .env
+   openssl rand -hex 16    # a password for POSTGRES_PASSWORD
+   ```
+
+   Open `.env` and set:
+
+   | Variable | Value |
+   |---|---|
+   | `POSTGRES_PASSWORD` | Letters and digits only, such as the output of `openssl rand -hex 16`. It goes into a connection string unescaped |
+   | `OPENAI_PROVIDER_KEY` | Your OpenAI key. The policy names it in `key_env` |
+   | `GANTRY_LICENSE` | Your license key, on one line. Empty runs the open source features only |
+   | `GANTRY_IMAGE` | The image to run, in the next step |
+   | `GANTRY_BIND`, `GANTRY_PORT` | Where Gantry listens. Empty means `127.0.0.1` and `8080` |
+
+3. Get the images: the gateway, and the `cli` service, which is the open source `gantry` command line for `key new` and `audit verify`.
+
+   <Tabs>
+   <TabItem label="Pull the release">
+
+   Log in with your GitHub user and a token with `read:packages`, then set the version you were given in `.env`:
+
+   ```bash
+   docker login ghcr.io -u <your GitHub user>
+   ```
+
+   ```bash title=".env"
+   GANTRY_IMAGE=ghcr.io/ggantry/gantry-enterprise:<version>
+   ```
+
+   ```bash
+   docker compose pull gantry
+   docker compose --profile tools build cli
+   ```
+
+   </TabItem>
+   <TabItem label="Build from source">
+
+   Leave `GANTRY_IMAGE` empty. Compose builds the image from `gantry-enterprise/Dockerfile`, with the folder that holds both repositories as its context.
+
+   ```bash
+   docker compose --profile tools build gantry cli
+   ```
+
+   </TabItem>
+   </Tabs>
+
+4. Start the stack.
+
+   ```bash
+   docker compose up -d
+   curl -s http://127.0.0.1:8080/healthz
+   ```
+
+   ```json
+   {"status":"ok","policy_sha256":"2e4896bb...","keys_sha256":"aebe9c54...","rejected":null}
+   ```
+
+   Gantry waits for Postgres to be healthy, creates its tables in the `gantry` database, and starts. `docker compose logs gantry` shows what it started with:
+
+   ```text
+   License lic_8f2 for Acme: scim, siem, 50 seats, until 2027-11-13.
+   warning: DATABASE_URL says sslmode=disable, so the connection to the store is not encrypted: ...
+   gantry enterprise 0.0.1 listening on http://0.0.0.0:8080
+   First run: no admin key yet. Open http://127.0.0.1:8080/console/setup/efe8afe6... to make the first one. The link works once.
+   Audit log: /var/lib/gantry/gantry-audit.jsonl is new. The chain starts at record 1.
+   1 rule, 0 keys, 1 provider: openai (openai) at https://api.openai.com/v1.
+   Keys, kill switches and budgets are shared through the store named by DATABASE_URL with every Gantry on that database.
+   ```
+
+   The `sslmode=disable` warning is expected here: Gantry shares the Postgres container's network, so the database is on the same machine and its traffic never crosses a network.
+
+5. Make the first admin and sign in to the console. Print the one-time link and open it in a browser on this machine.
+
+   ```bash
+   docker compose logs gantry | grep 'First run'
+   ```
+
+   Give your name and team. The page shows your admin key once: keep it in your password manager. Sign in at `http://127.0.0.1:8080/console` with it. The key works within 2 seconds.
+
+6. Issue a key and make a governed call.
+
+   ```bash
+   KEY=$(docker compose run --rm -T cli key new maya.cohen --team payments --policy /etc/gantry/gantry.policy.yaml --quiet)
+   sleep 2
+   curl -s http://127.0.0.1:8080/v1/chat/completions \
+     -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+     -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hi"}]}'
+   ```
+
+   `key new` writes the key's hash to Postgres, because the policy has `store:`, and prints the key alone. Every gateway on the database accepts it within 2 seconds. The answer is OpenAI's, with an `X-Gantry-Decision` header added. A call without a key is refused with 401 `no_key`.
+
+7. Verify the audit log.
+
+   ```bash
+   docker compose run --rm -T cli audit verify /var/lib/gantry/gantry-audit.jsonl
+   ```
+
+   ```text
+   /var/lib/gantry/gantry-audit.jsonl: 9 records in an unbroken chain from record 1 to record 9.
+   1 request, 3 configuration records, 4 admin records, 1 usage record.
+   Last hash: b92eb3a59f5e593cc7ad082fb6308e924b5f32f6f152163b935e574169e44ec3
+   ```
+
+   The console's **Audit log** page does the same with **Verify chain now**.
+
+</Steps>
+
+## Change the policy
+
+The policy is `gantry.policy.yaml` in this folder, mounted read-only. Edit it, check it, and Gantry uses it within 2 seconds. A change that fails the check is not used: Gantry keeps the version it has and records `config_rejected`.
+
+```bash
+docker compose run --rm -T cli check /etc/gantry/gantry.policy.yaml
+```
+
+```text
+/etc/gantry/gantry.policy.yaml is valid: 1 rule, keys in the store named by DATABASE_URL, 1 provider: openai (openai) at https://api.openai.com/v1.
+```
+
+To use another file, set `GANTRY_POLICY=./my.policy.yaml` in `.env`. Changing the `store:` section needs `docker compose up -d --force-recreate gantry`.
+
+## Production on one VM
+
+<Steps>
+
+1. **TLS.** Keep `GANTRY_BIND` empty, so Gantry listens on `127.0.0.1` only, and put Caddy on the VM in front of it. Caddy gets and renews the certificate.
+
+   ```text title="/etc/caddy/Caddyfile"
+   gantry.example.com {
+       reverse_proxy 127.0.0.1:8080 {
+           flush_interval -1
+       }
+   }
+   ```
+
+   For nginx, see [Deployment](/operations/deployment/#a-proxy-in-front). Callers then use `https://gantry.example.com/v1`.
+
+2. **Secrets.** `.env` holds the database password, the provider keys and the license. It is in `.gitignore`. Make it readable by its owner only, or write it at boot from your secret manager.
+
+   ```bash
+   chmod 600 .env
+   ```
+
+3. **Start on boot.** Every service has `restart: unless-stopped`, so the stack comes back when Docker does.
+
+   ```bash
+   sudo systemctl enable docker
+   ```
+
+4. **Back up Postgres** on a schedule. It holds the keys, kill switches and spend.
+
+   ```bash
+   docker compose exec -T postgres pg_dump -U gantry gantry > gantry-db-$(date +%F).sql
+   ```
+
+   To restore, stop the gateway, load the dump into an empty database, and start it again:
+
+   ```bash
+   docker compose stop gantry
+   docker compose exec -T postgres dropdb -U gantry gantry
+   docker compose exec -T postgres createdb -U gantry gantry
+   docker compose exec -T postgres psql -q -U gantry -d gantry < gantry-db-2026-11-13.sql
+   docker compose start gantry
+   ```
+
+5. **Back up the audit volume** and keep its last hash where the VM cannot write. A chain cannot show records removed from its end; the kept hash can.
+
+   ```bash
+   docker run --rm -v gantry_gantry-data:/data:ro -v "$PWD":/backup busybox:1.36.1 \
+     tar czf /backup/gantry-data-$(date +%F).tgz -C /data .
+   docker compose run --rm -T cli audit verify /var/lib/gantry/gantry-audit.jsonl | sed -n 's/^Last hash: //p'
+   ```
+
+   Later, `audit verify ... --expect-last <kept hash>` proves no record up to it was changed or removed. To ship the log as it is written, see [Observability](/operations/observability/#shipping-the-audit-log).
+
+6. **Monitoring.** Add metrics and traces with a `docker-compose.override.yml` beside `docker-compose.yml`. Compose reads it on every command. The port is published on the `postgres` service because Gantry shares its network.
+
+   ```yaml title="docker-compose.override.yml"
+   services:
+     postgres:
+       ports:
+         - "127.0.0.1:9464:9464"
+     gantry:
+       command: ["serve", "/etc/gantry/gantry.policy.yaml", "--keys", "/var/lib/gantry/gantry.keys.yaml", "--listen", "0.0.0.0:8080", "--metrics", "0.0.0.0:9464"]
+       environment:
+         OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.internal:4318
+   ```
+
+   ```bash
+   docker compose up -d
+   curl -s http://127.0.0.1:9464/metrics | head -3
+   ```
+
+   Point your uptime check at `https://gantry.example.com/healthz`. Scrape configuration and alerts are in [Observability](/operations/observability/#scrape-and-alert).
+
+7. **Upgrade.** Back up Postgres first: a newer Gantry may update the database schema, and an older one refuses a database a newer one has written. Then set the new version in `.env` and recreate the gateway. Requests in flight get 30 seconds.
+
+   ```bash
+   docker compose exec -T postgres pg_dump -U gantry gantry > gantry-db-before-upgrade.sql
+   docker compose pull gantry
+   docker compose up -d
+   docker compose logs gantry | grep 'Audit log'
+   ```
+
+   The start line says the chain continues at the next record. When you build from source, run `git pull` in both repositories and `docker compose --profile tools build gantry cli` in place of `docker compose pull gantry`.
+
+8. **Roll back.** Set `GANTRY_IMAGE` back to the previous version and run `docker compose up -d`. If the previous version refuses the database because the new one changed its schema, restore the dump taken before the upgrade, as in step 4.
+
+</Steps>
+
+### What to watch
+
+| Signal | Meaning | Do |
+|---|---|---|
+| `/healthz` answers 503, or `gantry_audit_broken` is `1` | The audit log cannot be written. Every request is refused | Free disk space on the volume, then `docker compose restart gantry` |
+| Refusals with `store_unavailable` | Postgres is down. Requests under a budget are refused; others are served | `docker compose ps postgres`, `docker compose logs postgres` |
+| Disk use of the `gantry-data` volume | About 1.35 GB per million requests | [Start a new chain](/operations/operations/#start-a-new-chain) before the disk fills |
+| The license line at start | A warning means the license is in its 30-day grace period | Set the renewed license and recreate the gateway |
+| Certificate expiry | Caddy renews on its own; a certificate you manage does not | Renew before it lapses |
+
+<Aside type="caution">
+One gateway per `gantry-data` volume. Two processes writing one audit log break its chain. To run more than one replica, use [Kubernetes](/deploy/kubernetes/) or [AWS](/deploy/aws/).
+</Aside>
+
+## Test the stack without a provider
+
+`test/run.sh` starts the stack with an OpenAI-compatible mock in place of OpenAI, issues a key, makes a governed call, checks that a call without a key gets 401 and verifies the audit chain. It runs as its own Compose project on port `18080` and removes everything it made.
+
+```bash
+sh test/run.sh
+```
+
+```text
+governed call: 200, answer from the mock
+call without a key: 401
+compose test passed
+```
+
+## Next
+
+<CardGrid>
+	<LinkCard title="Connect a project" href="/integrations/connect-a-project/" description="Move a project's model calls to your gateway." />
+	<LinkCard title="Policy file" href="/governance/policy/" description="Rules, budgets and guardrails." />
+	<LinkCard title="Kubernetes" href="/deploy/kubernetes/" description="More than one replica, with the Helm chart." />
+</CardGrid>

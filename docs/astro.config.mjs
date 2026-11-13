@@ -23,6 +23,7 @@ export default defineConfig({
 			lastUpdated: true,
 			sidebar: [
 				{ label: 'Getting started', items: [{ label: 'Overview', link: '/' }, { autogenerate: { directory: 'getting-started' } }] },
+				group('Deploy', 'deploy'),
 				group('Integrations', 'integrations'),
 				group('Governance', 'governance'),
 				group('Providers', 'providers'),
