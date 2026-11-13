@@ -297,6 +297,25 @@ Gantry then holds the whole stream (up to 64 MiB), joins the text its events car
 
 The cost is latency: the caller sees no token until the model has written its last. `gantry check` refuses `buffer_stream: true` on a rule with no `on: [answer]` guardrail.
 
+### Checking a stream as it comes: check_stream_every
+
+`check_stream_every: <characters>` is the middle way. Gantry passes the stream on a window at a time: it holds each window until the answer guardrails, webhooks included, have read the whole text so far, then sends it. When a guardrail blocks, the stream stops there. The caller has the text checked before it, then an error event in its API's shape (`code: guardrail_blocked`), and the provider's stream is dropped. Blocked text never reaches the caller.
+
+```yaml title="gantry.policy.yaml"
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+    guardrails: [vendor]
+    check_stream_every: 300
+```
+
+- The caller sees text in bursts of about `check_stream_every` characters, each one guardrail round trip later than the model wrote it. 50 to 100000.
+- Each check sends the whole answer so far, so a webhook sees context, and a phrase split across windows is still found.
+- The record is one `answer_guardrails` record: `pass` at the end, or `block` with `stopped_after_chars`, the characters sent before the stop.
+- Masking cannot rewrite text already sent: `gantry check` refuses a masking answer guardrail on such a rule, and a webhook that answers `mask` stops the stream like a block. Use `buffer_stream` to mask streamed answers.
+- `gantry check` refuses it with `buffer_stream` on the same rule, and on a rule with no `on: [answer]` guardrail.
+
 <Aside type="caution">
 A Responses request that names `previous_response_id`, `conversation` or a stored `prompt` makes the provider add text Gantry never sees, so guardrails do not check it. Send `store: false` and the whole conversation in `input`.
 </Aside>

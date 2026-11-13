@@ -144,6 +144,7 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `rate` | map | none | `{ rpm: 1 to 1000000, tpm: 1 to 1000000000 }`, either or both. |
 | `cache` | map | none | `{ ttl_seconds: 1 to 86400 }`. See [Caching](/routing/caching/). |
 | `buffer_stream` | boolean | `false` | Hold a streamed answer whole so `on: [answer]` guardrails check it first. Needs a guardrail with `on: [answer]`. |
+| `check_stream_every` | integer | none | Check a streamed answer every this many characters, sending only what was checked. See [guardrails](/governance/guardrails/#checking-a-stream-as-it-comes-check_stream_every). |
 | `passthrough` | list | `[]` | Native provider paths the rule may reach as sent. See [Passthrough](#passthrough). |
 
 Every model a budgeted rule reaches must have a price, built in or under `prices:`. For `models: ["*"]` that is every model every provider serves. `gantry check` refuses a file that breaks this.

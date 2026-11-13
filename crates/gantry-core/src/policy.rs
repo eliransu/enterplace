@@ -100,6 +100,8 @@ pub struct Limits {
     pub cache_ttl_seconds: Option<u64>,
     /// Hold a streamed answer whole so the answer guardrails check it before the caller sees any of it.
     pub buffer_stream: bool,
+    /// Check a streamed answer every this many characters, letting through only what was checked.
+    pub check_stream_every: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

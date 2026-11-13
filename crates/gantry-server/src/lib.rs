@@ -1875,6 +1875,10 @@ async fn decide(
             team: seen.person.map(|p| p.team.clone()).unwrap_or_default(),
             path: path.clone(),
             buffer_stream: seen.rule.is_some_and(|r| r.limits.buffer_stream),
+            stream_every: seen
+                .rule
+                .and_then(|r| r.limits.check_stream_every)
+                .map(|n| n as usize),
         };
         match &mut outcome {
             Ok(Next::Forward(parts, _, _)) => {
@@ -2191,6 +2195,8 @@ struct AnswerCheck {
     path: String,
     /// The rule's `buffer_stream`: a streamed answer is held whole and checked too.
     buffer_stream: bool,
+    /// The rule's `check_stream_every`: a streamed answer is checked every this many characters as it comes.
+    stream_every: Option<usize>,
 }
 
 /// Runs `on: [answer]` guardrails on a whole answer before it reaches the caller: a block replaces it with a
@@ -2218,6 +2224,9 @@ async fn answer_guarded(
         record
     };
     let streamed = is_type(&response, "text/event-stream");
+    if let (true, Some(every)) = (streamed, check.stream_every) {
+        return Ok(windowed(state, check, decision, response, every));
+    }
     if streamed && !check.buffer_stream {
         if let Some(audit) = &state.audit {
             let record = record("not_run: the answer is streamed".into(), "not_run");
@@ -2247,32 +2256,7 @@ async fn answer_guarded(
             .collect();
         (answer, pointers, texts)
     };
-    let view = serde_json::json!({
-        "messages": texts
-            .iter()
-            .map(|t| serde_json::json!({"role": "assistant", "content": t}))
-            .collect::<Vec<_>>()
-    });
-    let mut verdict = guard::check_reply(view, &check.guards);
-    for guardrail in &check.guards {
-        let guard::Check::Webhook(hook) = &guardrail.check else {
-            continue;
-        };
-        if verdict.blocked.is_some() {
-            break;
-        }
-        let sent = guard::WebhookRequest::new(
-            decision,
-            &check.person,
-            &check.team,
-            &check.path,
-            &verdict.body,
-        );
-        let reply = ask(state, guardrail.action, hook, &sent).await;
-        if let Some(cause) = verdict.merge_answer(guardrail, &sent, reply) {
-            eprintln!("gantry: decision {decision}: on the answer: {cause}");
-        }
-    }
+    let verdict = answer_verdict(state, &check, decision, &texts).await;
     let word = match (&verdict.blocked, verdict.changed) {
         (Some(_), _) => "block",
         (None, true) => "mask",
@@ -2339,6 +2323,189 @@ async fn answer_guarded(
     let masked = serde_json::to_vec(&answer).map_err(|_| unreadable())?;
     parts.headers.remove(header::CONTENT_LENGTH);
     Ok(Response::from_parts(parts, Body::from(masked)))
+}
+
+/// The answer guardrails' verdict on the model's texts: the built-in detectors, then each webhook in order until one
+/// blocks.
+async fn answer_verdict(
+    state: &AppState,
+    check: &AnswerCheck,
+    decision: &str,
+    texts: &[serde_json::Value],
+) -> guard::Verdict {
+    let view = serde_json::json!({
+        "messages": texts
+            .iter()
+            .map(|t| serde_json::json!({"role": "assistant", "content": t}))
+            .collect::<Vec<_>>()
+    });
+    let mut verdict = guard::check_reply(view, &check.guards);
+    for guardrail in &check.guards {
+        let guard::Check::Webhook(hook) = &guardrail.check else {
+            continue;
+        };
+        if verdict.blocked.is_some() {
+            break;
+        }
+        let sent = guard::WebhookRequest::new(
+            decision,
+            &check.person,
+            &check.team,
+            &check.path,
+            &verdict.body,
+        );
+        let reply = ask(state, guardrail.action, hook, &sent).await;
+        if let Some(cause) = verdict.merge_answer(guardrail, &sent, reply) {
+            eprintln!("gantry: decision {decision}: on the answer: {cause}");
+        }
+    }
+    verdict
+}
+
+/// The end of the last whole event in a stream read so far: just after its blank line.
+fn whole_events(bytes: &[u8]) -> usize {
+    bytes
+        .windows(2)
+        .rposition(|w| w == b"\n\n")
+        .map_or(0, |at| at + 2)
+}
+
+/// The event that ends a stream a guardrail stopped, in the caller's API.
+fn blocked_event(path: &str, message: &str) -> String {
+    match path {
+        MESSAGES => format!(
+            "event: error\ndata: {}\n\n",
+            serde_json::json!({"type": "error", "error": {"type": "permission_error", "message": message}})
+        ),
+        RESPONSES => format!(
+            "event: error\ndata: {}\n\n",
+            serde_json::json!({"type": "error", "code": guard::BLOCKED_CODE, "message": message})
+        ),
+        _ => format!(
+            "data: {}\n\n",
+            serde_json::json!({"error": {"message": message, "type": "gantry_error", "code": guard::BLOCKED_CODE}})
+        ),
+    }
+}
+
+/// The checked part of a streamed answer, released to the caller as it is checked.
+struct Released(tokio::sync::mpsc::Receiver<Bytes>);
+
+impl http_body::Body for Released {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+        self.0
+            .poll_recv(cx)
+            .map(|b| b.map(|b| Ok(http_body::Frame::data(b))))
+    }
+}
+
+/// `check_stream_every`: passes a streamed answer on a window at a time. Each window is held until the answer
+/// guardrails have read the whole text so far and let it through, so text a guardrail blocks never reaches the
+/// caller: the stream ends there with an error event in the caller's API, and the provider's stream is dropped.
+/// A guardrail that would rewrite the text stops it too, since what was sent cannot be rewritten (`gantry check`
+/// refuses a masking answer guardrail on such a rule; a webhook may still answer mask).
+fn windowed(
+    state: &AppState,
+    check: AnswerCheck,
+    decision: &str,
+    response: Response,
+    every: usize,
+) -> Response {
+    let (mut parts, mut body) = response.into_parts();
+    parts.headers.remove(header::CONTENT_LENGTH);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(8);
+    let (state, decision) = (state.clone(), decision.to_string());
+    tokio::spawn(async move {
+        let mut seen: Vec<u8> = Vec::new();
+        let (mut released, mut checked) = (0usize, 0usize);
+        loop {
+            let done = match body.frame().await {
+                Some(Ok(frame)) => {
+                    if let Ok(data) = frame.into_data() {
+                        seen.extend_from_slice(&data);
+                    }
+                    false
+                }
+                // The provider's stream ended or broke: what is left is checked as the end.
+                _ => true,
+            };
+            let end = if done {
+                seen.len()
+            } else {
+                whole_events(&seen)
+            };
+            if end > released {
+                let texts: Vec<serde_json::Value> = stream_texts(&seen[..end])
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(_, text)| text.into())
+                    .collect();
+                let chars: usize = texts
+                    .iter()
+                    .filter_map(|t| t.as_str())
+                    .map(|t| t.chars().count())
+                    .sum();
+                if done || chars >= checked + every {
+                    let verdict = answer_verdict(&state, &check, &decision, &texts).await;
+                    if verdict.blocked.is_some() || verdict.changed {
+                        let name = verdict
+                            .blocked
+                            .as_ref()
+                            .map_or("a guardrail", |b| b.guardrail.as_str())
+                            .to_string();
+                        if let Some(audit) = &state.audit {
+                            let mut record = serde_json::Map::new();
+                            record.insert("event".into(), "answer_guardrails".into());
+                            record.insert("id".into(), decision.as_str().into());
+                            record.insert("time".into(), gantry_core::audit::timestamp().into());
+                            record.insert("verdict".into(), "block".into());
+                            record.insert(
+                                "guardrails".into(),
+                                serde_json::to_value(&verdict.audit).unwrap_or_default(),
+                            );
+                            record.insert("stopped_after_chars".into(), checked.into());
+                            audit.log.append_record_then(&record, |_| {});
+                        }
+                        let message = format!(
+                            "Refused: guardrail \"{name}\" stopped the model's answer partway. What came before was checked and sent; the rest was withheld. Ask in another way, or ask a Gantry admin about the guardrail."
+                        );
+                        let _ = tx
+                            .send(Bytes::from(blocked_event(&check.path, &message)))
+                            .await;
+                        return;
+                    }
+                    checked = chars;
+                    if tx
+                        .send(Bytes::copy_from_slice(&seen[released..end]))
+                        .await
+                        .is_err()
+                    {
+                        // The caller left: the provider's stream is dropped with the body.
+                        return;
+                    }
+                    released = end;
+                }
+            }
+            if done {
+                if let Some(audit) = &state.audit {
+                    let mut record = serde_json::Map::new();
+                    record.insert("event".into(), "answer_guardrails".into());
+                    record.insert("id".into(), decision.as_str().into());
+                    record.insert("time".into(), gantry_core::audit::timestamp().into());
+                    record.insert("verdict".into(), "pass".into());
+                    record.insert("guardrails".into(), serde_json::Value::Array(Vec::new()));
+                    audit.log.append_record_then(&record, |_| {});
+                }
+                return;
+            }
+        }
+    });
+    Response::from_parts(parts, Body::new(Released(rx)))
 }
 
 /// Where the model's text is in one event of a stream, as (slot, JSON pointer) pairs: a slot is one text the

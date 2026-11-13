@@ -58,6 +58,7 @@ const KNOWN: &[&str] = &[
     "cache",
     "ttl_seconds",
     "buffer_stream",
+    "check_stream_every",
     "passthrough",
     "provider",
     "paths",
@@ -243,6 +244,8 @@ struct RuleFile {
     cache: Option<CacheFile>,
     #[serde(default)]
     buffer_stream: bool,
+    #[serde(default)]
+    check_stream_every: Option<i64>,
     #[serde(default)]
     passthrough: Vec<PassthroughFile>,
 }
@@ -1396,6 +1399,36 @@ fn rule_guardrails(
         }
     }
     for (i, rule) in rules.iter().enumerate() {
+        if rule.limits.check_stream_every.is_some() {
+            let until = lines.get(i + 1).copied().unwrap_or(end);
+            let at = format!(
+                "{}:{}",
+                file.display(),
+                line_of_key(text, "check_stream_every", rule.line, until)
+            );
+            let answers: Vec<&Guardrail> = rule.guardrails.iter().filter(|g| g.on.answer).collect();
+            if answers.is_empty() {
+                errors.push(format!(
+                    "{at}: rule \"{}\" has check_stream_every, which checks streamed answers as they come, and none of its guardrails has on: [answer]. Add one with on: [answer], or remove the line.",
+                    rule.name
+                ));
+            }
+            if rule.limits.buffer_stream {
+                errors.push(format!(
+                    "{at}: rule \"{}\" has both check_stream_every and buffer_stream. buffer_stream holds the whole answer; check_stream_every lets it through as it is checked. Keep one.",
+                    rule.name
+                ));
+            }
+            if let Some(mask) = answers
+                .iter()
+                .find(|g| g.action == crate::guard::Action::Mask)
+            {
+                errors.push(format!(
+                    "{at}: guardrail \"{}\" masks answers, and check_stream_every passes text on before the whole answer is known, so it cannot mask what was sent. Set it to action: block, or use buffer_stream: true.",
+                    mask.name
+                ));
+            }
+        }
         if rule.limits.buffer_stream && !rule.guardrails.iter().any(|g| g.on.answer) {
             let until = lines.get(i + 1).copied().unwrap_or(end);
             errors.push(format!(
@@ -1445,6 +1478,15 @@ fn limits(rule: &RuleFile, at: &dyn Fn(&str) -> String, errors: &mut Vec<String>
         }
     }
     limits.buffer_stream = rule.buffer_stream;
+    if let Some(every) = rule.check_stream_every {
+        match u32::try_from(every) {
+            Ok(every @ 50..=100_000) => limits.check_stream_every = Some(every),
+            _ => errors.push(format!(
+                "{}: check_stream_every is how many characters of a streamed answer pass between checks, 50 to 100000, for example check_stream_every: 300.",
+                at("check_stream_every")
+            )),
+        }
+    }
     limits
 }
 
@@ -2704,6 +2746,7 @@ rules:
                 tpm: None,
                 cache_ttl_seconds: Some(300),
                 buffer_stream: false,
+                check_stream_every: None,
             }
         );
         assert_eq!(
@@ -3050,6 +3093,53 @@ guardrails:
             .collect();
         assert_eq!(names, ["vendor", "no-secrets"]);
         assert!(rules[1].guardrails.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn check_stream_every_needs_a_blocking_answer_guardrail_and_a_sane_window() -> TestResult {
+        let rule = |guards: &str, extra: &str| {
+            format!(
+                "{GUARDED}  - name: answers\n    type: secrets\n    action: block\n    on: [answer]\n  - name: masks\n    type: pii\n    action: mask\n    on: [answer]\n{}",
+                GOOD.replace(
+                    "    models: [gpt-4o-mini]\n",
+                    &format!("    models: [gpt-4o-mini]\n    guardrails: [{guards}]\n{extra}"),
+                )
+            )
+        };
+        let loaded = check(
+            "window",
+            &rule("answers, vendor", "    check_stream_every: 300\n"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        assert_eq!(
+            loaded.policy.rule_list()[0].limits.check_stream_every,
+            Some(300)
+        );
+        for (guards, extra, expected) in [
+            (
+                "no-secrets",
+                "    check_stream_every: 300\n",
+                "on: [answer]",
+            ),
+            ("answers", "    check_stream_every: 5\n", "50 to 100000"),
+            (
+                "answers",
+                "    check_stream_every: 300\n    buffer_stream: true\n",
+                "buffer_stream",
+            ),
+            ("answers, masks", "    check_stream_every: 300\n", "mask"),
+        ] {
+            let refused = check("window-bad", &rule(guards, extra), None)?
+                .err()
+                .ok_or("a bad check_stream_every loaded")?
+                .join("\n");
+            assert!(
+                refused.contains("check_stream_every") && refused.contains(expected),
+                "{extra}: {refused}"
+            );
+        }
         Ok(())
     }
 
