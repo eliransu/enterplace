@@ -57,6 +57,65 @@ pub struct Options {
     pub interval: Duration,
     pub secrets: Vec<crate::secrets::Secret>,
     pub secrets_interval: Duration,
+    /// Extra environment variables the gateway may read, beyond the defaults (see `gateway_env`).
+    pub pass_env: Vec<String>,
+}
+
+/// Variables every gateway gets when the node has them: what a process needs to run and to trust TLS.
+const BASE_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "TZ",
+    "LANG",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+];
+
+/// The gateway's whole environment. It starts empty: a policy names environment variables (`key_env`), and the
+/// policy comes from the control plane, so the gateway must not be able to read the node's credential or anything
+/// else on the machine. It gets the base variables, every `*_PROVIDER_KEY`, the names in `--pass-env`, and on a
+/// hosted gateway the org's provider keys from the control plane. A hybrid node ignores keys sent by the control
+/// plane: at the customer, provider keys come from the customer's own machine.
+fn gateway_env(
+    opts: &Options,
+    from_control_plane: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut env: BTreeMap<String, String> = std::env::vars()
+        .filter(|(k, _)| {
+            BASE_ENV.contains(&k.as_str())
+                || k.ends_with("_PROVIDER_KEY")
+                || opts.pass_env.iter().any(|p| p == k)
+        })
+        .filter(|(k, _)| !k.starts_with("GANTRY_NODE") && !k.starts_with("GANTRY_DEVICE"))
+        .collect();
+    if std::env::var("GANTRY_ORG").is_ok() {
+        env.extend(
+            from_control_plane
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+    }
+    env
+}
+
+/// A policy may read a key from a file only where the node keeps managed keys (`secrets/`, written by `--secrets`).
+fn file_problems(policy: &str) -> Vec<String> {
+    policy
+        .lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let text = line.split('#').next().unwrap_or("");
+            let at = text.find("_file:")?;
+            let value = text[at + 6..].trim().trim_matches('"').trim_matches('\'');
+            (!value.starts_with("secrets/") || value.contains("..")).then(|| {
+                format!(
+                    "line {}: {} is outside the node's secrets folder",
+                    i + 1,
+                    value
+                )
+            })
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -162,6 +221,14 @@ fn apply(opts: &Options, config: &Config) -> Result<(), String> {
     write_atomic(&dir.join(KEYS), &config.keys)?;
     // Managed keys are read from files the node rewrites, so they rotate without a gateway restart.
     let policy = crate::secrets::rewrite_policy(&config.policy, &opts.secrets);
+    let problems = file_problems(&policy);
+    if !problems.is_empty() {
+        return Err(format!(
+            "refused config {}: {}. Still serving the last config.",
+            config.version,
+            problems.join("; ")
+        ));
+    }
     write_atomic(&dir.join(POLICY), &policy)?;
     write_atomic(&dir.join("config.version"), &config.version)
 }
@@ -172,7 +239,8 @@ fn spawn_gateway(opts: &Options, env: &BTreeMap<String, String>) -> Result<Child
     Command::new(exe)
         .current_dir(&opts.dir)
         .args(["serve", POLICY, "--keys", KEYS, "--listen", &opts.listen])
-        .envs(env)
+        .env_clear()
+        .envs(gateway_env(opts, env))
         .spawn()
         .map_err(|err| format!("could not start the gateway: {err}"))
 }

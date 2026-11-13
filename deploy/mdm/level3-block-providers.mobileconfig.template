@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  UNTESTED. DO NOT DEPLOY. Level 3 (enforced: the device cannot reach provider hosts directly) is the subject of
+  the device spike, plan item 0.5. Nobody has run this profile on a real Mac. Until the spike passes its criteria
+  (two coding agents work fully through Gantry with direct access blocked, allowed desktop apps keep working, a
+  developer with local admin cannot bypass it without leaving a trace), treat this as a starting sketch only.
+
+  Approach sketched: a DNS settings payload sends resolution of the provider hosts to a resolver the customer
+  runs, which answers them with a sinkhole, while the gateway host resolves normally. Known open questions for
+  0.5: local admins can remove non-supervised profiles; tools that pin IPs or use DoH bypass DNS; the Claude and
+  ChatGPT desktop apps use the same hosts and would break; a content filter (NEFilter) or the customer's SWG may be
+  the real answer. Replace SINKHOLE_DNS_IP before any test.
+-->
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key>
+      <string>com.apple.dnsSettings.managed</string>
+      <key>PayloadIdentifier</key>
+      <string>me.gantry.level3.dns</string>
+      <key>PayloadUUID</key>
+      <string>9A8B7C6D-5E4F-4A3B-8C2D-1E0F9A8B7C6D</string>
+      <key>PayloadVersion</key>
+      <integer>1</integer>
+      <key>DNSSettings</key>
+      <dict>
+        <key>DNSProtocol</key>
+        <string>Cleartext</string>
+        <key>ServerAddresses</key>
+        <array><string>SINKHOLE_DNS_IP</string></array>
+      </dict>
+      <key>OnDemandRules</key>
+      <array>
+        <dict>
+          <key>Action</key>
+          <string>EvaluateConnection</string>
+          <key>ActionParameters</key>
+          <array>
+            <dict>
+              <key>DomainAction</key>
+              <string>NeverConnect</string>
+              <key>Domains</key>
+              <array>
+                <string>api.anthropic.com</string>
+                <string>api.openai.com</string>
+                <string>chatgpt.com</string>
+              </array>
+            </dict>
+          </array>
+        </dict>
+        <dict>
+          <key>Action</key>
+          <string>Disconnect</string>
+        </dict>
+      </array>
+    </dict>
+  </array>
+  <key>PayloadDisplayName</key>
+  <string>Gantry level 3: block direct provider access (UNTESTED)</string>
+  <key>PayloadIdentifier</key>
+  <string>me.gantry.level3</string>
+  <key>PayloadScope</key>
+  <string>System</string>
+  <key>PayloadType</key>
+  <string>Configuration</string>
+  <key>PayloadUUID</key>
+  <string>3C4D5E6F-7A8B-4C9D-8E0F-1A2B3C4D5E6F</string>
+  <key>PayloadVersion</key>
+  <integer>1</integer>
+</dict>
+</plist>

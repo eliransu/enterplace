@@ -1,0 +1,45 @@
+# MDM packaging for the Gantry device agent (plan 6.4, levels 1 and 2)
+
+The agent (`gantry-enterprise device`) runs as a root LaunchDaemon. Every 5 minutes it reads the org's device
+profile from the control plane and, for the person signed in at the screen, points Claude Code (managed settings in
+`/Library/Application Support/ClaudeCode/managed-settings.json`), Codex (`~/.codex/config.toml`) and the shell
+(`~/.config/gantry/env`) at the gateway. It puts them back if someone changes them and reports coverage, which owners
+read at `/o/<org>/devices/coverage` in the app.
+
+| File | What it is |
+|---|---|
+| `me.gantry.device.plist` | The LaunchDaemon. `CONTROL_PLANE_URL` is filled in by `build-pkg.sh`. |
+| `build-pkg.sh` | Builds a signed-ready `.pkg` with `pkgbuild`: binary in `/usr/local/bin`, daemon loaded on install. |
+| `gantry-device-token.mobileconfig` | Delivers the enrolment token as a managed preference (`me.gantry.device`, key `EnrolmentToken`). |
+| `level3-block-providers.mobileconfig.template` | **UNTESTED** sketch for level 3. Do not deploy before the device spike (plan 0.5) passes. |
+
+## Steps
+
+1. In the app, open Devices (linked from Gateways), create an enrolment token, and set the device profile
+   (gateway URL, which tools to manage).
+2. Build the package on a Mac:
+   ```sh
+   cargo build --release
+   deploy/mdm/build-pkg.sh https://gantry-control.eliran.me
+   productsign --sign "Developer ID Installer: <your org>" deploy/mdm/gantry-device-0.0.1.pkg gantry-device-signed.pkg
+   ```
+3. In Jamf or Intune, upload `gantry-device-token.mobileconfig` with `PASTE_ENROLMENT_TOKEN` replaced by the token.
+4. The agent reads a file, not the preference domain, so it never has to parse plists. Deploy this script with the
+   package (Jamf policy script, Intune shell script, run as root) so the token lands where the agent looks:
+   ```sh
+   mkdir -p "/Library/Application Support/Gantry" && umask 077 && \
+   /usr/bin/defaults read "/Library/Managed Preferences/me.gantry.device" EnrolmentToken \
+     > "/Library/Application Support/Gantry/device-token"
+   ```
+   The agent's token order: `GANTRY_DEVICE_TOKEN`, then the file named by `GANTRY_DEVICE_TOKEN_FILE`, then
+   `/Library/Application Support/Gantry/device-token`.
+5. Deploy the package. The agent's log is `/var/log/gantry-device.log`. Devices show up in the coverage report after
+   the first run; one not seen in 24 hours is flagged.
+
+Try it by hand first: `GANTRY_DEVICE_TOKEN=gantry_dev_... gantry-enterprise device --control-plane <url> --dry-run`
+prints what it would change and the report it would send, and writes nothing.
+
+## Levels
+
+0 not seen, 1 installed only, 2 configured through Gantry. Cursor and VS Code are detected (level 1) but not
+configured by the agent. Level 3 (enforced) needs the device spike, plan item 0.5, on a real Mac with admin rights.

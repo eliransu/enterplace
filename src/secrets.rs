@@ -55,7 +55,10 @@ pub fn parse(spec: &str) -> Result<Secret, String> {
         "env" => Source::Env(rest.to_owned()),
         "vault" => match rest.rsplit_once('#') {
             Some((url, field))
-                if (url.starts_with("https://") || url.starts_with("http://"))
+                // The Vault token travels with the request: plain http only to Vault on this machine.
+                if (url.starts_with("https://")
+                    || url.starts_with("http://127.0.0.1")
+                    || url.starts_with("http://localhost"))
                     && !field.is_empty() =>
             {
                 Source::Vault {
@@ -63,7 +66,7 @@ pub fn parse(spec: &str) -> Result<Secret, String> {
                     field: field.to_owned(),
                 }
             }
-            _ => return fail("a vault source is a URL and #field"),
+            _ => return fail("a vault source is an https URL (or http://localhost) and #field"),
         },
         "aws-sm" => {
             let (arn, field) = match rest.split_once('#') {
