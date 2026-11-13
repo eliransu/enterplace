@@ -431,18 +431,19 @@ pub fn run(opts: Options) -> Result<(), String> {
                 eprintln!("gantry node: the control plane answers again; serving resumes");
                 closed = false;
             }
-        } else if let Some(limit) = opts.max_offline {
-            if !closed && last_contact.elapsed() > limit {
-                eprintln!(
-                    "gantry node: no answer from the control plane for {} s (--max-offline); the gateway stops serving until it answers",
-                    limit.as_secs()
-                );
-                if let Ok(mut c) = child.lock() {
-                    let _ = c.kill();
-                    let _ = c.wait();
-                }
-                closed = true;
+        } else if let Some(limit) = opts.max_offline
+            && !closed
+            && last_contact.elapsed() > limit
+        {
+            eprintln!(
+                "gantry node: no answer from the control plane for {} s (--max-offline); the gateway stops serving until it answers",
+                limit.as_secs()
+            );
+            if let Ok(mut c) = child.lock() {
+                let _ = c.kill();
+                let _ = c.wait();
             }
+            closed = true;
         }
         match fetched {
             Ok(Some(next)) => {
