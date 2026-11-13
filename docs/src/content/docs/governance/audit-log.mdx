@@ -107,6 +107,8 @@ A record reaches the operating system before the request is forwarded. Gantry sy
 
 If a write fails, or the file is deleted, moved, replaced or cut shorter while Gantry runs, every later request is refused with `audit_unavailable` (503), `GET /healthz` answers 503, and the server log says what happened. Gantry does not write to that file again until it is restarted.
 
+On Windows, Gantry opens the log so that no other program can delete, move or replace it while Gantry runs: those attempts fail with a sharing error and the records stay in the file. Cutting the file shorter is still possible there and is caught as on Linux and macOS.
+
 On `SIGTERM`, every record already handed to the audit writer is written and synced before the process ends, including the usage record of an answer that ended just before the stop.
 
 ## Repair a cut last line
@@ -147,6 +149,7 @@ While Gantry has the log open it keeps `gantry-audit.jsonl.lock` beside it, hold
 - A second `gantry serve` on the same log refuses to start while the process named in the lock file runs.
 - After `kill -9` or a crash, the next `gantry serve` takes the lock over once that process is gone. For a repair, delete the lock file once Gantry is surely stopped, then run the repair again.
 - Two containers sharing one audit folder both run as process 1 and cannot tell each other apart. Give each its own audit path.
+- On Windows, Gantry asks `tasklist` whether the process named in the lock file runs.
 
 ## Size
 
