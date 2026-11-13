@@ -40,6 +40,9 @@ Commands:
   prices <model> [--policy <file>]
         Print the price Gantry charges for a model and where it came from: the policy's prices:, Gantry's
         own table, or the table generated from LiteLLM's price map (with its source and date).
+  providers [--markdown]
+        List the provider catalog: id, name, kind and URL. A policy provider may say `preset: <id>` in place
+        of its url and kind. --markdown prints the reference page of the docs.
   serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
         [--tls-cert <pem> --tls-key <pem>]
         Run the gateway: every request is identified, checked against the policy and recorded.
@@ -291,6 +294,14 @@ async fn main() -> ExitCode {
                 _ => None,
             }
         }
+        ["providers"] => {
+            print!("{}", gantry_core::catalog::table());
+            Some(ExitCode::SUCCESS)
+        }
+        ["providers", "--markdown"] => {
+            print!("{}", gantry_core::catalog::page());
+            Some(ExitCode::SUCCESS)
+        }
         ["version" | "--version" | "-V"] => {
             println!(
                 "gantry {} (src {}, built {})",
@@ -328,6 +339,7 @@ async fn main() -> ExitCode {
                 "gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>]",
             ),
             ["audit", "repair", ..] => Some("gantry audit repair [<file>] [--yes]"),
+            ["providers", ..] => Some("gantry providers [--markdown]"),
             ["login", ..] => Some("gantry login <gantry url> [--no-browser]"),
             ["logout", ..] => Some("gantry logout"),
             ["kill", ..] => Some(

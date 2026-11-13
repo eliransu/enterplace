@@ -222,6 +222,20 @@ gantry prices gpt-4o-mini
 
 It prints the source (the policy's `prices:`, Gantry's own table, or the table generated from LiteLLM's price map, with its date), US dollars per million tokens for input, output, cache read, cache write and one-hour cache write, a long-context price and a per-image price when set, and the most output tokens and context window. For an alias it prints the price of each deployment. A model with no price exits `2` with the `prices:` lines to add.
 
+## providers
+
+Lists the provider catalog: every id a policy provider can name with `preset:`, with its name, kind and URL.
+
+```text
+gantry providers [--markdown]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--markdown` | off | Prints the [provider catalog](/reference/providers/) page of these docs instead |
+
+Local entries, model servers you run yourself, are marked: they need `allow_private: true`. Exit `0`.
+
 ## import litellm
 
 Writes a Gantry policy from a LiteLLM proxy config, checks it, and lists what could not be mapped.

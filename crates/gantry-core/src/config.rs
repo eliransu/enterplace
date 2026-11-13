@@ -27,6 +27,7 @@ const KNOWN: &[&str] = &[
     "key_env",
     "key_file",
     "kind",
+    "preset",
     "allow_private",
     "principals",
     "models",
@@ -194,6 +195,9 @@ pub const DEFAULT_COOLDOWN_SECONDS: u64 = 30;
 #[serde(deny_unknown_fields)]
 struct ProviderFile {
     name: String,
+    // A catalog id that fills in url and kind when they are not written.
+    #[serde(default)]
+    preset: Option<String>,
     // Optional here only so a file written for the previous version gets a message that says what to add.
     #[serde(default)]
     kind: Option<String>,
@@ -1867,6 +1871,35 @@ fn check_fallback(
     }
 }
 
+/// Fills in the url and kind of each provider that names a catalog preset, before the providers are checked, so a
+/// preset is held to every rule a hand-written provider is. What the file writes itself wins.
+fn presets(file: &Path, text: &str, entries: &mut [ProviderFile], errors: &mut Vec<String>) {
+    let lines = provider_lines(text);
+    for (i, entry) in entries.iter_mut().enumerate() {
+        let Some(id) = entry.preset.as_deref() else {
+            continue;
+        };
+        let Some(preset) = crate::catalog::find(id) else {
+            let line = lines.get(i).copied().unwrap_or(0);
+            let until = lines.get(i + 1).copied().unwrap_or(usize::MAX);
+            let closest = crate::catalog::PRESETS
+                .iter()
+                .min_by_key(|p| distance(id, p.id))
+                .map_or(String::new(), |p| format!(" did you mean {}?", p.id));
+            errors.push(format!(
+                "{}:{}: preset \"{id}\" is not in Gantry's provider catalog;{closest} `gantry providers` lists every id. Or remove preset and write url and kind.",
+                file.display(),
+                line_of_key(text, "preset", line, until)
+            ));
+            continue;
+        };
+        entry.url.get_or_insert_with(|| preset.url.to_string());
+        entry
+            .kind
+            .get_or_insert_with(|| preset.kind.word().to_string());
+    }
+}
+
 fn providers(
     file: &Path,
     text: &str,
@@ -2289,7 +2322,7 @@ pub fn load_texts(
         return Err(errors);
     }
 
-    let parsed: PolicyFile = match serde_yaml_ng::from_str(policy_text) {
+    let mut parsed: PolicyFile = match serde_yaml_ng::from_str(policy_text) {
         Ok(parsed) => parsed,
         Err(err) => {
             errors.push(explain(policy_path, &err));
@@ -2304,6 +2337,7 @@ pub fn load_texts(
             parsed.version
         ));
     }
+    presets(policy_path, policy_text, &mut parsed.providers, &mut errors);
     let providers = providers(policy_path, policy_text, &parsed, &mut errors);
     let mut rules = policy_rules(policy_path, policy_text, &parsed, &mut errors);
     rule_guardrails(policy_path, policy_text, &parsed, &mut rules, &mut errors);

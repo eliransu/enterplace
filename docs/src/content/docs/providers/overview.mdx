@@ -36,6 +36,18 @@ rules:
     models: ["*"]
 ```
 
+## Presets
+
+For a provider in the [provider catalog](/reference/providers/), `preset: <id>` stands in for `url` and `kind`. The catalog holds over 100 providers, each with the documentation page its URL came from; `gantry providers` lists them. A `url` or `kind` written next to the preset wins, for a proxy or a regional endpoint. An id the catalog does not hold fails `gantry check`, which names the closest one.
+
+```yaml
+providers:
+  - name: groq
+    preset: groq
+    key_env: GROQ_PROVIDER_KEY
+    models: [llama-3.3-70b-versatile]
+```
+
 ## Kinds
 
 The `kind` decides which routes reach a provider and how its key is sent.
