@@ -9,7 +9,7 @@ kill switches and budgets, the audit log on Azure Files, and secrets as Key Vaul
 |---|---|
 | Resource group, virtual network with a subnet for the apps and a delegated subnet for the database | Private network for everything |
 | Container Apps environment (Consumption workload profile) and app (one replica, single revision mode) | HTTPS ingress on the app's address, health probes on `/healthz` |
-| PostgreSQL Flexible Server 16, private access only, private DNS zone, database `gantry` | The store. Its certificate chains to roots Gantry trusts, so it connects with `sslmode=require` |
+| PostgreSQL Flexible Server 16, private access only, private DNS zone, database `gantry` | The store. Its certificate chains to roots Gantry trusts, so it connects with `sslmode=verify-full`, checking the certificate and host name |
 | Key Vault secret `<name>-database-url` in your vault | The app reads `DATABASE_URL`, the provider keys and the license as Key Vault references |
 | User-assigned identity with Key Vault Secrets User on the vault | What the app reads secrets as |
 | Storage account (ZRS) and Azure Files share, mounted at `/var/lib/gantry` | The audit log, one folder per revision |

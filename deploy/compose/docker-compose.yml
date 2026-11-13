@@ -28,8 +28,8 @@ services:
       dockerfile: gantry-enterprise/Dockerfile
     # Set explicitly: the image's default command has been the retired node mode.
     command: ["serve", "/etc/gantry/gantry.policy.yaml", "--keys", "/var/lib/gantry/gantry.keys.yaml", "--listen", "0.0.0.0:8080"]
-    # Gantry allows sslmode=disable only for a database on its own machine. Sharing Postgres's network namespace
-    # makes the database `localhost` to Gantry, so the store needs no TLS certificate on one host.
+    # Sharing Postgres's network namespace keeps the database off every network but this pair of containers, so the
+    # connection is plain (sslmode=disable). Gantry warns at start that it is not encrypted; on one host that is expected.
     network_mode: service:postgres
     environment:
       DATABASE_URL: postgres://gantry:${POSTGRES_PASSWORD}@localhost:5432/gantry?sslmode=disable

@@ -94,6 +94,8 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=sha,format=long,prefix=
+            # The newest build of main. Production pins a commit SHA or a version instead.
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
       - name: One tag for both architectures
         working-directory: digests

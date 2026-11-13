@@ -158,5 +158,5 @@ resource "aws_secretsmanager_secret" "database_url" {
 resource "aws_secretsmanager_secret_version" "database_url" {
   count         = local.create_db ? 1 : 0
   secret_id     = aws_secretsmanager_secret.database_url[0].id
-  secret_string = "postgres://gantry:${random_password.db[0].result}@${aws_db_proxy.this[0].endpoint}:5432/gantry?sslmode=require"
+  secret_string = "postgres://gantry:${random_password.db[0].result}@${aws_db_proxy.this[0].endpoint}:5432/gantry?sslmode=verify-full"
 }

@@ -26,8 +26,7 @@ Without the policy's `store:` section, keys, budgets and kill switches live in o
 keys, budgets and kill switches. Rate limits and the response cache stay per replica.
 
 `postgres.enabled` starts a one-pod Postgres in the chart for trials. It is not for production: no backups, no high
-availability, no TLS. The store refuses a database that is not on localhost without TLS signed by a public root, so
-the bundled one does not work with the store yet.
+availability, no TLS: Gantry connects to it with `sslmode=disable` and says at start that the connection is not encrypted.
 
 ## Values
 

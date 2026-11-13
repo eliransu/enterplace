@@ -73,7 +73,7 @@ resource "azurerm_subnet" "db" {
 }
 
 # The database: private access only, reachable from the virtual network. Its certificate chains to DigiCert and
-# Microsoft roots that are among the Mozilla roots Gantry checks against, so Gantry connects with sslmode=require.
+# Microsoft roots that are among the Mozilla roots Gantry checks against, so Gantry connects with sslmode=verify-full.
 resource "azurerm_private_dns_zone" "db" {
   name                = "${var.name}.private.postgres.database.azure.com"
   resource_group_name = azurerm_resource_group.this.name
@@ -130,7 +130,7 @@ resource "azurerm_postgresql_flexible_server_database" "gantry" {
 resource "azurerm_key_vault_secret" "database_url" {
   name         = "${var.name}-database-url"
   key_vault_id = var.key_vault_id
-  value        = "postgres://gantry:${random_password.db.result}@${azurerm_postgresql_flexible_server.this.fqdn}:5432/gantry?sslmode=require"
+  value        = "postgres://gantry:${random_password.db.result}@${azurerm_postgresql_flexible_server.this.fqdn}:5432/gantry?sslmode=verify-full"
 }
 
 # The app reads its secrets from the vault as this identity.

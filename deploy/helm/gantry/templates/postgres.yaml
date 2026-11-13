@@ -20,7 +20,7 @@ metadata:
 type: Opaque
 stringData:
   POSTGRES_PASSWORD: {{ $password | quote }}
-  DATABASE_URL: {{ printf "postgres://gantry:%s@%s:5432/gantry" $password $name | quote }}
+  DATABASE_URL: {{ printf "postgres://gantry:%s@%s:5432/gantry?sslmode=disable" $password $name | quote }}
 ---
 apiVersion: v1
 kind: Service

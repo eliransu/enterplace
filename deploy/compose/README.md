@@ -32,7 +32,7 @@ The first start prints a one-time link to make the first console admin: `docker 
 ## Notes
 
 - Gantry shares the Postgres container's network, so the database is `localhost` to it and the connection needs no
-  TLS (Gantry allows `sslmode=disable` only on its own machine). That is why port 8080 is published on the
+  TLS (`sslmode=disable`; Gantry warns at start that it is not encrypted). That is why port 8080 is published on the
   `postgres` service.
 - Gantry listens on `127.0.0.1:8080`. For other machines, set `GANTRY_BIND=0.0.0.0` and put TLS in front (Caddy or
   nginx, see the deployment docs) or give Gantry `--tls-cert` and `--tls-key`.
