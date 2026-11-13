@@ -1,7 +1,7 @@
 name: deploy
 on:
+  # Every branch, so a deploy change is proven before its pull request.
   push:
-    branches: [main]
     paths: [deploy/compose/**, deploy/terraform/**, Dockerfile, .github/workflows/deploy.yml]
   pull_request:
     paths: [deploy/compose/**, deploy/terraform/**, Dockerfile, .github/workflows/deploy.yml]
