@@ -28,7 +28,9 @@ Vault Secrets Officer on it (to add `DATABASE_URL`). Then:
 
 ```hcl
 module "gantry" {
-  source = "github.com/ggantry/gantry-enterprise//deploy/terraform/azure-container-apps"
+  # Copied out of the image: docker create --name gantry-files ghcr.io/ggantry/gantry-enterprise:<version>
+  #   && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
+  source = "./gantry-deploy/terraform/azure-container-apps"
 
   location            = "westeurope"
   resource_group_name = "gantry"

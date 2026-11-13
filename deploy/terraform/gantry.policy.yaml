@@ -1,4 +1,4 @@
-# A starting policy for the Compose stack. Edit it and Gantry uses the change within 2 seconds.
+# A starting policy for the modules. It keeps its last two lines: the audit log on the volume, and the store.
 version: 1
 providers:
   - name: openai

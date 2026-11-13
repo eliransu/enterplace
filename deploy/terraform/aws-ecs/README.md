@@ -27,7 +27,9 @@ never enter Terraform state), then:
 
 ```hcl
 module "gantry" {
-  source = "github.com/ggantry/gantry-enterprise//deploy/terraform/aws-ecs"
+  # Copied out of the image: docker create --name gantry-files ghcr.io/ggantry/gantry-enterprise:<version>
+  #   && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
+  source = "./gantry-deploy/terraform/aws-ecs"
 
   image              = "ghcr.io/ggantry/gantry-enterprise:0.1.0"
   policy             = file("gantry.policy.yaml")
@@ -45,7 +47,7 @@ module "gantry" {
 ```
 
 The policy must have `audit: { path: /var/lib/gantry/gantry-audit.jsonl }` and
-`store: { postgres_url_env: DATABASE_URL }`. `deploy/compose/gantry.policy.yaml` is a starting point. Then point
+`store: { postgres_url_env: DATABASE_URL }`. `gantry.policy.yaml` beside the modules (`/deploy/terraform` in the image) is a starting point. Then point
 `domain_name` at the output `alb_dns_name`, issue a key and call `gateway_url`.
 
 `examples/basic` is the configuration CI plans, with no AWS account.

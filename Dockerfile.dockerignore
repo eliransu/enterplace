@@ -4,3 +4,6 @@
 **/dist
 gantry/docs
 gantry/site
+**/.terraform
+**/*.tfstate*
+**/.terraform.lock.hcl

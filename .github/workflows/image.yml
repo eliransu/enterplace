@@ -31,11 +31,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: gantry-enterprise
+      # The open source branch with this branch's name when there is one, else main: a change that spans both
+      # repositories is built and tested together.
+      - id: oss
+        env:
+          TOKEN: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ref=main
+          git ls-remote --exit-code --heads "https://x-access-token:$TOKEN@github.com/${{ github.repository_owner }}/gantry.git" "$BRANCH" >/dev/null && ref=$BRANCH
+          echo "gantry at $ref"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
       # The open source repository is private: GANTRY_REPO_TOKEN is a token that can read it.
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/gantry
           path: gantry
+          ref: ${{ steps.oss.outputs.ref }}
           token: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3

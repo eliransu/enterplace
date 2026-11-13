@@ -15,7 +15,7 @@ module "gantry" {
   source = "../.."
 
   image  = "ghcr.io/ggantry/gantry-enterprise:0.1.0"
-  policy = file("${path.module}/../../../../compose/gantry.policy.yaml")
+  policy = file("${path.module}/../../../gantry.policy.yaml")
 
   vpc_id             = "vpc-0123456789abcdef0"
   private_subnet_ids = ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0bbbbbbbbbbbbbbb2"]

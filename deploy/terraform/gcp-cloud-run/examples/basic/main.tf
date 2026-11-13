@@ -15,7 +15,7 @@ module "gantry" {
   region  = "europe-west1"
   zone    = "europe-west1-b"
   image   = "europe-docker.pkg.dev/gantry-example/gantry/gantry-enterprise:0.1.0"
-  policy  = file("${path.module}/../../../../compose/gantry.policy.yaml")
+  policy  = file("${path.module}/../../../gantry.policy.yaml")
 
   license_secret       = "gantry-license"
   provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key" }

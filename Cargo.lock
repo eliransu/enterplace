@@ -390,6 +390,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gantry-cli"
+version = "0.0.1"
+dependencies = [
+ "gantry-console",
+ "gantry-core",
+ "gantry-server",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
 name = "gantry-console"
 version = "0.0.1"
 dependencies = [
@@ -423,6 +435,7 @@ version = "0.0.1"
 dependencies = [
  "axum",
  "base64",
+ "gantry-cli",
  "gantry-console",
  "gantry-core",
  "gantry-server",

@@ -11,6 +11,8 @@ publish = false
 # Path dependencies while both repositories are developed side by side.
 gantry-core = { path = "../gantry/crates/gantry-core" }
 gantry-server = { path = "../gantry/crates/gantry-server" }
+# Every open source command (key new, audit verify, check...) runs from this binary too, so the image needs no other.
+gantry-cli = { path = "../gantry/crates/gantry-cli" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
 # The node talks to the control plane from plain threads; a blocking client keeps that code short.
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }

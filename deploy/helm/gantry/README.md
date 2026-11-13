@@ -3,14 +3,26 @@
 Runs the `gantry-enterprise` image (`serve`) as a StatefulSet. The full install guide comes later; this is the short
 version.
 
+The chart ships inside the image, at `/deploy/helm/gantry`, so it matches the image version. Docker and the registry
+token are all a customer needs:
+
 ```bash
+docker login ghcr.io -u <user>
+docker create --name gantry-files ghcr.io/ggantry/gantry-enterprise:<version>
+docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
 kubectl create secret docker-registry ghcr --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
 kubectl create secret generic gantry-secrets \
   --from-literal=OPENAI_PROVIDER_KEY=sk-... --from-literal=GANTRY_LICENSE=...
-gantry key new admin --team platform --admin --keys gantry.keys.yaml   # the open source CLI
-kubectl create secret generic gantry-keys --from-file=gantry.keys.yaml
-helm install gantry deploy/helm/gantry \
-  --set 'imagePullSecrets[0].name=ghcr' --set keys.existingSecret=gantry-keys
+helm install gantry ./gantry-deploy/helm/gantry \
+  --set 'imagePullSecrets[0].name=ghcr' --set image.tag=<version>
+```
+
+The first pod prints a one-time link to make the first admin (`kubectl logs gantry-0 -c gantry`). Admin commands run in
+the pod with the image's own binary, which takes every `gantry` command:
+
+```bash
+kubectl exec gantry-0 -c gantry -- /gantry-enterprise key new maya.cohen --team payments --keys /var/lib/gantry/gantry.keys.yaml --policy /etc/gantry/gantry.policy.yaml
+kubectl exec gantry-0 -c gantry -- /gantry-enterprise audit verify /var/lib/gantry/gantry-audit.jsonl
 ```
 
 ## Why a StatefulSet

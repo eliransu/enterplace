@@ -1,0 +1,80 @@
+//! One binary does everything: `gantry-enterprise` runs every open source `gantry` command as `gantry` does, and keeps
+//! its own commands. The self-hosted image holds this binary alone, so admin tasks run with it.
+
+use std::process::{Command, Output};
+
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+fn run(args: &[&str]) -> std::io::Result<Output> {
+    Command::new(env!("CARGO_BIN_EXE_gantry-enterprise"))
+        .args(args)
+        .env_remove("GANTRY_LICENSE")
+        .env_remove("GANTRY_LICENSE_FILE")
+        .output()
+}
+
+#[test]
+fn the_open_source_commands_run_as_gantry_runs_them() -> TestResult {
+    let dir = std::env::temp_dir().join(format!("gantry-enterprise-cli-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let policy = dir.join("gantry.policy.yaml");
+    let keys = dir.join("gantry.keys.yaml");
+    let (policy_s, keys_s) = (policy.to_str().ok_or("path")?, keys.to_str().ok_or("path")?);
+
+    let out = run(&["init", "--out", policy_s])?;
+    assert!(out.status.success(), "{out:?}");
+
+    let out = run(&[
+        "key",
+        "new",
+        "maya.cohen",
+        "--team",
+        "payments",
+        "--keys",
+        keys_s,
+        "--quiet",
+    ])?;
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8(out.stdout)?.trim().starts_with("gantry_"));
+
+    let out = run(&["key", "list", "--keys", keys_s])?;
+    assert!(String::from_utf8(out.stdout)?.contains("maya.cohen\tpayments"));
+
+    let out = run(&["check", policy_s, "--keys", keys_s])?;
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8(out.stdout)?.contains("is valid: 1 rule, 1 key"));
+
+    let log = dir.join("gantry-audit.jsonl");
+    std::fs::write(&log, "")?;
+    let out = run(&["audit", "verify", log.to_str().ok_or("path")?])?;
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(String::from_utf8(out.stdout)?.contains("no records yet"));
+
+    let out = run(&["version"])?;
+    assert!(String::from_utf8(out.stdout)?.starts_with("gantry "));
+
+    // A mistake gets the open source command line's own answer and exit code.
+    let out = run(&["key", "new", "maya"])?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("Usage: gantry key new"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+#[test]
+fn the_enterprise_commands_keep_precedence() -> TestResult {
+    let out = run(&["license", "show"])?;
+    assert!(out.status.success(), "{out:?}");
+    // `serve` with no policy is the enterprise usage, never the open source server started without a license check.
+    for args in [&["serve"][..], &[], &["help"]] {
+        let out = run(args)?;
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert!(
+            String::from_utf8(out.stderr)?.contains("gantry-enterprise node --control-plane"),
+            "{args:?}"
+        );
+    }
+    Ok(())
+}

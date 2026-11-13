@@ -9,6 +9,7 @@
 #     -e OPENAI_PROVIDER_KEY gantry-enterprise:local
 # The policy file must say `audit: { path: /var/lib/gantry/gantry-audit.jsonl }`: /etc/gantry is read-only.
 # `node` (a gateway managed by the hosted control plane) is still in the binary; it is no longer the default.
+# Every open source `gantry` command runs from the same binary: docker run --rm <image> audit verify <file>.
 
 FROM rust:1.88-alpine AS build
 RUN apk add --no-cache musl-dev
@@ -26,6 +27,10 @@ COPY --from=build /out/gantry-enterprise /gantry-enterprise
 # The audit log's folder belongs to the user Gantry runs as. Everything else is read-only to it.
 COPY --from=build --chown=65532:65532 /out/var/lib/gantry /var/lib/gantry
 COPY --from=build /out/etc/gantry /etc/gantry
+# The Helm chart and the Terraform modules for this exact version, so a customer needs the registry and nothing else:
+#   docker create --name gantry-files <image> && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
+COPY --from=build /src/gantry-enterprise/deploy/helm /deploy/helm
+COPY --from=build /src/gantry-enterprise/deploy/terraform /deploy/terraform
 USER 65532:65532
 EXPOSE 8080
 VOLUME ["/var/lib/gantry"]

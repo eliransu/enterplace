@@ -13,7 +13,7 @@ module "gantry" {
   location            = "westeurope"
   resource_group_name = "gantry"
   image               = "ghcr.io/ggantry/gantry-enterprise:0.1.0"
-  policy              = file("${path.module}/../../../../compose/gantry.policy.yaml")
+  policy              = file("${path.module}/../../../gantry.policy.yaml")
 
   key_vault_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/security/providers/Microsoft.KeyVault/vaults/acme-secrets"
   license_secret       = "gantry-license"

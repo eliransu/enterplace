@@ -36,7 +36,10 @@ const USAGE: &str = "usage:
       (people in the keys file, default gantry.keys.yaml) of allowed, expiry and grace state. Checked offline.
   gantry-enterprise license keygen --out <file>                         (Gantry staff builds only)
   gantry-enterprise license issue --signing-key <file> --customer <name> --id <id> --features <a,b|all>
-      --seats <n> --issued <YYYY-MM-DD> --expires <YYYY-MM-DD>              (Gantry staff builds only)";
+      --seats <n> --issued <YYYY-MM-DD> --expires <YYYY-MM-DD>              (Gantry staff builds only)
+  gantry-enterprise <gantry command>
+      Every other command runs as the open source `gantry` runs it: check, init, key new|list|revoke|prune,
+      store import, import litellm, audit verify|repair, prices, providers, kill, unkill, login, logout, version.";
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter()
@@ -278,6 +281,10 @@ async fn main() -> ExitCode {
         .await
         .map_err(|err| err.to_string()),
         },
+        // `serve` without a policy and `help` stay here, so the open source server never starts unlicensed from this binary.
+        Some(command) if !matches!(command, "serve" | "help" | "--help" | "-h") => {
+            return gantry_cli::run(&args).await;
+        }
         _ => Err(USAGE.to_owned()),
     };
     match result {
