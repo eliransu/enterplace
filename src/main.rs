@@ -2,6 +2,7 @@
 //! (hybrid: at the customer; hosted: in Gantry's cloud).
 
 mod device;
+mod enterprise;
 mod license;
 mod node;
 mod secrets;
@@ -265,13 +266,14 @@ async fn main() -> ExitCode {
                 .unwrap_or_else(|| gantry_core::config::keys_path_for(Path::new(&args[1]))),
         ) {
             Err(err) => Err(err),
-            Ok(()) => gantry_server::serve_policy(
+            Ok(()) => gantry_server::serve_policy_with(
             &name,
             Path::new(&args[1]),
             flag(&args, "--keys").map(Path::new),
             flag(&args, "--listen"),
             flag(&args, "--metrics"),
             None,
+            &|host| enterprise::extend(license::current(), host),
         )
         .await
         .map_err(|err| err.to_string()),

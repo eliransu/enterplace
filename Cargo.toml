@@ -11,7 +11,7 @@ publish = false
 # Path dependencies while both repositories are developed side by side.
 gantry-core = { path = "../gantry/crates/gantry-core" }
 gantry-server = { path = "../gantry/crates/gantry-server" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
 # The node talks to the control plane from plain threads; a blocking client keeps that code short.
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 serde_json = "1"
@@ -20,6 +20,15 @@ ring = "0.17"
 # Licenses travel as base64url text; already in the build through the open crates.
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
+# The enterprise console pages are axum handlers on the console's router; already in the build through gantry-server.
+axum = { version = "0.8", default-features = false }
+# Members and every later feature write audit records and hash tokens with the open source helpers.
+gantry-console = { path = "../gantry/crates/gantry-console" }
+
+[dev-dependencies]
+# The feature tests drive the gateway's router in process; both are already in the build through gantry-server.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
 
 [features]
 # Gantry staff only: `license keygen` and `license issue`. Customer builds cannot sign licenses.

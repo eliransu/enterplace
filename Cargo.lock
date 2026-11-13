@@ -421,13 +421,17 @@ dependencies = [
 name = "gantry-enterprise"
 version = "0.0.1"
 dependencies = [
+ "axum",
  "base64",
+ "gantry-console",
  "gantry-core",
  "gantry-server",
+ "http-body-util",
  "ring",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "ureq",
 ]
 

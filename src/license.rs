@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 const PUBLIC_KEY: &str = "_S1S_JtovtLjEsm4Je9fzJtAWmmXRn8tjQPDFQkSp1Y";
 
 /// Days an expired license keeps its features, so a renewal that lands late does not switch anything off.
-const GRACE_DAYS: u64 = 30;
+pub const GRACE_DAYS: u64 = 30;
 
 /// The refusal code a feature returns when the license does not unlock it.
 pub const LICENSE_REQUIRED: &str = "license_required";
@@ -53,8 +53,6 @@ pub struct Status {
 }
 
 /// A feature refused for want of a license, for the caller to answer with.
-// S.4 features read it; nothing gated exists yet.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Refused {
     pub code: &'static str,
@@ -206,8 +204,6 @@ impl Status {
     }
 
     /// `Ok` when `feature` is unlocked, else the refusal to answer with.
-    // S.4 features call this; nothing gated exists yet.
-    #[allow(dead_code)]
     pub fn require(&self, feature: &str) -> Result<(), Refused> {
         if self.unlocked(feature) {
             return Ok(());
