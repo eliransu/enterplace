@@ -8,8 +8,8 @@ body { margin: 0; background: var(--ground); color: var(--text); font-family: va
 :focus-visible { outline: var(--focus-ring) solid var(--focus); outline-offset: var(--focus-ring); }
 .g-caps { text-transform: uppercase; }
 .g-muted { color: var(--text-muted); }
-/* Syne draws old-style figures by default, which makes numbers jump. Every Syne style asks for lining figures.
-   They stay proportional: Syne's equal-width "1" has a slab foot that reads as another typeface. Columns of numbers are set in mono. */
+/* Display styles ask for lining, proportional figures so headline numbers sit on the baseline at their natural width.
+   Columns of numbers are set in mono, or tabular in tables. */
 .t-hero, .t-xl, .t-lg, .t-md, .t-sm, .t-numeral, .t-tag { font-variant-numeric: lining-nums proportional-nums; }
 
 /* Icon: one set (Lucide), drawn inline, sized and stroked by tokens. */

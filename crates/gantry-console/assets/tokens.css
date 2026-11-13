@@ -90,8 +90,8 @@
   --measure-wide: 900px;
   --sheet: 480px;
   --nav: 256px;
-  --font-display: "Syne", "Arial Black", system-ui, sans-serif;
-  --font-sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Familjen Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: "Familjen Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "Fragment Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 .t-hero { font-family: var(--font-display); font-size: 72px; line-height: 79px; font-weight: 600; letter-spacing: -0.02em; }

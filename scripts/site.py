@@ -238,8 +238,7 @@ LANDING = f"""<div style="background: var(--ground); color: var(--text); overflo
 </div>"""
 
 FONT_FACES = """
-@font-face{font-family:"Syne";src:url("fonts/Syne-Variable.woff2") format("woff2");font-weight:400 800;font-display:swap}
-@font-face{font-family:"Instrument Sans";src:url("fonts/InstrumentSans-Variable.woff2") format("woff2");font-weight:400 700;font-display:swap}
+@font-face{font-family:"Familjen Grotesk";src:url("fonts/FamiljenGrotesk-Variable.woff2") format("woff2");font-weight:400 700;font-display:swap}
 @font-face{font-family:"Fragment Mono";src:url("fonts/FragmentMono-Regular.woff2") format("woff2");font-weight:400;font-display:swap}
 a{color:inherit}a:hover{color:inherit}
 """

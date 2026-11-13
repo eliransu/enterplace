@@ -310,7 +310,7 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
         "/console/assets/bundle.css",
         "/console/assets/tokens.css",
         "/console/assets/console.js",
-        "/console/assets/fonts/Syne-Variable.woff2",
+        "/console/assets/fonts/FamiljenGrotesk-Variable.woff2",
     ] {
         assert_eq!(
             send(&s.app, get(asset, "")?).await?.0,

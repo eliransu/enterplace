@@ -1,10 +1,9 @@
-/* Gantry brand on Starlight: near-black and white surfaces, lime as the one accent, Instrument Sans and Fragment Mono. */
-@font-face { font-family: 'Instrument Sans'; src: url('../assets/fonts/InstrumentSans-Variable.woff2') format('woff2'); font-weight: 400 700; font-display: swap; }
+/* Gantry brand on Starlight: near-black and white surfaces, lime as the one accent, Familjen Grotesk and Fragment Mono. */
+@font-face { font-family: 'Familjen Grotesk'; src: url('../assets/fonts/FamiljenGrotesk-Variable.woff2') format('woff2'); font-weight: 400 700; font-display: swap; }
 @font-face { font-family: 'Fragment Mono'; src: url('../assets/fonts/FragmentMono-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
-@font-face { font-family: 'Syne'; src: url('../assets/fonts/Syne-Variable.woff2') format('woff2'); font-weight: 400 800; font-display: swap; }
 
 :root {
-	--sl-font: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+	--sl-font: 'Familjen Grotesk', ui-sans-serif, system-ui, sans-serif;
 	--sl-font-mono: 'Fragment Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 	--sl-content-width: 50rem;
 	--gantry-lime: #e3ff45;
@@ -42,7 +41,7 @@
 	--sl-color-black: #ffffff;
 }
 
-h1, h2, .site-title { font-family: 'Syne', var(--sl-font); letter-spacing: -0.01em; }
+h1, h2, h3, .site-title { letter-spacing: -0.02em; }
 .site-title { font-weight: 700; font-size: 1.25rem; }
 
 /* Links read as links in both themes, with the lime as the underline in dark. */

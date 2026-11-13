@@ -1790,9 +1790,8 @@ async fn asset(Path(file): Path<String>) -> Response {
 
 async fn font(Path(file): Path<String>) -> Response {
     let body: &'static [u8] = match file.as_str() {
-        "Syne-Variable.woff2" => include_bytes!("../assets/fonts/Syne-Variable.woff2"),
-        "InstrumentSans-Variable.woff2" => {
-            include_bytes!("../assets/fonts/InstrumentSans-Variable.woff2")
+        "FamiljenGrotesk-Variable.woff2" => {
+            include_bytes!("../assets/fonts/FamiljenGrotesk-Variable.woff2")
         }
         "FragmentMono-Regular.woff2" => {
             include_bytes!("../assets/fonts/FragmentMono-Regular.woff2")
