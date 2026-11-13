@@ -198,13 +198,27 @@ pub fn lock_path(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// How the writer keeps up, for `/metrics`.
-#[derive(Debug, Default)]
+/// Something that sees each record's fields (the JSON object without its braces) as the writer chains it.
+pub type Observer = Box<dyn Fn(&str) + Send + Sync>;
+
+/// How the writer keeps up, for `/metrics`, and who else reads the records as they are written.
+#[derive(Default)]
 pub struct Stats {
     /// Records handed to the writer and not yet taken by it.
     pub queued: AtomicU64,
     /// Time of each write call, one per batch of records.
     pub write: crate::metrics::Histogram,
+    /// Set once, by the trace exporter. It runs on the writer thread, so it must only queue work, never wait.
+    pub observer: std::sync::OnceLock<Observer>,
+}
+
+impl std::fmt::Debug for Stats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Stats")
+            .field("queued", &self.queued)
+            .field("observed", &self.observer.get().is_some())
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for AuditLog {
@@ -244,6 +258,9 @@ fn write_records(
                     }
                 },
             };
+            if let Some(see) = stats.observer.get() {
+                see(&fields);
+            }
             batch.push(done);
             n += 1;
             let body = format!("{{\"n\":{n},{fields},\"prev\":\"{prev}\"");

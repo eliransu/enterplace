@@ -298,6 +298,8 @@ pub fn governed(
         }),
         spent_from: Some(loaded.audit_path.clone()),
         aliases: loaded.aliases.clone(),
+        // From the process environment: `provider_key` answers for provider keys, and tests stub it.
+        traces: crate::TraceExport::from_env(|name| std::env::var(name).ok())?,
         ..Config::default()
     };
     let prints = (

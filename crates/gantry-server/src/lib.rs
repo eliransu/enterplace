@@ -35,6 +35,8 @@ mod alias;
 mod metrics;
 mod reload;
 mod spend;
+mod traces;
+pub use traces::TraceExport;
 
 use http_body_util::BodyExt;
 use hyper_rustls::HttpsConnector;
@@ -226,6 +228,8 @@ pub struct Config {
     pub spent_from: Option<PathBuf>,
     /// Model names callers send that are served by one or more deployments.
     pub aliases: Vec<gantry_core::config::Alias>,
+    /// Where OpenTelemetry traces go. `None` traces nothing.
+    pub traces: Option<TraceExport>,
 }
 
 /// A configuration the server refuses to start with. The message names the cause and the fix.
@@ -280,6 +284,8 @@ struct AppState {
     kills: Option<Arc<gantry_core::kill::Switches>>,
     // Which deployments of an alias are cooling down or busy. Kept across reloads.
     pool: Arc<alias::Pool>,
+    // One span per request, when traces are exported.
+    tracer: Option<Arc<traces::Tracer>>,
 }
 
 impl AppState {
@@ -436,8 +442,33 @@ fn build(
     if let Some(path) = &config.spent_from {
         spend.replay(path).map_err(ConfigError)?;
     }
+    let client = Client::builder(TokioExecutor::new()).build(connector);
+    // Spans are finished from the audit records, so traces need the audit log.
+    let tracer = match (config.traces, &config.audit) {
+        (Some(export), Some(audit)) => {
+            let tracer = Arc::new(traces::Tracer::new(export));
+            let seen = tracer.clone();
+            if audit
+                .log
+                .stats()
+                .observer
+                .set(Box::new(move |fields| seen.observe(fields)))
+                .is_err()
+            {
+                return Err(ConfigError(
+                    "this audit log already feeds a trace exporter. Start one Gantry per audit log.".into(),
+                ));
+            }
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(tracer.clone().run(client.clone()));
+            }
+            Some(tracer)
+        }
+        _ => None,
+    };
     let state = AppState {
-        client: Client::builder(TokioExecutor::new()).build(connector),
+        client,
+        tracer,
         live,
         audit: config.audit,
         reloader: reloader.clone(),
@@ -1598,9 +1629,22 @@ fn check_query(uri: &Uri) -> Result<(), Refusal> {
 }
 
 /// Every request except the health check: gives it a decision ID, checks it, records it, and only then forwards it.
-async fn handle(State(state): State<AppState>, request: Request) -> Response {
+async fn handle(State(state): State<AppState>, mut request: Request) -> Response {
     let arrived = Instant::now();
     let decision = id::decision_id();
+    const TRACEPARENT: HeaderName = HeaderName::from_static("traceparent");
+    if let Some(tracer) = &state.tracer {
+        let ours = tracer.begin(
+            &decision,
+            request.method(),
+            request.uri().path(),
+            request.headers().get(&TRACEPARENT),
+        );
+        // The provider sees Gantry's span as the parent of its own.
+        if let Some(ours) = ours {
+            request.headers_mut().insert(TRACEPARENT, ours);
+        }
+    }
     let anthropic = matches!(request.uri().path(), MESSAGES | COUNT_TOKENS);
     // One snapshot for the whole request: a reload that lands meanwhile applies to the next request, not this one.
     let version = state.version();
@@ -1626,6 +1670,9 @@ async fn handle(State(state): State<AppState>, request: Request) -> Response {
     }
     if let Ok(value) = HeaderValue::from_str(&decision) {
         response.headers_mut().insert(DECISION, value);
+    }
+    if let Some(tracer) = &state.tracer {
+        tracer.answered(&decision, response.status().as_u16());
     }
     response
 }

@@ -79,6 +79,35 @@ groups:
           summary: A team spent more than $500 in a day.
 ```
 
+## Traces
+
+Gantry exports one OpenTelemetry span per request over OTLP/HTTP with JSON. Set the standard variables where `gantry serve` runs:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318   # spans go to /v1/traces
+OTEL_SERVICE_NAME=gantry                                  # the default
+OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer%20abc     # optional, percent-encoded
+```
+
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` sets the full URL instead. Gantry speaks `http/json` only: a protocol variable set to anything else stops it at startup with a message saying so. Unset, nothing is exported.
+
+When a request carries a W3C `traceparent`, its span joins that trace. The provider is sent a `traceparent` naming Gantry's span, so a trace reads caller, Gantry, provider.
+
+| Span field | Value |
+|---|---|
+| Name | The method and path, such as `POST /v1/chat/completions` |
+| `gantry.decision` | The decision ID, the same as the `x-gantry-decision` header and the audit record's `id` |
+| `gantry.verdict`, `gantry.code`, `gantry.rule` | The decision and, for a refusal, its code |
+| `gantry.team`, `gantry.provider`, `gen_ai.request.model` | Who, where and which model |
+| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gantry.charged_usd` | From the usage record |
+| `http.response.status_code`, `gantry.ended` | How the answer ended |
+
+The span lasts until the request's usage record, so a stream's span covers the whole stream. A span with no usage record (an upstream error, a route with no usage) ends when its answer was sent, five minutes later. Its status is an error only for a 5xx: a refusal is the policy working.
+
+Spans carry what the audit log says and less: no prompt, no answer, no key and no person's name. They are built from the audit records, so traces need the audit log on, as it is under `gantry serve`.
+
+Export never slows a request. Spans wait in memory and go out once a second. When the collector is down or slow, spans are dropped, and Gantry says so on standard error at most once a minute.
+
 ## Shipping the audit log
 
 The audit log is a file of JSON lines, `gantry-audit.jsonl` or the `audit: { path: ... }` in the policy. Gantry only appends to it, so any shipper that tails a file can send it to Loki, Elasticsearch, Splunk or Datadog. Ship each line as it is: the `hash` and `prev` fields chain every record to the one before, and that chain is what `gantry audit verify` checks.

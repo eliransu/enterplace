@@ -46,7 +46,7 @@ Hybrid gateways are part of the commercial product. They run `gantry-enterprise 
 | `--listen <host:port>` | The gateway's address. Default `127.0.0.1:8080`. |
 | `--interval <seconds>` | How often it asks the control plane for changes. Default 5. |
 | `--max-offline <seconds>` | Stop serving when the control plane has not answered for this long, so a key revoked during an outage cannot be used for longer. Off by default: the gateway keeps serving its last config. |
-| `--pass-env A,B` | Environment variables the gateway may read besides `*_PROVIDER_KEY`, such as `AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY` for Bedrock. The gateway's environment otherwise starts empty. |
+| `--pass-env A,B` | Environment variables the gateway may read besides `*_PROVIDER_KEY` and `OTEL_*` (trace export), such as `AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY` for Bedrock. The gateway's environment otherwise starts empty. |
 | `--metrics <host:port>` | Serve Prometheus metrics at `GET /metrics` on that address, as `gantry serve --metrics` does. |
 | `--secrets NAME=<source>` | Read a provider key from `file:`, `env:`, `vault:<url>#field` or `aws-sm:<arn>`, and rotate it without a restart. |
 

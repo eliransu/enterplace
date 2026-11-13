@@ -39,6 +39,19 @@ pub fn new_key() -> Result<String, String> {
     Ok(format!("{KEY_PREFIX}{}", hex(&random)))
 }
 
+/// `n` random bytes as hex, for trace and span IDs. Without system randomness it falls back to a hash of a fresh
+/// decision ID: unique, not secret, which is all a trace ID needs.
+pub fn random_hex(n: usize) -> String {
+    let mut bytes = vec![0u8; n];
+    if getrandom::fill(&mut bytes).is_err() {
+        let seed = sha256(decision_id().as_bytes());
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = seed[i % seed.len()];
+        }
+    }
+    hex(&bytes)
+}
+
 pub fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
