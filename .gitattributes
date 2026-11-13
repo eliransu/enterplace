@@ -1,0 +1,3 @@
+# Test corpora and the docs tables measured from them must be byte for byte the same on every OS: a Windows
+# checkout that turns line ends into CRLF changes what the detectors see.
+* text=auto eol=lf
