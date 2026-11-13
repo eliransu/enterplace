@@ -36,3 +36,5 @@ The sign-in page links to **Sign in with email and password**. A wrong password 
 **Remove member** ends their console session at once and revokes every key whose name is their email, in any case. Gateways on the same database stop accepting those keys within a second. A role change takes effect on their next page, with no new sign-in.
 
 Every invite, acceptance, role change, removal and sign-in is an admin record in the audit log, in the same chain as requests.
+
+To have Okta or Microsoft Entra ID add and remove members, see [SCIM provisioning](/operations/scim/).
