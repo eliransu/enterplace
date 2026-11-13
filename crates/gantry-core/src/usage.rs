@@ -805,7 +805,7 @@ mod tests {
 
     #[test]
     fn the_policy_file_overrides_a_price_and_unset_cache_prices_fall_back() -> TestResult {
-        let overrides: PriceOverrides = serde_yaml_ng::from_str(
+        let overrides: PriceOverrides = crate::config::from_yaml(
             "gpt-4o-mini:\n  input: 1\n  output: 2\nmy-local-model:\n  input: 0\n  output: 0\n  long_context:\n    above_prompt_tokens: 10\n    price: { input: 3, output: 4 }\n",
         )?;
         let mini = price_for("gpt-4o-mini", &overrides).ok_or("no price")?;
@@ -833,10 +833,12 @@ mod tests {
     #[test]
     fn a_price_with_an_unknown_field_or_a_negative_value_is_refused() -> TestResult {
         assert!(
-            serde_yaml_ng::from_str::<PriceOverrides>("m:\n  input: 1\n  output: 1\n  cached: 1\n")
-                .is_err()
+            crate::config::from_yaml::<PriceOverrides>(
+                "m:\n  input: 1\n  output: 1\n  cached: 1\n"
+            )
+            .is_err()
         );
-        let negative: PriceOverrides = serde_yaml_ng::from_str(
+        let negative: PriceOverrides = crate::config::from_yaml(
             "m:\n  input: 1\n  output: 1\n  long_context: { above_prompt_tokens: 1, price: { input: -1, output: 1 } }\n",
         )?;
         let err = negative.get("m").ok_or("no m")?.check("m");
@@ -875,7 +877,7 @@ mod tests {
     #[test]
     fn a_price_comes_from_the_policy_then_gantry_then_litellm() -> TestResult {
         let overrides: PriceOverrides =
-            serde_yaml_ng::from_str("gpt-4o:\n  input: 1\n  output: 2\n")?;
+            crate::config::from_yaml("gpt-4o:\n  input: 1\n  output: 2\n")?;
         let policy = price_for("gpt-4o", &overrides).ok_or("no price")?;
         assert_eq!((policy.input, policy.source), (1.0, PriceSource::Policy));
         let own = price_for("claude-haiku-5-5", &overrides).ok_or("no price")?;

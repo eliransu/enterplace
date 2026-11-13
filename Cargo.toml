@@ -20,8 +20,8 @@ http-body = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 tower = { version = "0.5", features = ["util"] }
-# Policy and keys files are YAML. serde_yaml_ng is the maintained fork of serde_yaml.
-serde_yaml_ng = "0.10"
+# Policy and keys files are YAML. serde-saphyr is pure safe Rust with alias expansion limits (unsafe-libyaml is unmaintained).
+serde-saphyr = "1.1"
 # SHA-256 for key hashes and the audit chain.
 sha2 = "0.10"
 # HMAC-SHA256 for AWS Signature Version 4, to sign requests to Amazon Bedrock.

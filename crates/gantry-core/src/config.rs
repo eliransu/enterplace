@@ -885,8 +885,19 @@ fn distance(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
+/// Every YAML file Gantry reads goes through here, so all of them refuse duplicate keys and bound alias
+/// expansion (serde-saphyr's defaults), and an error is one plain line for `explain`, not a source snippet.
+pub(crate) fn from_yaml<T: serde::de::DeserializeOwned>(
+    text: &str,
+) -> Result<T, serde_saphyr::Error> {
+    serde_saphyr::from_str_with_options(
+        text,
+        serde_saphyr::options! { with_snippet: false, strict_booleans: true },
+    )
+}
+
 /// Turns a YAML error into one line: where, what, and the nearest word Gantry knows.
-fn explain(file: &Path, err: &serde_yaml_ng::Error) -> String {
+fn explain(file: &Path, source: &str, err: &serde_saphyr::Error) -> String {
     let at = err.location().map_or_else(
         || file.display().to_string(),
         |l| format!("{}:{}", file.display(), l.line()),
@@ -919,20 +930,21 @@ fn explain(file: &Path, err: &serde_yaml_ng::Error) -> String {
     {
         return format!("{at}: \"{word}\" is missing here. Add it.");
     }
-    if let Some((path, rest)) = text.split_once("invalid type: ")
-        && let Some((given, wanted)) = rest.split_once(", expected ")
+    if let Some(rest) = text.strip_prefix("duplicate mapping key: ") {
+        let word = rest.split(',').next().unwrap_or(rest);
+        return format!(
+            "{at}: \"{word}\" is written twice in the same place. Keep one, so the file says one thing."
+        );
+    }
+    if let Some(wanted) = wanted_kind(text)
+        && let Some(l) = err.location()
     {
-        // The parser names the place as `rules[0].budget: `; its last word is the key a person wrote.
-        let key = path
-            .trim_end_matches([':', ' '])
-            .rsplit('.')
-            .next()
-            .map(|k| k.split('[').next().unwrap_or(k))
-            .filter(|k| !k.is_empty())
-            .unwrap_or("this value");
-        // The parser quotes the value in backticks, which reads as code in a message meant for a person.
-        let given = given.replace('`', "");
-        return match wanted_as_written(wanted) {
+        // The parser names neither the key nor the value, only where the value starts; both are read back from
+        // the file as the person wrote them.
+        let line = usize::try_from(l.line()).unwrap_or(0);
+        let column = usize::try_from(l.column()).unwrap_or(0);
+        let (key, given) = written_at(source, line, column);
+        return match wanted_as_written(&key, wanted) {
             Wanted::Example(example) => {
                 format!("{at}: {key} is {given}. Write it as {example}.")
             }
@@ -942,31 +954,114 @@ fn explain(file: &Path, err: &serde_yaml_ng::Error) -> String {
     format!("{at}: this is not valid YAML: {text}.")
 }
 
+/// The kind of value the parser wanted, from its message for a value of another kind.
+fn wanted_kind(text: &str) -> Option<&'static str> {
+    Some(match text {
+        "expected mapping start" => "a map",
+        "expected sequence start" => "a sequence",
+        "expected string scalar" => "a string",
+        t if t.starts_with("invalid boolean") => "a boolean",
+        "invalid floating point" => "f64",
+        "invalid u8" | "invalid u16" | "invalid u32" | "invalid u64" | "invalid usize"
+        | "invalid i64" => "u64",
+        _ => return None,
+    })
+}
+
+/// The key that holds the value starting at `line`:`column` (both from 1), and that value described as a person
+/// reads it: `integer 5`, `string "x"`, `a list`.
+fn written_at(text: &str, line: usize, column: usize) -> (String, String) {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(here) = line.checked_sub(1).and_then(|i| lines.get(i)) else {
+        return ("this value".into(), "another kind of value".into());
+    };
+    let start = here
+        .char_indices()
+        .nth(column.saturating_sub(1))
+        .map_or(here.len(), |(i, _)| i);
+    let (before, value) = here.split_at(start);
+    let inline_key = before.trim_end().strip_suffix(':').and_then(|b| {
+        b.rsplit(|c: char| !(c.is_ascii_alphanumeric() || "_-.@\"'".contains(c)))
+            .next()
+            .map(|k| k.trim_matches(['"', '\'']))
+            .filter(|k| !k.is_empty())
+    });
+    if let Some(key) = inline_key {
+        let value = value.split(" #").next().unwrap_or_default().trim_end();
+        let value = if value.starts_with(['[', '{']) {
+            value
+        } else {
+            value
+                .split([',', '}', ']'])
+                .next()
+                .unwrap_or_default()
+                .trim()
+        };
+        return (key.to_string(), described(value));
+    }
+    // A block written on the lines under its key: the key is the nearest line above that ends in a colon.
+    let key = lines[..line - 1]
+        .iter()
+        .rev()
+        .map(|l| l.trim_start().trim_start_matches("- "))
+        .find(|l| {
+            l.split(" #")
+                .next()
+                .unwrap_or_default()
+                .trim_end()
+                .ends_with(':')
+        })
+        .and_then(key_at)
+        .unwrap_or("this value");
+    let given = if here.trim_start().starts_with('-') {
+        "a list"
+    } else {
+        "a map"
+    };
+    (key.to_string(), given.into())
+}
+
+fn described(value: &str) -> String {
+    let unquoted = value.trim_matches(['"', '\'']);
+    match value {
+        "" | "~" | "null" => "empty".into(),
+        "true" | "false" => format!("boolean {value}"),
+        v if v.starts_with('[') => "a list".into(),
+        v if v.starts_with('{') => "a map".into(),
+        v if v.parse::<i128>().is_ok() => format!("integer {v}"),
+        v if v.parse::<f64>().is_ok_and(f64::is_finite) => format!("floating point {v}"),
+        _ => format!("string \"{unquoted}\""),
+    }
+}
+
 enum Wanted {
     Example(&'static str),
     Kind(&'static str),
 }
 
 /// What the parser wanted, said as the file says it: never a Rust type name.
-fn wanted_as_written(wanted: &str) -> Wanted {
-    match wanted {
-        "struct BudgetFile" => Wanted::Example("budget: { usd: 20, per: month }"),
-        "struct RateFile" => Wanted::Example("rate: { rpm: 60 }"),
-        "struct CacheFile" => Wanted::Example("cache: { ttl_seconds: 300 }"),
-        "struct PrincipalsFile" => Wanted::Example("principals: { team: payments }"),
-        "struct AuditFile" => Wanted::Example("audit: { path: gantry-audit.jsonl }"),
-        "struct ConsoleFile" => {
+fn wanted_as_written(key: &str, wanted: &str) -> Wanted {
+    match (wanted, key) {
+        ("a map", "budget") => Wanted::Example("budget: { usd: 20, per: month }"),
+        ("a map", "rate") => Wanted::Example("rate: { rpm: 60 }"),
+        ("a map", "cache") => Wanted::Example("cache: { ttl_seconds: 300 }"),
+        ("a map", "principals") => Wanted::Example("principals: { team: payments }"),
+        ("a map", "audit") => Wanted::Example("audit: { path: gantry-audit.jsonl }"),
+        ("a map", "console") => {
             Wanted::Example("console: { sso: { issuer: ..., client_id: ... } }")
         }
-        "struct Price" => Wanted::Example("gpt-4o: { input: 2.5, output: 10 }"),
-        "a sequence" => Wanted::Kind("a list, such as [a, b]"),
-        "a string" => Wanted::Kind("text"),
-        "a boolean" => Wanted::Kind("true or false"),
-        "u8" | "u16" | "u32" | "u64" | "usize" => Wanted::Kind("a whole number"),
-        "f32" | "f64" => Wanted::Kind("a number"),
-        w if w.starts_with("struct ") || w == "a map" => {
+        // A map under a key Gantry does not know by name is a model's price under prices.
+        ("a map", k) if !KNOWN.contains(&k) => {
+            Wanted::Example("gpt-4o: { input: 2.5, output: 10 }")
+        }
+        ("a map", _) => {
             Wanted::Kind("a map of keys (key: value lines under it, or { key: value })")
         }
+        ("a sequence", _) => Wanted::Kind("a list, such as [a, b]"),
+        ("a string", _) => Wanted::Kind("text"),
+        ("a boolean", _) => Wanted::Kind("true or false"),
+        ("u64", _) => Wanted::Kind("a whole number"),
+        ("f64", _) => Wanted::Kind("a number"),
         _ => Wanted::Kind("another kind of value"),
     }
 }
@@ -2186,10 +2281,10 @@ pub fn key_entries(file: &Path, text: &str) -> Result<Vec<KeyEntry>, Vec<String>
 
 fn keys(file: &Path, text: &str, errors: &mut Vec<String>) -> Vec<KeyEntry> {
     let mut entries: Vec<KeyEntry> = Vec::new();
-    let parsed: KeysFile = match serde_yaml_ng::from_str(text) {
+    let parsed: KeysFile = match from_yaml(text) {
         Ok(parsed) => parsed,
         Err(err) => {
-            errors.push(explain(file, &err));
+            errors.push(explain(file, text, &err));
             return entries;
         }
     };
@@ -2324,10 +2419,10 @@ pub fn load_texts(
         return Err(errors);
     }
 
-    let mut parsed: PolicyFile = match serde_yaml_ng::from_str(policy_text) {
+    let mut parsed: PolicyFile = match from_yaml(policy_text) {
         Ok(parsed) => parsed,
         Err(err) => {
-            errors.push(explain(policy_path, &err));
+            errors.push(explain(policy_path, policy_text, &err));
             return Err(errors);
         }
     };
@@ -3248,6 +3343,73 @@ guardrails:
             refused.contains("buffer_stream") && refused.contains("on: [answer]"),
             "{refused}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_key_written_twice_is_refused_with_its_line() -> TestResult {
+        let twice = GOOD.replacen("version: 1\n", "version: 1\nversion: 1\n", 1);
+        let problems = errors(check("dup-key", &twice, None)?)?;
+        assert!(
+            problems.contains("gantry.policy.yaml:3: \"version\" is written twice"),
+            "{problems}"
+        );
+        let nested = GOOD.replacen(
+            "    models: [gpt-4o-mini]\n",
+            "    models: [gpt-4o-mini]\n    models: [gpt-4o]\n",
+            1,
+        );
+        let problems = errors(check("dup-key-nested", &nested, None)?)?;
+        assert!(
+            problems.contains("gantry.policy.yaml:13: \"models\" is written twice"),
+            "{problems}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_price_or_a_list_of_the_wrong_kind_is_explained() -> TestResult {
+        let price = format!("{GOOD}prices:\n  gpt-4o: 5\n");
+        let problems = errors(check("price-kind", &price, None)?)?;
+        assert!(
+            problems.contains("gantry.policy.yaml:17: gpt-4o is integer 5. Write it as gpt-4o: { input: 2.5, output: 10 }"),
+            "{problems}"
+        );
+        let block = GOOD.replacen("{ team: payments }", "\n      - team", 1);
+        let problems = errors(check("block-kind", &block, None)?)?;
+        assert!(
+            problems.contains("principals is a list. Write it as principals: { team: payments }"),
+            "{problems}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn yaml_1_1_words_read_as_yaml_1_2() -> TestResult {
+        // `on`, `yes`, `no` and `off` are booleans in YAML 1.1 only. As a key, `on` stays the key `on`; as text they
+        // stay text; where true or false is wanted, they are refused, not read as a boolean.
+        let words = GOOD
+            .replace("{ team: payments }", "{ team: off }")
+            .replace("name: payments-team", "name: no");
+        if let Err(problems) = check("yaml11-text", &words, None)? {
+            return Err(problems.join("\n").into());
+        }
+        let yes = GOOD.replace("{ any: true }", "{ any: yes }");
+        let problems = errors(check("yaml11-yes", &yes, None)?)?;
+        assert!(
+            problems.contains("gantry.policy.yaml:14: any must be true or false"),
+            "{problems}"
+        );
+        let guarded = format!(
+            "{GOOD}guardrails:\n  - name: answers\n    type: secrets\n    action: block\n    on: [answer]\n"
+        )
+        .replace(
+            "    models: [\"*\"]\n",
+            "    models: [\"*\"]\n    guardrails: [answers]\n",
+        );
+        if let Err(problems) = check("yaml11-on", &guarded, None)? {
+            return Err(problems.join("\n").into());
+        }
         Ok(())
     }
 

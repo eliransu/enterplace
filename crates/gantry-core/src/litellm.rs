@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_yaml_ng::{Mapping, Value};
+use serde_json::{Map, Value};
 
 /// What `import` made: the policy text and one line per thing it could not map or that needs a hand.
 #[derive(Debug)]
@@ -138,34 +138,62 @@ fn env_ref(value: &Value) -> Option<String> {
 
 /// `[{"a": ["b", "c"]}]` (or `{a: [b]}`) as pairs.
 fn fallback_pairs(value: &Value) -> Vec<(String, Vec<String>)> {
-    let maps: Vec<&Mapping> = match value {
-        Value::Sequence(items) => items.iter().filter_map(Value::as_mapping).collect(),
-        Value::Mapping(map) => vec![map],
+    let maps: Vec<&Map<String, Value>> = match value {
+        Value::Array(items) => items.iter().filter_map(Value::as_object).collect(),
+        Value::Object(map) => vec![map],
         _ => Vec::new(),
     };
     maps.into_iter()
         .flat_map(|m| m.iter())
-        .filter_map(|(k, v)| {
+        .map(|(k, v)| {
             let to = match v {
-                Value::Sequence(s) => s.iter().filter_map(text).collect(),
+                Value::Array(s) => s.iter().filter_map(text).collect(),
                 other => text(other).into_iter().collect(),
             };
-            Some((text(k)?, to))
+            (k.clone(), to)
         })
         .collect()
 }
 
 fn map(pairs: Vec<(&str, Value)>) -> Value {
-    Value::Mapping(
-        pairs
-            .into_iter()
-            .map(|(k, v)| (Value::from(k), v))
-            .collect(),
-    )
+    Value::Object(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+}
+
+/// The workspace builds serde_json with arbitrary_precision, which serializes a number as a private struct; this
+/// writes numbers as numbers so the YAML says `input: 2.5`, not a mapping.
+struct Plain<'a>(&'a Value);
+
+impl serde::Serialize for Plain<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeMap, SerializeSeq};
+        match self.0 {
+            Value::Number(n) => match (n.as_u64(), n.as_i64(), n.as_f64()) {
+                (Some(u), _, _) => s.serialize_u64(u),
+                (_, Some(i), _) => s.serialize_i64(i),
+                (_, _, Some(f)) => s.serialize_f64(f),
+                _ => s.serialize_str(&n.to_string()),
+            },
+            Value::Array(items) => {
+                let mut seq = s.serialize_seq(Some(items.len()))?;
+                for item in items {
+                    seq.serialize_element(&Plain(item))?;
+                }
+                seq.end()
+            }
+            Value::Object(fields) => {
+                let mut map = s.serialize_map(Some(fields.len()))?;
+                for (k, v) in fields {
+                    map.serialize_entry(k, &Plain(v))?;
+                }
+                map.end()
+            }
+            other => other.serialize(s),
+        }
+    }
 }
 
 fn list(items: impl IntoIterator<Item = String>) -> Value {
-    Value::Sequence(items.into_iter().map(Value::from).collect())
+    Value::Array(items.into_iter().map(Value::from).collect())
 }
 
 /// Dollars per token to dollars per million tokens, without float noise.
@@ -227,14 +255,14 @@ fn priced(
 /// list, `{"keys": [...]}`, or CSV with a header): keys cannot move (LiteLLM keeps hashes), so they become team
 /// rules and the `gantry key new` lines to reissue them.
 pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
-    let root: Value = serde_yaml_ng::from_str(config)
+    let root: Value = crate::config::from_yaml(config)
         .map_err(|err| format!("the LiteLLM config is not YAML Gantry can read: {err}."))?;
     let root = root
-        .as_mapping()
+        .as_object()
         .ok_or("the LiteLLM config must be a mapping with a model_list.")?;
     let mut report = Vec::new();
     let get =
-        |section: &str, key: &str| -> Option<&Value> { root.get(section)?.as_mapping()?.get(key) };
+        |section: &str, key: &str| -> Option<&Value> { root.get(section)?.as_object()?.get(key) };
     let retries = get("router_settings", "num_retries")
         .or_else(|| get("litellm_settings", "num_retries"))
         .and_then(Value::as_u64)
@@ -248,7 +276,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
         });
     let entries = root
         .get("model_list")
-        .and_then(Value::as_sequence)
+        .and_then(Value::as_array)
         .ok_or("the LiteLLM config has no model_list, so there is nothing to serve. Give the config.yaml the proxy starts with.")?;
 
     let mut providers: Vec<Provider> = Vec::new();
@@ -260,7 +288,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
             report.push(format!("model_list[{at}] has no model_name; skipped."));
             continue;
         };
-        let params = entry.get("litellm_params").and_then(Value::as_mapping);
+        let params = entry.get("litellm_params").and_then(Value::as_object);
         let Some(model) = params.and_then(|p| p.get("model")).and_then(text) else {
             report.push(format!(
                 "model_list[{at}] ({name}) has no litellm_params.model; skipped."
@@ -594,7 +622,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
                 alias.push(("content_policy_fallback", c.clone().into()));
             }
         }
-        alias.push(("deployments", Value::Sequence(deployments)));
+        alias.push(("deployments", Value::Array(deployments)));
         aliases.push(map(alias));
     }
     // ponytail: an OpenAI-API provider whose only model another provider lists (two regions of gpt-4o) lists it
@@ -649,10 +677,10 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
             };
             entry.push((
                 field,
-                Value::Mapping(
+                Value::Object(
                     p.upstream
                         .iter()
-                        .map(|(k, v)| (k.clone().into(), v.clone().into()))
+                        .map(|(k, v)| (k.clone(), v.clone().into()))
                         .collect(),
                 ),
             ));
@@ -708,10 +736,9 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
     ] {
         for key in root
             .get(section)
-            .and_then(Value::as_mapping)
+            .and_then(Value::as_object)
             .into_iter()
             .flat_map(|m| m.keys())
-            .filter_map(text)
         {
             if known.contains(&key.as_str()) {
                 continue;
@@ -727,7 +754,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
             });
         }
     }
-    for key in root.keys().filter_map(text) {
+    for key in root.keys() {
         if ![
             "model_list",
             "router_settings",
@@ -742,20 +769,21 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
 
     let mut policy = vec![
         ("version", Value::from(1)),
-        ("providers", Value::Sequence(out_providers)),
+        ("providers", Value::Array(out_providers)),
     ];
     if !aliases.is_empty() {
-        policy.push(("aliases", Value::Sequence(aliases)));
+        policy.push(("aliases", Value::Array(aliases)));
     }
-    policy.push(("rules", Value::Sequence(rules)));
+    policy.push(("rules", Value::Array(rules)));
     if !prices.is_empty() {
-        policy.push((
-            "prices",
-            Value::Mapping(prices.into_iter().map(|(k, v)| (k.into(), v)).collect()),
-        ));
+        policy.push(("prices", Value::Object(prices.into_iter().collect())));
     }
-    let body = serde_yaml_ng::to_string(&map(policy))
-        .map_err(|err| format!("the policy could not be written: {err}."))?;
+    // One line per value, as a person would write it: no folded `>-` blocks for a long provider URL.
+    let body = serde_saphyr::to_string_with_options(
+        &Plain(&map(policy)),
+        serde_saphyr::ser_options! { prefer_block_scalars: false },
+    )
+    .map_err(|err| format!("the policy could not be written: {err}."))?;
     Ok(Imported {
         policy: format!(
             "# Imported from a LiteLLM config by `gantry import litellm`. Check it with `gantry check`.\n{body}"
@@ -923,6 +951,43 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+    #[test]
+    fn an_alias_bomb_is_refused_not_expanded() -> TestResult {
+        // A config a user brings may be hostile: nine levels of ten aliases each would be a billion strings.
+        let mut bomb = String::from("a: &a [lol, lol, lol, lol, lol, lol, lol, lol, lol, lol]\n");
+        for (name, prev) in ["b", "c", "d", "e", "f", "g", "h", "i"]
+            .iter()
+            .zip(["a", "b", "c", "d", "e", "f", "g", "h"])
+        {
+            bomb.push_str(&format!(
+                "{name}: &{name} [*{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}]\n"
+            ));
+        }
+        bomb.push_str("model_list: *i\n");
+        let started = std::time::Instant::now();
+        let refused = import(&bomb, None)
+            .err()
+            .ok_or("the alias bomb was accepted")?;
+        assert!(
+            refused.starts_with("the LiteLLM config is not YAML Gantry can read"),
+            "{refused}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        Ok(())
+    }
+
+    #[test]
+    fn yes_no_and_on_stay_text_in_a_litellm_config() -> TestResult {
+        let config = CONFIG.replacen("model_list:", "on: yes\nno: off\nmodel_list:", 1);
+        let imported = import(&config, None)?;
+        let report = imported.report.join("\n");
+        assert!(
+            report.contains("on: not mapped.") && report.contains("no: not mapped."),
+            "{report}"
+        );
+        Ok(())
+    }
+
     /// The shapes of LiteLLM's docs: two deployments behind one name, Azure, Bedrock, Anthropic, a local server,
     /// router and litellm settings.
     const CONFIG: &str = r#"
@@ -1051,7 +1116,7 @@ general_settings:
         let imported = import(CONFIG, Some(export))?;
         check(&imported.policy, "keys: []\n")?;
         assert!(
-            imported.policy.contains("team: payments") && imported.policy.contains("'*'"),
+            imported.policy.contains("team: payments") && imported.policy.contains("\"*\""),
             "{}",
             imported.policy
         );

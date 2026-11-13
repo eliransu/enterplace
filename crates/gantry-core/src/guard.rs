@@ -1446,8 +1446,8 @@ mod tests {
         assert!(on_answer.blocked.is_none() && on_answer.changed);
         assert!(!on_answer.body.to_string().contains("AKIAIOSFODNN7EXAMPLE"));
         assert_eq!(on_answer.audit[0].guardrail, "answers");
-        let file = |on: &str| -> Result<GuardrailFile, serde_yaml_ng::Error> {
-            serde_yaml_ng::from_str(&format!("name: g\ntype: secrets\naction: block\n{on}"))
+        let file = |on: &str| -> Result<GuardrailFile, serde_saphyr::Error> {
+            crate::config::from_yaml(&format!("name: g\ntype: secrets\naction: block\n{on}"))
         };
         let both = guardrails(&[file("on: [request, answer]")?]).map_err(|e| e.join(" "))?;
         assert_eq!(
@@ -1875,7 +1875,7 @@ rules:
   - name: everyone
     guardrails: [no-secrets, mask-pii, lasso]
 ";
-        let file: File = serde_yaml_ng::from_str(text)?;
+        let file: File = crate::config::from_yaml(text)?;
         let defined = guardrails(&file.guardrails).map_err(|e| e.join("\n"))?;
         assert_eq!(defined.len(), 4);
         assert_eq!(
@@ -1946,23 +1946,23 @@ rules:
             ),
         ];
         for (yaml, expected) in cases {
-            let def: GuardrailFile = serde_yaml_ng::from_str(yaml)?;
+            let def: GuardrailFile = crate::config::from_yaml(yaml)?;
             let text = guardrails(&[def]).err().unwrap_or_default().join("\n");
             assert!(
                 text.to_lowercase().contains(&expected.to_lowercase()),
                 "{yaml}: {text}"
             );
         }
-        let one: GuardrailFile = serde_yaml_ng::from_str("name: a\ntype: secrets\naction: block")?;
+        let one: GuardrailFile = crate::config::from_yaml("name: a\ntype: secrets\naction: block")?;
         let twice = guardrails(&[one.clone(), one])
             .err()
             .unwrap_or_default()
             .join("\n");
         assert!(twice.contains("defined twice"), "{twice}");
         assert!(
-            serde_yaml_ng::from_str::<GuardrailFile>("name: a\ntype: dlp\naction: block").is_err()
+            crate::config::from_yaml::<GuardrailFile>("name: a\ntype: dlp\naction: block").is_err()
         );
-        let def: GuardrailFile = serde_yaml_ng::from_str(
+        let def: GuardrailFile = crate::config::from_yaml(
             "name: v\ntype: webhook\nurl: https://x\non_failure: fail_closed\nheaders_env: { Authorization: GUARD_TOKEN }",
         )?;
         let hooks = guardrails(&[def]).map_err(|e| e.join("\n"))?;
@@ -1994,8 +1994,8 @@ rules:
 
     #[test]
     fn vendor_guardrails_parse_with_their_defaults_and_bad_ones_are_explained() -> TestResult {
-        let parse = |yaml: &str| -> Result<Result<Vec<Guardrail>, String>, serde_yaml_ng::Error> {
-            let def: GuardrailFile = serde_yaml_ng::from_str(yaml)?;
+        let parse = |yaml: &str| -> Result<Result<Vec<Guardrail>, String>, serde_saphyr::Error> {
+            let def: GuardrailFile = crate::config::from_yaml(yaml)?;
             Ok(guardrails(&[def]).map_err(|e| e.join("\n")))
         };
         let hook_of = |g: &[Guardrail]| match g.first().map(|g| &g.check) {
