@@ -55,6 +55,8 @@ pub struct Options {
     pub dir: PathBuf,
     pub listen: String,
     pub interval: Duration,
+    pub secrets: Vec<crate::secrets::Secret>,
+    pub secrets_interval: Duration,
 }
 
 #[derive(Clone)]
@@ -141,9 +143,26 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     fs::rename(&tmp, path).map_err(|err| format!("could not replace {}: {err}", path.display()))
 }
 
-fn apply(dir: &Path, config: &Config) -> Result<(), String> {
+/// As `write_atomic`, readable by this user only: for provider keys.
+pub(crate) fn write_private(path: &Path, text: &str) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+        .open(&tmp)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, text.as_bytes()))
+        .map_err(|err| format!("could not write {}: {err}", tmp.display()))?;
+    fs::rename(&tmp, path).map_err(|err| format!("could not replace {}: {err}", path.display()))
+}
+
+fn apply(opts: &Options, config: &Config) -> Result<(), String> {
+    let dir = &opts.dir;
     write_atomic(&dir.join(KEYS), &config.keys)?;
-    write_atomic(&dir.join(POLICY), &config.policy)?;
+    // Managed keys are read from files the node rewrites, so they rotate without a gateway restart.
+    let policy = crate::secrets::rewrite_policy(&config.policy, &opts.secrets);
+    write_atomic(&dir.join(POLICY), &policy)?;
     write_atomic(&dir.join("config.version"), &config.version)
 }
 
@@ -241,7 +260,7 @@ pub fn run(opts: Options) -> Result<(), String> {
     // Start from the control plane when it answers, else from the files the node wrote last time.
     let mut config = match client.config(None) {
         Ok(Some(config)) => {
-            apply(&opts.dir, &config)?;
+            apply(&opts, &config)?;
             eprintln!(
                 "gantry node: config {} from {}",
                 config.version, client.base
@@ -266,13 +285,22 @@ pub fn run(opts: Options) -> Result<(), String> {
         }
     };
 
+    if !opts.secrets.is_empty() {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(10))
+            .build();
+        let values = crate::secrets::load(&opts.dir, &opts.secrets, &agent)?;
+        let (dir, interval) = (opts.dir.clone(), opts.secrets_interval);
+        let secrets = opts.secrets.clone();
+        std::thread::spawn(move || crate::secrets::watch(dir, secrets, values, interval, agent));
+    }
     let child = Arc::new(Mutex::new(spawn_gateway(&opts, &config.env)?));
     let mut shipped_total: u64 = 0;
     loop {
         std::thread::sleep(opts.interval);
         match client.config(Some(&config.version)) {
             Ok(Some(next)) => {
-                if let Err(err) = apply(&opts.dir, &next) {
+                if let Err(err) = apply(&opts, &next) {
                     eprintln!("gantry node: {err}");
                 } else {
                     eprintln!(
