@@ -1,0 +1,57 @@
+name: deploy
+on:
+  # Every branch, so a deploy change is proven before its pull request.
+  push:
+    paths: [deploy/compose/**, deploy/terraform/**, Dockerfile, .github/workflows/deploy.yml]
+  pull_request:
+    paths: [deploy/compose/**, deploy/terraform/**, Dockerfile, .github/workflows/deploy.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [aws-ecs, gcp-cloud-run, azure-container-apps]
+    defaults:
+      run:
+        working-directory: deploy/terraform/${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false && terraform validate
+      - working-directory: deploy/terraform/${{ matrix.module }}/examples/basic
+        run: terraform init -backend=false -input=false && terraform validate
+      # A plan with no cloud account: AWS and Google plan with fake credentials and their lookups skipped; azurerm
+      # needs a real token first, so its example is planned through `terraform test` with the provider mocked.
+      - working-directory: deploy/terraform/${{ matrix.module }}/examples/basic
+        run: |
+          if [ -d tests ]; then terraform test; else terraform plan -input=false -lock=false; fi
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gantry-enterprise
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/gantry
+          path: gantry
+          # The open source repository is private for now, and the default token reads only this one.
+          token: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
+      # Builds both images from the checkouts, starts Postgres, Gantry and the mock, issues a key, makes a governed
+      # call and verifies the audit chain.
+      - name: Compose test
+        run: |
+          # The store (slice 7) is in the gantry repository only once it is merged; until then the test runs
+          # without the policy's store section.
+          [ -f gantry/crates/gantry-server/src/store.rs ] || export NO_STORE=1
+          gantry-enterprise/deploy/compose/test/run.sh
