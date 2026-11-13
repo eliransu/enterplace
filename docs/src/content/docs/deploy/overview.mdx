@@ -1,0 +1,101 @@
+---
+title: Deploy Gantry Enterprise
+description: What a self-hosted Gantry Enterprise deployment is made of, what stays in your network, how to choose between Docker, Kubernetes, AWS, GCP and Azure, and how to size it.
+sidebar:
+  label: Overview
+  order: 1
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Gantry Enterprise runs in your own network or cloud account. These guides take you from nothing to a gateway that answers governed requests, with the console signed in and the audit log verified, and then through what production needs. The deploy files they use are in the `gantry-enterprise` repository, under `deploy/`.
+
+## What you deploy
+
+| Part | What it is | Where it lives |
+|---|---|---|
+| The image | `ghcr.io/ggantry/gantry-enterprise`: one static binary, `/gantry-enterprise`, built `FROM scratch`, running as user `65532`. It serves the gateway, the console, the admin API and the enterprise features | Your registry or ghcr.io, which is private: your license comes with read access |
+| Postgres | The store: keys, kill switches and spend, shared by every replica. The Compose stack and the Terraform modules run Postgres 16 | A managed database (RDS, Cloud SQL, Azure Database for PostgreSQL) or the Compose container |
+| A volume per replica | `/var/lib/gantry`, holding that replica's hash-chained audit log. Two replicas never share one, because each writes its own chain | A Docker volume, a PersistentVolumeClaim, EFS, Filestore or Azure Files |
+| The policy | One YAML file at `/etc/gantry/gantry.policy.yaml`: providers, rules, guardrails. It holds no secrets | Version control, then a ConfigMap, a parameter or a secret mount |
+| The license key | One line of text in `GANTRY_LICENSE`. It unlocks the enterprise features and is checked offline | Your secret store |
+| Provider keys | One environment variable per provider, named by the policy's `key_env` | Your secret store |
+
+Every guide uses a policy of this shape. The last two lines are the ones the deploy files need: the audit log on the volume, and the store.
+
+{/* not checked: gantry check on main does not know store: until the store (slice 7) merges */}
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com/v1
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-4o-mini]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [gpt-4o-mini]
+audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+store: { postgres_url_env: DATABASE_URL }
+```
+
+`DATABASE_URL` holds the connection string, password included, so it lives with the other secrets and never in the policy. See [Several replicas with a store](/operations/store/) for its TLS settings.
+
+### The image tags
+
+Each build of `main` is pushed tagged with its full commit SHA, and each release with its version, such as `0.1.0`. There is no `latest` tag. Pin the version you were given in every deploy file: a moving tag makes a rollback guesswork.
+
+### The command line
+
+The `gantry-enterprise` image runs `serve` and `license show`. Issuing keys from a shell, `gantry check` and `gantry audit verify` come from the open source `gantry` command line, built from the `gantry` repository (see the [Quickstart](/getting-started/quickstart/#1-install)). The Compose stack builds it for you as its `cli` service. In the clouds you use the console and the admin API instead, and verify audit logs from a copy.
+
+## What stays in your network
+
+| Data | Where it goes |
+|---|---|
+| Prompts and answers | To the model provider your policy names, and back to the caller. Gantry never stores them: not in the audit log, not in Postgres |
+| Provider keys | Read from environment variables, sent only to their provider |
+| Gantry keys | Shown once when issued. Only their SHA-256 is stored |
+| The audit log | Your volume. You ship it where you choose |
+| Keys, kill switches, spend | Your Postgres |
+| The license | Checked against a public key in the binary. No network call |
+
+Nothing calls home. The gateway connects only to what your policy and environment name: the model providers, guardrail vendors and webhooks, your Postgres, and your OpenTelemetry collector if you set one. It runs the same in a network with no route to the internet, as long as it can reach the providers you use.
+
+## Choose a target
+
+| Target | Guide | Replicas | Postgres | Audit volume | Fits |
+|---|---|---|---|---|---|
+| One machine | [Docker Compose](/deploy/docker/) | 1 | A container beside it | A Docker volume | A trial, a team on one VM |
+| Any Kubernetes | [Kubernetes](/deploy/kubernetes/) | 1 or more | Managed, or your own | A claim per pod | EKS, GKE, AKS, OpenShift, on premises |
+| AWS | [ECS on Fargate](/deploy/aws/) | 1 or more | RDS with RDS Proxy | EFS, an access point per replica | AWS without a cluster |
+| Google Cloud | [Cloud Run](/deploy/gcp/) | 1 | Cloud SQL | Filestore | GCP without a cluster |
+| Azure | [Container Apps](/deploy/azure/) | 1 | Azure Database for PostgreSQL | Azure Files | Azure without a cluster |
+
+Cloud Run and Container Apps run one replica: neither can give each replica a volume of its own, and two gateways on one audit log would break its chain. For more than one replica on Google Cloud or Azure, use GKE or AKS with the Helm chart.
+
+## Sizing
+
+| Resource | What drives it | Defaults in the deploy files |
+|---|---|---|
+| Memory | Request bodies in flight, at most 256 MiB in all. Idle, Gantry uses a few MiB | 384 MiB limit (Helm), 1 GiB (ECS, Cloud Run), 2 GiB (Container Apps) |
+| CPU | Requests per second, guardrails, streamed answers | 0.1 core requested (Helm), 0.5 vCPU (ECS), 1 core (Cloud Run, Container Apps) |
+| Audit volume | About 1.35 GB per million requests, per replica | 10 GiB per pod (Helm). EFS grows on its own; Filestore starts at 1 TiB; Azure Files 100 GiB |
+| Postgres | Small: one row per key and kill switch, and spend rows per team, person and key for each day and month | `db.t4g.small` (AWS), `db-custom-1-3840` (GCP), `GP_Standard_D2ds_v5` (Azure) |
+| Replicas | Availability first. Each replica serves the same keys and budgets through the store | 2 on ECS, 1 elsewhere |
+
+- Gantry reads and verifies the whole audit log at every start, so a start takes longer as the log grows. Start a new chain when it gets large: see [Running in production](/operations/operations/#start-a-new-chain).
+- A request under a budget makes one database round trip to reserve its cost and one to settle it. A request with no budget makes none. Put Postgres in the same region as the gateways.
+- Rate limits (`rpm`, `tpm`) and the answer cache are counted per replica. Console sign-ins are good on the replica that made them, so the load balancer needs session affinity when there is more than one replica.
+
+## Next
+
+<CardGrid>
+	<LinkCard title="Docker Compose" href="/deploy/docker/" description="One machine, from nothing to a governed call." />
+	<LinkCard title="Kubernetes" href="/deploy/kubernetes/" description="The Helm chart on EKS, GKE, AKS or any cluster." />
+	<LinkCard title="AWS" href="/deploy/aws/" description="ECS on Fargate, RDS and EFS with Terraform." />
+	<LinkCard title="Google Cloud" href="/deploy/gcp/" description="Cloud Run, Cloud SQL and Filestore with Terraform." />
+	<LinkCard title="Azure" href="/deploy/azure/" description="Container Apps, Azure Database for PostgreSQL and Azure Files with Terraform." />
+	<LinkCard title="License key" href="/operations/license/" description="What the license unlocks, expiry and seats." />
+</CardGrid>
