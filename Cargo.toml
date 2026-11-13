@@ -1,0 +1,24 @@
+[package]
+name = "gantry-enterprise"
+description = "Commercial edition of the Gantry AI gateway."
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+license-file = "LICENSE"
+publish = false
+
+[dependencies]
+# Path dependencies while both repositories are developed side by side.
+gantry-core = { path = "../gantry/crates/gantry-core" }
+gantry-server = { path = "../gantry/crates/gantry-server" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# The node talks to the control plane from plain threads; a blocking client keeps that code short.
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

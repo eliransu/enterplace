@@ -1,0 +1,25 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gantry-enterprise
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/gantry
+          path: gantry
+      - working-directory: gantry-enterprise
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --locked
