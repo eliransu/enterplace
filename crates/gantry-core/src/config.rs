@@ -58,6 +58,9 @@ const KNOWN: &[&str] = &[
     "cache",
     "ttl_seconds",
     "buffer_stream",
+    "passthrough",
+    "provider",
+    "paths",
     "prices",
     "input",
     "output",
@@ -240,6 +243,15 @@ struct RuleFile {
     cache: Option<CacheFile>,
     #[serde(default)]
     buffer_stream: bool,
+    #[serde(default)]
+    passthrough: Vec<PassthroughFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PassthroughFile {
+    provider: String,
+    paths: Vec<String>,
 }
 
 // Numbers are read wide and checked by hand, so a wrong one gets a message with the fix, not a parser's.
@@ -1229,9 +1241,74 @@ fn policy_rules(
             models,
             guardrails: Vec::new(),
             limits,
+            passthrough: rule
+                .passthrough
+                .iter()
+                .map(|p| crate::policy::Passthrough {
+                    provider: p.provider.clone(),
+                    paths: p.paths.clone(),
+                })
+                .collect(),
         });
     }
     rules
+}
+
+/// Each rule's `passthrough:` entries must name a provider of a kind Gantry can send to as is, and paths that
+/// start with `/` and cannot climb out of the prefix.
+fn rule_passthrough(
+    file: &Path,
+    text: &str,
+    rules: &[Rule],
+    providers: &[Provider],
+    errors: &mut Vec<String>,
+) {
+    let (lines, end) = rule_lines(text);
+    for (i, rule) in rules.iter().enumerate() {
+        let line = lines.get(i).copied().unwrap_or(0);
+        let until = lines.get(i + 1).copied().unwrap_or(end);
+        let at = format!(
+            "{}:{}",
+            file.display(),
+            line_of_key(text, "passthrough", line, until)
+        );
+        for entry in &rule.passthrough {
+            match providers.iter().find(|p| p.name == entry.provider) {
+                None => errors.push(format!(
+                    "{at}: passthrough names no provider named \"{}\". Use the name of one under providers:.",
+                    entry.provider
+                )),
+                Some(p) if matches!(p.kind, Kind::Bedrock | Kind::Vertex | Kind::VertexAnthropic) => errors.push(format!(
+                    "{at}: provider \"{}\" is {}, whose requests Gantry must sign or translate, so it cannot be reached as sent. Pass through to an openai, anthropic, azure or gemini provider.",
+                    entry.provider,
+                    p.kind.word()
+                )),
+                Some(_) => {}
+            }
+            if entry.paths.is_empty() {
+                errors.push(format!(
+                    "{at}: passthrough to \"{}\" needs at least one path, such as /v1/batches.",
+                    entry.provider
+                ));
+            }
+            for path in &entry.paths {
+                let bad = if !path.starts_with('/') {
+                    Some("starts with /")
+                } else if path.split('/').any(|seg| seg == ".." || seg == ".") {
+                    Some("has no . or .. segment")
+                } else if path.contains(['?', '#', '%', '\\']) || path.contains("//") {
+                    Some("is a plain path, with no query, fragment, escape or empty segment")
+                } else {
+                    None
+                };
+                if let Some(why) = bad {
+                    errors.push(format!(
+                        "{at}: the passthrough path \"{path}\" is refused: a path {why}. Write it as /v1/batches."
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// The line of each item of a top-level list such as `guardrails:`. Same rule as `rule_lines`.
@@ -2188,6 +2265,7 @@ pub fn load_texts(
     let providers = providers(policy_path, policy_text, &parsed, &mut errors);
     let mut rules = policy_rules(policy_path, policy_text, &parsed, &mut errors);
     rule_guardrails(policy_path, policy_text, &parsed, &mut rules, &mut errors);
+    rule_passthrough(policy_path, policy_text, &rules, &providers, &mut errors);
     check_prices(
         policy_path,
         policy_text,
@@ -2401,6 +2479,57 @@ rules:
             .err()
             .map(|e| e.join("\n"))
             .ok_or("the file was accepted")
+    }
+
+    #[test]
+    fn a_rule_names_the_provider_paths_it_may_reach_and_bad_ones_are_refused() -> TestResult {
+        let with = |entry: &str| {
+            format!(
+                "version: 1\nproviders:\n  - name: openai\n    kind: openai\n    url: https://api.openai.com\n    key_env: K\n    models: [gpt-4o]\n  - name: bedrock\n    kind: bedrock\n    region: us-east-1\n    models: [m]\n    model_ids: {{ m: x }}\nrules:\n  - name: batch\n    principals: {{ team: data }}\n    models: [gpt-4o]\n    passthrough:\n{entry}"
+            )
+        };
+        let loaded = check(
+            "pt-good",
+            &with("      - { provider: openai, paths: [/v1/batches, /v1/files] }\n"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        let rule = loaded.policy.rule_list().first().ok_or("no rule")?;
+        assert!(rule.reaches("openai", "/v1/batches"));
+        assert!(rule.reaches("openai", "/v1/batches/batch_1/cancel"));
+        assert!(
+            !rule.reaches("openai", "/v1/batchesX"),
+            "a prefix matches whole path segments"
+        );
+        assert!(!rule.reaches("openai", "/v1/organization/admin_api_keys"));
+        assert!(!rule.reaches("anthropic", "/v1/batches"));
+        for (entry, expected) in [
+            (
+                "      - { provider: nope, paths: [/v1/x] }\n",
+                "no provider named \"nope\"",
+            ),
+            ("      - { provider: bedrock, paths: [/x] }\n", "bedrock"),
+            (
+                "      - { provider: openai, paths: [v1/x] }\n",
+                "starts with /",
+            ),
+            (
+                "      - { provider: openai, paths: [/v1/../admin] }\n",
+                "..",
+            ),
+            (
+                "      - { provider: openai, paths: [] }\n",
+                "at least one path",
+            ),
+        ] {
+            let found = errors(check("pt-bad", &with(entry), None)?)?;
+            assert!(found.contains(expected), "{entry}: {found}");
+            assert!(
+                found.contains("gantry.policy.yaml:"),
+                "the error names file and line: {found}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

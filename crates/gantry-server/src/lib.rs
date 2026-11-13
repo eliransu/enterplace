@@ -85,6 +85,8 @@ const TRANSCRIPTIONS: &str = "/v1/audio/transcriptions";
 const SPEECH: &str = "/v1/audio/speech";
 const MODERATIONS: &str = "/v1/moderations";
 const RERANK: &str = "/v1/rerank";
+/// `/passthrough/<provider>/<native path>`: a provider's own API, reached as sent on the paths a rule names.
+const PASSTHROUGH: &str = "/passthrough/";
 
 /// The routes forwarded as sent, to providers of kind openai only.
 fn openai_only(path: &str) -> bool {
@@ -1026,6 +1028,21 @@ async fn check<'a>(
             anthropic_client,
         )));
     }
+    if parts.uri.path().starts_with(PASSTHROUGH) {
+        let query_carries_key = parts.uri.query().is_some_and(|q| carries(q.as_bytes()));
+        return passthrough(
+            state,
+            version,
+            policy,
+            person,
+            &key_sha256,
+            parts,
+            body,
+            query_carries_key,
+            seen,
+        )
+        .await;
+    }
     let Some(route) = route_kind(&parts.method, parts.uri.path()) else {
         return Err(unknown_route());
     };
@@ -1131,6 +1148,7 @@ async fn check<'a>(
                 cooldown: alias.map(|a| Duration::from_secs(a.cooldown_seconds)),
                 context,
                 content,
+                passthrough: None,
             });
             Ok(Next::Forward(parts, bytes, permit))
         }
@@ -1216,6 +1234,110 @@ fn killed(
     }
 }
 
+/// A request for a provider's own API: allowed only on a path the caller's rule names for that provider, with any
+/// `model` in its body checked as on every other route. It is then recorded, limited and metered like the rest.
+#[allow(clippy::too_many_arguments)]
+async fn passthrough<'a>(
+    state: &AppState,
+    version: &Snapshot,
+    policy: &'a Policy,
+    person: &'a Principal,
+    key_sha256: &str,
+    mut parts: Parts,
+    body: Body,
+    query_carries_key: bool,
+    seen: &mut Seen<'a>,
+) -> Result<Next, Refusal> {
+    let rest = parts
+        .uri
+        .path()
+        .strip_prefix(PASSTHROUGH)
+        .unwrap_or_default();
+    let (name, native) = match rest.split_once('/') {
+        Some((name, path)) => (name.to_string(), format!("/{path}")),
+        None => (rest.to_string(), "/".to_string()),
+    };
+    let Some(index) = version.providers.iter().position(|p| p.name == name) else {
+        return Err(Refusal::new(
+            StatusCode::NOT_FOUND,
+            "unknown_provider",
+            format!(
+                "Refused: there is no provider \"{name}\" to pass through to. Use /passthrough/<provider>/<path> with a provider named in the policy."
+            ),
+        ));
+    };
+    seen.provider = Some(index);
+    let Some(rule) = policy.rule_for(person) else {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "no_rule",
+            format!(
+                "Refused: no rule in the policy names \"{}\" or team \"{}\", so nothing is allowed. Ask a Gantry admin to add a rule.",
+                person.name, person.team
+            ),
+        ));
+    };
+    seen.rule = Some(rule);
+    // A dot segment could climb out of the listed prefix at the provider, whatever the prefix match says here.
+    let climbs = native
+        .split('/')
+        .any(|seg| seg == "." || seg == ".." || seg.contains('%'));
+    if climbs || !rule.reaches(&name, &native) {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "passthrough_not_allowed",
+            format!(
+                "Refused: rule \"{}\" does not let you reach {native} at provider \"{name}\" as sent. Ask a Gantry admin to add the path under the rule's passthrough:.",
+                rule.name
+            ),
+        ));
+    }
+    if query_carries_key {
+        return Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            "key_in_query",
+            "Refused: the query carries your Gantry key, which must never reach a provider. Send it in the Authorization header only.",
+        ));
+    }
+    let (bytes, permit) = read_body(Some(&person.name), state, &parts.headers, body).await?;
+    let model = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from));
+    if let Some(model) = &model {
+        seen.model = Some(model.clone());
+        if !matches!(policy.decide(person, model), Decision::Allow(_)) {
+            return Err(Refusal::new(
+                StatusCode::FORBIDDEN,
+                "model_not_allowed",
+                format!(
+                    "Refused: rule \"{}\" does not allow model \"{model}\" for \"{}\". {} Ask a Gantry admin if you need it.",
+                    rule.name,
+                    person.name,
+                    allowed_models(rule)
+                ),
+            ));
+        }
+    }
+    killed(state, person, key_sha256, model.as_deref())?;
+    let target = match parts.uri.query() {
+        Some(query) => format!("{native}?{query}"),
+        None => native,
+    };
+    let model = model.unwrap_or_default();
+    parts.extensions.insert(Plan {
+        provider: index,
+        model: model.clone(),
+        translated: None,
+        from_messages: false,
+        chain: vec![(index, model)],
+        cooldown: None,
+        context: Vec::new(),
+        content: Vec::new(),
+        passthrough: Some(target),
+    });
+    Ok(Next::Forward(parts, bytes, permit))
+}
+
 fn unknown_route() -> Refusal {
     Refusal::new(
         StatusCode::NOT_FOUND,
@@ -1244,6 +1366,8 @@ struct Plan {
     context: Vec<(usize, String)>,
     /// Where the request goes when the provider refuses it under its content policy.
     content: Vec<(usize, String)>,
+    /// For a passthrough request: the native path and query it is sent to, as sent.
+    passthrough: Option<String>,
 }
 
 /// The model of a multipart form (an audio transcription), read as `Peek` reads a JSON body's.
@@ -1710,12 +1834,13 @@ async fn decide(
     let on_request = guards.iter().any(|g| g.on.request);
     // QA14-5: a form's text fields (the transcription prompt) are checked; only a form with none is not text.
     let not_text = on_request
-        && path == TRANSCRIPTIONS
         && match &outcome {
-            Ok(Next::Forward(parts, bytes, _)) => {
+            Ok(Next::Forward(parts, bytes, _)) if path == TRANSCRIPTIONS => {
                 form_texts(&parts.headers, bytes).is_ok_and(|t| t.is_empty())
             }
-            _ => true,
+            // A passthrough call with no body (a GET of a batch) has nothing to read.
+            Ok(Next::Forward(_, bytes, _)) if path.starts_with(PASSTHROUGH) => bytes.is_empty(),
+            _ => path == TRANSCRIPTIONS,
         };
     outcome = match outcome {
         Ok(Next::Forward(parts, bytes, held)) if on_request && !not_text => {
@@ -1798,7 +1923,12 @@ async fn decide(
                 serde_json::to_value(found).unwrap_or_default(),
             );
         } else if not_text && outcome.is_ok() {
-            record.insert("guardrails".into(), "not_run: the body is audio".into());
+            let why = if path.starts_with(PASSTHROUGH) {
+                "not_run: the request has no body"
+            } else {
+                "not_run: the body is audio"
+            };
+            record.insert("guardrails".into(), why.into());
         }
         if let Some(serde_json::Value::Object(extra)) =
             outcome.as_ref().err().and_then(|r| r.record.as_deref())
@@ -2425,6 +2555,8 @@ fn text_fields(path: &str, body: &serde_json::Value) -> Result<Vec<String>, Stri
     }
     let mut pointers = Vec::new();
     match path {
+        // A provider's own API has no shape Gantry knows: every string in the body is text.
+        _ if path.starts_with(PASSTHROUGH) => strings(body, String::new(), &mut pointers),
         IMAGES => match &body["prompt"] {
             Value::String(_) => pointers.push("/prompt".into()),
             Value::Null => {}
@@ -2624,6 +2756,10 @@ async fn send(
     // With a policy every query parameter has been checked against the route's list, so what is left goes on.
     // A translated request goes to the messages route, which it now is.
     let route = match plan.as_ref().map(|p| (p.from_messages, p.translated)) {
+        _ if plan.as_ref().is_some_and(|p| p.passthrough.is_some()) => plan
+            .as_ref()
+            .and_then(|p| p.passthrough.clone())
+            .unwrap_or_default(),
         Some((true, _)) => CHAT.to_string(),
         Some((false, Some(_))) => MESSAGES.to_string(),
         _ => parts
@@ -2636,7 +2772,10 @@ async fn send(
         .as_ref()
         .map_or_else(|| vec![(first, String::new())], |p| p.chain.clone());
     // A provider's own fallback takes the same model; an alias has its deployments instead.
-    if let Some(plan) = plan.as_ref().filter(|p| p.cooldown.is_none())
+    // A passthrough path is that provider's own API: another provider may not have it.
+    if let Some(plan) = plan
+        .as_ref()
+        .filter(|p| p.cooldown.is_none() && p.passthrough.is_none())
         && let Some(fallback) = provider
             .fallback
             .as_ref()
@@ -2895,7 +3034,14 @@ fn outbound(
         })
     };
     let mut headers = parts.headers.clone();
+    let passthrough = plan.is_some_and(|p| p.passthrough.is_some());
     let (url, body) = match provider.kind {
+        // As sent, to the provider's own path: `gantry check` allows passthrough only to kinds that need no
+        // signing or translation.
+        _ if passthrough => (
+            gantry_core::config::join(&provider.url, route),
+            bytes.clone(),
+        ),
         Kind::OpenAi | Kind::Anthropic => (
             gantry_core::config::join(&provider.url, route),
             bytes.clone(),

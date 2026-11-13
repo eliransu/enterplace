@@ -112,9 +112,32 @@ pub struct Rule {
     /// Run in this order on every request the rule allows, before it is recorded and sent.
     pub guardrails: Vec<Guardrail>,
     pub limits: Limits,
+    /// Native provider paths the rule may reach through `/passthrough/<provider>/...`. Empty reaches none.
+    pub passthrough: Vec<Passthrough>,
+}
+
+/// One provider and the path prefixes of its own API a rule may reach as sent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Passthrough {
+    pub provider: String,
+    pub paths: Vec<String>,
 }
 
 impl Rule {
+    /// Whether the rule lets a request reach `path` at `provider`. A prefix matches whole path segments, so
+    /// `/v1/batches` reaches `/v1/batches/b1` and not `/v1/batchesX`.
+    pub fn reaches(&self, provider: &str, path: &str) -> bool {
+        self.passthrough
+            .iter()
+            .filter(|p| p.provider == provider)
+            .any(|p| {
+                p.paths.iter().any(|prefix| {
+                    path.strip_prefix(prefix.as_str())
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+                })
+            })
+    }
+
     fn applies_to(&self, principal: &Principal) -> bool {
         match &self.who {
             Who::Any => true,
@@ -206,6 +229,7 @@ impl Policy {
             models,
             guardrails: Vec::new(),
             limits: Limits::default(),
+            passthrough: Vec::new(),
         });
         self
     }

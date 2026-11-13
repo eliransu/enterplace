@@ -144,8 +144,36 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `rate` | map | none | `{ rpm: 1 to 1000000, tpm: 1 to 1000000000 }`, either or both. |
 | `cache` | map | none | `{ ttl_seconds: 1 to 86400 }`. See [Caching](/routing/caching/). |
 | `buffer_stream` | boolean | `false` | Hold a streamed answer whole so `on: [answer]` guardrails check it first. Needs a guardrail with `on: [answer]`. |
+| `passthrough` | list | `[]` | Native provider paths the rule may reach as sent. See [Passthrough](#passthrough). |
 
 Every model a budgeted rule reaches must have a price, built in or under `prices:`. For `models: ["*"]` that is every model every provider serves. `gantry check` refuses a file that breaks this.
+
+## Passthrough
+
+Gantry serves the common routes itself: chat completions, messages, responses, embeddings, images, audio, moderations and rerank. For any other endpoint of a provider's own API (batches, files, the legacy completions route, Gemini's native methods), send the request to `/passthrough/<provider>/<path>`. Gantry swaps your Gantry key for the provider key and sends the request to that path unchanged.
+
+A rule reaches nothing this way unless it lists the provider and the path prefixes:
+
+```yaml title="gantry.policy.yaml"
+rules:
+  - name: data-team
+    principals: { team: data }
+    models: [gpt-4o-mini]
+    passthrough:
+      - { provider: openai, paths: [/v1/batches, /v1/files] }
+```
+
+```bash
+curl https://gantry.example.com/passthrough/openai/v1/batches/batch_123 \
+  -H "Authorization: Bearer $GANTRY_KEY"
+```
+
+- A prefix matches whole path segments: `/v1/batches` reaches `/v1/batches/batch_123/cancel`, not `/v1/batchesX`. A path with a `.`, `..` or escaped segment is refused, so a listed prefix cannot be climbed out of.
+- A body with a `model` field is checked against the rule's models, as on every other route. A body without one is allowed by the path alone.
+- Each call is recorded, counts against the rule's budget and rate, and is charged from the `usage` the provider returns, priced by the body's model. A call with no model is recorded with no cost.
+- Guardrails read every string in the body, whatever its shape. A call with no body (a `GET`) is recorded with `guardrails: not_run: the request has no body`.
+- Only providers of kind `openai`, `anthropic`, `azure` and `gemini`. Bedrock and Vertex requests must be signed or translated, so `gantry check` refuses them here.
+- The provider key can reach any path you list. List the endpoints people need, never an account's admin API.
 
 ## Order of checks
 
