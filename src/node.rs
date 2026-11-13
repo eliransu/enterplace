@@ -39,6 +39,8 @@ const SHIPPED: &[&str] = &[
     "charged_usd",
     "trigger",
     "policy_sha256",
+    "problem_count",
+    "problems",
     "keys_sha256",
     "action",
     "prev",
@@ -59,6 +61,9 @@ pub struct Options {
     pub secrets_interval: Duration,
     /// Extra environment variables the gateway may read, beyond the defaults (see `gateway_env`).
     pub pass_env: Vec<String>,
+    /// With a limit, a node that has not reached the control plane for this long stops serving (fail closed), so a
+    /// key revoked during an outage cannot be used for longer than this. Without one it serves its last config.
+    pub max_offline: Option<Duration>,
 }
 
 /// Variables every gateway gets when the node has them: what a process needs to run and to trust TLS.
@@ -158,6 +163,7 @@ impl Client {
             req = req.set("if-none-match", &format!("\"{version}\""));
         }
         let res = match req.call() {
+            Ok(res) if res.status() == 304 => return Ok(None),
             Ok(res) => res,
             Err(ureq::Error::Status(304, _)) => return Ok(None),
             Err(ureq::Error::Status(code, res)) => {
@@ -309,15 +315,47 @@ fn heartbeat(client: &Client, version: &str, shipped_total: u64, gateway_running
     }));
 }
 
+/// Set when the node is asked to stop (SIGTERM, Ctrl-C): it ships what is left, stops the gateway and exits.
+pub static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn stopping() -> bool {
+    STOP.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Sleeps `d`, waking early when the node is asked to stop. True when it is.
+fn sleep_or_stop(d: Duration) -> bool {
+    let end = std::time::Instant::now() + d;
+    while std::time::Instant::now() < end {
+        if stopping() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200).min(end - std::time::Instant::now()));
+    }
+    stopping()
+}
+
+/// An HTTP agent for the control plane and secret sources. A node behind a corporate proxy reaches the outside
+/// through HTTPS_PROXY (or https_proxy, ALL_PROXY), as other tools on that network do.
+pub fn agent() -> Result<ureq::Agent, String> {
+    let mut builder = ureq::AgentBuilder::new().timeout(Duration::from_secs(10));
+    if let Some(url) = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+    {
+        let proxy = ureq::Proxy::new(&url)
+            .map_err(|err| format!("the proxy in HTTPS_PROXY ({url}) is not usable: {err}"))?;
+        builder = builder.proxy(proxy);
+    }
+    Ok(builder.build())
+}
+
 pub fn run(opts: Options) -> Result<(), String> {
     let token = std::env::var("GANTRY_NODE_TOKEN").map_err(|_| {
         "GANTRY_NODE_TOKEN is not set. Put the node token the control plane issued in it."
             .to_owned()
     })?;
     let client = Client {
-        agent: ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(10))
-            .build(),
+        agent: agent()?,
         base: opts.control_plane.trim_end_matches('/').to_owned(),
         token,
         org: std::env::var("GANTRY_ORG").ok(),
@@ -354,9 +392,7 @@ pub fn run(opts: Options) -> Result<(), String> {
     };
 
     if !opts.secrets.is_empty() {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(10))
-            .build();
+        let agent = agent()?;
         let values = crate::secrets::load(&opts.dir, &opts.secrets, &agent)?;
         let (dir, interval) = (opts.dir.clone(), opts.secrets_interval);
         let secrets = opts.secrets.clone();
@@ -364,9 +400,43 @@ pub fn run(opts: Options) -> Result<(), String> {
     }
     let child = Arc::new(Mutex::new(spawn_gateway(&opts, &config.env)?));
     let mut shipped_total: u64 = 0;
+    let mut last_contact = std::time::Instant::now();
+    let mut closed = false;
     loop {
-        std::thread::sleep(opts.interval);
-        match client.config(Some(&config.version)) {
+        if sleep_or_stop(opts.interval) {
+            // Ship what is left, then stop the gateway, so nothing keeps serving and the audit log is closed.
+            if let Ok(n) = ship(&client, &opts.dir) {
+                shipped_total += n as u64;
+            }
+            if let Ok(mut c) = child.lock() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            heartbeat(&client, &config.version, shipped_total, false);
+            eprintln!("gantry node: stopped");
+            return Ok(());
+        }
+        let fetched = client.config(Some(&config.version));
+        if fetched.is_ok() {
+            last_contact = std::time::Instant::now();
+            if closed {
+                eprintln!("gantry node: the control plane answers again; serving resumes");
+                closed = false;
+            }
+        } else if let Some(limit) = opts.max_offline {
+            if !closed && last_contact.elapsed() > limit {
+                eprintln!(
+                    "gantry node: no answer from the control plane for {} s (--max-offline); the gateway stops serving until it answers",
+                    limit.as_secs()
+                );
+                if let Ok(mut c) = child.lock() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                closed = true;
+            }
+        }
+        match fetched {
             Ok(Some(next)) => {
                 if let Err(err) = apply(&opts, &next) {
                     eprintln!("gantry node: {err}");
@@ -400,6 +470,7 @@ pub fn run(opts: Options) -> Result<(), String> {
             Err(err) => eprintln!("gantry node: {err}. Will retry."),
         }
         let running = match child.lock() {
+            Ok(_) if closed => false,
             Ok(mut c) => match c.try_wait() {
                 Ok(None) => true,
                 _ => {

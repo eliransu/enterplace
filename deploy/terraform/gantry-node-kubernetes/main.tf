@@ -39,7 +39,7 @@ resource "kubernetes_deployment_v1" "this" {
         container {
           name  = "gantry"
           image = var.image
-          args  = ["node", "--control-plane", var.control_plane_url, "--dir", "/var/lib/gantry", "--listen", "0.0.0.0:8080", "--interval", tostring(var.poll_interval)]
+          args  = concat(["node", "--control-plane", var.control_plane_url, "--dir", "/var/lib/gantry", "--listen", "0.0.0.0:8080", "--interval", tostring(var.poll_interval)], var.extra_args)
           port {
             name           = "http"
             container_port = 8080

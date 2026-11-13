@@ -19,6 +19,8 @@ const USAGE: &str = "usage:
       aws-sm:<secret ARN>[#field] (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN).
       The gateway's environment starts empty: it gets PATH, HOME, TZ, LANG, SSL_CERT_*, every *_PROVIDER_KEY,
       and the names in --pass-env A,B (for example AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY for Bedrock).
+      --max-offline <seconds> stops serving when the control plane has not answered for that long (fail closed).
+      HTTPS_PROXY is used to reach the control plane and secret sources.
   gantry-enterprise device --control-plane <url> [--interval <seconds>] [--dry-run] [--once] [--home <folder>]
       Point the signed-in user's coding tools at the org's gateway every --interval seconds (default 300) and
       report coverage. The enrolment token goes in GANTRY_DEVICE_TOKEN, or in the file GANTRY_DEVICE_TOKEN_FILE
@@ -81,6 +83,9 @@ async fn main() -> ExitCode {
                     interval: Duration::from_secs(interval),
                     secrets,
                     secrets_interval: Duration::from_secs(secrets_interval),
+                    max_offline: flag(&args, "--max-offline")
+                        .and_then(|s| s.parse().ok())
+                        .map(Duration::from_secs),
                     pass_env: args
                         .windows(2)
                         .filter(|w| w[0] == "--pass-env")
@@ -88,6 +93,24 @@ async fn main() -> ExitCode {
                         .filter(|s| !s.is_empty())
                         .collect(),
                 };
+                // SIGTERM (a rollout, `docker stop`) and Ctrl-C stop the node cleanly: it ships what is left and
+                // stops the gateway with it instead of leaving it serving on its own.
+                tokio::spawn(async {
+                    #[cfg(unix)]
+                    {
+                        if let Ok(mut term) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                            tokio::select! {
+                                _ = term.recv() => {}
+                                _ = tokio::signal::ctrl_c() => {}
+                            }
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = tokio::signal::ctrl_c().await;
+                    }
+                    node::STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+                });
                 // The node loop blocks; it runs on its own thread so the runtime stays free.
                 tokio::task::spawn_blocking(move || node::run(opts))
                     .await

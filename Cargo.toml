@@ -11,7 +11,7 @@ publish = false
 # Path dependencies while both repositories are developed side by side.
 gantry-core = { path = "../gantry/crates/gantry-core" }
 gantry-server = { path = "../gantry/crates/gantry-server" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 # The node talks to the control plane from plain threads; a blocking client keeps that code short.
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 serde_json = "1"

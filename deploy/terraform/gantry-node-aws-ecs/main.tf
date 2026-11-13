@@ -63,7 +63,7 @@ resource "aws_ecs_task_definition" "this" {
     name         = "gantry"
     image        = var.image
     essential    = true
-    command      = ["node", "--control-plane", var.control_plane_url, "--dir", "/var/lib/gantry", "--listen", "0.0.0.0:8080", "--interval", tostring(var.poll_interval)]
+    command      = concat(["node", "--control-plane", var.control_plane_url, "--dir", "/var/lib/gantry", "--listen", "0.0.0.0:8080", "--interval", tostring(var.poll_interval)], var.extra_args)
     portMappings = [{ containerPort = 8080, protocol = "tcp" }]
     secrets = concat(
       [{ name = "GANTRY_NODE_TOKEN", valueFrom = var.node_token_secret_arn }],

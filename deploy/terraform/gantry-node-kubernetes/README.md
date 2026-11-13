@@ -20,7 +20,7 @@ module "gantry" {
   source = "./deploy/terraform/gantry-node-kubernetes"
 
   namespace         = "ai"
-  image             = "registry.example.com/gantry-enterprise:1.4.0"
+  image             = "registry.example.com/gantry-enterprise:0.0.1"
   control_plane_url = "https://gantry-control.eliran.me"
   node_token_secret = { name = "gantry-node", key = "token" }
   provider_key_secrets = {
@@ -52,3 +52,18 @@ trust policy for the cluster's issuer with subject `system:serviceaccount:<names
 | `cpu`, `memory` | `250m`, `256Mi` | Pod size |
 
 Outputs: `deployment_name`, `service_name`, `base_url`.
+
+## The image
+
+There is no public registry yet. Build the image from the folder that holds both repositories and push it to your own registry:
+
+```bash
+docker buildx build --platform linux/amd64 -f gantry-enterprise/Dockerfile -t <your-registry>/gantry-enterprise:0.0.1 --push .
+```
+
+## Limits to know
+
+- Run one replica per gateway. Budgets, rate limits and the cache are counted per process, so two replicas allow twice the budget.
+- On SIGTERM the node ships its last audit records and stops the gateway; give it the default 30 second grace period.
+- `extra_args` passes node flags: `--max-offline <seconds>` fails closed after a control plane outage that long, `--pass-env` lets the gateway read named variables (Bedrock's AWS credentials), and `--secrets` reads provider keys from Vault or AWS Secrets Manager and rotates them without a restart.
+- The node reaches the control plane through `HTTPS_PROXY` when it is set.

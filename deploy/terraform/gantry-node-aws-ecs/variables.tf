@@ -5,7 +5,7 @@ variable "name" {
 }
 
 variable "image" {
-  description = "The gantry-enterprise image, such as 123456789012.dkr.ecr.eu-west-1.amazonaws.com/gantry-enterprise:1.4.0."
+  description = "The gantry-enterprise image, such as 123456789012.dkr.ecr.eu-west-1.amazonaws.com/gantry-enterprise:0.0.1."
   type        = string
 }
 
@@ -88,4 +88,10 @@ variable "log_retention_days" {
   description = "CloudWatch retention for the gateway's logs."
   type        = number
   default     = 30
+}
+
+variable "extra_args" {
+  description = "More node flags, such as [\"--max-offline\", \"3600\", \"--pass-env\", \"AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY\", \"--secrets\", \"OPENAI_PROVIDER_KEY=aws-sm:arn:...\"]. See gantry-enterprise node --help."
+  type        = list(string)
+  default     = []
 }

@@ -17,7 +17,7 @@ the task definition or in Terraform state.
 module "gantry" {
   source = "./deploy/terraform/gantry-node-aws-ecs"
 
-  image                 = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/gantry-enterprise:1.4.0"
+  image                 = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/gantry-enterprise:0.0.1"
   control_plane_url     = "https://gantry-control.eliran.me"
   node_token_secret_arn = aws_secretsmanager_secret.gantry_node_token.arn
   provider_key_secret_arns = {
@@ -54,3 +54,18 @@ Gantry key from `POST https://gantry-control.eliran.me/token/<org>` with their O
 | `cpu`, `memory`, `cpu_architecture` | `512`, `1024`, `X86_64` | Task size |
 
 Outputs: `service_name`, `cluster_arn`.
+
+## The image
+
+There is no public registry yet. Build the image from the folder that holds both repositories and push it to your own registry:
+
+```bash
+docker buildx build --platform linux/amd64 -f gantry-enterprise/Dockerfile -t <your-registry>/gantry-enterprise:0.0.1 --push .
+```
+
+## Limits to know
+
+- Run one replica per gateway. Budgets, rate limits and the cache are counted per process, so two replicas allow twice the budget.
+- On SIGTERM the node ships its last audit records and stops the gateway; give it the default 30 second grace period.
+- `extra_args` passes node flags: `--max-offline <seconds>` fails closed after a control plane outage that long, `--pass-env` lets the gateway read named variables (Bedrock's AWS credentials), and `--secrets` reads provider keys from Vault or AWS Secrets Manager and rotates them without a restart.
+- The node reaches the control plane through `HTTPS_PROXY` when it is set.

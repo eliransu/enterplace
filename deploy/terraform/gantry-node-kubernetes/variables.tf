@@ -11,7 +11,7 @@ variable "namespace" {
 }
 
 variable "image" {
-  description = "The gantry-enterprise image, such as registry.example.com/gantry-enterprise:1.4.0."
+  description = "The gantry-enterprise image, such as registry.example.com/gantry-enterprise:0.0.1."
   type        = string
 }
 
@@ -33,9 +33,9 @@ variable "provider_key_secrets" {
 }
 
 variable "replicas" {
-  description = "How many gateway pods to run."
+  description = "Replicas. Keep 1: budgets, rate limits and the cache are counted per process, so 2 replicas allow twice the budget."
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "service_type" {
@@ -66,4 +66,10 @@ variable "poll_interval" {
   description = "Seconds between config checks with the control plane."
   type        = number
   default     = 5
+}
+
+variable "extra_args" {
+  description = "More node flags, such as [\"--max-offline\", \"3600\", \"--pass-env\", \"AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY\", \"--secrets\", \"OPENAI_PROVIDER_KEY=aws-sm:arn:...\"]. See gantry-enterprise node --help."
+  type        = list(string)
+  default     = []
 }
