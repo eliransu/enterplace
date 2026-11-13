@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde_json::{Map, Value};
@@ -60,6 +60,8 @@ struct Chain {
     path: Option<PathBuf>,
     /// Bytes the log held after the last write, to notice when it is cut.
     len: u64,
+    /// Whether this log still holds its lock, when it took one.
+    fence: Option<Arc<Fence>>,
 }
 
 impl Chain {
@@ -119,20 +121,7 @@ pub struct AuditLog {
     len: Arc<AtomicU64>,
     stats: Arc<Stats>,
     /// The lock file this log wrote beside the file it holds, removed when it closes.
-    lock: Option<PathBuf>,
-}
-
-impl Drop for AuditLog {
-    fn drop(&mut self) {
-        let Some(lock) = &self.lock else { return };
-        locked_paths().remove(lock);
-        // Only a lock that still names this process: another Gantry may have taken over one it found stale.
-        if std::fs::read_to_string(lock)
-            .is_ok_and(|pid| pid.trim() == std::process::id().to_string())
-        {
-            let _ = std::fs::remove_file(lock);
-        }
-    }
+    lock: Option<Lock>,
 }
 
 /// Lock files held by logs open in this process, so a second open in the same process is refused too.
@@ -144,33 +133,395 @@ fn locked_paths() -> std::sync::MutexGuard<'static, std::collections::HashSet<Pa
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Writes the lock file beside a log, or refuses when a live process holds it (QA12-2). Returns None when the lock
-/// cannot be written (a read-only folder): the log is still served, as before.
-fn take_lock(path: &Path) -> Result<Option<PathBuf>, String> {
-    let lock = lock_path(path);
-    let mut held = locked_paths();
-    let holder = std::fs::read_to_string(&lock)
+/// How often a holder rewrites its lock. A lock that has not changed for six beats belongs to a Gantry that is gone;
+/// one that cannot rewrite its own for three beats stops writing records first, so the two never overlap.
+const BEAT: Duration = Duration::from_secs(5);
+
+/// Who writes a lock: a process, the machine it runs on, and the process space it sees. Two containers can both
+/// be process 1 on one share, so a process ID alone says nothing about a lock another container wrote.
+#[derive(Clone, Debug)]
+struct Me {
+    pid: u32,
+    host: Option<String>,
+    /// Equal only for processes that can see each other's process IDs. None when it cannot be told.
+    space: Option<String>,
+}
+
+impl Me {
+    fn this_process() -> Me {
+        static ME: std::sync::OnceLock<Me> = std::sync::OnceLock::new();
+        ME.get_or_init(|| {
+            let host = host_name();
+            Me {
+                pid: std::process::id(),
+                space: pid_space(host.as_deref()),
+                host,
+            }
+        })
+        .clone()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn host_name() -> Option<String> {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
         .ok()
-        .and_then(|pid| pid.trim().parse::<u32>().ok());
-    // A lock naming this process's ID and no log open here is stale: in a container every Gantry is process 1.
-    let refused = held.contains(&lock)
-        || holder.is_some_and(|pid| pid != std::process::id() && process_alive(pid));
-    if refused {
-        return Err(format!(
-            "another Gantry ({}) holds the audit log at {}: it wrote {}. Two writers would break the chain. Stop the other one or give this one its own `audit: {{ path: ... }}`; if no Gantry is running, delete {} and start again.",
-            holder.map_or("process ID unknown".to_string(), |pid| format!(
-                "process {pid}"
-            )),
-            path.display(),
-            lock.display(),
-            lock.display()
-        ));
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+#[cfg(windows)]
+fn host_name() -> Option<String> {
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .filter(|name| !name.is_empty())
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn host_name() -> Option<String> {
+    let out = std::process::Command::new("hostname")
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !name.is_empty()).then_some(name)
+}
+
+/// On Linux a host name is no proof: Cloud Run and others can give every instance the same one. The boot ID tells
+/// machines apart and the PID namespace tells containers on one machine apart.
+#[cfg(target_os = "linux")]
+fn pid_space(_: Option<&str>) -> Option<String> {
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+    let ns = std::fs::read_link("/proc/self/ns/pid").ok()?;
+    Some(format!("{}/{}", boot.trim(), ns.display()))
+}
+
+/// Elsewhere containers do not share a machine's host name, and machines on one network do not either.
+#[cfg(not(target_os = "linux"))]
+fn pid_space(host: Option<&str>) -> Option<String> {
+    host.map(str::to_string)
+}
+
+fn lock_text(me: &Me, instance: &str, beat: u64) -> String {
+    format!(
+        "holder {instance}\npid {}\nhost {}\nspace {}\nbeat {beat}\n",
+        me.pid,
+        me.host.as_deref().unwrap_or("unknown"),
+        me.space.as_deref().unwrap_or("unknown")
+    )
+}
+
+/// What a lock file says about its holder. A lock from before the holder line holds only a process ID.
+struct Holder {
+    pid: Option<u32>,
+    host: Option<String>,
+    space: Option<String>,
+    bare: bool,
+}
+
+impl Holder {
+    fn parse(text: &str) -> Holder {
+        if let Ok(pid) = text.trim().parse::<u32>() {
+            return Holder {
+                pid: Some(pid),
+                host: None,
+                space: None,
+                bare: true,
+            };
+        }
+        let field = |name: &str| {
+            text.lines()
+                .filter_map(|line| line.split_once(' '))
+                .find(|(key, value)| *key == name && *value != "unknown")
+                .map(|(_, value)| value.to_string())
+        };
+        Holder {
+            pid: field("pid").and_then(|pid| pid.parse().ok()),
+            host: field("host"),
+            space: field("space"),
+            bare: false,
+        }
     }
-    if std::fs::write(&lock, format!("{}\n", std::process::id())).is_err() {
-        return Ok(None);
+
+    fn describe(&self) -> String {
+        match (self.pid, &self.host) {
+            (Some(pid), Some(host)) => format!("process {pid} on {host}"),
+            (Some(pid), None) => format!("process {pid}"),
+            (None, _) => "process ID unknown".to_string(),
+        }
     }
-    held.insert(lock.clone());
-    Ok(Some(lock))
+}
+
+/// Whole seconds, rounded up, for messages.
+fn secs(time: Duration) -> String {
+    format!("{:.0}", time.as_secs_f64().ceil())
+}
+
+/// The holder's own say on whether it still holds its lock, which the writer asks before each write.
+struct Fence {
+    lock: PathBuf,
+    start: Instant,
+    /// When the holder last rewrote its lock, in milliseconds after `start`.
+    beat_ms: AtomicU64,
+    limit: Duration,
+    /// Why records stopped. Kept once set: a lock that came back does not undo records another Gantry wrote meanwhile.
+    lost: std::sync::OnceLock<String>,
+}
+
+impl Fence {
+    fn beat(&self) {
+        let ms = u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.beat_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// Why records may no longer be written, or None while the lock is this log's.
+    fn lost(&self) -> Option<String> {
+        let since = Duration::from_millis(self.beat_ms.load(Ordering::Relaxed));
+        if self.lost.get().is_none() && self.start.elapsed().saturating_sub(since) >= self.limit {
+            let _ = self.lost.set(format!(
+                "the audit log lock {} could not be updated for {} seconds, so another Gantry may take the log over. Every request is refused until Gantry is started again. Check that the folder is reachable and writable.",
+                self.lock.display(),
+                secs(self.limit)
+            ));
+        }
+        self.lost.get().cloned()
+    }
+}
+
+/// A lock this log holds: a thread rewrites it every beat, and closing the log removes it.
+struct Lock {
+    path: PathBuf,
+    instance: String,
+    fence: Arc<Fence>,
+    stop: Option<mpsc::Sender<()>>,
+    beats: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        // Stopped first, so a beat cannot write the lock again after it is removed.
+        drop(self.stop.take());
+        if let Some(beats) = self.beats.take() {
+            let _ = beats.join();
+        }
+        locked_paths().remove(&self.path);
+        // Only a lock that still names this log: another Gantry may have taken over one it found stale.
+        if is_mine(&self.path, &self.instance) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn is_mine(lock: &Path, instance: &str) -> bool {
+    std::fs::read_to_string(lock)
+        .is_ok_and(|text| text.starts_with(&format!("holder {instance}\n")))
+}
+
+fn create_lock(lock: &Path, text: &str) -> io::Result<()> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock)?
+        .write_all(text.as_bytes())
+}
+
+/// Rewrites the lock every beat, and stops once it names another Gantry.
+fn keep_lock(
+    lock: &Path,
+    me: &Me,
+    instance: &str,
+    fence: &Fence,
+    stop: &mpsc::Receiver<()>,
+    beat: Duration,
+) {
+    let mut n = 0;
+    while let Err(mpsc::RecvTimeoutError::Timeout) = stop.recv_timeout(beat) {
+        n += 1;
+        let text = lock_text(me, instance, n);
+        let wrote = match std::fs::read_to_string(lock) {
+            Ok(_) if is_mine(lock, instance) => std::fs::write(lock, text),
+            // Removed by hand while this log holds it: nobody else holds it either.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => create_lock(lock, &text),
+            Ok(_) => {
+                let _ = fence.lost.set(format!(
+                    "the audit log lock {} now names another Gantry, which took the log over after this one could not update the lock. Every request is refused until Gantry is started again: two writers would break the chain.",
+                    lock.display()
+                ));
+                return;
+            }
+            Err(err) => Err(err),
+        };
+        // A beat that fails is tried again; after three the fence stops the writer.
+        if wrote.is_ok() {
+            fence.beat();
+        }
+    }
+}
+
+enum Verdict {
+    Take,
+    /// A holder this process can see running.
+    Live,
+    /// A holder it cannot see: alive while its lock keeps changing.
+    Watch,
+}
+
+fn judge(holder: &Holder, me: &Me, held_here: bool) -> Verdict {
+    // A bare process ID comes from a Gantry that could only see its own machine, as this check did.
+    let near = holder.bare || (holder.space.is_some() && holder.space == me.space);
+    match holder.pid {
+        Some(pid) if near && pid != me.pid => {
+            if process_alive(pid) {
+                Verdict::Live
+            } else {
+                Verdict::Take
+            }
+        }
+        // This very process: held by a log open here, or left by one that was dropped without closing.
+        Some(_) if near && !holder.bare => {
+            if held_here {
+                Verdict::Live
+            } else {
+                Verdict::Take
+            }
+        }
+        _ => Verdict::Watch,
+    }
+}
+
+/// Writes the lock file beside a log, or refuses when another Gantry holds it (QA12-2). A holder on this machine is
+/// checked by its process ID. One in another container or on another machine cannot be seen, so it counts as
+/// alive while its lock keeps changing: this waits up to eight beats for it to stop, which is what the new Gantry
+/// of a rollout needs. Returns None when the lock cannot be written (a read-only folder): the log is still served.
+// The lock is judged by its content changing, timed on this machine's own clock. NFS and SMB set modification
+// times from the server's clock, which can be far from this one, and a reader cannot tell how far; a change in
+// content needs no clock in common. The price is that a lock left by a holder elsewhere is taken over only after
+// six beats of watching it, never at once.
+// ponytail: two Gantrys that both find the same lock stale at the same moment race between reading it and removing
+// it, a window of microseconds after thirty seconds of watching; create_new settles who creates the new one, and a
+// loser that removed the winner's lock is caught by the winner's next beat, which stops the winner's writer. An OS
+// lock does not help: NFS and SMB locks do not survive a client that is gone.
+fn take_lock(path: &Path, beat: Duration, me: &Me) -> Result<Option<Lock>, String> {
+    let lock = lock_path(path);
+    let (stale, wait) = (beat * 6, beat * 8);
+    let deadline = Instant::now() + wait;
+    let instance = crate::id::random_hex(8);
+    let mine = lock_text(me, &instance, 0);
+    let mut seen: Option<(String, Instant)> = None;
+    let mut told = false;
+    loop {
+        let text = match std::fs::read_to_string(&lock) {
+            Ok(text) => Some(text),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => {
+                return Err(format!(
+                    "the audit log lock {} cannot be read: {err}. Gantry cannot tell whether another Gantry writes to {}. Check that Gantry may read the folder, or delete the lock file if no Gantry is running.",
+                    lock.display(),
+                    path.display()
+                ));
+            }
+        };
+        let take = if let Some(text) = &text {
+            let holder = Holder::parse(text);
+            match judge(&holder, me, locked_paths().contains(&lock)) {
+                Verdict::Take => true,
+                Verdict::Live => {
+                    return Err(format!(
+                        "another Gantry ({}) holds the audit log at {}: it wrote {}. Two writers would break the chain. Stop the other one or give this one its own `audit: {{ path: ... }}`; if no Gantry is running, delete {} and start again.",
+                        holder.describe(),
+                        path.display(),
+                        lock.display(),
+                        lock.display()
+                    ));
+                }
+                Verdict::Watch => {
+                    let now = Instant::now();
+                    let changed = match &seen {
+                        Some((before, at)) if before == text => *at,
+                        _ => {
+                            seen = Some((text.clone(), now));
+                            now
+                        }
+                    };
+                    let quiet = now - changed;
+                    if quiet >= stale {
+                        true
+                    } else if now >= deadline {
+                        return Err(format!(
+                            "another Gantry ({}) holds the audit log at {}: its lock {} last changed {} seconds ago, and Gantry waited {} seconds for it to stop. Two writers would break the chain. Stop the other one or give this one its own `audit: {{ path: ... }}`. A Gantry that is gone is taken over once its lock has not changed for {} seconds; if no Gantry is running anywhere, delete {} and start again.",
+                            holder.describe(),
+                            path.display(),
+                            lock.display(),
+                            secs(quiet),
+                            secs(wait),
+                            secs(stale),
+                            lock.display()
+                        ));
+                    } else {
+                        if !told {
+                            told = true;
+                            eprintln!(
+                                "gantry: the audit log at {} is held by another Gantry ({}), which may be the one this one replaces. Waiting up to {} seconds for it to stop; its lock is taken over once it has not changed for {} seconds.",
+                                path.display(),
+                                holder.describe(),
+                                secs(wait),
+                                secs(stale)
+                            );
+                        }
+                        std::thread::sleep(beat / 5);
+                        false
+                    }
+                }
+            }
+        } else {
+            true
+        };
+        if !take {
+            continue;
+        }
+        // Removed only while it still says what was judged, so a lock someone just wrote is not.
+        if let Some(text) = &text {
+            if std::fs::read_to_string(&lock).is_ok_and(|now| now == *text) {
+                let _ = std::fs::remove_file(&lock);
+            } else {
+                continue;
+            }
+        }
+        match create_lock(&lock, &mine) {
+            Ok(()) => break,
+            // Another Gantry created it first: judge its lock instead.
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Ok(None),
+        }
+    }
+    let fence = Arc::new(Fence {
+        lock: lock.clone(),
+        start: Instant::now(),
+        beat_ms: AtomicU64::new(0),
+        limit: beat * 3,
+        lost: std::sync::OnceLock::new(),
+    });
+    let (stop, stopped) = mpsc::channel();
+    locked_paths().insert(lock.clone());
+    let mut held = Lock {
+        path: lock.clone(),
+        instance: instance.clone(),
+        fence: fence.clone(),
+        stop: Some(stop),
+        beats: None,
+    };
+    let me = me.clone();
+    held.beats = Some(
+        std::thread::Builder::new()
+            .name("gantry-audit-lock".into())
+            .spawn(move || keep_lock(&lock, &me, &instance, &fence, &stopped, beat))
+            .map_err(|err| {
+                format!(
+                    "the audit log lock could not be kept: {err}. Without it another Gantry could take the log over while this one writes. Check the process and thread limits and start again."
+                )
+            })?,
+    );
+    Ok(Some(held))
 }
 
 /// FILE_SHARE_READ | FILE_SHARE_WRITE, without FILE_SHARE_DELETE.
@@ -190,8 +541,6 @@ fn is_device(_: &std::fs::Metadata) -> bool {
 
 /// Whether a process with this ID runs. Without unsafe code: /proc on Linux, `ps` elsewhere. When neither can
 /// tell, it is taken as running, so a second writer is refused and the message names the file to delete.
-// ponytail: two containers sharing one log folder both run as process 1 and cannot see each other; give each
-// container its own audit path.
 #[cfg(not(windows))]
 fn process_alive(pid: u32) -> bool {
     if Path::new("/proc/self").exists() {
@@ -220,8 +569,9 @@ fn process_alive(pid: u32) -> bool {
 }
 
 /// The file beside an audit log that says a Gantry process holds it: `gantry audit repair` refuses while it exists.
-// ponytail: a lock file, not an OS lock (File::lock needs Rust 1.89). A Gantry killed without closing its log leaves
-// it behind: the next `serve` takes it over when the process it names is gone, and repair says to delete it.
+// ponytail: a lock file, not an OS lock (File::lock needs Rust 1.89, and NFS and SMB locks do not outlive a client
+// that is gone). A Gantry killed without closing its log leaves it behind: the next `serve` takes it over once the
+// process it names is gone or its lock stops changing (see `take_lock`), and repair says to delete it.
 pub fn lock_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(".lock");
@@ -308,6 +658,9 @@ fn write_records(
         // Every later request is refused until an admin has looked and Gantry is started again.
         let result = if failed {
             Err(io::ErrorKind::BrokenPipe)
+        } else if let Some(why) = chain.fence.as_ref().and_then(|fence| fence.lost()) {
+            eprintln!("gantry: {why}");
+            Err(io::ErrorKind::PermissionDenied)
         } else if let Err(what) = chain.intact() {
             eprintln!(
                 "gantry: the audit log is gone: {what} while Gantry was running. Every request is refused until Gantry is started again. If the file is gone for good, a restart begins a new chain at record 1 in a new file: keep whatever copy of the old one you have."
@@ -402,6 +755,13 @@ fn hash_of(body: &str) -> String {
 impl AuditLog {
     /// Opens the log for appending and picks the chain up where the last record left it.
     pub fn open(path: &Path) -> Result<Self, String> {
+        Self::open_as(path, BEAT, &Me::this_process())
+    }
+
+    /// `open` with the beat of the lock and the holder it names, so a test can be another Gantry, sooner.
+    fn open_as(path: &Path, beat: Duration, me: &Me) -> Result<Self, String> {
+        // Taken before the chain is read: a Gantry waited for may still be adding records until it stops.
+        let lock = take_lock(path, beat, me)?;
         let mut options = OpenOptions::new();
         options.create(true).read(true).append(true);
         // A new log is readable by its owner only: it names every caller and what each asked for.
@@ -484,9 +844,10 @@ impl AuditLog {
             prev,
             path: Some(path.to_path_buf()),
             len,
+            fence: lock.as_ref().map(|lock| lock.fence.clone()),
         })
         .map_err(|err| format!("the audit log writer could not be started: {err}."))?;
-        log.lock = take_lock(path)?;
+        log.lock = lock;
         Ok(log)
     }
 
@@ -524,6 +885,7 @@ impl AuditLog {
             prev: GENESIS.to_string(),
             path: None,
             len,
+            fence: None,
         })
     }
 
@@ -636,7 +998,12 @@ impl AuditLog {
     /// Whether a write has failed or the file has gone. Once true, every record is refused until a restart.
     /// It also looks at the file itself, so a health check sees a deleted or replaced log before any request does.
     pub fn is_broken(&self) -> bool {
-        if self.broken.load(Ordering::Relaxed) {
+        if self.broken.load(Ordering::Relaxed)
+            || self
+                .lock
+                .as_ref()
+                .is_some_and(|lock| lock.fence.lost().is_some())
+        {
             return true;
         }
         #[cfg(unix)]
@@ -814,13 +1181,10 @@ pub fn repair(path: &Path, cut: &Cut) -> Result<u64, String> {
     };
     let lock = lock_path(path);
     if lock.exists() {
-        let pid = std::fs::read_to_string(&lock).unwrap_or_default();
+        let holder = Holder::parse(&std::fs::read_to_string(&lock).unwrap_or_default());
         return Err(format!(
             "a Gantry process ({}) holds the audit log at {}: it wrote {}. Stop it and run the repair again; a repair while it writes would break the chain. If no Gantry is running (it was killed), delete {} and run the repair again.",
-            match pid.trim() {
-                "" => "process ID unknown".to_string(),
-                pid => format!("process {pid}"),
-            },
+            holder.describe(),
             path.display(),
             lock.display(),
             lock.display()
@@ -1092,6 +1456,159 @@ mod tests {
         Ok(())
     }
 
+    /// A short beat, so a test sees a lock go stale in a second instead of thirty.
+    const TEST_BEAT: Duration = Duration::from_millis(200);
+
+    /// A Gantry in another container or on another machine: a process space this one cannot see into.
+    fn elsewhere(space: &str) -> Me {
+        Me {
+            pid: 1,
+            host: Some(format!("host-{space}")),
+            space: Some(space.to_string()),
+        }
+    }
+
+    #[test]
+    fn a_lock_from_this_host_names_a_live_process_and_is_refused_at_once() -> TestResult {
+        let path = temp("live-here");
+        let other = std::process::Command::new("sleep").arg("30").spawn()?;
+        let here = Me {
+            pid: other.id(),
+            ..Me::this_process()
+        };
+        std::fs::write(lock_path(&path), lock_text(&here, "abc", 0))?;
+        let started = Instant::now();
+        let err = AuditLog::open_as(&path, TEST_BEAT, &Me::this_process())
+            .err()
+            .ok_or("opened a log held by a live process on this host")?;
+        let mut other = other;
+        other.kill()?;
+        other.wait()?;
+        // Well under the six beats a lock it cannot judge is watched for; `ps` alone can take a beat.
+        assert!(
+            started.elapsed() < TEST_BEAT * 5,
+            "waited for a holder it can see"
+        );
+        assert!(err.contains(&format!("process {}", other.id())), "{err}");
+        // Once that process is gone, its lock is taken over at once.
+        let started = Instant::now();
+        drop(AuditLog::open_as(&path, TEST_BEAT, &Me::this_process())?);
+        assert!(
+            started.elapsed() < TEST_BEAT * 5,
+            "waited for a dead holder"
+        );
+        assert!(!lock_path(&path).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn a_holder_elsewhere_that_still_beats_is_waited_for_then_refused() -> TestResult {
+        let path = temp("remote-live");
+        let remote = elsewhere("a");
+        std::fs::write(lock_path(&path), lock_text(&remote, "abc", 0))?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let beating = std::thread::spawn({
+            let (stop, lock, remote) = (stop.clone(), lock_path(&path), remote.clone());
+            move || {
+                let mut n = 0;
+                while !stop.load(Ordering::Relaxed) {
+                    n += 1;
+                    let _ = std::fs::write(&lock, lock_text(&remote, "abc", n));
+                    std::thread::sleep(TEST_BEAT / 4);
+                }
+            }
+        });
+        let started = Instant::now();
+        let refused = AuditLog::open_as(&path, TEST_BEAT, &Me::this_process()).err();
+        let waited = started.elapsed();
+        stop.store(true, Ordering::Relaxed);
+        let _ = beating.join();
+        let err = refused.ok_or("opened a log a live Gantry elsewhere holds")?;
+        // Waited out the bound, and not much longer.
+        assert!(waited >= TEST_BEAT * 8, "gave up after {waited:?}");
+        assert!(
+            waited < TEST_BEAT * 8 + Duration::from_secs(5),
+            "{waited:?}"
+        );
+        assert!(
+            err.contains("process 1 on host-a") && err.contains(".lock") && err.contains("gone"),
+            "{err}"
+        );
+        assert!(
+            std::fs::read_to_string(lock_path(&path))?.contains("host host-a"),
+            "the refusal kept the holder's lock"
+        );
+        std::fs::remove_file(lock_path(&path))?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_holder_elsewhere_whose_lock_stopped_changing_is_taken_over() -> TestResult {
+        let path = temp("remote-gone");
+        std::fs::write(lock_path(&path), lock_text(&elsewhere("a"), "abc", 7))?;
+        let started = Instant::now();
+        let log = AuditLog::open_as(&path, TEST_BEAT, &Me::this_process())?;
+        assert!(
+            started.elapsed() >= TEST_BEAT * 6,
+            "took over a lock it had not watched"
+        );
+        assert!(
+            !std::fs::read_to_string(lock_path(&path))?.contains("host-a"),
+            "the lock still names the holder that is gone"
+        );
+        drop(log);
+        assert!(!lock_path(&path).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn a_new_gantry_waits_for_the_old_one_and_continues_its_chain() -> TestResult {
+        let path = temp("rollout");
+        let old = AuditLog::open_as(&path, TEST_BEAT, &elsewhere("old"))?;
+        old.append(&entry("A"))?;
+        let new = std::thread::spawn({
+            let path = path.clone();
+            move || AuditLog::open_as(&path, TEST_BEAT, &elsewhere("new"))
+        });
+        // Longer than a stale lock takes: the old one beats, so the new one keeps waiting.
+        std::thread::sleep(TEST_BEAT * 7);
+        assert!(!new.is_finished(), "the new Gantry did not wait");
+        assert!(!old.is_broken(), "the old Gantry lost its lock");
+        old.append(&entry("B"))?;
+        old.flush();
+        drop(old);
+        let new = new.join().map_err(|_| "the new Gantry panicked")??;
+        assert_eq!(
+            new.records_at_open(),
+            2,
+            "the new Gantry read the chain before the old one stopped"
+        );
+        new.append(&entry("C"))?;
+        new.flush();
+        drop(new);
+        assert_eq!(verify(&path)?.0, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn a_log_whose_lock_another_gantry_took_refuses_records() -> TestResult {
+        let path = temp("lost");
+        let log = AuditLog::open_as(&path, TEST_BEAT, &Me::this_process())?;
+        log.append(&entry("A"))?;
+        std::fs::write(lock_path(&path), lock_text(&elsewhere("a"), "abc", 0))?;
+        std::thread::sleep(TEST_BEAT * 3);
+        assert!(log.is_broken());
+        assert!(log.append(&entry("B")).is_err());
+        drop(log);
+        assert!(
+            lock_path(&path).exists(),
+            "removed the lock of the Gantry that took over"
+        );
+        std::fs::remove_file(lock_path(&path))?;
+        assert_eq!(verify(&path)?.0, 1);
+        Ok(())
+    }
+
     #[test]
     fn a_kept_hash_cut_short_is_named_as_cut_short_not_as_removed_records() -> TestResult {
         let path = temp("short-expect");
@@ -1230,6 +1747,8 @@ mod tests {
         for id in ["A", "B", "C"] {
             log.append(&entry(id))?;
         }
+        // Closed, so the open below meets the cut log and not this log's lock.
+        drop(log);
         let original = std::fs::read_to_string(&path)?;
 
         std::fs::write(

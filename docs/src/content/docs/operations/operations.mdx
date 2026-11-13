@@ -203,11 +203,13 @@ A log changed in the middle is evidence, not something to repair. If the removed
 
 ### The lock file
 
-While Gantry has the log open it keeps `gantry-audit.jsonl.lock` beside it, holding its process ID.
+While Gantry has the log open it keeps `gantry-audit.jsonl.lock` beside it, naming its holder and rewritten every 5 seconds.
 
 - `audit repair --yes` refuses while the lock file exists.
-- A second `gantry serve` on the same log refuses to start while the process the lock names is running.
-- After `kill -9` or a crash the lock file stays. The next `gantry serve` takes it over once that process is gone. For a repair, delete it once Gantry is surely stopped.
+- A second `gantry serve` on the same machine refuses to start while the process the lock names is running.
+- A holder in another container or on another machine counts as running while its lock keeps changing. A new `gantry serve` waits up to 40 seconds for it to stop, then refuses and names it. It takes the lock over once the lock has not changed for 30 seconds.
+- A Gantry that cannot rewrite its lock for 15 seconds refuses every request until it is started again, so two writers never share one chain.
+- After `kill -9` or a crash the lock file stays. The next `gantry serve` takes it over once that process is gone (at once on the same machine, after 30 seconds from another). For a repair, delete it once Gantry is surely stopped.
 
 ## Stop all traffic
 
