@@ -756,7 +756,7 @@ const KINDS: &[Kind] = &[
     Kind {
         detector: SECRETS,
         kind: "private_key",
-        pattern: r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----",
+        pattern: r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----",
         valid: any,
     },
     Kind {
@@ -774,7 +774,7 @@ const KINDS: &[Kind] = &[
     Kind {
         detector: SECRETS,
         kind: "slack_token",
-        pattern: r"\bxox[abposr]-[A-Za-z0-9-]{10,250}",
+        pattern: r"\bxox[abposre]-[A-Za-z0-9-]{10,250}",
         valid: any,
     },
     Kind {
@@ -799,7 +799,7 @@ const KINDS: &[Kind] = &[
         detector: PII,
         kind: "iban",
         pattern: r"\b[A-Z]{2}[0-9]{2}(?: ?[A-Z0-9]){11,30}\b",
-        valid: iban_ok,
+        valid: iban_found,
     },
     Kind {
         detector: PII,
@@ -823,13 +823,13 @@ const KINDS: &[Kind] = &[
     Kind {
         detector: PII,
         kind: "medical_record_number",
-        pattern: r"(?i:\b(?:MRN|medical record(?: number| no\.?)?))[:#\s]+[A-Z0-9-]{5,12}\b",
+        pattern: r"(?i:\b(?:MRN|medical record(?: number| no\.?)?))[:#=\s]+[A-Z0-9-]{5,12}\b",
         valid: any,
     },
     Kind {
         detector: PII,
         kind: "date_of_birth",
-        pattern: r"(?i:\b(?:DOB|date of birth|born on))[:\s]+(?:[0-9]{1,2}[/.-][0-9]{1,2}[/.-][0-9]{2,4}|[0-9]{4}-[0-9]{2}-[0-9]{2})\b",
+        pattern: r"(?i:\b(?:DOB|date of birth|born on))[:=\s]+(?:[0-9]{1,2}[/.-][0-9]{1,2}[/.-][0-9]{2,4}|[0-9]{4}-[0-9]{2}-[0-9]{2})\b",
         valid: any,
     },
     Kind {
@@ -877,6 +877,18 @@ fn iban_ok(text: &str) -> bool {
         };
     }
     rest == 1
+}
+
+/// The length of the IBAN a match starts with: all of it, or the longest part that ends before a space. The pattern
+/// reads on through spaced groups, so "GB82... BIC NWBKGB2L" is matched with the words after it, which fail the check.
+fn iban_len(text: &str) -> Option<usize> {
+    std::iter::once(text.len())
+        .chain(text.rmatch_indices(' ').map(|(at, _)| at))
+        .find(|&len| iban_ok(&text[..len]))
+}
+
+fn iban_found(text: &str) -> bool {
+    iban_len(text).is_some()
 }
 
 fn israeli_id_ok(text: &str) -> bool {
@@ -981,6 +993,9 @@ pub fn scan(parts: &[TextPart]) -> Result<Vec<Finding>, String> {
                     .unwrap_or(end);
                 covered = end;
             }
+            if kind.kind == "iban" {
+                end = m.start() + iban_len(m.as_str()).unwrap_or(m.len());
+            }
             found.push(Finding {
                 detector: kind.detector,
                 kind: kind.kind,
@@ -995,9 +1010,12 @@ pub fn scan(parts: &[TextPart]) -> Result<Vec<Finding>, String> {
 /// The end of a private key's end line that starts at `at`, if the line is one.
 fn key_line_end(text: &[u8], at: usize) -> Option<usize> {
     let line = &text[at..text.len().min(at + 80)];
-    let tail = b"PRIVATE KEY-----";
-    let found = line.windows(tail.len()).position(|w| w == tail)?;
-    Some(at + found + tail.len())
+    [&b"PRIVATE KEY-----"[..], b"PRIVATE KEY BLOCK-----"]
+        .iter()
+        .find_map(|tail| {
+            let found = line.windows(tail.len()).position(|w| w == *tail)?;
+            Some(at + found + tail.len())
+        })
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -1487,6 +1505,36 @@ mod tests {
             assert_eq!(kinds(text)?, [kind], "{text}");
         }
         assert!(kinds("ask- the AKIA team, sk-short, gantry_xyz")?.is_empty());
+        Ok(())
+    }
+
+    /// Shapes the gantry-detectors-v1 corpus found missed: a PGP secret key, a rotating Slack app's refresh token,
+    /// an IBAN followed by an uppercase word, and a labelled value written as key=value in a log line.
+    #[test]
+    fn shapes_the_corpus_found_missed_are_found() -> TestResult {
+        let pgp = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOYBGabcdef\n=abcd\n-----END PGP PRIVATE KEY BLOCK-----";
+        let cases = [
+            (pgp, "private_key"),
+            ("token=xoxe-1-abcdefghijklmnopqrstuvwxyz", "slack_token"),
+            ("IBAN GB82WEST12345698765432 BIC NWBKGB2L", "iban"),
+            ("IBAN GB82 WEST 1234 5698 7654 32 BIC COBADEFFXXX", "iban"),
+            ("chart opened MRN=MR-5344440", "medical_record_number"),
+            ("intake DOB=12/21/1971", "date_of_birth"),
+        ];
+        for (text, kind) in cases {
+            assert_eq!(kinds(text)?, [kind], "{text}");
+        }
+        let part = |text: &str| TextPart {
+            path: "/x".into(),
+            role: "user".into(),
+            text: text.into(),
+        };
+        // The whole block is one finding, so masking leaves none of the key behind.
+        assert_eq!(scan(&[part(pgp)])?[0].span, 0..pgp.len());
+        // The word after the IBAN is not part of it, so masking does not eat it.
+        let wire = "IBAN GB82WEST12345698765432 BIC NWBKGB2L";
+        assert_eq!(scan(&[part(wire)])?[0].span, 5..27);
+        assert!(kinds("IBAN GB82WEST12345698765433 BIC NWBKGB2L")?.is_empty());
         Ok(())
     }
 
