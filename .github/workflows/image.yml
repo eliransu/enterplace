@@ -1,10 +1,11 @@
 # Builds the image for amd64 and arm64 and pushes it to ghcr.io/ggantry/gantry-enterprise, a private package, tagged
-# with the commit sha (and the version, on a v* tag). Run by hand on a branch, it builds both and pushes nothing.
+# with the commit sha (and the version, on a v* tag). On a pull request or a branch, it builds both and pushes nothing.
 name: image
 on:
   push:
-    branches: [main]
+    branches: [main, helm]
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -13,7 +14,7 @@ permissions:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/gantry-enterprise
-  PUBLISH: ${{ github.event_name == 'push' }}
+  PUBLISH: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   build:
@@ -72,7 +73,7 @@ jobs:
           retention-days: 1
 
   merge:
-    if: github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     steps:

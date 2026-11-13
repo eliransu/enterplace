@@ -1,7 +1,7 @@
 name: helm
 on:
   push:
-    branches: [main]
+    branches: [main, helm]
   pull_request:
   workflow_dispatch:
 
