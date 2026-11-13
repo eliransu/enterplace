@@ -1475,3 +1475,22 @@ fn import_litellm_writes_a_policy_that_checks_and_never_replaces_one() -> TestRe
     assert!(String::from_utf8(out.stderr)?.contains("never replaced"));
     Ok(())
 }
+
+#[test]
+fn providers_lists_the_catalog_with_id_name_kind_and_url() -> TestResult {
+    let out = gantry(&["providers"], &[])?;
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout)?;
+    let groq = text
+        .lines()
+        .find(|line| line.starts_with("groq "))
+        .ok_or(format!("no groq line: {text}"))?;
+    let words: Vec<&str> = groq.split_whitespace().collect();
+    assert_eq!(
+        words,
+        ["groq", "Groq", "openai", "https://api.groq.com/openai/v1"]
+    );
+    assert!(text.lines().count() > 100, "{text}");
+    assert!(text.contains("http://localhost:11434/v1 (local, needs allow_private: true)"));
+    Ok(())
+}

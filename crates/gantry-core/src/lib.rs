@@ -1,6 +1,7 @@
 //! Core of the Gantry AI gateway. Embeddable as a library.
 
 pub mod audit;
+pub mod catalog;
 pub mod chat;
 pub mod config;
 pub mod eventstream;

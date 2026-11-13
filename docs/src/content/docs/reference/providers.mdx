@@ -1,0 +1,142 @@
+---
+title: Provider catalog
+description: Every provider a policy can name with preset, with its URL, its kind and the documentation the URL came from.
+---
+
+{/* Generated from crates/gantry-core/src/catalog.rs by `gantry providers --markdown`. Do not edit by hand. */}
+
+A provider in the policy file may say `preset: <id>` instead of writing its `url` and `kind`. Gantry takes both from this table; a `url` or `kind` written next to the preset wins. The provider still needs `key_env` (or `key_file`) and `models`.
+
+```yaml
+providers:
+- name: groq
+preset: groq
+key_env: GROQ_API_KEY
+models: [llama-3.3-70b-versatile]
+```
+
+The key goes in the header the kind sends: `Authorization: Bearer` for openai, `x-api-key` for anthropic, `x-goog-api-key` for gemini. A chat request goes to the URL followed by `/chat/completions` (anthropic: `/messages`; gemini: `/models/<model>:generateContent`).
+
+Local entries are model servers you run yourself. Their URL is the server's default on this machine, so the provider also needs `allow_private: true`, and `key_env` only if the server was started with a key. Run `gantry providers` to print this table.
+
+| ID | Name | Kind | URL | Source |
+| --- | --- | --- | --- | --- |
+| `302ai` | 302.AI | openai | `https://api.302.ai/v1` | [docs](https://doc.302.ai/147522039e0) |
+| `abacus` | Abacus.AI RouteLLM | openai | `https://routellm.abacus.ai/v1` | [docs](https://abacus.ai/help/developer-platform/route-llm/chat-completions/) |
+| `ai21` | AI21 Studio | openai | `https://api.ai21.com/studio/v1` | [docs](https://docs.ai21.com/reference/jamba-1-6-api-ref) |
+| `aihubmix` | AIHubMix | openai | `https://aihubmix.com/v1` | [docs](https://docs.aihubmix.com/en/quick-start) |
+| `aimlapi` | AI/ML API | openai | `https://api.aimlapi.com/v1` | [docs](https://docs.aimlapi.com/quickstart/setting-up) |
+| `akashml` | AkashML | openai | `https://api.akashml.com/v1` | [docs](https://akashml.com/docs/guides/akash-chat) |
+| `anthropic` | Anthropic | anthropic | `https://api.anthropic.com/v1` | [docs](https://platform.claude.com/docs/en/api/overview) |
+| `aphrodite` | Aphrodite Engine (local) | openai | `http://127.0.0.1:2242/v1` | [docs](https://sonar.dphn.ai/serving/openai/) |
+| `arcee` | Arcee AI | openai | `https://api.arcee.ai/api/v1` | [docs](https://docs.arcee.ai/) |
+| `atlascloud` | Atlas Cloud | openai | `https://api.atlascloud.ai/v1` | [docs](https://atlascloud.ai/docs/en/models/llm) |
+| `avian` | Avian | openai | `https://api.avian.io/v1` | [docs](https://avian.io/docs) |
+| `baseten` | Baseten Model APIs | openai | `https://inference.baseten.co/v1` | [docs](https://docs.baseten.co/development/model-apis/overview) |
+| `berget` | Berget AI | openai | `https://api.berget.ai/v1` | [docs](https://api.berget.ai/) |
+| `byteplus` | BytePlus ModelArk | openai | `https://ark.ap-southeast.bytepluses.com/api/v3` | [docs](https://docs.byteplus.com/en/docs/ModelArk/1399008) |
+| `cerebras` | Cerebras | openai | `https://api.cerebras.ai/v1` | [docs](https://inference-docs.cerebras.ai/api-reference/chat-completions) |
+| `chutes` | Chutes | openai | `https://llm.chutes.ai/v1` | [docs](https://chutes.ai/llms.txt) |
+| `clarifai` | Clarifai | openai | `https://api.clarifai.com/v2/ext/openai/v1` | [docs](https://docs.clarifai.com/getting-started/quickstart/) |
+| `cloudrift` | CloudRift | openai | `https://inference.cloudrift.ai/v1` | [docs](https://www.cloudrift.ai/inference) |
+| `cohere` | Cohere (Compatibility API) | openai | `https://api.cohere.ai/compatibility/v1` | [docs](https://docs.cohere.com/docs/compatibility-api) |
+| `cometapi` | CometAPI | openai | `https://api.cometapi.com/v1` | [docs](https://apidoc.cometapi.com/) |
+| `cortecs` | Cortecs | openai | `https://api.cortecs.ai/v1` | [docs](https://docs.cortecs.ai/serverless-inference/api/chat-completions) |
+| `deepinfra` | DeepInfra | openai | `https://api.deepinfra.com/v1/openai` | [docs](https://docs.deepinfra.com/chat/overview) |
+| `digitalocean` | DigitalOcean Gradient | openai | `https://inference.do-ai.run/v1` | [docs](https://docs.digitalocean.com/products/inference/how-to/use-chat-completions-api/) |
+| `docker-model-runner` | Docker Model Runner (local) | openai | `http://localhost:12434/engines/v1` | [docs](https://docs.docker.com/ai/model-runner/api-reference/) |
+| `fastrouter` | FastRouter | openai | `https://api.fastrouter.ai/api/v1` | [docs](https://docs.fastrouter.ai/api-reference/chat-completions) |
+| `featherless` | Featherless AI | openai | `https://api.featherless.ai/v1` | [docs](https://featherless.ai/docs/api-overview-and-common-options) |
+| `fireworks` | Fireworks AI | openai | `https://api.fireworks.ai/inference/v1` | [docs](https://docs.fireworks.ai/api-reference/post-chatcompletions) |
+| `friendli` | FriendliAI Serverless | openai | `https://api.friendli.ai/serverless/v1` | [docs](https://friendli.ai/docs/openapi/serverless/chat-completions) |
+| `gemini` | Google Gemini API | gemini | `https://generativelanguage.googleapis.com/v1beta` | [docs](https://aistudio.google.com/api-reference/generate-content) |
+| `gemini-openai` | Google Gemini API (OpenAI compatibility) | openai | `https://generativelanguage.googleapis.com/v1beta/openai` | [docs](https://aistudio.google.com/docs/openai) |
+| `gitee-ai` | Gitee AI (MoArk) | openai | `https://api.moark.com/v1` | [docs](https://moark.com/docs/products/apis/texts/text-generation) |
+| `gmi` | GMI Cloud | openai | `https://api.gmi-serving.com/v1` | [docs](https://docs.gmicloud.ai/inference-engine/api-reference/llm-api-reference) |
+| `gpt4all` | GPT4All (local) | openai | `http://localhost:4891/v1` | [docs](https://docs.gpt4all.io/gpt4all_api_server/home.html) |
+| `groq` | Groq | openai | `https://api.groq.com/openai/v1` | [docs](https://console.groq.com/docs/api-reference) |
+| `heroku` | Heroku Managed Inference | openai | `https://us.inference.heroku.com/v1` | [docs](https://devcenter.heroku.com/articles/ai-integrations-vercel) |
+| `huggingface` | Hugging Face Inference Providers | openai | `https://router.huggingface.co/v1` | [docs](https://huggingface.co/docs/inference-providers/index) |
+| `hunyuan` | Tencent Hunyuan | openai | `https://api.hunyuan.cloud.tencent.com/v1` | [docs](https://cloud.tencent.com/document/product/1729/111007) |
+| `hyperbolic` | Hyperbolic | openai | `https://api.hyperbolic.ai/inference/v1` | [docs](https://hyperbolic.ai/docs/inference/quickstart.md) |
+| `inference-net` | Inference.net | openai | `https://api.inference.net/v1` | [docs](https://docs.inference.net/quickstart) |
+| `infermatic` | Infermatic | openai | `https://api.totalgpt.ai/v1` | [docs](https://ui.infermatic.ai/docs) |
+| `infini-ai` | Infini-AI | openai | `https://cloud.infini-ai.com/maas/v1` | [docs](https://docs.infini-ai.com/gen-studio/api/get-started/) |
+| `io-intelligence` | IO Intelligence (io.net) | openai | `https://api.intelligence.io.solutions/api/v1` | [docs](https://io.net/docs/reference/ai-models/create-chat-completion) |
+| `ionos` | IONOS AI Model Hub | openai | `https://openai.inference.de-txl.ionos.com/v1` | [docs](https://docs.ionos.com/cloud/ai/ai-model-hub/how-tos/text-generation) |
+| `jan` | Jan (local) | openai | `http://127.0.0.1:1337/v1` | [docs](https://docs.jan.ai/desktop/api-server) |
+| `jina-deepsearch` | Jina DeepSearch | openai | `https://deepsearch.jina.ai/v1` | [docs](https://jina.ai/deepsearch/) |
+| `kilo` | Kilo Gateway | openai | `https://ai-gateway.kilo.ai/api/v1` | [docs](https://kilo.ai/docs/gateway/authentication) |
+| `koboldcpp` | KoboldCpp (local) | openai | `http://localhost:5001/v1` | [docs](https://github.com/LostRuins/koboldcpp/wiki) |
+| `krutrim` | Krutrim Cloud | openai | `https://cloud.olakrutrim.com/v1` | [docs](https://docs.cloud.olakrutrim.com/basics/ai-studio/ai-jobs/inferencing) |
+| `lemonade` | Lemonade Server (local) | openai | `http://localhost:13305/v1` | [docs](https://lemonade-server.ai/docs/api/openai/) |
+| `lingyiwanwu` | 01.AI Lingyiwanwu | openai | `https://api.lingyiwanwu.com/v1` | [docs](https://platform.lingyiwanwu.com/docs/api-reference) |
+| `llama-swap` | llama-swap (local) | openai | `http://localhost:8080/v1` | [docs](https://github.com/mostlygeek/llama-swap/blob/main/README.md) |
+| `llamacpp` | llama.cpp server (local) | openai | `http://127.0.0.1:9931/v1` | [docs](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) |
+| `llamafile` | llamafile (local) | openai | `http://127.0.0.1:8080/v1` | [docs](https://docs.mozilla.ai/llamafile/using-llamafile/api) |
+| `lmdeploy` | LMDeploy (local) | openai | `http://localhost:23333/v1` | [docs](https://lmdeploy.readthedocs.io/en/latest/llm/api_server.html) |
+| `lmstudio` | LM Studio (local) | openai | `http://localhost:1234/v1` | [docs](https://lmstudio.ai/docs/developer/openai-compat) |
+| `localai` | LocalAI (local) | openai | `http://localhost:8080/v1` | [docs](https://localai.io/docs/basics/getting_started/) |
+| `longcat` | Meituan LongCat | openai | `https://api.longcat.chat/openai/v1` | [docs](https://longcat.chat/platform/docs/) |
+| `martian` | Martian | openai | `https://api.withmartian.com/v1` | [docs](https://docs.withmartian.com/) |
+| `meta` | Meta Model API | openai | `https://api.meta.ai/v1` | [docs](https://dev.meta.ai/docs/quickstart) |
+| `minimax` | MiniMax | openai | `https://api.minimax.io/v1` | [docs](https://platform.minimax.io/docs/api-reference/text-chat-openai) |
+| `minimax-cn` | MiniMax (China) | openai | `https://api.minimax.cn/v1` | [docs](https://platform.minimax.cn/docs/api-reference/text-chat-openai) |
+| `mistral` | Mistral AI | openai | `https://api.mistral.ai/v1` | [docs](https://docs.mistral.ai/api/) |
+| `mistralrs` | mistral.rs (local) | openai | `http://localhost:1234/v1` | [docs](https://docs.mistralrs.dev/quickstart/) |
+| `mlx-lm` | MLX LM server (local) | openai | `http://localhost:8080/v1` | [docs](https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/SERVER.md) |
+| `modelscope` | ModelScope API-Inference | openai | `https://api-inference.modelscope.cn/v1` | [docs](https://modelscope.cn/headlines/article/960) |
+| `moonshot` | Moonshot AI (Kimi) | openai | `https://api.moonshot.ai/v1` | [docs](https://platform.kimi.ai/docs/api/chat) |
+| `moonshot-cn` | Moonshot AI (China) | openai | `https://api.moonshot.cn/v1` | [docs](https://platform.kimi.com/docs/api/chat) |
+| `morph` | Morph | openai | `https://api.morphllm.com/v1` | [docs](https://docs.morphllm.com/api-reference/endpoint/apply) |
+| `nebius` | Nebius Token Factory | openai | `https://api.tokenfactory.nebius.com/v1` | [docs](https://docs.tokenfactory.nebius.com/) |
+| `nexa` | Nexa SDK server (local) | openai | `http://127.0.0.1:18181/v1` | [docs](https://geniex.aihub.qualcomm.com/en/run/cli/local-server) |
+| `nous` | Nous Research | openai | `https://inference-api.nousresearch.com/v1` | [docs](https://hermes-agent.nousresearch.com/docs/integrations/providers) |
+| `novita` | Novita AI | openai | `https://api.novita.ai/openai/v1` | [docs](https://docs.novita.ai/guides/llm-api) |
+| `nscale` | Nscale | openai | `https://inference.api.nscale.com/v1` | [docs](https://docs.nscale.com/api-reference/inference/create-chat-completion) |
+| `nvidia` | NVIDIA NIM | openai | `https://integrate.api.nvidia.com/v1` | [docs](https://docs.api.nvidia.com/nim/reference/meta-llama-3_1-8b-infer) |
+| `ollama` | Ollama (local) | openai | `http://localhost:11434/v1` | [docs](https://docs.ollama.com/api/openai-compatibility) |
+| `ollama-cloud` | Ollama Cloud | openai | `https://ollama.com/v1` | [docs](https://docs.ollama.com/api/openai-compatibility) |
+| `openai` | OpenAI | openai | `https://api.openai.com/v1` | [docs](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) |
+| `opencode-zen` | OpenCode Zen | openai | `https://opencode.ai/inference/openai/v1` | [docs](https://opencode.ai/docs/zen/) |
+| `openllm` | OpenLLM (local) | openai | `http://localhost:3000/v1` | [docs](https://github.com/bentoml/OpenLLM/blob/main/README.md) |
+| `openrouter` | OpenRouter | openai | `https://openrouter.ai/api/v1` | [docs](https://openrouter.ai/docs/api/reference/overview) |
+| `ovhcloud` | OVHcloud AI Endpoints | openai | `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1` | [docs](https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-getting-started) |
+| `parasail` | Parasail | openai | `https://api.parasail.io/v1` | [docs](https://docs.parasail.io/parasail-docs/quickstart/serverless) |
+| `perplexity` | Perplexity (Orchestrator API) | openai | `https://api.perplexity.ai/orchestrator/v1` | [docs](https://docs.perplexity.ai/docs/router/quickstart) |
+| `poe` | Poe | openai | `https://api.poe.com/v1` | [docs](https://creator.poe.com/docs/external-applications/openai-compatible-api) |
+| `ppio` | PPIO | openai | `https://api.ppio.com/openai/v1` | [docs](https://ppio.com/docs/models/reference-llm) |
+| `qianfan` | Baidu Qianfan | openai | `https://qianfan.baidubce.com/v2` | [docs](https://cloud.baidu.com/doc/qianfan-api/s/3m7of64lb) |
+| `qiniu` | Qiniu AI | openai | `https://api.qnaigc.com/v1` | [docs](https://developer-doc.qiniu.com/products/aitokenapi/inference-api/1-real-time-ai-interface-api) |
+| `ramalama` | RamaLama (local) | openai | `http://127.0.0.1:8080/v1` | [docs](https://github.com/containers/ramalama/blob/main/docs/ramalama-serve.1.md) |
+| `regolo` | Regolo.ai | openai | `https://api.regolo.ai/v1` | [docs](https://docs.regolo.ai/models/families/completions/) |
+| `reka` | Reka | openai | `https://api.reka.ai/v1` | [docs](https://docs.reka.ai/chat/overview) |
+| `requesty` | Requesty | openai | `https://router.requesty.ai/v1` | [docs](https://docs.requesty.ai/quickstart) |
+| `sambanova` | SambaNova Cloud | openai | `https://api.sambanova.ai/v1` | [docs](https://docs.sambanova.ai/docs/api-reference/chat-completions/create-chat-based-completion) |
+| `sarvam` | Sarvam AI | openai | `https://api.sarvam.ai/v1` | [docs](https://docs.sarvam.ai/api-reference-docs/authentication) |
+| `scaleway` | Scaleway Generative APIs | openai | `https://api.scaleway.ai/v1` | [docs](https://www.scaleway.com/en/docs/generative-apis/api-cli/using-chat-api/) |
+| `sglang` | SGLang (local) | openai | `http://127.0.0.1:30000/v1` | [docs](https://docs.sglang.io/advanced_features/server_arguments.html) |
+| `siliconflow` | SiliconFlow | openai | `https://api.siliconflow.com/v1` | [docs](https://docs.siliconflow.com/en/api-reference/chat-completions/chat-completions) |
+| `siliconflow-cn` | SiliconFlow (China) | openai | `https://api.siliconflow.cn/v1` | [docs](https://docs.siliconflow.cn/cn/api-reference/chat-completions/chat-completions) |
+| `spark` | iFlytek Spark | openai | `https://spark-api-open.xf-yun.com/v1` | [docs](https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html) |
+| `stepfun` | StepFun | openai | `https://api.stepfun.com/v1` | [docs](https://platform.stepfun.com/docs/api-reference/chat/chat-completion-create) |
+| `synthetic` | Synthetic | openai | `https://api.synthetic.new/openai/v1` | [docs](https://dev.synthetic.new/docs/api/overview) |
+| `tabbyapi` | TabbyAPI (local) | openai | `http://127.0.0.1:5000/v1` | [docs](https://github.com/theroyallab/tabbyAPI/blob/main/config_sample.yml) |
+| `telnyx` | Telnyx Inference | openai | `https://api.telnyx.com/v2/ai/openai` | [docs](https://developers.telnyx.com/api-reference/openai-chat/create-a-chat-completion-openai-compatible) |
+| `tensorrt-llm` | TensorRT-LLM (trtllm-serve) (local) | openai | `http://localhost:8000/v1` | [docs](https://nvidia.github.io/TensorRT-LLM/commands/trtllm-serve/trtllm-serve.html) |
+| `text-generation-webui` | text-generation-webui (local) | openai | `http://127.0.0.1:5000/v1` | [docs](https://github.com/oobabooga/text-generation-webui/blob/main/docs/12%20-%20OpenAI%20API.md) |
+| `tgi` | Text Generation Inference (local) | openai | `http://localhost:3000/v1` | [docs](https://huggingface.co/docs/text-generation-inference/messages_api) |
+| `together` | Together AI | openai | `https://api.together.ai/v1` | [docs](https://docs.together.ai/reference/chat-completions-1) |
+| `upstage` | Upstage | openai | `https://api.upstage.ai/v1` | [docs](https://console.upstage.ai/docs/capabilities/chat) |
+| `venice` | Venice.ai | openai | `https://api.venice.ai/api/v1` | [docs](https://docs.venice.ai/api-reference/endpoint/chat/completions) |
+| `vercel` | Vercel AI Gateway | openai | `https://ai-gateway.vercel.sh/v1` | [docs](https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-chat-completions) |
+| `vllm` | vLLM (local) | openai | `http://localhost:8000/v1` | [docs](https://docs.vllm.ai/en/latest/getting_started/quickstart.html) |
+| `volcengine` | Volcengine Ark | openai | `https://ark.cn-beijing.volces.com/api/v3` | [docs](https://docs.volcengine.com/docs/82379/1298459) |
+| `vultr` | Vultr Serverless Inference | openai | `https://api.vultrinference.com/v1` | [docs](https://docs.vultr.com/how-to-use-vultr-serverless-inference-in-nodejs) |
+| `wandb` | Weights & Biases Inference | openai | `https://api.inference.wandb.ai/v1` | [docs](https://docs.coreweave.com/inference/api-reference/chat-completions) |
+| `xai` | xAI | openai | `https://api.x.ai/v1` | [docs](https://docs.x.ai/developers/model-capabilities/legacy/chat-completions) |
+| `xinference` | Xorbits Inference (local) | openai | `http://127.0.0.1:9997/v1` | [docs](https://github.com/xorbitsai/inference/blob/main/README.md) |
+| `zai` | Z.ai | openai | `https://api.z.ai/api/paas/v4` | [docs](https://docs.z.ai/api-reference/llm/chat-completion) |
+| `zai-coding` | Z.ai GLM Coding Plan | openai | `https://api.z.ai/api/coding/paas/v4` | [docs](https://docs.z.ai/devpack/tool/others) |
+| `zenmux` | ZenMux | openai | `https://zenmux.ai/api/v1` | [docs](https://zenmux.ai/docs/api/openai/create-chat-completion.html) |
+| `zhipu` | Zhipu BigModel (China) | openai | `https://open.bigmodel.cn/api/paas/v4` | [docs](https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%AF%B9%E8%AF%9D%E8%A1%A5%E5%85%A8) |
