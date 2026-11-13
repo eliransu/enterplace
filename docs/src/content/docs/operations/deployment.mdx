@@ -212,21 +212,21 @@ Behind a proxy, the `client` field of every audit record is the proxy's address.
 
 4. Point your load balancer's health check at `GET /healthz`. It answers 503 when the audit log cannot be written.
 
-5. Issue keys from the console at `/console`, or let developers get their own with `gantry login` through [single sign-on](/gantry/governance/single-sign-on/).
+5. Issue keys from the console at `/console`, or let developers get their own with `gantry login` through [single sign-on](/governance/single-sign-on/).
 
-6. Keep the last hash of the audit log off the host, on a schedule. See [Running in production](/gantry/operations/operations/#backups).
+6. Keep the last hash of the audit log off the host, on a schedule. See [Running in production](/operations/operations/#backups).
 
 </Steps>
 
 <Aside type="note">
-Gantry runs as one process per audit log. Budgets, rate limits, the cache and console sessions live in its memory. See [Project status](/gantry/getting-started/status/).
+Gantry runs as one process per audit log. Budgets, rate limits, the cache and console sessions live in its memory. See [Project status](/getting-started/status/).
 </Aside>
 
 ## Next
 
 <CardGrid>
-	<LinkCard title="Kubernetes" href="/gantry/operations/kubernetes/" description="The Helm chart and plain manifests." />
-	<LinkCard title="Running in production" href="/gantry/operations/operations/" description="Reload, signals, backups, a full disk and upgrades." />
-	<LinkCard title="Security model" href="/gantry/operations/security/" description="What Gantry protects and where it stops." />
-	<LinkCard title="CLI reference" href="/gantry/reference/cli/" description="Every flag of gantry serve." />
+	<LinkCard title="Kubernetes" href="/operations/kubernetes/" description="The Helm chart and plain manifests." />
+	<LinkCard title="Running in production" href="/operations/operations/" description="Reload, signals, backups, a full disk and upgrades." />
+	<LinkCard title="Security model" href="/operations/security/" description="What Gantry protects and where it stops." />
+	<LinkCard title="CLI reference" href="/reference/cli/" description="Every flag of gantry serve." />
 </CardGrid>

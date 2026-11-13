@@ -35,7 +35,7 @@ A key that is not an admin's is refused and recorded with code `not_admin`. The 
 </TabItem>
 <TabItem label="Single sign-on">
 
-With `console.sso` in the policy, the sign-in page shows "Sign in with single sign-on". Gantry runs the OpenID Connect authorization code flow with PKCE against your identity provider and takes the person's role from a claim in the ID token. Setup is in [Single sign-on](/gantry/governance/single-sign-on/).
+With `console.sso` in the policy, the sign-in page shows "Sign in with single sign-on". Gantry runs the OpenID Connect authorization code flow with PKCE against your identity provider and takes the person's role from a claim in the ID token. Setup is in [Single sign-on](/governance/single-sign-on/).
 
 If `client_secret_env` names a variable that is not set, Gantry starts with a warning and every single sign-on fails. Signing in with an admin key still works.
 
@@ -87,7 +87,7 @@ Each action is an `admin` record with `"via": "console"`, written before the act
 | `console_sso_starts` | 100 or more single sign-on starts in one minute, written at most once a minute |
 | `console_sso_refusals` | Refused sign-ins from one client address past the first 100 in a minute, summed in one record with the count per code |
 
-Record fields are in [Audit records](/gantry/reference/audit-records/#admin). The sign-in refusal codes are in [Refusal codes](/gantry/reference/refusal-codes/#single-sign-on-codes).
+Record fields are in [Audit records](/reference/audit-records/#admin). The sign-in refusal codes are in [Refusal codes](/reference/refusal-codes/#single-sign-on-codes).
 
 ## Sessions live in memory
 
@@ -96,6 +96,6 @@ Console sessions and single sign-ons in progress are held in the Gantry process.
 ## Next
 
 <CardGrid>
-	<LinkCard title="Single sign-on" href="/gantry/governance/single-sign-on/" description="OIDC sign-in for the console and gantry login." />
-	<LinkCard title="Admin API" href="/gantry/reference/admin-api/" description="Issue and revoke keys and kill switches over HTTP." />
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="OIDC sign-in for the console and gantry login." />
+	<LinkCard title="Admin API" href="/reference/admin-api/" description="Issue and revoke keys and kill switches over HTTP." />
 </CardGrid>

@@ -55,7 +55,7 @@ A request on a route its model's provider does not serve is refused with `wrong_
 - `accept_chat: true` on `anthropic`, `bedrock` or `vertex_anthropic` also takes chat completions requests, translated to messages.
 - `accept_messages: true` on `openai`, `azure`, `gemini` or `vertex` also takes messages requests (Claude Code), translated to chat completions.
 
-See [Translation](/gantry/routing/translation/).
+See [Translation](/routing/translation/).
 
 ## Fields
 
@@ -67,7 +67,7 @@ See [Translation](/gantry/routing/translation/).
 | `key_env` | string | required | The name of the environment variable that holds the provider key. Not allowed on `bedrock`. Optional on a local `openai` provider with `allow_private: true`. |
 | `models` | list | required | The exact model names this provider serves. Not empty, no `"*"`. |
 | `allow_private` | bool | `false` | Lets `url` point at this machine or a private network. |
-| `retries` | integer | `0` | 0 to 5. See [Retries and fallbacks](/gantry/routing/retries-and-fallbacks/). |
+| `retries` | integer | `0` | 0 to 5. See [Retries and fallbacks](/routing/retries-and-fallbacks/). |
 | `fallback` | string | none | Another provider of the same API to try after this one fails. |
 | `accept_chat` | bool | `false` | `anthropic`, `bedrock`, `vertex_anthropic`: also take chat completions requests. |
 | `accept_messages` | bool | `false` | `openai`, `azure`, `gemini`, `vertex`: also take messages requests. |
@@ -76,11 +76,11 @@ See [Translation](/gantry/routing/translation/).
 | `region` | string | none | `bedrock` only: the AWS region. |
 | `model_ids` | map | none | `bedrock` only: model name to Bedrock model ID. |
 
-Any field Gantry does not know is an error in `gantry check`, never ignored. See [Policy file](/gantry/governance/policy/).
+Any field Gantry does not know is an error in `gantry check`, never ignored. See [Policy file](/governance/policy/).
 
 ## Models
 
-Each provider lists the exact model names it serves, and a model may be listed by one provider only. A request goes to the one provider that lists its `model`. To spread one name over several providers, use an [alias](/gantry/routing/aliases/).
+Each provider lists the exact model names it serves, and a model may be listed by one provider only. A request goes to the one provider that lists its `model`. To spread one name over several providers, use an [alias](/routing/aliases/).
 
 On `openai` and `anthropic` providers the name the client sends is the name the provider receives, because Gantry forwards the body as it came. On `azure` and `bedrock` the name picks a deployment or model ID from the provider's map.
 
@@ -110,7 +110,7 @@ A `bedrock` provider takes no `key_env`: Gantry signs with `AWS_ACCESS_KEY_ID`, 
 
 A `url` on this machine or a private network is refused unless the provider says `allow_private: true`. Private means `localhost`, `127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, link-local, `::1`, `fc00::/7`, `fe80::/10`, IPv4-mapped IPv6 of any of these, a trailing dot, and numeric spellings such as `127.1` or `2130706433`.
 
-An `openai` provider with `allow_private: true` may leave out `key_env`. It is then sent no `Authorization` header, and never the caller's Gantry key. See [Local models](/gantry/providers/local-models/).
+An `openai` provider with `allow_private: true` may leave out `key_env`. It is then sent no `Authorization` header, and never the caller's Gantry key. See [Local models](/providers/local-models/).
 
 ## Listing models
 
@@ -137,14 +137,14 @@ Gantry reloads the policy within 2 seconds of a save. A provider's `models`, `de
 A change to a provider's `name`, `kind`, `url`, `key_env`, `allow_private`, `region` or `api_version`, or adding or removing a provider, needs a restart. A reload with such a change is rejected with that reason. Rotating a provider key means changing its environment variable, which also needs a restart.
 
 <Aside type="note">
-Most provider kinds are built from the vendor's API documentation and tested against local mocks. See [Project status](/gantry/getting-started/status/).
+Most provider kinds are built from the vendor's API documentation and tested against local mocks. See [Project status](/getting-started/status/).
 </Aside>
 
 ## Providers
 
 <CardGrid>
-	<LinkCard title="OpenAI and compatible vendors" href="/gantry/providers/openai/" description="OpenAI, Groq, Mistral, Together, Fireworks, DeepSeek, OpenRouter." />
-	<LinkCard title="Anthropic" href="/gantry/providers/anthropic/" description="Claude through Anthropic's messages API." />
-	<LinkCard title="Amazon Bedrock" href="/gantry/providers/bedrock/" description="Claude on Bedrock, signed with SigV4." />
-	<LinkCard title="Local models" href="/gantry/providers/local-models/" description="Ollama, vLLM and LM Studio." />
+	<LinkCard title="OpenAI and compatible vendors" href="/providers/openai/" description="OpenAI, Groq, Mistral, Together, Fireworks, DeepSeek, OpenRouter." />
+	<LinkCard title="Anthropic" href="/providers/anthropic/" description="Claude through Anthropic's messages API." />
+	<LinkCard title="Amazon Bedrock" href="/providers/bedrock/" description="Claude on Bedrock, signed with SigV4." />
+	<LinkCard title="Local models" href="/providers/local-models/" description="Ollama, vLLM and LM Studio." />
 </CardGrid>

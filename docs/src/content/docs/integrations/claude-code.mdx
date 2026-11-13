@@ -40,7 +40,7 @@ Claude Code talks to Anthropic's messages API. Point it at Gantry with a Gantry 
     gantry login https://gantry.example.com
     ```
 
-    This signs the developer in through the browser, saves a personal key named by their email, and prints the variables below with their own key. Every request then carries their name. `gantry logout` revokes it. See [Single sign-on](/gantry/governance/single-sign-on/).
+    This signs the developer in through the browser, saves a personal key named by their email, and prints the variables below with their own key. Every request then carries their name. `gantry logout` revokes it. See [Single sign-on](/governance/single-sign-on/).
 
     </TabItem>
     <TabItem label="Issued by an admin">
@@ -49,7 +49,7 @@ Claude Code talks to Anthropic's messages API. Point it at Gantry with a Gantry 
     gantry key new maya.cohen --team payments --url https://gantry.example.com
     ```
 
-    The key is printed once, with the variables below. See [Keys and identity](/gantry/governance/keys/).
+    The key is printed once, with the variables below. See [Keys and identity](/governance/keys/).
 
     </TabItem>
     </Tabs>
@@ -92,7 +92,7 @@ providers:
       claude-haiku-5-5: us.anthropic.claude-haiku-5-5-v1:0
 ```
 
-Gantry signs with AWS credentials from its own environment. See [Amazon Bedrock](/gantry/providers/bedrock/).
+Gantry signs with AWS credentials from its own environment. See [Amazon Bedrock](/providers/bedrock/).
 
 </TabItem>
 <TabItem label="Vertex AI">
@@ -106,7 +106,7 @@ providers:
     models: [claude-sonnet-4-6, claude-haiku-4-5]
 ```
 
-Vertex AI names models without Anthropic's date suffix. When Claude Code sends another name, map it with an [alias](/gantry/routing/aliases/). See [Vertex AI](/gantry/providers/vertex/).
+Vertex AI names models without Anthropic's date suffix. When Claude Code sends another name, map it with an [alias](/routing/aliases/). See [Vertex AI](/providers/vertex/).
 
 </TabItem>
 <TabItem label="GPT, Gemini or a local model">
@@ -126,7 +126,7 @@ export ANTHROPIC_MODEL=gpt-5
 export ANTHROPIC_SMALL_FAST_MODEL=gpt-5-mini
 ```
 
-`accept_messages: true` works on `openai`, `azure`, `gemini` and `vertex` providers. Requests and answers, streamed or whole and tool calls included, are translated to chat completions and back. A field with no chat equivalent is refused with `untranslatable`, naming the field. Claude Code warns that it does not know the model and assumes a context window; set one in its model configuration. See [Translation](/gantry/routing/translation/).
+`accept_messages: true` works on `openai`, `azure`, `gemini` and `vertex` providers. Requests and answers, streamed or whole and tool calls included, are translated to chat completions and back. A field with no chat equivalent is refused with `untranslatable`, naming the field. Claude Code warns that it does not know the model and assumes a context window; set one in its model configuration. See [Translation](/routing/translation/).
 
 </TabItem>
 </Tabs>
@@ -154,7 +154,7 @@ Claude Code labels any 403 "Failed to authenticate". The message after that labe
 - Every refusal sets `x-should-retry: false`, except `busy`, `rate_limited` and the `upstream_*` codes, which set `x-should-retry: true`. Claude Code resends those on its own. `rate_limited` also sets `Retry-After`.
 - A guardrail refusal says where the finding is, in words and as a JSON pointer: `in message 3 (/messages/2/content/1/text)`. That is the third message of the conversation Claude Code sent, which may be an earlier turn, a file it read or a tool result. Remove the secret from that turn or file and send again. A new session starts without the earlier turns.
 
-See [Refusal codes](/gantry/reference/refusal-codes/) for every code.
+See [Refusal codes](/reference/refusal-codes/) for every code.
 
 ## Budgets
 
@@ -165,13 +165,13 @@ The difference is given back when the answer ends. While it is held, a small bud
 - **Lower what each request asks for.** Run `export CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000` before `claude`. Claude Code sends that `max_tokens`, and each request reserves less.
 - **Size the budget for the reserve, not the average.** A team running several sessions at once holds one reserve per request in flight.
 
-See [Budgets and rate limits](/gantry/governance/budgets-and-rate-limits/).
+See [Budgets and rate limits](/governance/budgets-and-rate-limits/).
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Codex" href="/gantry/integrations/codex/" description="OpenAI's coding agent over the Responses API." />
-	<LinkCard title="Anthropic provider" href="/gantry/providers/anthropic/" description="The messages routes and the headers Gantry passes." />
-	<LinkCard title="Guardrails" href="/gantry/governance/guardrails/" description="Block or mask secrets and personal data in prompts." />
-	<LinkCard title="Translation" href="/gantry/routing/translation/" description="Run Claude Code on GPT, Gemini or a local model." />
+	<LinkCard title="Codex" href="/integrations/codex/" description="OpenAI's coding agent over the Responses API." />
+	<LinkCard title="Anthropic provider" href="/providers/anthropic/" description="The messages routes and the headers Gantry passes." />
+	<LinkCard title="Guardrails" href="/governance/guardrails/" description="Block or mask secrets and personal data in prompts." />
+	<LinkCard title="Translation" href="/routing/translation/" description="Run Claude Code on GPT, Gemini or a local model." />
 </CardGrid>

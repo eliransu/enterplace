@@ -30,7 +30,7 @@ Order inside a feature page: what it is, a minimal working example, configuratio
 - `<Aside type="note|tip|caution|danger">` for one point that matters. At most three per page. `caution` for anything that exposes keys or loses audit records.
 - Tables for fields, flags, codes. Columns: Field | Type | Default | Description.
 - Code blocks always carry a language. Use a `title="gantry.policy.yaml"` on file contents. Show command output in a separate `text` block.
-- Links between pages include the site base and a trailing slash: `/gantry/governance/budgets/`. Starlight does not add the base to Markdown links. Anchors work: `/gantry/reference/refusal-codes/#budget_exceeded`.
+- Links between pages are root-relative with a trailing slash: `/governance/budgets/`. Anchors work: `/reference/refusal-codes/#budget_exceeded`.
 
 ## Voice
 

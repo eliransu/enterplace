@@ -82,7 +82,7 @@ A Bedrock error, streamed or not, reaches the caller in Anthropic's error shape 
 
 - `POST /v1/messages/count_tokens` is refused with `wrong_route` for a Bedrock model. Gantry does not call Bedrock's CountTokens.
 - Betas are passed on as sent. A beta Bedrock does not offer comes back as Bedrock's 400.
-- `accept_chat: true` lets chat completions clients reach these models, translated. See [Translation](/gantry/routing/translation/).
+- `accept_chat: true` lets chat completions clients reach these models, translated. See [Translation](/routing/translation/).
 
 ## Errors from gantry check
 
@@ -95,6 +95,6 @@ A provider without `region` or `model_ids` is refused the same way, naming the m
 ## Related
 
 <CardGrid>
-	<LinkCard title="Retries and fallbacks" href="/gantry/routing/retries-and-fallbacks/" description="Fall back from Anthropic to Bedrock." />
-	<LinkCard title="Claude Code" href="/gantry/integrations/claude-code/" description="Run Claude Code on Bedrock through Gantry." />
+	<LinkCard title="Retries and fallbacks" href="/routing/retries-and-fallbacks/" description="Fall back from Anthropic to Bedrock." />
+	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Run Claude Code on Bedrock through Gantry." />
 </CardGrid>

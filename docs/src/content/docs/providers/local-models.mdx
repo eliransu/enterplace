@@ -83,7 +83,7 @@ prices:
   gpt-oss:20b: { input: 0, output: 0 }
 ```
 
-- With `accept_messages: true`, Claude Code can run on a local model. See [Translation](/gantry/routing/translation/).
+- With `accept_messages: true`, Claude Code can run on a local model. See [Translation](/routing/translation/).
 
 <Aside type="tip">
 In the container, `127.0.0.1` is the container itself. Use the host's address, for example `http://host.docker.internal:11434` with `--add-host host.docker.internal:host-gateway`, and keep `allow_private: true` if the address is private.
@@ -100,6 +100,6 @@ gantry.policy.yaml:5: the provider url points at this machine or a private netwo
 ## Related
 
 <CardGrid>
-	<LinkCard title="Providers overview" href="/gantry/providers/overview/" description="What counts as a private address." />
-	<LinkCard title="Pricing" href="/gantry/routing/pricing/" description="Set prices for models Gantry does not know." />
+	<LinkCard title="Providers overview" href="/providers/overview/" description="What counts as a private address." />
+	<LinkCard title="Pricing" href="/routing/pricing/" description="Set prices for models Gantry does not know." />
 </CardGrid>

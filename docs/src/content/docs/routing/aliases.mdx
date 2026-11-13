@@ -80,7 +80,7 @@ Aliases change without a restart, as rules do.
 - The usage record names the provider and model that answered, and the answer is charged at that model's price.
 - A budget reserves at the price of the first deployment picked. A rule with a budget that names an alias needs a price for each deployment's model.
 
-A kill switch on a model also stops every alias that can send to it. See [Kill switches](/gantry/governance/kill-switches/).
+A kill switch on a model also stops every alias that can send to it. See [Kill switches](/governance/kill-switches/).
 
 ## Errors from gantry check
 
@@ -91,12 +91,12 @@ gantry.policy.yaml:20: alias "smart": weight is how often a deployment is picked
 ```
 
 <Aside type="note">
-Map a name a client insists on to the name a provider uses with a one-deployment alias. For example, Claude Code's `claude-sonnet-5-5` to Vertex AI's `claude-sonnet-4-6`. See [Vertex AI](/gantry/providers/vertex/).
+Map a name a client insists on to the name a provider uses with a one-deployment alias. For example, Claude Code's `claude-sonnet-5-5` to Vertex AI's `claude-sonnet-4-6`. See [Vertex AI](/providers/vertex/).
 </Aside>
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Retries and fallbacks" href="/gantry/routing/retries-and-fallbacks/" description="Per-provider retries and one fallback provider." />
-	<LinkCard title="Pricing" href="/gantry/routing/pricing/" description="Prices for each deployment's model." />
+	<LinkCard title="Retries and fallbacks" href="/routing/retries-and-fallbacks/" description="Per-provider retries and one fallback provider." />
+	<LinkCard title="Pricing" href="/routing/pricing/" description="Prices for each deployment's model." />
 </CardGrid>

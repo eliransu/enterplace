@@ -37,7 +37,7 @@ An `admin` record's `action` is one of `list_keys`, `issue_key`, `revoke_key`, `
 
 **Not recorded at all:** `GET /healthz`, `HEAD /api/hello` (Claude Code's startup probe), and a request so malformed that the HTTP library rejects it first (a bare 400 with no decision ID). A request that got no answer at all (an `upstream_*` failure) has a request record and no usage record.
 
-Every field of every record type is in [Audit records](/gantry/reference/audit-records/).
+Every field of every record type is in [Audit records](/reference/audit-records/).
 
 ### Configuration records
 
@@ -152,12 +152,12 @@ While Gantry has the log open it keeps `gantry-audit.jsonl.lock` beside it, hold
 
 A request record is about 650 bytes and a usage record about 700, so a million forwarded requests make about 1.35 GB. Gantry reads the whole file at every start to verify it, so start-up time grows with the file. To start a new chain, stop Gantry, move the file aside with its last hash, and start again.
 
-Ship records to a log store with Vector, Fluent Bit or the OpenTelemetry Collector: see [Observability](/gantry/operations/observability/).
+Ship records to a log store with Vector, Fluent Bit or the OpenTelemetry Collector: see [Observability](/operations/observability/).
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Audit records" href="/gantry/reference/audit-records/" description="Every field of every record type." />
-	<LinkCard title="Policy file" href="/gantry/governance/policy/#reloading" description="When config_loaded and config_rejected are written." />
-	<LinkCard title="Security model" href="/gantry/operations/security/" description="What the chain proves and where it stops." />
+	<LinkCard title="Audit records" href="/reference/audit-records/" description="Every field of every record type." />
+	<LinkCard title="Policy file" href="/governance/policy/#reloading" description="When config_loaded and config_rejected are written." />
+	<LinkCard title="Security model" href="/operations/security/" description="What the chain proves and where it stops." />
 </CardGrid>

@@ -19,7 +19,7 @@ if spec is None or spec.loader is None:
 d = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(d)
 
-DOCS = "../docs"
+DOCS = "https://gantry-docs.eliran.me"
 # `scripts/release.sh image` writes the measured size ("8.2 MB" then the bytes) for the release to fill in.
 _measured = (ROOT / "dist" / "image-size.txt").read_text().split() if (ROOT / "dist" / "image-size.txt").exists() else []
 IMAGE_SIZE = " ".join(_measured[:2]) if len(_measured) >= 3 else "small"
@@ -116,7 +116,7 @@ LANDING = f"""<div style="background: var(--ground); color: var(--text); overflo
 <a class="g-nav__brand" href="#top"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
 <a class="g-nav__item t-body" href="#policy">Product</a>
 <a class="g-nav__item t-body" href="#coverage">Coverage</a>
-<a class="g-nav__item t-body" href="{DOCS}/index.html">Docs</a>
+<a class="g-nav__item t-body" href="{DOCS}/">Docs</a>
 {d.btn("Quickstart", small=True, href="#start")}
 </nav>
 <div class="g-hero">
@@ -207,7 +207,7 @@ LANDING = f"""<div style="background: var(--ground); color: var(--text); overflo
            ("gantry key new", "Prints a key once. Gantry keeps only its hash."),
            ("gantry serve", "Identifies, checks and records every request, then forwards it with the provider's key."),
            ("gantry audit verify", "Proves the log is one unbroken chain, and prints the last hash to keep elsewhere.")], ident=True)}
-<div class="g-head__actions">{d.btn("Read the quickstart", href=DOCS + "/quickstart.html")}{d.btn("Point Claude Code at it", "quiet", href=DOCS + "/claude-code.html")}</div>
+<div class="g-head__actions">{d.btn("Read the quickstart", href=DOCS + "/getting-started/quickstart/")}{d.btn("Point Claude Code at it", "quiet", href=DOCS + "/integrations/claude-code/")}</div>
 </div>
 </div>
 </section>
@@ -229,9 +229,9 @@ LANDING = f"""<div style="background: var(--ground); color: var(--text); overflo
 <a class="t-lead" href="#policy">Product</a>
 <a class="t-lead" href="#coverage">Coverage</a>
 <a class="t-lead" href="#start">Quickstart</a>
-<a class="t-lead" href="{DOCS}/index.html">Docs</a>
-<a class="t-lead" href="{DOCS}/security.html">Security</a>
-<a class="t-lead" href="{DOCS}/comparison.html">Compared with LiteLLM and Bifrost</a>
+<a class="t-lead" href="{DOCS}/">Docs</a>
+<a class="t-lead" href="{DOCS}/operations/security/">Security</a>
+<a class="t-lead" href="{DOCS}/migrate/comparison/">Compared with LiteLLM and Bifrost</a>
 </nav>
 </footer>
 

@@ -2,9 +2,9 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
-// GitHub Pages serves the site under /gantry. A custom domain (docs.getgantry.ai) sets DOCS_BASE=/.
-const site = process.env.DOCS_SITE ?? 'https://ggantry.github.io';
-const base = process.env.DOCS_BASE ?? '/gantry';
+// Served at the root of its own domain on Cloudflare.
+const site = process.env.DOCS_SITE ?? 'https://gantry-docs.eliran.me';
+const base = process.env.DOCS_BASE ?? '/';
 
 const group = (label, directory) => ({ label, items: [{ autogenerate: { directory } }] });
 

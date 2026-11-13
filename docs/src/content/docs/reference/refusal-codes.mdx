@@ -95,7 +95,7 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 
 **403.** A kill switch stops this person, team, key, model or everyone. The message names the switch, the reason, the admin who set it and when.
 
-**Fix:** ask that admin. The switch stays until `gantry unkill`. See [Kill switches](/gantry/governance/kill-switches/).
+**Fix:** ask that admin. The switch stays until `gantry unkill`. See [Kill switches](/governance/kill-switches/).
 
 ### kills_unreadable
 
@@ -107,7 +107,7 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 
 ### unknown_route
 
-**404.** The method and path are not one Gantry serves. See [HTTP routes](/gantry/reference/http-routes/). On the admin API, also a method and path it does not serve, or a Gantry that serves no keys file.
+**404.** The method and path are not one Gantry serves. See [HTTP routes](/reference/http-routes/). On the admin API, also a method and path it does not serve, or a Gantry that serves no keys file.
 
 **Fix:** check the method and the path.
 
@@ -164,7 +164,7 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 
 **403.** No rule names the caller's name or team.
 
-**Fix:** an admin adds a rule. See [Policy file](/gantry/governance/policy/).
+**Fix:** an admin adds a rule. See [Policy file](/governance/policy/).
 
 ### model_not_allowed
 
@@ -176,7 +176,7 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 
 **403.** The rule allows the model, but no provider lists it, or an alias has no deployment Gantry can reach. It is 403, not 404, because Claude Code replaces the message of a 404 with its own and retries a 400.
 
-**Fix:** check the model name, or an admin adds it to a provider. See [Providers](/gantry/providers/overview/).
+**Fix:** check the model name, or an admin adds it to a provider. See [Providers](/providers/overview/).
 
 ### wrong_route
 
@@ -211,7 +211,7 @@ Also 403 when a guardrail with `on: [answer]` withheld the model's whole answer.
 
 **500** when a guardrail masked the request and the masked body could not be written. The unmasked body is never sent.
 
-**Fix:** remove what was found and send again. For a guardrail service that is down, try later or tell the admin. See [Guardrails](/gantry/governance/guardrails/).
+**Fix:** remove what was found and send again. For a guardrail service that is down, try later or tell the admin. See [Guardrails](/governance/guardrails/).
 
 ## Limits
 
@@ -219,7 +219,7 @@ Also 403 when a guardrail with `on: [answer]` withheld the model's whole answer.
 
 **429.** The caller sent as many requests in the last minute as `rate: { rpm: N }` allows, or the tokens used in the last minute, plus those held by requests in flight, plus the most this request could use would pass a `tpm` limit (the rule's, or the key's). `Retry-After` says how many seconds to wait. A request that could use more tokens than a whole minute allows is refused without `Retry-After`. The record's `limit` field names the limit.
 
-**Fix:** wait the seconds in `Retry-After`, or send a smaller `max_tokens`. See [Budgets and rate limits](/gantry/governance/budgets-and-rate-limits/).
+**Fix:** wait the seconds in `Retry-After`, or send a smaller `max_tokens`. See [Budgets and rate limits](/governance/budgets-and-rate-limits/).
 
 ### budget_exceeded
 
@@ -245,7 +245,7 @@ Also 403 when a guardrail with `on: [answer]` withheld the model's whole answer.
 
 **503.** The record could not be written: the disk failed, or the log was deleted, moved, replaced or cut short. Every request, admin call and console action is refused until a restart, and `/healthz` answers 503. This refusal has no record, because that is the problem it reports.
 
-**Fix:** the admin checks the log file and the server's stderr, then restarts. See [Running in production](/gantry/operations/operations/#disk-full-and-audit-repair).
+**Fix:** the admin checks the log file and the server's stderr, then restarts. See [Running in production](/operations/operations/#disk-full-and-audit-repair).
 
 ### upstream_unreachable
 
@@ -283,7 +283,7 @@ With `retries` or a `fallback` on the provider, an `upstream_*` failure, a 429 o
 
 ## Admin API codes
 
-These come from `/admin/keys` and `/admin/kills`, in OpenAI's shape. `no_key`, `ambiguous_key`, `unknown_key`, `unknown_route`, `busy`, `body_too_large`, `body_timeout` and `audit_unavailable` apply there too. See [Admin API](/gantry/reference/admin-api/).
+These come from `/admin/keys` and `/admin/kills`, in OpenAI's shape. `no_key`, `ambiguous_key`, `unknown_key`, `unknown_route`, `busy`, `body_too_large`, `body_timeout` and `audit_unavailable` apply there too. See [Admin API](/reference/admin-api/).
 
 ### not_admin
 
@@ -341,7 +341,7 @@ These come from `/admin/keys` and `/admin/kills`, in OpenAI's shape. `no_key`, `
 
 ## Single sign-on codes
 
-Console and `gantry login` sign-ins that fail show a page with the cause and the fix, and write an `admin` record with `action: console_sign_in` and one of these codes. See [Single sign-on](/gantry/governance/single-sign-on/).
+Console and `gantry login` sign-ins that fail show a page with the cause and the fix, and write an `admin` record with `action: console_sign_in` and one of these codes. See [Single sign-on](/governance/single-sign-on/).
 
 | Code | Cause |
 |---|---|

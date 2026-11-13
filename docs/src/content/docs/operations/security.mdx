@@ -35,7 +35,7 @@ A request that cannot be identified, decided and recorded is not forwarded.
 - 256 random bits from the operating system, prefixed `gantry_` so secret scanners recognize them: `gantry_` and 64 hex characters.
 - Shown once. Only the SHA-256 is stored, in a keys file created with mode `0600`.
 - Looked up by hash, so Gantry never compares secret bytes one at a time.
-- A key can carry an expiry, a budget, a model list and a tokens-per-minute limit of its own. See [Keys and identity](/gantry/governance/keys/).
+- A key can carry an expiry, a budget, a model list and a tokens-per-minute limit of its own. See [Keys and identity](/governance/keys/).
 
 ## Provider keys
 
@@ -52,7 +52,7 @@ Gantry removes from every forwarded request:
 - any header that carries the caller's Gantry key in its name or value, compared without regard to case, with or without the `gantry_` prefix. A hand-made key shorter than 16 characters is found only where it stands as a word of its own,
 - `Cookie`, `Host` and the hop-by-hop headers (`Connection` and the headers it names, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`).
 
-`anthropic-*` and `x-claude-code-*` headers pass unchanged to Anthropic-API providers. The full list per route is in [HTTP routes](/gantry/reference/http-routes/#headers).
+`anthropic-*` and `x-claude-code-*` headers pass unchanged to Anthropic-API providers. The full list per route is in [HTTP routes](/reference/http-routes/#headers).
 
 **One credential, one model.** Two different credentials on one request are refused with `ambiguous_key`, so Gantry never checks one credential and forwards another. A body with a second spelling of the `model` key (such as `Model`) is refused, so the policy cannot check one model while the provider runs another.
 
@@ -75,7 +75,7 @@ A rule's guardrails read the text of each request it allows before the request i
 - **A webhook is as strong as its `on_failure`.** `fail_open` forwards requests unchecked while the service is down and records `skipped` for each.
 - **Masking re-serializes.** A masked request is written from its parsed JSON, keeping key order and numbers. A request with nothing masked is forwarded byte for byte.
 
-See [Guardrails](/gantry/governance/guardrails/).
+See [Guardrails](/governance/guardrails/).
 
 ## Stored Responses state
 
@@ -88,7 +88,7 @@ A `/v1/responses` request that names `previous_response_id`, `conversation` or a
 - Starting a sign-in stores nothing on the server, so a flood of starts locks nobody out. Floods are summed into one audit record a minute.
 - `gantry login` never puts a key in the browser. A one-use code valid for two minutes returns to a listener on `127.0.0.1`, and only the CLI holding the PKCE verifier can trade it for the key. The CLI sends a key only to an https address (plain http only to this machine) and saves it in a file only its owner can read.
 
-See [Admin console](/gantry/operations/console/) and [Single sign-on](/gantry/governance/single-sign-on/).
+See [Admin console](/operations/console/) and [Single sign-on](/governance/single-sign-on/).
 
 ## Exposure
 
@@ -128,6 +128,6 @@ Report a security problem privately to the maintainers, not in a public issue.
 ## Next
 
 <CardGrid>
-	<LinkCard title="HTTP routes" href="/gantry/reference/http-routes/" description="Routes, query parameters and headers." />
-	<LinkCard title="Project status" href="/gantry/getting-started/status/" description="What is built and what is planned." />
+	<LinkCard title="HTTP routes" href="/reference/http-routes/" description="Routes, query parameters and headers." />
+	<LinkCard title="Project status" href="/getting-started/status/" description="What is built and what is planned." />
 </CardGrid>

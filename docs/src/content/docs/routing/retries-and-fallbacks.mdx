@@ -88,12 +88,12 @@ The request record is written before anything is sent, so it names the first pro
 `outcome` is the provider's status, or the refusal code for a try that got no answer: `upstream_unreachable`, `upstream_failed` or `upstream_timeout`. The usage record follows when the answer ends, and names the provider that answered. `gantry audit verify` counts attempts records apart.
 
 <Aside type="tip">
-Clients retry on their own too. Gantry sets `x-should-retry: true` only on `busy`, `rate_limited` and the `upstream_*` codes, so Claude Code and the SDKs resend only what may clear. Codex needs `stream_max_retries = 0`; see [Codex](/gantry/integrations/codex/#retries).
+Clients retry on their own too. Gantry sets `x-should-retry: true` only on `busy`, `rate_limited` and the `upstream_*` codes, so Claude Code and the SDKs resend only what may clear. Codex needs `stream_max_retries = 0`; see [Codex](/integrations/codex/#retries).
 </Aside>
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Aliases" href="/gantry/routing/aliases/" description="Load balancing, cooldown and named fallbacks." />
-	<LinkCard title="Audit log" href="/gantry/governance/audit-log/" description="Request, attempts and usage records." />
+	<LinkCard title="Aliases" href="/routing/aliases/" description="Load balancing, cooldown and named fallbacks." />
+	<LinkCard title="Audit log" href="/governance/audit-log/" description="Request, attempts and usage records." />
 </CardGrid>

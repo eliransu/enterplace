@@ -37,7 +37,7 @@ curl -X POST https://gantry.example.com/admin/kills \
   -d '{"scope":"person","value":"maya.cohen@example.com","reason":"retrying the same ticket in a loop"}'
 ```
 
-Answers `201` with the switch and `"in_effect": true`. `GET /admin/kills` lists the switches that are on. See [Admin API](/gantry/reference/admin-api/).
+Answers `201` with the switch and `"in_effect": true`. `GET /admin/kills` lists the switches that are on. See [Admin API](/reference/admin-api/).
 
 </TabItem>
 </Tabs>
@@ -97,7 +97,7 @@ Refused: a kill switch stops traffic for person maya.cohen@example.com: "retryin
 
 While a switch is on, the console's Audit log shows a banner, and the record of each request it stopped names it.
 
-Admin API calls are never stopped, so an admin can always turn a switch off, including `--all`. That holds for an admin a switch names too: stop a leaked admin key by [revoking it](/gantry/governance/keys/#revoke-a-key), not with a switch.
+Admin API calls are never stopped, so an admin can always turn a switch off, including `--all`. That holds for an admin a switch names too: stop a leaked admin key by [revoking it](/governance/keys/#revoke-a-key), not with a switch.
 
 ## Persistence
 
@@ -137,7 +137,7 @@ Two nodes changing switches at the same instant can lose one change. Check `GET 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Keys" href="/gantry/governance/keys/" description="Revoke a key for good." />
-	<LinkCard title="Audit log" href="/gantry/governance/audit-log/" description="The set_kill and clear_kill records." />
-	<LinkCard title="Admin API" href="/gantry/reference/admin-api/" description="The kills routes." />
+	<LinkCard title="Keys" href="/governance/keys/" description="Revoke a key for good." />
+	<LinkCard title="Audit log" href="/governance/audit-log/" description="The set_kill and clear_kill records." />
+	<LinkCard title="Admin API" href="/reference/admin-api/" description="The kills routes." />
 </CardGrid>

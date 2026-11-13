@@ -21,7 +21,7 @@ The OpenAI SDKs take the address with `/v1`. The Anthropic SDKs take it without,
 ## What every client needs
 
 - **Key.** Gantry reads the key from `Authorization: Bearer gantry_...` or from `x-api-key: gantry_...`. If both are sent they must hold the same value, or the request is refused with `ambiguous_key`. A provider key (one that starts with `sk-`) is refused with `unknown_key` and a hint.
-- **Route.** The model must be on a provider the route fits. Chat requests reach `openai`, `azure`, `gemini` and `vertex` providers. Responses and embeddings reach `openai` only. Messages requests reach `anthropic`, `bedrock` and `vertex_anthropic`. Any other pairing is refused with `wrong_route`, which names the right route, unless the provider opts in to [translation](/gantry/routing/translation/).
+- **Route.** The model must be on a provider the route fits. Chat requests reach `openai`, `azure`, `gemini` and `vertex` providers. Responses and embeddings reach `openai` only. Messages requests reach `anthropic`, `bedrock` and `vertex_anthropic`. Any other pairing is refused with `wrong_route`, which names the right route, unless the provider opts in to [translation](/routing/translation/).
 - **Anthropic headers.** The Anthropic SDKs send `api_key` (`ANTHROPIC_API_KEY`) as `x-api-key` and `auth_token` (`ANTHROPIC_AUTH_TOKEN`) as `Authorization: Bearer`. Set only one of them, to the Gantry key.
 
 ## Send a request
@@ -164,6 +164,6 @@ The SDK names on this page come from each SDK's documentation and published sour
 ## Related
 
 <CardGrid>
-	<LinkCard title="Refusal codes" href="/gantry/reference/refusal-codes/" description="Every code, its status and Anthropic error type." />
-	<LinkCard title="Providers" href="/gantry/providers/overview/" description="Which provider kinds each route reaches." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code, its status and Anthropic error type." />
+	<LinkCard title="Providers" href="/providers/overview/" description="Which provider kinds each route reaches." />
 </CardGrid>

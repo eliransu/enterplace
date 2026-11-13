@@ -42,7 +42,7 @@ Metrics: http://127.0.0.1:9464/metrics
 |---|---|
 | `route` | `chat_completions`, `messages`, `count_tokens`, `responses`, `embeddings`, `models`, or `other` for every other path |
 | `verdict` | `allow` or `refused` |
-| `code` | The [refusal code](/gantry/reference/refusal-codes/), empty when allowed |
+| `code` | The [refusal code](/reference/refusal-codes/), empty when allowed |
 | `outcome` | The provider's HTTP status, or the Gantry code when it gave none, such as `upstream_timeout` |
 
 Histogram buckets run from 100 microseconds to 60 seconds: `0.0001`, `0.00025`, `0.0005`, `0.001`, `0.0025`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5`, `10`, `30`, `60` and `+Inf`.
@@ -83,7 +83,7 @@ groups:
 
 The audit log is a file of JSON lines, `gantry-audit.jsonl` or the `audit: { path: ... }` in the policy. Gantry only appends to it, so any shipper that tails a file can send it to Loki, Elasticsearch, Splunk or Datadog. Ship each line as it is: the `hash` and `prev` fields chain every record to the one before, and that chain is what `gantry audit verify` checks.
 
-Fields worth indexing: `event` (absent on request records), `id`, `person`, `team`, `key`, `verdict`, `code`, `model`, `provider`, `charged_usd`. Every field is in [Audit records](/gantry/reference/audit-records/).
+Fields worth indexing: `event` (absent on request records), `id`, `person`, `team`, `key`, `verdict`, `code`, `model`, `provider`, `charged_usd`. Every field is in [Audit records](/reference/audit-records/).
 
 The recipes below read the file from its start and keep their place across restarts. They print to stdout: point the sink at your log system, and check the configuration against the version of the tool you run.
 
@@ -171,7 +171,7 @@ service:
 - `file_storage` keeps the receiver's place across Collector restarts, so records are neither skipped nor sent twice. Its folder must exist and be writable by the Collector.
 - `otlphttp` sends to `<endpoint>/v1/logs`. Replace the endpoint with your backend's and drop `debug` once it works. Recent Collector releases name this exporter `otlp_http` and accept `otlphttp` as a deprecated alias.
 
-On Kubernetes, run the shipper as a second container in the Gantry pod. See [Kubernetes](/gantry/operations/kubernetes/#ship-the-audit-log-from-the-pod).
+On Kubernetes, run the shipper as a second container in the Gantry pod. See [Kubernetes](/operations/kubernetes/#ship-the-audit-log-from-the-pod).
 
 ## Verify what was shipped
 
@@ -202,6 +202,6 @@ A shipped copy that starts in the middle of the log does not verify on its own. 
 ## Next
 
 <CardGrid>
-	<LinkCard title="Audit records" href="/gantry/reference/audit-records/" description="The schema of every record type." />
-	<LinkCard title="Audit log" href="/gantry/governance/audit-log/" description="How the chain works and how to keep the last hash." />
+	<LinkCard title="Audit records" href="/reference/audit-records/" description="The schema of every record type." />
+	<LinkCard title="Audit log" href="/governance/audit-log/" description="How the chain works and how to keep the last hash." />
 </CardGrid>

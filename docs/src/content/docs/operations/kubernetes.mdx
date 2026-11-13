@@ -123,7 +123,7 @@ Never expose the metrics port through the Ingress. `/metrics` takes no key and s
 
 ## Ship the audit log from the pod
 
-Run a log shipper as a second container in the Gantry pod, with the data volume mounted read-only at `/var/lib/gantry`. Containers of one pod can share a `ReadWriteOnce` volume. Give the shipper's own state an `emptyDir` or a volume of its own. Recipes are in [Observability](/gantry/operations/observability/#shipping-the-audit-log).
+Run a log shipper as a second container in the Gantry pod, with the data volume mounted read-only at `/var/lib/gantry`. Containers of one pod can share a `ReadWriteOnce` volume. Give the shipper's own state an `emptyDir` or a volume of its own. Recipes are in [Observability](/operations/observability/#shipping-the-audit-log).
 
 ## Check the files
 
@@ -136,6 +136,6 @@ It parses every YAML file in `deploy/`, checks the security settings above and t
 ## Next
 
 <CardGrid>
-	<LinkCard title="Observability" href="/gantry/operations/observability/" description="Prometheus metrics and audit log shipping." />
-	<LinkCard title="Running in production" href="/gantry/operations/operations/" description="Reload, backups, a full disk and upgrades." />
+	<LinkCard title="Observability" href="/operations/observability/" description="Prometheus metrics and audit log shipping." />
+	<LinkCard title="Running in production" href="/operations/operations/" description="Reload, backups, a full disk and upgrades." />
 </CardGrid>

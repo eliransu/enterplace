@@ -47,11 +47,11 @@ api-key: <the value of AZURE_OPENAI_API_KEY>
 
 ## Behavior
 
-- Callers use `POST /v1/chat/completions`. Messages requests are refused with `wrong_route` unless the provider sets `accept_messages: true`. See [Translation](/gantry/routing/translation/).
+- Callers use `POST /v1/chat/completions`. Messages requests are refused with `wrong_route` unless the provider sets `accept_messages: true`. See [Translation](/routing/translation/).
 - The body goes as it came, `model` included. The deployment in the path decides what runs.
 - `deployments` changes without a restart; `api_version` needs one.
-- An `azure` provider can be the fallback of an `openai` provider, and the reverse. The fallback serves each model through its own `deployments`. See [Retries and fallbacks](/gantry/routing/retries-and-fallbacks/).
-- A content filter error from Azure (`content_filter`) can send an alias request to its `content_policy_fallback`. See [Aliases](/gantry/routing/aliases/).
+- An `azure` provider can be the fallback of an `openai` provider, and the reverse. The fallback serves each model through its own `deployments`. See [Retries and fallbacks](/routing/retries-and-fallbacks/).
+- A content filter error from Azure (`content_filter`) can send an alias request to its `content_policy_fallback`. See [Aliases](/routing/aliases/).
 
 <Aside type="note">
 Microsoft Entra tokens and Azure's newer `/openai/v1` API are not supported. Use the resource key and the deployment URL.
@@ -67,6 +67,6 @@ gantry.policy.yaml:14: model "gpt-4o" has no entry in deployments, so Gantry wou
 ## Related
 
 <CardGrid>
-	<LinkCard title="OpenAI" href="/gantry/providers/openai/" description="OpenAI and compatible vendors." />
-	<LinkCard title="Aliases" href="/gantry/routing/aliases/" description="Spread one model name over several Azure deployments." />
+	<LinkCard title="OpenAI" href="/providers/openai/" description="OpenAI and compatible vendors." />
+	<LinkCard title="Aliases" href="/routing/aliases/" description="Spread one model name over several Azure deployments." />
 </CardGrid>

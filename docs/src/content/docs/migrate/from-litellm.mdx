@@ -117,7 +117,7 @@ The import keeps LiteLLM's variable names in `key_env`. If Claude Code will run 
 
 | LiteLLM | Gantry |
 |---|---|
-| `model_list[].model_name` | The model name callers send. One deployment whose model has the same name is listed under its provider's `models`. Several deployments, or one under another name, become an [alias](/gantry/routing/aliases/) with that name. |
+| `model_list[].model_name` | The model name callers send. One deployment whose model has the same name is listed under its provider's `models`. Several deployments, or one under another name, become an [alias](/routing/aliases/) with that name. |
 | `litellm_params.model` with `openai/`, or a bare `gpt-*` | `kind: openai`, `url: https://api.openai.com` |
 | `anthropic/`, or a bare `claude-*` | `kind: anthropic` |
 | `azure/<deployment>` with `api_base`, `api_version` | `kind: azure` with `deployments` and `api_version` |
@@ -125,7 +125,7 @@ The import keeps LiteLLM's variable names in `key_env`. If Claude Code will run 
 | `gemini/` | `kind: gemini` |
 | `vertex_ai/gemini-*` with `vertex_project`, `vertex_location` | `kind: vertex` with the `/publishers/google` URL |
 | `vertex_ai/claude-*` with `vertex_project`, `vertex_location` | `kind: vertex_anthropic` with the `/publishers/anthropic` URL, and an alias from the `model_name` to the Vertex model name (`claude-sonnet-4-5@20250929`) |
-| `groq/`, `mistral/`, `together_ai/`, `fireworks_ai/`, `deepseek/`, `openrouter/`, `ollama/`, `ollama_chat/`, `lm_studio/`, `hosted_vllm/` | `kind: openai` with the vendor's base URL from [Providers](/gantry/providers/overview/), or `api_base`. A local server gets `allow_private: true` and no key. |
+| `groq/`, `mistral/`, `together_ai/`, `fireworks_ai/`, `deepseek/`, `openrouter/`, `ollama/`, `ollama_chat/`, `lm_studio/`, `hosted_vllm/` | `kind: openai` with the vendor's base URL from [Providers](/providers/overview/), or `api_base`. A local server gets `allow_private: true` and no key. |
 | `api_key: os.environ/NAME` | `key_env: NAME`. A key written in the config is not copied: the report names the variable to set. |
 | `litellm_params.weight` | The deployment's `weight` |
 | `model_info.input_cost_per_token`, `output_cost_per_token` | `prices:` in dollars per million tokens, under the name Gantry sends |
@@ -145,12 +145,12 @@ These are not mapped. Each appears in the report with what to do in Gantry.
 |---|---|
 | Other `routing_strategy` values | The alias uses `round_robin`. |
 | `fallbacks` | Gantry fails over between an alias's deployments, or from a provider to its `fallback` provider for the same model. Add the fallback as a deployment of the alias if it may also take a share of traffic. |
-| `rpm`, `tpm` per deployment | Gantry limits people, teams and keys: `rate:` on a rule, `tpm` on a key. See [Budgets and rate limits](/gantry/governance/budgets-and-rate-limits/). |
+| `rpm`, `tpm` per deployment | Gantry limits people, teams and keys: `rate:` on a rule, `tpm` on a key. See [Budgets and rate limits](/governance/budgets-and-rate-limits/). |
 | `general_settings.master_key` | Make an admin key with `gantry key new <name> --team <team> --admin`. |
 | `general_settings.database_url`, `redis_*` | Not needed. Keys are a file, records are the audit log, cooldowns are in memory on one node. |
 | `litellm_settings.drop_params` | Gantry never drops a parameter silently. |
 | `cache`, `cache_params` | Add `cache: { ttl_seconds: N }` to a rule. |
-| `success_callback`, `callbacks` | Every request is in the [audit log](/gantry/governance/audit-log/), and `/metrics` serves Prometheus. |
+| `success_callback`, `callbacks` | Every request is in the [audit log](/governance/audit-log/), and `/metrics` serves Prometheus. |
 | Vertex AI models other than Gemini and Claude | Not served by Gantry. Left out. |
 | A provider with no Gantry kind and no OpenAI-compatible URL | Not served by Gantry. Left out. If it speaks the OpenAI API, add it as `kind: openai` with its `url`. |
 | Anything else | Reported as not mapped. |
@@ -180,7 +180,7 @@ From the export the import writes:
 gantry key new maya --team payments --budget 20/month --expires 2027-01-01 --models gpt-4o,gpt-4o-mini --tpm 50000
 ```
 
-Run each command and send the printed key to its owner through your secret manager. Developers can instead get their own key with `gantry login`. See [Keys and identity](/gantry/governance/keys/).
+Run each command and send the printed key to its owner through your secret manager. Developers can instead get their own key with `gantry login`. See [Keys and identity](/governance/keys/).
 
 ## Two regions of one model
 
@@ -195,8 +195,8 @@ The config format was read from LiteLLM's public docs on 2026-11-13 ([configs](h
 ## Related
 
 <CardGrid>
-	<LinkCard title="Gantry, LiteLLM and Bifrost" href="/gantry/migrate/comparison/" description="What each gateway does and does better." />
-	<LinkCard title="Policy file" href="/gantry/governance/policy/" description="Every key the imported policy uses." />
-	<LinkCard title="Model aliases" href="/gantry/routing/aliases/" description="Weights, cooldown and fallbacks over several deployments." />
-	<LinkCard title="CLI reference" href="/gantry/reference/cli/" description="gantry import, key new, prices and check." />
+	<LinkCard title="Gantry, LiteLLM and Bifrost" href="/migrate/comparison/" description="What each gateway does and does better." />
+	<LinkCard title="Policy file" href="/governance/policy/" description="Every key the imported policy uses." />
+	<LinkCard title="Model aliases" href="/routing/aliases/" description="Weights, cooldown and fallbacks over several deployments." />
+	<LinkCard title="CLI reference" href="/reference/cli/" description="gantry import, key new, prices and check." />
 </CardGrid>

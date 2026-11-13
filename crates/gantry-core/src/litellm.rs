@@ -721,7 +721,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
                 "database_url" => "general_settings.database_url: not needed. Gantry keeps keys in gantry.keys.yaml and records in its audit log.".into(),
                 "drop_params" => "litellm_settings.drop_params: Gantry never drops a parameter silently; an unknown one passes through or is refused.".into(),
                 "cache" | "cache_params" => format!("{section}.{key}: Gantry caches per rule in memory: add cache: {{ ttl_seconds: N }} to a rule."),
-                "success_callback" | "failure_callback" | "callbacks" => format!("{section}.{key}: Gantry writes every request to its audit log and serves Prometheus metrics; see https://ggantry.github.io/gantry/operations/observability/."),
+                "success_callback" | "failure_callback" | "callbacks" => format!("{section}.{key}: Gantry writes every request to its audit log and serves Prometheus metrics; see https://gantry-docs.eliran.me/operations/observability/."),
                 "redis_host" | "redis_port" | "redis_password" => format!("{section}.{key}: Gantry runs on one node and keeps cooldowns in memory."),
                 _ => format!("{section}.{key}: not mapped."),
             });

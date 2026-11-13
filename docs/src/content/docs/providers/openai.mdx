@@ -29,7 +29,7 @@ Gantry sends the key as `Authorization: Bearer <key>` and forwards the body byte
 
 ## OpenAI-compatible vendors
 
-Every vendor below is `kind: openai`. Write the vendor's documented base URL as `url`: Gantry adds the route after `/v1` (see [How the URL is built](/gantry/providers/overview/#how-the-url-is-built)).
+Every vendor below is `kind: openai`. Write the vendor's documented base URL as `url`: Gantry adds the route after `/v1` (see [How the URL is built](/providers/overview/#how-the-url-is-built)).
 
 | Vendor | `url` | Routes the vendor documents |
 |---|---|---|
@@ -154,12 +154,12 @@ providers:
     models: [gemini-4-hydrogen]
 ```
 
-Gantry calls `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` with the key in `Authorization: Bearer`. For tool calls, system instructions and Gemini's own usage counts, the native [`gemini` kind](/gantry/providers/gemini/) is the better choice.
+Gantry calls `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` with the key in `Authorization: Bearer`. For tool calls, system instructions and Gemini's own usage counts, the native [`gemini` kind](/providers/gemini/) is the better choice.
 
 </TabItem>
 </Tabs>
 
-For Ollama, vLLM and LM Studio, see [Local models](/gantry/providers/local-models/).
+For Ollama, vLLM and LM Studio, see [Local models](/providers/local-models/).
 
 ## Responses and embeddings
 
@@ -173,7 +173,7 @@ For Ollama, vLLM and LM Studio, see [Local models](/gantry/providers/local-model
 A Responses request's `max_output_tokens` sizes its budget reservation.
 
 - A request with `previous_response_id` or `store: true` leaves the conversation stored at OpenAI under Gantry's provider key. The record shows the request; Gantry does not track what the provider stored.
-- Under a budget, a request that names stored context (`previous_response_id`, `conversation` or `prompt`) is refused with `stored_context`, unless the model's price sets `max_context`. See [Pricing](/gantry/routing/pricing/).
+- Under a budget, a request that names stored context (`previous_response_id`, `conversation` or `prompt`) is refused with `stored_context`, unless the model's price sets `max_context`. See [Pricing](/routing/pricing/).
 - Other Responses routes (`GET` and `DELETE /v1/responses/{id}`, input items, cancel) are refused with `unknown_route`.
 
 ## Images, audio, moderations and rerank
@@ -197,12 +197,12 @@ These routes go to the `openai` provider that serves the request's `model`, or a
 Guardrails never read the audio of a transcription. Do not give transcription models to a rule whose guardrails must see what is spoken.
 </Aside>
 
-Image and speech models priced by the token need `max_output` in their price under a budget or a tokens-per-minute limit; image models priced by the image need `per_image`. See [Pricing](/gantry/routing/pricing/).
+Image and speech models priced by the token need `max_output` in their price under a budget or a tokens-per-minute limit; image models priced by the image need `per_image`. See [Pricing](/routing/pricing/).
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Providers overview" href="/gantry/providers/overview/" description="Kinds, fields, URLs and private addresses." />
-	<LinkCard title="Codex" href="/gantry/integrations/codex/" description="Codex CLI over the Responses route." />
-	<LinkCard title="Translation" href="/gantry/routing/translation/" description="Serve Claude Code from GPT with accept_messages." />
+	<LinkCard title="Providers overview" href="/providers/overview/" description="Kinds, fields, URLs and private addresses." />
+	<LinkCard title="Codex" href="/integrations/codex/" description="Codex CLI over the Responses route." />
+	<LinkCard title="Translation" href="/routing/translation/" description="Serve Claude Code from GPT with accept_messages." />
 </CardGrid>

@@ -26,8 +26,8 @@ Gantry serves the OpenAI and Anthropic routes your clients already call, plus a 
 | `GET` | `/v1/models` | yes | yes | The models the caller's rule allows |
 | `GET` | `/healthz` | no | no | Health check |
 | `HEAD` | `/api/hello` | no | no | Claude Code's startup probe. Answers 200 and reaches no provider |
-| `GET`, `POST` | `/console/...` | session | sign-ins and changes | The [admin console](/gantry/operations/console/) |
-| `GET`, `POST`, `DELETE` | `/admin/keys`, `/admin/keys/<prefix>`, `/admin/kills` | admin key | yes | The [admin API](/gantry/reference/admin-api/) |
+| `GET`, `POST` | `/console/...` | session | sign-ins and changes | The [admin console](/operations/console/) |
+| `GET`, `POST`, `DELETE` | `/admin/keys`, `/admin/keys/<prefix>`, `/admin/kills` | admin key | yes | The [admin API](/reference/admin-api/) |
 | `GET` | `/metrics` | no | no | Prometheus metrics, only on the `--metrics` address |
 
 Any method other than `GET` on `/healthz`, or other than `HEAD` on `/api/hello`, is refused with `unknown_route` and recorded. The key is checked before the route, so an unknown route without a key gets `no_key`.
@@ -43,7 +43,7 @@ A request goes to the one provider that lists its model, and only if that provid
 | `/v1/messages/count_tokens` | `anthropic` only |
 | `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank` | `openai` only |
 
-A model on a provider that does not serve the route is refused with `wrong_route`, and the message names the route to use. An alias tries only the deployments whose provider serves the route. See [Providers](/gantry/providers/overview/).
+A model on a provider that does not serve the route is refused with `wrong_route`, and the message names the route to use. An alias tries only the deployments whose provider serves the route. See [Providers](/providers/overview/).
 
 The policy reads the `model` field of the JSON body, or the one `model` form field of a transcription. Everything else in the body is forwarded as sent.
 
@@ -110,7 +110,7 @@ Every other header passes unchanged, including `anthropic-version`, `anthropic-b
 | `anthropic-version: 2023-06-01` | Provider | A chat request translated for `anthropic` or `vertex_anthropic` that has none |
 | `X-Gantry-Decision` | Caller | The decision ID, on every response |
 | `Server-Timing: gantry;dur=<ms>` | Caller | Gantry's own time on a forwarded request, appended beside the provider's |
-| `x-should-retry`, `Retry-After` | Caller | On refusals. See [Refusal codes](/gantry/reference/refusal-codes/#response-shape) |
+| `x-should-retry`, `Retry-After` | Caller | On refusals. See [Refusal codes](/reference/refusal-codes/#response-shape) |
 
 The provider's answer, streamed or not, comes back as sent, with hop-by-hop headers removed.
 

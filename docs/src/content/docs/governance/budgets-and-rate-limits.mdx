@@ -35,7 +35,7 @@ gantry key new ci.release --team platform --budget 20/month --tpm 50000
 | `rate.rpm` | integer | none | Requests per sliding minute, per person. 1 to 1000000. |
 | `rate.tpm` | integer | none | Tokens (prompt and answer) per sliding minute. 1 to 1000000000. |
 
-`rpm` and `tpm` may be given together. On a key, the same limits are `budget: { usd, per }` and `tpm:` in its entry, or `--budget` and `--tpm` on [`gantry key new`](/gantry/governance/keys/#limits-per-key).
+`rpm` and `tpm` may be given together. On a key, the same limits are `budget: { usd, per }` and `tpm:` in its entry, or `--budget` and `--tpm` on [`gantry key new`](/governance/keys/#limits-per-key).
 
 ## Who a limit counts
 
@@ -58,13 +58,13 @@ A request must fit its rule's limits and its key's limits. Over the rule's budge
 
 2. **Admit.** The request is admitted only if spent, plus what requests in flight have reserved, plus its own reservation, fits the budget. Otherwise it is refused with `budget_exceeded`.
 
-3. **Settle.** When the answer ends, the reservation is replaced by the real cost from the [usage record](/gantry/governance/audit-log/#what-is-recorded).
+3. **Settle.** When the answer ends, the reservation is replaced by the real cost from the [usage record](/governance/audit-log/#what-is-recorded).
 
 </Steps>
 
 A budget is passed only when a provider bills more than the reservation: a model writing past its `max_tokens`, or a prompt that tokenizes to more than one token per three bytes.
 
-**Output tokens reserved** are the largest of `max_tokens`, `max_completion_tokens` and `max_output_tokens`, because a provider may read any of them. A request that states none reserves the model's `max_output` from its [price](/gantry/routing/pricing/), and is refused with `max_tokens_needed` when the price has none. A chat request with `n` reserves its output `n` times. Embeddings have no output tokens. `count_tokens` requests are free.
+**Output tokens reserved** are the largest of `max_tokens`, `max_completion_tokens` and `max_output_tokens`, because a provider may read any of them. A request that states none reserves the model's `max_output` from its [price](/routing/pricing/), and is refused with `max_tokens_needed` when the price has none. A chat request with `n` reserves its output `n` times. Embeddings have no output tokens. `count_tokens` requests are free.
 
 **Spend survives a restart.** At start, Gantry sums the `charged_usd` of the current month's usage records from the audit log. A reload that changes a budget applies to the next request.
 
@@ -117,7 +117,7 @@ The record of a refusal by a limit names it in `limit`, for example `{"kind": "t
 | `bad_limits` | 400 | no | Duplicate keys, a non-integer token limit or `n` out of range. |
 | `stored_context` | 400 | no | Stored Responses context under a budget without `max_context`. |
 
-Claude Code reads `x-should-retry` and does not retry a budget refusal. See [Refusal codes](/gantry/reference/refusal-codes/).
+Claude Code reads `x-should-retry` and does not retry a budget refusal. See [Refusal codes](/reference/refusal-codes/).
 
 <Aside type="note">
 Spend, reservations and rate-limit windows live in the memory of one Gantry process. Rate-limit windows start empty after a restart; spend is read back from the audit log.
@@ -126,7 +126,7 @@ Spend, reservations and rate-limit windows live in the memory of one Gantry proc
 ## Related
 
 <CardGrid>
-	<LinkCard title="Pricing" href="/gantry/routing/pricing/" description="Where each model's price comes from, and how to override it." />
-	<LinkCard title="Keys" href="/gantry/governance/keys/" description="Budgets, models and tpm per key." />
-	<LinkCard title="Audit log" href="/gantry/governance/audit-log/" description="The usage records spend is counted from." />
+	<LinkCard title="Pricing" href="/routing/pricing/" description="Where each model's price comes from, and how to override it." />
+	<LinkCard title="Keys" href="/governance/keys/" description="Budgets, models and tpm per key." />
+	<LinkCard title="Audit log" href="/governance/audit-log/" description="The usage records spend is counted from." />
 </CardGrid>

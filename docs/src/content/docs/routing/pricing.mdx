@@ -89,7 +89,7 @@ Prices are US dollars per million tokens, 0 or more. Prices change without a res
 
 ## How prices drive budgets
 
-A budget reserves the most a request could cost before it is sent, then replaces the reservation with the real cost when the answer ends. See [Budgets and rate limits](/gantry/governance/budgets-and-rate-limits/).
+A budget reserves the most a request could cost before it is sent, then replaces the reservation with the real cost when the answer ends. See [Budgets and rate limits](/governance/budgets-and-rate-limits/).
 
 - **No token limit.** A request that sets none of `max_tokens`, `max_completion_tokens` or `max_output_tokens` reserves the model's `max_output`. Without one, it is refused with `max_tokens_needed` (400). Built-in values: 16384 for `gpt-4o-mini` and `gpt-4o`, 64000 for `claude-sonnet-5-5` and `claude-haiku-5-5`.
 - **Stored context.** A Responses request that names `previous_response_id`, `conversation` or `prompt` is refused under a budget with `stored_context` (400), unless the model has `max_context`.
@@ -109,6 +109,6 @@ gantry.policy.yaml:23: rule "everyone-else" has a budget in dollars, and model "
 ## Related
 
 <CardGrid>
-	<LinkCard title="Budgets and rate limits" href="/gantry/governance/budgets-and-rate-limits/" description="Dollar budgets per team, person or key." />
-	<LinkCard title="Audit log" href="/gantry/governance/audit-log/" description="Usage records and price_source." />
+	<LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" description="Dollar budgets per team, person or key." />
+	<LinkCard title="Audit log" href="/governance/audit-log/" description="Usage records and price_source." />
 </CardGrid>

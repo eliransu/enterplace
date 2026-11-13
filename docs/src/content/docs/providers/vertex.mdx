@@ -65,7 +65,7 @@ Claude Code or any messages client reaches these models through `POST /v1/messag
 - The answer is Anthropic's own format, streamed or whole, and goes back unchanged.
 - `anthropic-beta` headers are passed on as sent. Whether Vertex AI honours a beta is up to Vertex AI.
 - `POST /v1/messages/count_tokens` is refused with `wrong_route` for these models.
-- `accept_chat: true` lets chat completions clients reach them too, translated. See [Translation](/gantry/routing/translation/).
+- `accept_chat: true` lets chat completions clients reach them too, translated. See [Translation](/routing/translation/).
 
 ### Model names
 
@@ -78,11 +78,11 @@ aliases:
       - { provider: claude-vertex, model: claude-sonnet-4-6 }
 ```
 
-See [Aliases](/gantry/routing/aliases/).
+See [Aliases](/routing/aliases/).
 
 ## Gemini on Vertex AI
 
-Callers use `POST /v1/chat/completions`. Gantry applies the same translation as the [`gemini` kind](/gantry/providers/gemini/) and sends it to `<url>/models/<model>:generateContent`, or `:streamGenerateContent?alt=sse` for a stream, with `Authorization: Bearer <token>`.
+Callers use `POST /v1/chat/completions`. Gantry applies the same translation as the [`gemini` kind](/providers/gemini/) and sends it to `<url>/models/<model>:generateContent`, or `:streamGenerateContent?alt=sse` for a stream, with `Authorization: Bearer <token>`.
 
 A `vertex` provider can fall back to a `gemini` or another `vertex` provider. With `accept_messages: true`, Claude Code can use these Gemini models too.
 
@@ -95,6 +95,6 @@ gantry.policy.yaml:5: a vertex provider's url ends in /publishers/google, for ex
 ## Related
 
 <CardGrid>
-	<LinkCard title="Gemini" href="/gantry/providers/gemini/" description="The Gemini API and the full translation table." />
-	<LinkCard title="Claude Code" href="/gantry/integrations/claude-code/" description="Run Claude Code on Vertex AI through Gantry." />
+	<LinkCard title="Gemini" href="/providers/gemini/" description="The Gemini API and the full translation table." />
+	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Run Claude Code on Vertex AI through Gantry." />
 </CardGrid>

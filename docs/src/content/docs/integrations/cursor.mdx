@@ -10,7 +10,7 @@ import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components'
 Cursor reaches Gantry through its "Override OpenAI Base URL" setting. Its chat and agent requests then go to `POST /v1/chat/completions` on Gantry, identified by a Gantry key.
 
 <Aside type="caution">
-Cursor's own servers build the final prompt and send the request, also when you give it your own key and base URL. Gantry must have a public HTTPS address, and every Gantry key travels through Cursor's servers. A Gantry on `127.0.0.1` or a private network cannot be reached from Cursor. See [Deployment](/gantry/operations/deployment/) for TLS.
+Cursor's own servers build the final prompt and send the request, also when you give it your own key and base URL. Gantry must have a public HTTPS address, and every Gantry key travels through Cursor's servers. A Gantry on `127.0.0.1` or a private network cannot be reached from Cursor. See [Deployment](/operations/deployment/) for TLS.
 </Aside>
 
 ## Setup
@@ -34,7 +34,7 @@ Model name:                gpt-4o-mini
 
 - Tab completion always uses Cursor's own models and never reaches Gantry. Only chat and agent requests do.
 - With the override on, every OpenAI-family request goes to Gantry, including models picked from Cursor's built-in list. Those are refused unless the policy allows them. Cursor has no per-model base URL.
-- Cursor shows no base URL override for its Anthropic key, so Claude models reach Gantry only over chat completions. Set `accept_chat: true` on the `anthropic` provider for that; without it they are refused with `wrong_route`. See [Translation](/gantry/routing/translation/).
+- Cursor shows no base URL override for its Anthropic key, so Claude models reach Gantry only over chat completions. Set `accept_chat: true` on the `anthropic` provider for that; without it they are refused with `wrong_route`. See [Translation](/routing/translation/).
 
 <Aside type="note">
 This setup follows Cursor's documentation and statements by Cursor staff. How Cursor displays a Gantry refusal is not documented.
@@ -43,6 +43,6 @@ This setup follows Cursor's documentation and statements by Cursor staff. How Cu
 ## Related
 
 <CardGrid>
-	<LinkCard title="Deployment" href="/gantry/operations/deployment/" description="Serve Gantry over HTTPS with --tls-cert and --tls-key." />
-	<LinkCard title="Keys and identity" href="/gantry/governance/keys/" description="Issue a key per person, with expiry and a budget." />
+	<LinkCard title="Deployment" href="/operations/deployment/" description="Serve Gantry over HTTPS with --tls-cert and --tls-key." />
+	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue a key per person, with expiry and a budget." />
 </CardGrid>

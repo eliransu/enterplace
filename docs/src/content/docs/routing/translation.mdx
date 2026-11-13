@@ -46,7 +46,7 @@ providers:
     accept_messages: true
 ```
 
-Claude Code can now run with `ANTHROPIC_MODEL=gpt-5` and `ANTHROPIC_SMALL_FAST_MODEL=gpt-5-mini`. See [Claude Code](/gantry/integrations/claude-code/).
+Claude Code can now run with `ANTHROPIC_MODEL=gpt-5` and `ANTHROPIC_SMALL_FAST_MODEL=gpt-5-mini`. See [Claude Code](/integrations/claude-code/).
 
 </TabItem>
 </Tabs>
@@ -100,11 +100,11 @@ Claude Code sends `output_config.effort` on every request, which Gantry sends as
 
 Guardrails, cache, rate limits and budgets see the request in the form actually sent: translated when it was translated, masked when a guardrail masked it. A cached answer is the provider's own; a translated caller gets the hit translated, as the first answer was. Usage is read from the provider's answer before it is translated, so a translated chat stream sent without `stream_options.include_usage` still has its tokens and cost recorded.
 
-For Gemini and Vertex AI, chat requests are always translated to generateContent. See [Gemini](/gantry/providers/gemini/).
+For Gemini and Vertex AI, chat requests are always translated to generateContent. See [Gemini](/providers/gemini/).
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Claude Code" href="/gantry/integrations/claude-code/" description="Run Claude Code on GPT, Gemini or a local model." />
-	<LinkCard title="Providers overview" href="/gantry/providers/overview/" description="Which routes each kind serves." />
+	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Run Claude Code on GPT, Gemini or a local model." />
+	<LinkCard title="Providers overview" href="/providers/overview/" description="Which routes each kind serves." />
 </CardGrid>

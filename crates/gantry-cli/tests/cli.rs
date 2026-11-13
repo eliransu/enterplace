@@ -1055,7 +1055,7 @@ fn key_new_makes_the_first_admin_and_prints_an_env_block_to_paste() -> TestResul
         format!("export OPENAI_API_KEY={key}\n"),
         // UX11 n13: the console's full address, not a path alone.
         "console at http://gw.internal:8080/console".to_string(),
-        "https://ggantry.github.io/gantry/integrations/codex/".to_string(),
+        "https://gantry-docs.eliran.me/integrations/codex/".to_string(),
     ] {
         assert!(stdout.contains(&line), "{line} missing from:\n{stdout}");
     }

@@ -146,7 +146,7 @@ Rotation is not built in. To start a new chain:
 |---|---|---|
 | `gantry.policy.yaml` | Providers, rules, guardrails, prices, console settings | Version control. It holds no secrets |
 | `gantry.keys.yaml` | The SHA-256, name, team and limits of each key | Back up with the same care as the policy: whoever can write it decides who may call. It holds no keys |
-| `gantry-audit.jsonl` | Every decision, usage and admin action | Ship it as it is written ([Observability](/gantry/operations/observability/#shipping-the-audit-log)), and keep old chains moved aside |
+| `gantry-audit.jsonl` | Every decision, usage and admin action | Ship it as it is written ([Observability](/operations/observability/#shipping-the-audit-log)), and keep old chains moved aside |
 | `gantry.kills.json` | Active kill switches, beside the keys file | Optional. Deleting it turns every switch off |
 
 Keep the count and last hash of the audit log where the Gantry host cannot write, on a schedule. A chain cannot show records removed from its end; the kept hash can.
@@ -216,7 +216,7 @@ gantry kill --all --reason "provider incident, stopping all AI traffic"
 gantry unkill --all
 ```
 
-`gantry kill --all` refuses every request with `killed` within 1 second on every node serving the same files. The admin API stays open so an admin can turn it off. See [Kill switches](/gantry/governance/kill-switches/).
+`gantry kill --all` refuses every request with `killed` within 1 second on every node serving the same files. The admin API stays open so an admin can turn it off. See [Kill switches](/governance/kill-switches/).
 
 ## Bench
 
@@ -277,6 +277,6 @@ The new process verifies the whole audit log before it serves and continues the 
 ## Next
 
 <CardGrid>
-	<LinkCard title="Security model" href="/gantry/operations/security/" description="What Gantry protects and where it stops." />
-	<LinkCard title="CLI reference" href="/gantry/reference/cli/" description="Every command and flag." />
+	<LinkCard title="Security model" href="/operations/security/" description="What Gantry protects and where it stops." />
+	<LinkCard title="CLI reference" href="/reference/cli/" description="Every command and flag." />
 </CardGrid>

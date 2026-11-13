@@ -1229,7 +1229,7 @@ const MAX_REASON: usize = 500;
 /// Each error says what is wrong with the answer, for the operator and for the vendor.
 pub fn parse_answer(bytes: &[u8], sent: usize) -> Result<WebhookAnswer, String> {
     let answer: WebhookAnswer = serde_json::from_slice(bytes).map_err(|err| {
-        format!("the answer is not a valid guardrail answer: {err}. See https://ggantry.github.io/gantry/governance/guardrail-webhooks/ for the format")
+        format!("the answer is not a valid guardrail answer: {err}. See https://gantry-docs.eliran.me/governance/guardrail-webhooks/ for the format")
     })?;
     check_answer(answer, sent)
 }

@@ -53,7 +53,7 @@ One per request Gantry decides. It records the decision, not the provider's answ
 | `method`, `path` | string | As the request came, without the query |
 | `model` | string or null | The `model` field of the body. `null` when refused before the body was read |
 | `verdict` | string | `allow` or `refused` |
-| `code` | string or null | The [refusal code](/gantry/reference/refusal-codes/) |
+| `code` | string or null | The [refusal code](/reference/refusal-codes/) |
 | `rule`, `rule_line` | string, integer, or null | The rule that decided and its line in the policy file |
 | `provider` | string or null | The provider the request was sent to. `null` when refused before one was chosen |
 | `policy_sha256`, `keys_sha256` | string | SHA-256 of the policy and keys files that decided it |

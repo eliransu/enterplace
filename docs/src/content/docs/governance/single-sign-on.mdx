@@ -169,7 +169,7 @@ gantry logout
 
 Revokes the saved key through `DELETE /admin/keys/self`, which any key may call for itself (recorded as `revoke_own_key`), then deletes the credentials and `env` files. A key Gantry no longer knows counts as already revoked.
 
-Expired login keys stay in the keys file until you run [`gantry key prune`](/gantry/governance/keys/#prune-expired-keys).
+Expired login keys stay in the keys file until you run [`gantry key prune`](/governance/keys/#prune-expired-keys).
 
 <Aside type="note">
 Console sessions and sign-ins in progress live in memory. A restart signs everyone out, and behind a load balancer the provider's callback must reach the node that started the sign-in.
@@ -178,7 +178,7 @@ Console sessions and sign-ins in progress live in memory. A restart signs everyo
 ## Related
 
 <CardGrid>
-	<LinkCard title="Keys" href="/gantry/governance/keys/" description="Issue, limit and revoke keys." />
-	<LinkCard title="Admin console" href="/gantry/operations/console/" description="What each console page shows." />
-	<LinkCard title="Security model" href="/gantry/operations/security/" description="What Gantry protects and where it stops." />
+	<LinkCard title="Keys" href="/governance/keys/" description="Issue, limit and revoke keys." />
+	<LinkCard title="Admin console" href="/operations/console/" description="What each console page shows." />
+	<LinkCard title="Security model" href="/operations/security/" description="What Gantry protects and where it stops." />
 </CardGrid>

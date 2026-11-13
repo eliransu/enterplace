@@ -45,7 +45,7 @@ OPENAI_PROVIDER_KEY=sk-... gantry serve gantry.policy.yaml --listen 0.0.0.0:8443
   --tls-cert tls.crt --tls-key tls.key --metrics 127.0.0.1:9464
 ```
 
-The start fails on any problem in the files, an unset provider key, an audit log whose chain does not hold, or a missing or mismatched TLS file. It warns when the keys file has no keys, when the address is not loopback and TLS is off, when `--metrics` is not loopback, and when `console.sso` is set without its client secret. See [Deployment](/gantry/operations/deployment/).
+The start fails on any problem in the files, an unset provider key, an audit log whose chain does not hold, or a missing or mismatched TLS file. It warns when the keys file has no keys, when the address is not loopback and TLS is off, when `--metrics` is not loopback, and when `console.sso` is set without its client secret. See [Deployment](/operations/deployment/).
 
 ### serve --unchecked
 
@@ -201,7 +201,7 @@ gantry audit repair [<file>] [--yes]
 gantry audit repair /var/lib/gantry/gantry-audit.jsonl --yes
 ```
 
-Exit `0` when there is nothing to repair or the repair is done. Exit `1` when it only showed the cut line, or refused: a broken chain, a whole last line, a lock file present, or a file that grew meanwhile. See [Running in production](/gantry/operations/operations/#disk-full-and-audit-repair).
+Exit `0` when there is nothing to repair or the repair is done. Exit `1` when it only showed the cut line, or refused: a broken chain, a whole last line, a lock file present, or a file that grew meanwhile. See [Running in production](/operations/operations/#disk-full-and-audit-repair).
 
 ## prices
 
@@ -260,7 +260,7 @@ gantry login https://gantry.example.com
 . ~/.config/gantry/env
 ```
 
-The key is saved in `$XDG_CONFIG_HOME/gantry/credentials`, else `~/.config/gantry/credentials`, readable by you only. The setup lines (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `GANTRY_KEY`) are written to `env` in the same folder: source it from your shell profile. A new login revokes the key of the one before. See [Single sign-on](/gantry/governance/single-sign-on/).
+The key is saved in `$XDG_CONFIG_HOME/gantry/credentials`, else `~/.config/gantry/credentials`, readable by you only. The setup lines (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `GANTRY_KEY`) are written to `env` in the same folder: source it from your shell profile. A new login revokes the key of the one before. See [Single sign-on](/governance/single-sign-on/).
 
 ## logout
 
@@ -303,7 +303,7 @@ GANTRY_ADMIN_KEY=gantry_... gantry kill --team payments --reason "runaway agent,
   --url https://gantry.example.com
 ```
 
-A switch that matches nothing is refused with the names it may have meant. See [Kill switches](/gantry/governance/kill-switches/).
+A switch that matches nothing is refused with the names it may have meant. See [Kill switches](/governance/kill-switches/).
 
 ## unkill
 
@@ -332,5 +332,5 @@ gantry 0.0.1 (src d88a5ce58bfa, built 2026-11-13)
 ```
 
 <Aside type="note">
-`gantry-bench`, the overhead benchmark, is a separate binary: `cargo run --release -p gantry-bench`. Its flags are in [Running in production](/gantry/operations/operations/#bench).
+`gantry-bench`, the overhead benchmark, is a separate binary: `cargo run --release -p gantry-bench`. Its flags are in [Running in production](/operations/operations/#bench).
 </Aside>

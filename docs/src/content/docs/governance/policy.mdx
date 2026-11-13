@@ -77,7 +77,7 @@ In the example, `maya.cohen` of team `payments` may use every model, because `ma
 
 ### Principals
 
-Each rule names exactly one principal. The name and team come from the caller's [Gantry key](/gantry/governance/keys/).
+Each rule names exactly one principal. The name and team come from the caller's [Gantry key](/governance/keys/).
 
 | Principal | Matches |
 |---|---|
@@ -93,7 +93,7 @@ Each rule names exactly one principal. The name and team come from the caller's 
 | `["*"]` | Every model any provider serves. `"*"` must stand alone. |
 | `[]` | No model. The rule matches the caller and refuses every request. |
 
-A key can carry its own `models:` list that narrows its rule further, never widens it. See [Keys](/gantry/governance/keys/#limits-per-key).
+A key can carry its own `models:` list that narrows its rule further, never widens it. See [Keys](/governance/keys/#limits-per-key).
 
 ## Field reference
 
@@ -104,11 +104,11 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `version` | integer | required | Must be `1`. |
 | `providers` | list | required | At least one provider. |
 | `rules` | list | required | Read in order. An empty list refuses everyone with `no_rule`. |
-| `guardrails` | list | `[]` | Guardrails that rules may name. See [Guardrails](/gantry/governance/guardrails/). |
-| `prices` | map | `{}` | Prices by exact model name, over the built-in table. See [Pricing](/gantry/routing/pricing/). |
-| `aliases` | list | `[]` | One model name served by several deployments, with weights, cooldown and named fallbacks. See [Providers](/gantry/providers/overview/). |
+| `guardrails` | list | `[]` | Guardrails that rules may name. See [Guardrails](/governance/guardrails/). |
+| `prices` | map | `{}` | Prices by exact model name, over the built-in table. See [Pricing](/routing/pricing/). |
+| `aliases` | list | `[]` | One model name served by several deployments, with weights, cooldown and named fallbacks. See [Providers](/providers/overview/). |
 | `audit` | map | see below | `{ path: <file> }`. Where the audit log is written. Default `gantry-audit.jsonl` beside the policy file. |
-| `console` | map | none | `{ sso: ... }`. Console sign-in and `gantry login`. See [Single sign-on](/gantry/governance/single-sign-on/). |
+| `console` | map | none | `{ sso: ... }`. Console sign-in and `gantry login`. See [Single sign-on](/governance/single-sign-on/). |
 
 ### Providers
 
@@ -129,7 +129,7 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `region` | string | `bedrock` only | The AWS region. |
 | `model_ids` | map | `bedrock` only | Model name to Bedrock model ID. |
 
-Per-kind routes, headers and examples are in [Providers](/gantry/providers/overview/).
+Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 
 ### Rules
 
@@ -139,9 +139,9 @@ Per-kind routes, headers and examples are in [Providers](/gantry/providers/overv
 | `principals` | map | required | Exactly one of `{ team: ... }`, `{ name: ... }`, `{ any: true }`. |
 | `models` | list | required | Exact names, `["*"]`, or `[]`. |
 | `guardrails` | list | `[]` | Names from the top-level `guardrails:`, run in this order. An undefined name is an error. |
-| `budget` | map | none | `{ usd: <above 0>, per: day \| month }`. See [Budgets and rate limits](/gantry/governance/budgets-and-rate-limits/). |
+| `budget` | map | none | `{ usd: <above 0>, per: day \| month }`. See [Budgets and rate limits](/governance/budgets-and-rate-limits/). |
 | `rate` | map | none | `{ rpm: 1 to 1000000, tpm: 1 to 1000000000 }`, either or both. |
-| `cache` | map | none | `{ ttl_seconds: 1 to 86400 }`. See [Caching](/gantry/routing/caching/). |
+| `cache` | map | none | `{ ttl_seconds: 1 to 86400 }`. See [Caching](/routing/caching/). |
 | `buffer_stream` | boolean | `false` | Hold a streamed answer whole so `on: [answer]` guardrails check it first. Needs a guardrail with `on: [answer]`. |
 
 Every model a budgeted rule reaches must have a price, built in or under `prices:`. For `models: ["*"]` that is every model every provider serves. `gantry check` refuses a file that breaks this.
@@ -152,7 +152,7 @@ Each request passes these steps in order and stops at the first that refuses it.
 
 <Steps>
 
-1. **Identify and decide.** Look up the key, check for an active [kill switch](/gantry/governance/kill-switches/), find the first rule that names the caller, check the model, choose the provider.
+1. **Identify and decide.** Look up the key, check for an active [kill switch](/governance/kill-switches/), find the first rule that names the caller, check the model, choose the provider.
 
 2. **Guardrails.** The rule's built-in detectors, then its vendors and webhooks, in the order written.
 
@@ -172,7 +172,7 @@ Guardrails run before the cache on purpose. A cached answer is served only to a 
 
 The cache key, the budget's estimate and the recorded usage are all of the body actually sent: masked if a guardrail masked it, translated if it was translated.
 
-For the full path, from body limits to provider errors, see [How it works](/gantry/getting-started/how-it-works/).
+For the full path, from body limits to provider errors, see [How it works](/getting-started/how-it-works/).
 
 ## Reloading
 
@@ -250,8 +250,8 @@ Each message starts with `<file>:<line>: `, shortened in the table.
 ## Related
 
 <CardGrid>
-	<LinkCard title="Keys" href="/gantry/governance/keys/" description="Issue the keys that give each caller a name and a team." />
-	<LinkCard title="Budgets and rate limits" href="/gantry/governance/budgets-and-rate-limits/" description="How budget, rpm and tpm are counted and refused." />
-	<LinkCard title="Guardrails" href="/gantry/governance/guardrails/" description="Detectors and vendors a rule can run." />
-	<LinkCard title="Refusal codes" href="/gantry/reference/refusal-codes/" description="Every code a request can be refused with." />
+	<LinkCard title="Keys" href="/governance/keys/" description="Issue the keys that give each caller a name and a team." />
+	<LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" description="How budget, rpm and tpm are counted and refused." />
+	<LinkCard title="Guardrails" href="/governance/guardrails/" description="Detectors and vendors a rule can run." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code a request can be refused with." />
 </CardGrid>

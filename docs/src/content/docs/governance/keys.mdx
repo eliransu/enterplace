@@ -9,7 +9,7 @@ import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starli
 
 A Gantry key identifies one person or one workload. Callers send it in place of a provider key, and the provider keys stay with Gantry.
 
-Each key carries a name and a team, which the [policy](/gantry/governance/policy/) rules match on. It can also carry an expiry, a budget, a model list and a tokens-per-minute limit of its own.
+Each key carries a name and a team, which the [policy](/governance/policy/) rules match on. It can also carry an expiry, a budget, a model list and a tokens-per-minute limit of its own.
 
 ## Issue a key
 
@@ -46,7 +46,7 @@ gantry key new ci.bot --team platform --quiet | vault kv put secret/gantry key=-
 
 Sign in to `/console` as an admin and open **People and workloads**. Fill in the name and team, and optionally an expiry, a budget and the admin flag. The console shows the key once and saves its hash to the keys file. Gantry uses it within 2 seconds.
 
-See [Admin console](/gantry/operations/console/).
+See [Admin console](/operations/console/).
 
 </TabItem>
 <TabItem label="Admin API">
@@ -58,7 +58,7 @@ curl -X POST https://gantry.example.com/admin/keys \
   -d '{"name":"maya.cohen","team":"payments","expires":"2026-12-31","budget":{"usd":20,"per":"month"}}'
 ```
 
-The answer (`201`) holds the key once, with `name`, `team` and `sha256_prefix`. The key works as soon as the answer arrives, because the admin API reloads the keys file before it answers. See [Admin API](/gantry/reference/admin-api/).
+The answer (`201`) holds the key once, with `name`, `team` and `sha256_prefix`. The key works as soon as the answer arrives, because the admin API reloads the keys file before it answers. See [Admin API](/reference/admin-api/).
 
 </TabItem>
 </Tabs>
@@ -93,7 +93,7 @@ The admin API cannot make admin keys, so the first admin is made on the machine 
 gantry key new noa.bar --team platform --admin
 ```
 
-This writes `admin: true` on the entry. After that, admins issue keys, including more admin keys, from the console. People can also sign in to the console through [single sign-on](/gantry/governance/single-sign-on/).
+This writes `admin: true` on the entry. After that, admins issue keys, including more admin keys, from the console. People can also sign in to the console through [single sign-on](/governance/single-sign-on/).
 
 ## Limits per key
 
@@ -111,7 +111,7 @@ gantry key new ci.agent --team platform --models gpt-4o-mini,o3 --tpm 200000
 
 Use `budget` and `expires` for a CI job or an agent that shares a team with people. The admin API refuses a `models` entry the policy does not serve, and refuses an expiry in the past. All four are written to the key's entry, and editing the entry changes them within 2 seconds, without a restart.
 
-See [Budgets and rate limits](/gantry/governance/budgets-and-rate-limits/) for how spend and tokens are counted.
+See [Budgets and rate limits](/governance/budgets-and-rate-limits/) for how spend and tokens are counted.
 
 ## The keys file
 
@@ -248,7 +248,7 @@ A request with a revoked key is refused with `unknown_key`. Its record holds the
 
 ## Prune expired keys
 
-Expired keys, such as old [`gantry login`](/gantry/governance/single-sign-on/#developer-keys-with-gantry-login) keys, stay in the file. Serving refuses them with `key_expired`, and `gantry check` lists each as a warning, so a check in CI keeps passing.
+Expired keys, such as old [`gantry login`](/governance/single-sign-on/#developer-keys-with-gantry-login) keys, stay in the file. Serving refuses them with `key_expired`, and `gantry check` lists each as a warning, so a check in CI keeps passing.
 
 ```bash
 gantry key prune --keys gantry.keys.yaml
@@ -262,7 +262,7 @@ gantry key prune --keys gantry.keys.yaml
 
 1. Make the first admin key with `--admin`, on the machine that holds the keys file.
 
-2. Issue each person's key with the admin API in a loop, or `gantry key new <name> --team <team> --quiet` per person, straight into your secret manager. Or turn on [self-service keys](/gantry/governance/single-sign-on/#developer-keys-with-gantry-login).
+2. Issue each person's key with the admin API in a loop, or `gantry key new <name> --team <team> --quiet` per person, straight into your secret manager. Or turn on [self-service keys](/governance/single-sign-on/#developer-keys-with-gantry-login).
 
 3. Give each workload (CI job, agent) its own key with `--expires` and `--budget`.
 
@@ -284,7 +284,7 @@ gantry key prune --keys gantry.keys.yaml
 ## Related
 
 <CardGrid>
-	<LinkCard title="Single sign-on" href="/gantry/governance/single-sign-on/" description="Console roles and self-service keys with gantry login." />
-	<LinkCard title="Kill switches" href="/gantry/governance/kill-switches/" description="Stop a person, team, key or model at once." />
-	<LinkCard title="Admin API" href="/gantry/reference/admin-api/" description="Every admin route and its answers." />
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Console roles and self-service keys with gantry login." />
+	<LinkCard title="Kill switches" href="/governance/kill-switches/" description="Stop a person, team, key or model at once." />
+	<LinkCard title="Admin API" href="/reference/admin-api/" description="Every admin route and its answers." />
 </CardGrid>

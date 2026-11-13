@@ -67,7 +67,7 @@ Set `stream_max_retries = 0`. Codex retries a failed streamed request up to `str
 With the default, one refused prompt makes six identical refusals, six audit records and, on a rule with a webhook guardrail, six calls to the guardrail service. With `0`, a refusal is sent and recorded once. `request_max_retries` alone does not change this.
 
 <Aside type="note">
-With `stream_max_retries = 0`, a stream cut by the network is not resumed, and the person runs the prompt again. Gantry's own retries to the provider (`retries:` on the provider) still apply. See [Retries and fallbacks](/gantry/routing/retries-and-fallbacks/).
+With `stream_max_retries = 0`, a stream cut by the network is not resumed, and the person runs the prompt again. Gantry's own retries to the provider (`retries:` on the provider) still apply. See [Retries and fallbacks](/routing/retries-and-fallbacks/).
 </Aside>
 
 ## What Gantry does with its requests
@@ -91,12 +91,12 @@ ERROR: unexpected status 403 Forbidden: Refused (model_not_allowed): team "t" ma
 ERROR: unexpected status 401 Unauthorized: Refused (unknown_key): Gantry does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask a Gantry admin. Decision 01M79K3Q28V5EXP60V1YSSA595., url: http://127.0.0.1:20770/v1/responses
 ```
 
-Quote the decision ID to an admin: it finds the record. See [Refusal codes](/gantry/reference/refusal-codes/).
+Quote the decision ID to an admin: it finds the record. See [Refusal codes](/reference/refusal-codes/).
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="OpenAI provider" href="/gantry/providers/openai/" description="Responses, embeddings and OpenAI-compatible vendors." />
-	<LinkCard title="Claude Code" href="/gantry/integrations/claude-code/" description="Anthropic's coding agent over the messages API." />
-	<LinkCard title="Budgets and rate limits" href="/gantry/governance/budgets-and-rate-limits/" description="How reservations work for agent sessions." />
+	<LinkCard title="OpenAI provider" href="/providers/openai/" description="Responses, embeddings and OpenAI-compatible vendors." />
+	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Anthropic's coding agent over the messages API." />
+	<LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" description="How reservations work for agent sessions." />
 </CardGrid>
