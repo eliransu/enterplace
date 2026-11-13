@@ -6,12 +6,17 @@
 #   scripts/release.sh images    the container image for linux/amd64 and linux/arm64 (needs docker buildx)
 #   scripts/release.sh linux     dist tarballs for x86_64 and aarch64 linux, taken from the images
 #   scripts/release.sh smoke     runs the image and times its first governed request against a local mock
+#   scripts/release.sh reproduce builds the linux tarballs twice from scratch and fails unless both are the same bytes
+#   scripts/release.sh sign      writes SHA256SUMS and provenance.json in dist/ and signs both (scripts/signing.py)
+#   scripts/release.sh verify    checks dist/ against the signatures and the public key in release/allowed_signers
+# Builds use the last commit's time as SOURCE_DATE_EPOCH unless it is set, so a rebuild of a commit is identical.
 # <src> is the source hash `gantry version` prints. Each tarball gets a .sha256 and a .BUILD file (the version line),
 # and the tarballs of the targets a run builds are deleted first, so a stale one cannot survive a partial run.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 mkdir -p dist
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || echo 0)}"
 
 # The source hash from a `gantry version` line: gantry 0.0.1 (src 3f9a1c2b4d5e, built 2026-11-13).
 src_of() { sed -n 's/.*(src \([0-9a-f]*\),.*/\1/p' <<< "$1"; }
@@ -28,7 +33,7 @@ tarball() {
   rm -rf "dist/$name" && mkdir -p "dist/$name"
   cp "$binary" "dist/$name/gantry"
   cp LICENSE README.md "dist/$name/"
-  tar -C dist -czf "dist/$name.tar.gz" "$name"
+  python3 scripts/pack.py "dist/$name.tar.gz" "$name" "dist/$name/gantry" "dist/$name/LICENSE" "dist/$name/README.md"
   rm -rf "dist/$name"
   (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
   echo "$line" > "dist/gantry-$version-$src-$target.BUILD"
@@ -53,10 +58,10 @@ case "${1:-}" in
     docker buildx build --platform linux/amd64,linux/arm64 -t "gantry:$version" .
     ;;
   linux)
-    clear_target x86_64-unknown-linux-musl
-    clear_target aarch64-unknown-linux-musl
-    for platform in amd64 arm64; do
-      docker buildx build --platform "linux/$platform" --load -t "gantry:$version-$platform" .
+    case " ${PLATFORMS:-amd64 arm64} " in *" amd64 "*) clear_target x86_64-unknown-linux-musl ;; esac
+    case " ${PLATFORMS:-amd64 arm64} " in *" arm64 "*) clear_target aarch64-unknown-linux-musl ;; esac
+    for platform in ${PLATFORMS:-amd64 arm64}; do
+      docker buildx build --platform "linux/$platform" --build-arg SOURCE_DATE_EPOCH --load -t "gantry:$version-$platform" ${NO_CACHE:+--no-cache} .
       line=$(docker run --rm --platform "linux/$platform" "gantry:$version-$platform" version)
       id=$(docker create "gantry:$version-$platform")
       docker cp "$id:/gantry" "dist/gantry-linux-$platform"
@@ -71,8 +76,28 @@ case "${1:-}" in
   smoke)
     exec python3 scripts/smoke_image.py "gantry:$version"
     ;;
+  reproduce)
+    # Two builds with no cache. Any difference is a build that depends on where or when it ran.
+    NO_CACHE=1 "$0" linux > /dev/null
+    first=$(cd dist && shasum -a 256 gantry-*-linux-musl.tar.gz)
+    NO_CACHE=1 "$0" linux > /dev/null
+    second=$(cd dist && shasum -a 256 gantry-*-linux-musl.tar.gz)
+    echo "$second"
+    if [ "$first" != "$second" ]; then
+      echo "NOT REPRODUCIBLE: the first build was" >&2
+      echo "$first" >&2
+      exit 1
+    fi
+    echo "reproducible: two builds from scratch gave the same bytes"
+    ;;
+  sign)
+    exec python3 scripts/signing.py sign dist
+    ;;
+  verify)
+    exec python3 scripts/signing.py verify dist
+    ;;
   *)
-    sed -n '2,11p' "$0"
+    sed -n '2,16p' "$0"
     exit 2
     ;;
 esac

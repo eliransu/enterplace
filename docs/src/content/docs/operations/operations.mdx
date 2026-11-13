@@ -272,6 +272,12 @@ Read the numbers as a comparison between builds on one machine. The mock, the ga
 
 </Steps>
 
+### Rolling back
+
+Stop the new version and start the previous one on the same files. Nothing is restored from a backup: the previous version serves the keys the new one issued, continues the same audit chain, and `gantry audit verify` from either version checks the whole log. Every release is held to this by `scripts/rollback_check.py <old binary> <new binary>`, which runs the old version, upgrades, rolls back on one folder and verifies the chain with both.
+
+A policy that uses a field only the new version knows stops the old one at start, with the field's name and line: keep the previous policy file beside the new one until the upgrade has settled, and put it back when you roll back.
+
 The new process verifies the whole audit log before it serves and continues the same chain. Its first `config_loaded` record has `trigger: start`, and its "before" hashes are the last version the log recorded, so a change made while Gantry was stopped shows. On Kubernetes the `Recreate` strategy leaves a few seconds with no gateway.
 
 ## Next

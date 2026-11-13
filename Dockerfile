@@ -15,6 +15,11 @@ FROM rust:1.88-alpine AS build
 RUN apk add --no-cache musl-dev
 WORKDIR /src
 COPY . .
+# Reproducible: the release pipeline passes the commit's time, and paths in the binary do not name this machine.
+# Two builds of one commit give the same binary (scripts/release.sh reproduce checks it).
+ARG SOURCE_DATE_EPOCH=0
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    RUSTFLAGS="--remap-path-prefix=/src=. --remap-path-prefix=/usr/local/cargo=cargo"
 # A static binary needs no C library in the final image. TLS roots are compiled in, so it needs no certificates either.
 RUN cargo build --release --locked -p gantry-cli \
  && mkdir -p /out/var/lib/gantry /out/etc/gantry \

@@ -20,7 +20,24 @@ Gantry is one static binary with no database. You run it the same way everywhere
 | `scripts/release.sh linux` | The same tarballs for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, built through Docker |
 | `scripts/release.sh image` | Image `gantry:<version>` and `gantry:local` for this machine's platform |
 | `scripts/release.sh images` | Image for `linux/amd64` and `linux/arm64` (needs `docker buildx`) |
+| `scripts/release.sh reproduce` | Builds the linux tarballs twice with no cache and fails unless both are the same bytes |
+| `scripts/release.sh sign` | Writes `dist/SHA256SUMS` and `dist/provenance.json` and signs both with the release key |
+| `scripts/release.sh verify` | Checks `dist/` against the signatures and the public key in `release/allowed_signers` |
 | `scripts/release.sh smoke` | Runs the image against a local mock. Passes when the image is under 50 MB, runs as non-root, prints the same `gantry version` line as `target/release/gantry` and answers a governed request within 60 seconds |
+
+### Reproducible and signed
+
+A build takes its date from `SOURCE_DATE_EPOCH`, which the release script sets to the last commit's time, and the binary names no path on the build machine. Tarballs are packed with fixed times and owners. So two builds of one commit give the same bytes, and anyone can rebuild a release and compare.
+
+Each release carries `SHA256SUMS`, `provenance.json` and a signature for each. `provenance.json` is an in-toto statement with a SLSA v1 predicate: the commit, the hashes of `Cargo.lock` and the `Dockerfile`, the build images, `SOURCE_DATE_EPOCH`, and the CI run that built it. To check a release you downloaded:
+
+```bash
+python3 scripts/signing.py verify <folder with the release files>
+```
+
+It checks both signatures with `ssh-keygen -Y verify` against `release/allowed_signers`, then every file against `SHA256SUMS`. A changed file, a file not signed, or another key fails it.
+
+The release workflow (`.github/workflows/release.yml`, on a `v*` tag) builds each platform twice and compares, runs the rollback check below, then signs.
 
 `<src>` is the source hash that `gantry version` prints. Each tarball holds the binary, `LICENSE` and `README.md`. A run deletes the earlier tarballs of the targets it builds, so a stale one cannot survive.
 
