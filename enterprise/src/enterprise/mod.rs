@@ -618,7 +618,8 @@ mod migration_tests {
         assert_eq!(
             versions(&client).await?,
             [
-                ("enterprise.alerts".to_string(), 1),
+                // Entry 2 is the daily baseline of the unusual request, error and latency rules.
+                ("enterprise.alerts".to_string(), 2),
                 ("enterprise.members".to_string(), 1),
                 ("enterprise.scim".to_string(), 1),
                 ("enterprise.siem".to_string(), 2),
