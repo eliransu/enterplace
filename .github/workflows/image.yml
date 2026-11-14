@@ -1,7 +1,7 @@
 # Builds the image for amd64 and arm64 and pushes it to ghcr.io/ggantry/gantry, a private package, tagged
 # with the commit sha (and the version, on a v* tag). On a pull request or a branch, it builds both and pushes nothing.
-# On a v* tag it also checks that both repositories name that version, and makes a GitHub Release of this private
-# repository with the CHANGELOG section and the image digest. How to release: RELEASING.md.
+# On a v* tag it also checks that the repository names that version, and puts the image digest at the top of the
+# GitHub Release of this private repository (release.yml adds the signed tarballs). How to release: RELEASING.md.
 name: image
 on:
   push:
@@ -19,7 +19,7 @@ env:
   PUBLISH: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
-  # Cargo.toml, CHANGELOG.md and the Helm chart of both repositories name one version; on a v* tag, that tag's.
+  # Cargo.toml, CHANGELOG.md and the Helm chart name one version; on a v* tag, that tag's.
   version:
     runs-on: ubuntu-latest
     outputs:
