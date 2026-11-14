@@ -193,7 +193,7 @@ pub fn locked(extension: &mut gantry_server::Extension, status: &Status) {
 }
 
 /// A JSON body: axum's `Json` needs a feature this crate leaves off, for one line.
-struct Json(Value);
+pub(super) struct Json(pub(super) Value);
 
 impl IntoResponse for Json {
     fn into_response(self) -> Response {
@@ -205,7 +205,7 @@ impl IntoResponse for Json {
     }
 }
 
-fn fail(status: StatusCode, code: &str, message: &str) -> Response {
+pub(super) fn fail(status: StatusCode, code: &str, message: &str) -> Response {
     (
         status,
         Json(json!({ "error": { "code": code, "message": message } })),
@@ -213,7 +213,7 @@ fn fail(status: StatusCode, code: &str, message: &str) -> Response {
         .into_response()
 }
 
-fn bearer(headers: &HeaderMap) -> &str {
+pub(super) fn bearer(headers: &HeaderMap) -> &str {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -240,24 +240,28 @@ struct Token {
     team: String,
 }
 
+/// The key holder whose key this is, if the key is in the keys file (or the store) and not expired.
+pub(super) fn key_holder(keys: &std::path::Path, key: &str) -> Option<config::KeyEntry> {
+    if key.is_empty() {
+        return None;
+    }
+    let text = config::read_keys(keys).ok()??;
+    let sha = sha256_hex(key.as_bytes());
+    let now = gantry_core::audit::timestamp();
+    config::key_entries(keys, &text)
+        .ok()?
+        .into_iter()
+        .find(|e| e.sha256 == sha)
+        .filter(|e| {
+            e.expires
+                .as_deref()
+                .is_none_or(|at| !gantry_core::policy::expiry_passed(at, &now))
+        })
+}
+
 impl Devices {
-    /// The key holder whose key this is, if the key is in the keys file (or the store) and not expired.
     fn holder(&self, key: &str) -> Option<config::KeyEntry> {
-        if key.is_empty() {
-            return None;
-        }
-        let text = config::read_keys(&self.keys).ok()??;
-        let sha = sha256_hex(key.as_bytes());
-        let now = gantry_core::audit::timestamp();
-        config::key_entries(&self.keys, &text)
-            .ok()?
-            .into_iter()
-            .find(|e| e.sha256 == sha)
-            .filter(|e| {
-                e.expires
-                    .as_deref()
-                    .is_none_or(|at| !gantry_core::policy::expiry_passed(at, &now))
-            })
+        key_holder(&self.keys, key)
     }
 
     /// The person at the device, from the Gantry key it sent in `x-gantry-key`, never from what the report says.
@@ -927,7 +931,7 @@ async fn api_admin(console: &Console, d: &Devices, headers: &HeaderMap) -> Optio
     Some(Admin::of_role(&entry.name, &entry.team, false, Via::Key))
 }
 
-fn not_admin() -> Response {
+pub(super) fn not_admin() -> Response {
     fail(
         StatusCode::UNAUTHORIZED,
         "admin_required",

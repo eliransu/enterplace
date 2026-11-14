@@ -31,6 +31,8 @@ Nothing is blocked in this step either. Observe mode is still on.
 - **People and workloads** (`/console/people`): every key by name and team, with what it spent this month and today.
 - From the terminal, `gantry audit coverage gantry-audit.jsonl --keys gantry.keys.yaml` lists each person and tool. A person with tool `-` and last seen `never` holds a key and has sent nothing.
 
+People on Claude Team or Enterprise seats need no key: with [watch mode](/integrations/claude-team/) they appear under the email address they signed in to Claude with, and coverage lists them with the tool `claude-code (watch)`.
+
 <Aside type="caution">
 A key is shown once. Never send it in chat or email. If one is lost, issue a new one.
 </Aside>

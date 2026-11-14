@@ -466,9 +466,14 @@ impl PgIndex {
                 Some(Fact::Request(row)) => {
                     let labels = serde_json::to_string(&row.labels).unwrap_or_else(|_| "{}".into());
                     tx.execute(
-                        "INSERT INTO gantry_requests (id, time, replica, n, hash, linked, line, path, labels, verdict, code, rule, findings) \
-                         VALUES ($1, CAST($2 AS text)::timestamptz, $3, $4, $5, $6, $7, $8, CAST($9 AS text)::jsonb, $10, $11, $12, $13) ON CONFLICT (id) DO NOTHING",
-                        &[&row.id, &row.time, &row.replica, &int(Some(row.n)), &row.hash, &row.linked, &row.line, &row.path, &labels, &row.verdict, &row.code, &row.rule, &row.findings],
+                        // What a request's usage record fills in later is empty here; a watch row, which has no
+                        // usage record, arrives with its own.
+                        "INSERT INTO gantry_requests (id, time, replica, n, hash, linked, line, path, labels, verdict, code, rule, findings, \
+                         status, input_tokens, output_tokens, cost_usd, latency_ms) \
+                         VALUES ($1, CAST($2 AS text)::timestamptz, $3, $4, $5, $6, $7, $8, CAST($9 AS text)::jsonb, $10, $11, $12, $13, \
+                         $14, $15, $16, $17, $18) ON CONFLICT (id) DO NOTHING",
+                        &[&row.id, &row.time, &row.replica, &int(Some(row.n)), &row.hash, &row.linked, &row.line, &row.path, &labels, &row.verdict, &row.code, &row.rule, &row.findings,
+                          &row.status.map(i32::from), &int(row.input_tokens), &int(row.output_tokens), &row.cost_usd, &int(row.latency_ms)],
                     )
                     .await
                     .map_err(db)?;

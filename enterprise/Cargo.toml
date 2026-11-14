@@ -37,6 +37,9 @@ futures-util = { version = "0.3", default-features = false }
 # Email alerts speak SMTP over TLS; both are already in the build through ureq, so no new code is compiled in.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "0.26"
+# Watch mode reads gzip OTLP exports. No decompressor was in the build; this is the smallest that checks the gzip
+# header and CRC itself: pure Rust (miniz_oxide), no C, no other features.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [dev-dependencies]
 # The feature tests drive the gateway's router in process; both are already in the build through gantry-server.

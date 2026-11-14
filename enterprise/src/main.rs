@@ -32,6 +32,10 @@ const USAGE: &str = "usage:
       (license feature devices). The enrolment token goes in GANTRY_DEVICE_TOKEN, or in the file
       GANTRY_DEVICE_TOKEN_FILE names (default /Library/Application Support/Gantry/device-token on macOS, which the MDM
       profile installs; /etc/gantry/device-token on Linux; C:\\ProgramData\\Gantry\\device-token on Windows).
+  gantry watch setup --gateway <url> (--team <team> | --person <name>) [--org <org>] [--label <text>] [--days <n>] [--token <token>]
+      Print the Claude Code managed settings that send its telemetry to the gateway's watch receiver (license feature
+      watch): for people on Claude Team or Enterprise seats, whose requests cannot go through a gateway. Creates a
+      watch token through the admin API with the admin key in GANTRY_ADMIN_KEY, or uses the one --token gives.
   gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
       Run the gateway on local files, as `gantry serve` does.
   gantry serve --unchecked
@@ -296,6 +300,14 @@ async fn main() -> ExitCode {
             (None, _) => Err(format!("`device` needs --control-plane.\n{USAGE}")),
             (_, None) => Err("no enrolment token: set GANTRY_DEVICE_TOKEN, or GANTRY_DEVICE_TOKEN_FILE to a file holding it. An owner or admin creates one on the console's Devices page.".to_owned()),
         },
+        Some("watch") => {
+            let rest = args[1..].to_vec();
+            // Creating the token is a blocking call to the gateway.
+            tokio::task::spawn_blocking(move || enterprise::watch::setup(&rest))
+                .await
+                .unwrap_or_else(|err| Err(err.to_string()))
+                .map(|out| println!("{out}"))
+        }
         Some("license") => license_command(&args[1..]),
         Some("serve") if args.get(1).map(String::as_str) == Some("--unchecked") => {
             gantry_server::serve_from_env(&name, true)

@@ -127,7 +127,7 @@ Besides name, team, `admin`, `expires`, `budget`, `models` and `tpm`, a key may 
 | `rpm` | integer, 1 to 1000000 | Requests per minute for this key, on top of the rule's `rpm`. Shared across gateways on a store | `rate_limited` (429), `limit.of: key` |
 | `parallel` | integer, 1 to 100000 | Requests in flight at once with this key, shared across gateways on a store. A place is held until the answer has been read to its end | `parallel_limited` (429) |
 | `tags` | list | Tags every request with the key carries: recorded, and used by [tag routing](/routing/strategies/#tags-and-teams-pick-deployments) | |
-| `metadata` | map | Your own notes, such as owner or ticket: at most 32 entries, each value at most 256 characters on one line. Shown and recorded, never decided on | |
+| `metadata` | map | Your own notes, such as owner or ticket: at most 32 entries, each value at most 256 characters on one line. Shown and recorded, never decided on. An `email` entry is the address [watch mode](/integrations/claude-team/#one-name-per-person) knows the key's holder by | |
 | `routes` | list | Path prefixes the key may call, such as `/v1/messages`. A prefix matches whole path segments. Empty allows every route | `route_not_allowed` (403) |
 | `from` | list | [Address ranges](/governance/access-control/#source-address-ranges) the key may be used from | `ip_not_allowed` (403) |
 | `mcp_tools` | list | MCP tools this key may use, within its rule's `tools:`: `<server>.<tool>`, `<server>.*`, `*`, or `!<server>.<tool>` to leave one out. It only narrows the rule. Empty leaves the rule's list. See [Tool permissions](/governance/tool-permissions/#mcp-tools-per-key-and-per-request) | `tool_not_allowed` |

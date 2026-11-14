@@ -65,7 +65,7 @@ Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and
 | `guardrail_vendor_failing` | `count` requests or answers whose guardrail service could not be reached within `minutes`, whether it failed open or closed | count, minutes | the guardrail |
 | `key_expiring` | A key expires within `days`. Checked once a minute against the keys | days (7) | key and expiry: once each |
 | `export_lagging` | An audit export destination has records older than `minutes` that it has not sent. Checked once a minute | minutes (15) | replica and destination |
-| `daily_digest` | Every day once the local time reaches `at`: the last 24 hours of every replica, with spend, requests, refusals and their commonest codes, the five top users by spend, and the alerts fired by kind. Sent to each of the rule's channels. A rule added after that time sends today's digest at once | at, such as `09:00` or `09:00+0200` (default `09:00` UTC) | the local day: once a day |
+| `daily_digest` | Every day once the local time reaches `at`: the last 24 hours of every replica, with spend, requests, refusals and their commonest codes, the five top users by spend, and the alerts fired by kind. With [watch mode](/integrations/claude-team/), the spend and the top users include what Claude Code reported on Claude seats, and a second line, `Watched:`, says how much of the spend that was. Sent to each of the rule's channels. A rule added after that time sends today's digest at once | at, such as `09:00` or `09:00+0200` (default `09:00` UTC) | the local day: once a day |
 | `region_outage` | Every [alias deployment](/routing/aliases/) whose `region:` is the region has `count` failures within `minutes`, and not one of them answered in that time. A region with one deployment still answering does not fire | region (empty: each region), count (1), minutes (5) | the region |
 | `config_rejected` | A reload refuses a change to the policy or keys file (a `config_rejected` record, with the first problem), or a policy version sent through the admin API is refused as `invalid_policy` | none | the refused change, or the record: once each |
 | `kill_cleared` | A kill switch is cleared (an `admin` record with action `clear_kill`) | none | the record: once each |
@@ -75,6 +75,10 @@ Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and
 Group by is `all` (default), `person`, `team` or `key`. The unusual kinds compare by `team` (default), `key` or `provider`: their requests, errors and latency are kept per scope and day in Postgres from the first record read, so the baseline is there when a rule is added. A replica new to alerting reads the records of the last 14 days before the month began, so the baseline is whole from the start.
 
 Each failure counts once: a try that was retried is in the attempts record, and the last try is in the usage record when the provider answered (a 5xx or 429 passed on) or in the upstream error record when none did. A failure Gantry made itself, such as a model with no deployment (`unknown_model`), is not a provider's and does not count.
+
+### Watched spend
+
+With [watch mode](/integrations/claude-team/), the cost Claude Code estimates for each request on a Claude Team or Enterprise seat counts for `budget` rules by amount and for `unusual_spend`, under the person and team of the watch token. A rule with a percent counts only requests that went through Gantry, as the policy's budgets do.
 
 ### A percent of a policy budget
 

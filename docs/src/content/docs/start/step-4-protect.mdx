@@ -37,6 +37,10 @@ Until 15 December (UTC) it records what it finds and blocks nothing. From that d
 
 If the findings are real secrets, let the date arrive. If the guardrail catches text it should leave alone, move the date and read [Guardrails](/governance/guardrails/) for what each detector matches.
 
+<Aside type="note">
+Guardrails read requests that go through Gantry. Claude Code on Claude Team or Enterprise seats talks to Anthropic directly, so [watch mode](/integrations/claude-team/) records it and cannot check it: this step needs API traffic through Gantry.
+</Aside>
+
 ## When you're ready
 
 Secrets stay in. To keep evidence of all of it, go to [Step 5: Prove](/start/step-5-prove/).

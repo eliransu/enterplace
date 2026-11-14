@@ -76,6 +76,12 @@ pub const DIMENSIONS: &[Dimension] = &[
         label: "Customer",
         field: "customer",
     },
+    // `watch` on what a coding tool reported about itself (watch records), absent on requests Gantry decided.
+    Dimension {
+        name: "source",
+        label: "Source",
+        field: "source",
+    },
 ];
 
 /// What links a request to its conversation: the session and the turn an events guardrail gave it. Filtered and
@@ -276,25 +282,47 @@ pub fn fact(line: &str, replica: &str, prev: Option<&str>) -> Option<Fact> {
         return None;
     }
     let number = |field: &str| record.get(field).and_then(Value::as_u64);
+    // A row as its record opens it: what a later usage record would add is left empty.
+    let row = |verdict: String, path: String| -> Option<Box<Row>> {
+        Some(Box::new(Row {
+            id: id.clone(),
+            time: text(&record, "time"),
+            replica: replica.to_string(),
+            n: number("n")?,
+            linked: prev.is_none_or(|p| record.get("prev").and_then(Value::as_str) == Some(p)),
+            hash: text(&record, "hash"),
+            line: line.to_string(),
+            path,
+            labels: labels_of(&record),
+            verdict,
+            code: text(&record, "code"),
+            rule: text(&record, "rule"),
+            findings: kinds(record.get("guardrails")),
+            ..Row::default()
+        }))
+    };
     match record.get("event").and_then(Value::as_str) {
-        None if record.get("verdict").is_some() && record.get("method").is_some() => {
-            let hash = text(&record, "hash");
-            Some(Fact::Request(Box::new(Row {
-                id,
-                time: text(&record, "time"),
-                replica: replica.to_string(),
-                n: number("n")?,
-                linked: prev.is_none_or(|p| record.get("prev").and_then(Value::as_str) == Some(p)),
-                hash,
-                line: line.to_string(),
-                path: text(&record, "path"),
-                labels: labels_of(&record),
-                verdict: text(&record, "verdict"),
-                code: text(&record, "code"),
-                rule: text(&record, "rule"),
-                findings: kinds(record.get("guardrails")),
-                ..Row::default()
-            })))
+        None if record.get("verdict").is_some() && record.get("method").is_some() => Some(
+            Fact::Request(row(text(&record, "verdict"), text(&record, "path"))?),
+        ),
+        // A model request a watched coding tool reported (a `watch` record): Gantry did not decide or forward it, so
+        // it is a row of its own with what the tool said it used, and it counts against no budget. The other watch
+        // kinds (tool decisions, prompts, metrics) are not requests.
+        Some("watch") => {
+            let kind = text(&record, "kind");
+            if !matches!(kind.as_str(), "api_request" | "api_error" | "api_refusal") {
+                return None;
+            }
+            let mut row = row("allow".into(), format!("watch/{kind}"))?;
+            if kind != "api_request" {
+                row.code = kind;
+            }
+            row.status = number("status").and_then(|s| u16::try_from(s).ok());
+            row.input_tokens = number("input_tokens");
+            row.output_tokens = number("output_tokens");
+            row.cost_usd = record.get("cost_usd").and_then(Value::as_f64);
+            row.latency_ms = number("latency_ms");
+            Some(Fact::Request(row))
         }
         Some("usage") => Some(Fact::Usage(Box::new(Usage {
             id,
@@ -1219,6 +1247,85 @@ mod tests {
         let mut forged = d1.clone();
         forged.line = forged.line.replace("payments", "platform");
         assert!(!forged.checks_out());
+        Ok(())
+    }
+
+    #[test]
+    fn a_watched_request_is_a_row_of_source_watch_and_other_watch_records_are_not() -> TestResult {
+        let (path, log) = chain()?;
+        log.append_record(&request("D1", "payments", true, None))?;
+        let watch = |id: &str, kind: &str, more: Value| -> serde_json::Map<String, Value> {
+            let mut r = serde_json::json!({
+                "event": "watch", "id": id, "time": crate::audit::timestamp(), "source": "watch", "kind": kind,
+                "person": "maya@acme.co", "team": "payments", "user_agent": "claude-code/2.1.325",
+                "provider": "anthropic", "model": "claude-sonnet-5-5"
+            });
+            if let (Some(r), Value::Object(more)) = (r.as_object_mut(), more) {
+                r.extend(more);
+            }
+            r.as_object().cloned().unwrap_or_default()
+        };
+        log.append_record(&watch(
+            "W1",
+            "api_request",
+            serde_json::json!({"input_tokens": 1200, "output_tokens": 40, "cost_usd": 0.00405, "latency_ms": 7}),
+        ))?;
+        log.append_record(&watch(
+            "W2",
+            "api_error",
+            serde_json::json!({"status": 529}),
+        ))?;
+        log.append_record(&watch(
+            "W3",
+            "tool_decision",
+            serde_json::json!({"tool": "Bash"}),
+        ))?;
+        log.flush();
+        let rows = fold_chain(&path)?;
+        assert_eq!(
+            rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["W2", "W1", "D1"],
+            "a tool decision is not a request"
+        );
+        let w1 = rows.get(1).ok_or("no W1")?;
+        assert_eq!(
+            (
+                w1.label("source"),
+                w1.label("person"),
+                w1.label("agent"),
+                w1.label("model")
+            ),
+            ("watch", "maya@acme.co", "claude-code", "claude-sonnet-5-5")
+        );
+        assert_eq!(
+            (
+                w1.input_tokens,
+                w1.output_tokens,
+                w1.cost_usd,
+                w1.latency_ms
+            ),
+            (Some(1200), Some(40), Some(0.00405), Some(7))
+        );
+        // Watched spend is seen, never charged: budgets count only what Gantry forwarded.
+        assert_eq!(w1.charged_usd, 0.0);
+        assert_eq!(
+            (w1.path.as_str(), w1.outcome()),
+            ("watch/api_request", Outcome::Allowed)
+        );
+        assert!(w1.checks_out());
+        let w2 = rows.first().ok_or("no W2")?;
+        assert_eq!(
+            (w2.code.as_str(), w2.outcome()),
+            ("api_error", Outcome::Error)
+        );
+        // The request Gantry decided has no source, so `source=watch` selects the watched ones alone.
+        let only = Query {
+            labels: vec![("source".into(), "watch".into())],
+            limit: 10,
+            ..Query::default()
+        };
+        assert_eq!(only.select(&rows).len(), 2);
+        assert_eq!(totals(&only.select(&rows)).cost_usd, 0.00405);
         Ok(())
     }
 

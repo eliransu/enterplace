@@ -47,6 +47,31 @@ Devices page. Docs: https://gantry-docs.eliran.me/operations/devices/
 Try it by hand first: `GANTRY_DEVICE_TOKEN=gantry_dev_... gantry device --control-plane <gateway url> --dry-run`
 prints what it would change and the report it would send, and writes nothing.
 
+## Watch mode: Claude Code telemetry for Claude Team and Enterprise seats
+
+People on Claude subscriptions cannot be routed through the gateway; watch mode (license feature `watch`) receives
+Claude Code's own telemetry instead. Docs: https://gantry-docs.eliran.me/integrations/claude-team/
+
+1. `GANTRY_ADMIN_KEY=gantry_... gantry watch setup --gateway https://gantry.example.com --team engineering` creates
+   a watch token and prints the settings (`--org <org>` for one organization's token). `claude-code-watch.managed-settings.json` here is the same block with
+   placeholders.
+2. Claude Team and Enterprise: paste the block at claude.ai, Organization settings, Claude Code, Managed settings.
+   Nothing is deployed to machines.
+3. Otherwise deliver it as Claude Code's managed settings file: `/Library/Application Support/ClaudeCode/managed-settings.json`
+   on macOS, `/etc/claude-code/managed-settings.json` on Linux, `C:\Program Files\ClaudeCode\managed-settings.json` on
+   Windows. Where the device agent runs it writes the same file and keeps the `env` keys it does not manage, so merge
+   the block's `env` into the file instead of replacing it:
+   ```sh
+   f="/Library/Application Support/ClaudeCode/managed-settings.json"; mkdir -p "$(dirname "$f")"; [ -s "$f" ] || echo '{}' > "$f"
+   python3 - "$f" claude-code-watch.managed-settings.json <<'PY'
+   import json, sys
+   have, add = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+   have.setdefault("env", {}).update(add["env"])
+   json.dump(have, open(sys.argv[1], "w"), indent=2)
+   PY
+   ```
+4. A watch token expires after the days it was made for (90 unless `--days`): deliver a new block before then.
+
 ## Linux
 
 `gantry-device.service` runs the agent as root under systemd. Replace `CONTROL_PLANE_URL`, put the token in

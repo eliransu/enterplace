@@ -24,6 +24,9 @@ pub struct Row {
     pub direct: u64,
 }
 
+/// The tool of a person whose Claude Code is watched through its own telemetry, not routed through Gantry.
+pub const WATCHED: &str = "claude-code (watch)";
+
 /// Rows by (person, tool). Tool `-` is a person with nothing else to show.
 pub type Coverage = BTreeMap<(String, String), Row>;
 
@@ -86,12 +89,26 @@ pub fn traffic(path: &Path) -> Result<Coverage, String> {
         let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
+        let text = |field: &str| record[field].as_str().unwrap_or("-").to_string();
+        // What a watched Claude Code reported about itself (a `watch` record): the person is covered by watching,
+        // as its own tool, so a routed Claude Code and a watched one are told apart. Its model requests count as
+        // requests; every watch record moves last seen.
+        if record["event"] == "watch" {
+            let row = rows
+                .entry((text("person"), WATCHED.into()))
+                .or_insert_with(|| Row {
+                    team: text("team"),
+                    ..Row::default()
+                });
+            row.requests += u64::from(record["kind"] == "api_request");
+            row.last_seen = text("time");
+            continue;
+        }
         // A request's decision record has a verdict and no event; admin records have both, usage and
         // configuration records have no verdict.
         let (Some(verdict), None) = (record["verdict"].as_str(), record.get("event")) else {
             continue;
         };
-        let text = |field: &str| record[field].as_str().unwrap_or("-").to_string();
         let row = rows
             .entry((
                 text("person"),

@@ -32,6 +32,7 @@ Gantry serves the OpenAI and Anthropic routes your clients already call, plus a 
 | `HEAD` | `/api/hello` | no | no | Claude Code's startup probe. Answers 200 and reaches no provider |
 | `GET`, `POST` | `/console/...` | session | sign-ins and changes | The [admin console](/operations/console/) |
 | `GET`, `POST`, `PATCH`, `DELETE` | `/admin/keys`, `/admin/keys/<prefix>`, `/admin/keys/<prefix>/rotate`, `/admin/kills` | admin key | yes | The [admin API](/reference/admin-api/) |
+| `POST` | `/otlp/v1/metrics`, `/otlp/v1/logs` | watch token | as `watch` records | Gantry Enterprise: the [watch mode](/integrations/claude-team/#the-receiver) receiver for Claude Code's own telemetry |
 | `GET` | `/metrics` | no | no | Prometheus metrics, only on the `--metrics` address |
 
 Any method other than `GET` on `/healthz` or `/readyz`, or other than `HEAD` on `/api/hello`, is refused with `unknown_route` and recorded. The key is checked before the route, so an unknown route without a key gets `no_key`.

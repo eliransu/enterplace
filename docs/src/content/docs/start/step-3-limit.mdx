@@ -29,6 +29,10 @@ Observe mode is still on, so a request over the budget is forwarded and recorded
 - **Spend** (`/console/spend`): spend this month against every budget in the policy.
 - **Analytics** (`/console/analytics`): the budget forecasts say whether each budget lasts the month at the current pace, or the date it runs out.
 
+<Aside type="note">
+Budgets count requests that go through Gantry. Usage on Claude Team or Enterprise seats seen through [watch mode](/integrations/claude-team/) is never refused and counts against no budget: this step needs API traffic through Gantry. An [alert](/operations/alerting/) on watched spend still works.
+</Aside>
+
 ## Enforce it
 
 When the amounts look right, delete the `mode: observe` line from the policy. From the next request, a team that reaches its budget is refused with `budget_exceeded`, and the message says when the budget starts again.

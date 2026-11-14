@@ -13,7 +13,7 @@ The open source crates expose these extension points. Nothing in them knows abou
 | Startup | `gantry_server::serve_policy_with(.., extend)`, `governed_with` | `extend(Host)` runs once the files are checked and the store is open, and returns a `gantry_server::Extension`. `src/main.rs` passes `enterprise::extend`. |
 | Console pages | `gantry_console::Extension { nav, routes, sign_in, accounts }` | Routes nested at `/console`, handlers take `State<Console>`. `Console::signed_in` gives who is signed in (`Admin`, with `via` and `role`), `Console::page` draws the shell with the nav, `Console::audit` writes an admin record, `Console::sign_in_account` opens a session the feature vouches for through `accounts`. Markup comes from `gantry_console::html`. |
 | Gateway routes | `gantry_server::Extension::routes` | Routes outside the console. Merged into the gateway's router. Their handlers have no `Console`, so they cannot write admin records: an API whose changes must be audited (SCIM, at `/console/scim/v2`) is a console route that answers JSON. |
-| Tables | `Host::postgres`: `PgStore::migrate(namespace, migrations)`, `PgStore::connect()` | Each feature's tables are its own list (`enterprise::MEMBERS`, `SCIM`, `SIEM`, `ALERTS`, `DEVICES`), applied under its own namespace (`enterprise.members`, `enterprise.scim`, `enterprise.siem`, `enterprise.alerts`, `enterprise.devices`) and only when the license unlocks the feature, so a license for one feature makes no other feature's tables. `enterprise::Db` holds a connection of the features' own, so transactions are safe. |
+| Tables | `Host::postgres`: `PgStore::migrate(namespace, migrations)`, `PgStore::connect()` | Each feature's tables are its own list (`enterprise::MEMBERS`, `SCIM`, `SIEM`, `ALERTS`, `DEVICES`, `WATCH`), applied under its own namespace (`enterprise.members`, `enterprise.scim`, `enterprise.siem`, `enterprise.alerts`, `enterprise.devices`, `enterprise.watch`) and only when the license unlocks the feature, so a license for one feature makes no other feature's tables. `enterprise::Db` holds a connection of the features' own, so transactions are safe. |
 | The policy in force | `Host::policy_now` (`gantry_server::PolicyNow`) | `with(\|policy\| ..)` reads the policy after every reload; empty while `extend` runs. Alerts ask it for the budgets a cost counted against (`Policy::applied`). |
 | Audit chains | `Host::audit`, `Host::audit_path`, `Host::request_index`, `Host::org_chains`, `Extension::on_org` | The install's chain, and with `audit: { per_org: true }` each organization's (`OrgChain { org, log, path, request_index }`). A feature that reads, seals, retires or ships the chain does it for each, as a replica of its own (`siem::chain`, `alerts::engine`, a `segments::Shipper` per chain). `on_org` is called with the chain of an organization a policy reload adds, before any request is recorded in it, so it gets the same at once. |
 | The request index | the `gantry_requests` table (namespace `insights`) | Every replica's requests, one row each, with `labels` (person, team, agent, org, ...). A page that counts traffic reads it instead of a replica's own audit log (the Devices page does). |
@@ -101,6 +101,15 @@ GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55433/postgres cargo
 - Alerting (`alerts.rs`, `alerts/channels.rs`, feature `alerts`): rules on the records `enterprise_audit` holds,
   evaluated on the exporter's tick, budget rules by amount or by percent of each policy budget, per organization.
 
+- Watch mode (`watch.rs`, `watch/otlp.rs`, feature `watch`): the OTLP receiver for Claude Code's own telemetry at
+  `/otlp/v1/metrics` and `/otlp/v1/logs`, as protobuf or JSON, plain or gzip (`flate2`, the one decompressor in the build), with watch tokens per team or
+  person, of an organization or of the install. A team token's email becomes the name the install knows the person
+  by (`People`: keys, the policy's `teams:`, `enterprise_people`). Unlike the
+  Cloudflare app it writes each kept event to the audit chain (`event: watch`), which is how the request index,
+  coverage, alerting and audit export see it: the open crates read that record type (`insights::fact`,
+  `coverage::traffic`) and know nothing of the license. No console page until one is designed: an API at
+  `/console/watch`.
+
 Built in the open crates rather than ported: policy versions with approval, dry run and rollback; shared rate
 limits, budgets, kill switches, sessions and routing state across replicas on the store; JWT sign-in to the admin
 API.
@@ -111,5 +120,5 @@ API.
 
 ## Still to port
 
-Reports, workload identity, Claude Code watch mode, TOTP. The
+Reports, workload identity, TOTP. The
 admin API's "add an existing user to an org" has no counterpart in a one-org install.
