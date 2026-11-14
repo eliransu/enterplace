@@ -23,7 +23,7 @@ use axum::{
 use gantry_core::{
     audit::{self, AuditLog},
     id::sha256,
-    policy::{Budget, Period, Principal, Rule, Who},
+    policy::{Budget, CacheScope, Period, Principal, Rule, Who},
     store::{Bucket as Counter, Change, LEASE, Lease, Reserve, Store},
     usage::{Price, PriceOverrides, Usage, UsageScanner, price_for},
 };
@@ -55,6 +55,8 @@ pub(crate) struct Spend {
     // ponytail: the cache stays per process even with a store. Answers are never written to the database (slice 7),
     // and a hit from memory takes microseconds where one from Postgres would take a round trip.
     cache: Mutex<Cache>,
+    /// The semantic cache's embeddings, each pointing at an answer in `cache`. Kept in memory for the same reason.
+    vectors: Mutex<Vectors>,
     /// With a store: this gateway's lease on each rate-limit scope. One lease asked for at a time per scope, so a
     /// burst waits for it instead of leasing the whole limit in pieces.
     leases: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Leased>>>>,
@@ -537,6 +539,21 @@ struct Cached {
     body: Bytes,
     expires: Instant,
     used: u64,
+    /// The rule and person or team it was made for. Checked on every read, beside the key that already holds it.
+    scope: String,
+    /// The decision that asked the provider for it.
+    origin: String,
+    /// What that decision was charged: what each hit saves.
+    cost: f64,
+}
+
+/// An answer read from the cache.
+struct Found {
+    status: StatusCode,
+    content_type: Option<HeaderValue>,
+    body: Bytes,
+    origin: String,
+    cost: f64,
 }
 
 /// Answers by the hash of provider, model and request body, least recently used out first.
@@ -556,21 +573,29 @@ impl Cache {
         }
     }
 
-    fn get(
-        &mut self,
-        key: &[u8; 32],
-        now: Instant,
-    ) -> Option<(StatusCode, Option<HeaderValue>, Bytes)> {
+    fn get(&mut self, key: &[u8; 32], scope: &str, now: Instant) -> Option<Found> {
         if self.entries.get(key).is_some_and(|c| c.expires <= now) {
             self.remove(key);
         }
         self.tick += 1;
         let tick = self.tick;
-        let entry = self.entries.get_mut(key)?;
+        let entry = self.entries.get_mut(key).filter(|c| c.scope == scope)?;
         self.order.remove(&entry.used);
         entry.used = tick;
         self.order.insert(tick, *key);
-        Some((entry.status, entry.content_type.clone(), entry.body.clone()))
+        Some(Found {
+            status: entry.status,
+            content_type: entry.content_type.clone(),
+            body: entry.body.clone(),
+            origin: entry.origin.clone(),
+            cost: entry.cost,
+        })
+    }
+
+    fn live(&self, key: &[u8; 32], scope: &str, now: Instant) -> bool {
+        self.entries
+            .get(key)
+            .is_some_and(|c| c.scope == scope && c.expires > now)
     }
 
     fn put(&mut self, key: [u8; 32], mut entry: Cached, cap: usize) {
@@ -589,6 +614,127 @@ impl Cache {
         self.bytes += entry.body.len();
         self.order.insert(entry.used, key);
         self.entries.insert(key, entry);
+    }
+}
+
+/// Most embeddings the semantic cache holds, across every rule. Each is scanned on a semantic lookup in its
+/// partition, and an answer it points at lives in the answer cache, within that cache's size.
+// ponytail: a linear scan of at most 4096 vectors (about 24 MiB at 1536 dimensions). An index (HNSW) when a
+// deployment needs more than that.
+const MAX_VECTORS: usize = 4096;
+
+/// Most bytes of request text embedded. A longer request is not compared by meaning, only byte for byte: cutting
+/// it would let two conversations that differ past the cut match.
+const MAX_EMBEDDED_TEXT: usize = 32 * 1024;
+
+struct Vector {
+    /// The scope, provider, model, route and every field of the body but its text: only requests alike in all of
+    /// these are compared.
+    partition: [u8; 32],
+    vector: Vec<f32>,
+    /// The answer's key in the answer cache.
+    key: [u8; 32],
+}
+
+/// The semantic cache's embeddings, oldest out first.
+#[derive(Default)]
+struct Vectors(VecDeque<Vector>);
+
+impl Vectors {
+    fn push(&mut self, vector: Vector) {
+        self.0.retain(|v| v.key != vector.key);
+        if self.0.len() >= MAX_VECTORS {
+            self.0.pop_front();
+        }
+        self.0.push_back(vector);
+    }
+
+    /// The answer keys in `partition` at or above `threshold`, closest first.
+    fn near(&self, partition: &[u8; 32], vector: &[f32], threshold: f64) -> Vec<([u8; 32], f64)> {
+        let mut near: Vec<([u8; 32], f64)> = self
+            .0
+            .iter()
+            .filter(|v| &v.partition == partition)
+            .filter_map(|v| Some((v.key, cosine(&v.vector, vector)?)))
+            .filter(|(_, score)| *score >= threshold)
+            .collect();
+        near.sort_by(|a, b| b.1.total_cmp(&a.1));
+        near
+    }
+}
+
+/// Cosine similarity, or None for vectors that cannot be compared (another length, or all zero).
+fn cosine(a: &[f32], b: &[f32]) -> Option<f64> {
+    if a.len() != b.len() || a.is_empty() {
+        return None;
+    }
+    let (mut dot, mut na, mut nb) = (0.0f64, 0.0f64, 0.0f64);
+    for (x, y) in a.iter().zip(b) {
+        let (x, y) = (f64::from(*x), f64::from(*y));
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    let norms = na.sqrt() * nb.sqrt();
+    (norms > 0.0 && dot.is_finite()).then(|| dot / norms)
+}
+
+/// A request's embedding, made through Gantry's embeddings route, to compare it with cached ones.
+pub(crate) struct Probe {
+    pub partition: [u8; 32],
+    pub vector: Vec<f32>,
+    pub threshold: f64,
+}
+
+/// How a cached answer was found, for the decision record.
+pub(crate) struct Hit {
+    pub matched: &'static str,
+    pub similarity: Option<f64>,
+    pub origin: String,
+    pub scope: &'static str,
+}
+
+/// What a cacheable answer becomes when it is settled.
+struct Keep {
+    key: [u8; 32],
+    ttl: Duration,
+    scope: String,
+    /// The semantic partition and embedding, when the rule has a semantic cache.
+    vector: Option<([u8; 32], Vec<f32>)>,
+    /// Set when answer guardrails must pass the answer before it is kept.
+    gate: Option<Gate>,
+}
+
+type Commit = Box<dyn FnOnce() + Send>;
+
+/// Holds a settled answer until the answer guardrails pass it, or the verdict until the answer is settled: the two
+/// happen on different threads, in either order. Only an explicit pass keeps the answer: a block, a mask, an
+/// unreadable answer or a check that could not be recorded drop it.
+#[derive(Clone, Default)]
+pub(crate) struct Gate(Arc<Mutex<(Option<bool>, Option<Commit>)>>);
+
+impl Gate {
+    pub(crate) fn passed(&self, yes: bool) {
+        let commit = {
+            let mut slot = locked(&self.0);
+            slot.0 = Some(yes);
+            slot.1.take()
+        };
+        if let (true, Some(commit)) = (yes, commit) {
+            commit();
+        }
+    }
+
+    fn settled(&self, commit: Commit) {
+        let mut slot = locked(&self.0);
+        match slot.0 {
+            Some(true) => {
+                drop(slot);
+                commit();
+            }
+            Some(false) => {}
+            None => slot.1 = Some(commit),
+        }
     }
 }
 
@@ -763,7 +909,9 @@ pub(crate) struct Admitted {
     /// cut off. None for a budgeted request, whose reservation is that estimate, and for a free one.
     estimate_from: Option<(Bytes, String)>,
     /// Where to keep the answer, and for how long, if it may be cached.
-    cache: Option<([u8; 32], Duration)>,
+    cache: Option<Keep>,
+    /// For a cache hit: what the answer cost when it was made.
+    saved: Option<f64>,
     /// Bytes of the body sent, for the prompt part of an estimate from streamed text.
     body_len: usize,
     /// At most the output tokens a finished stream without usage streamed, set when it ends.
@@ -812,12 +960,19 @@ impl Meter {
     pub(crate) fn take(&self) -> Option<Admitted> {
         locked(&self.0).take()
     }
+
+    /// Makes a cacheable answer wait for the answer guardrails' pass before it is kept.
+    pub(crate) fn gate(&self) -> Option<Gate> {
+        let mut slot = locked(&self.0);
+        let keep = slot.as_mut()?.cache.as_mut()?;
+        Some(keep.gate.get_or_insert_with(Gate::default).clone())
+    }
 }
 
 /// What `admit` decided.
 pub(crate) enum Admit {
     /// The cache holds the answer: it never reaches the provider.
-    Hit(Response, Box<Admitted>),
+    Hit(Response, Box<Admitted>, Hit),
     Go(Meter, Option<&'static str>),
 }
 
@@ -841,6 +996,8 @@ pub(crate) struct Ask<'a> {
     pub free: bool,
     /// Sent with the caller's own provider key: `Some(true)` when its spend still counts against budgets.
     pub caller_paid: Option<bool>,
+    /// The request's embedding, for a rule with a semantic cache.
+    pub probe: Option<Probe>,
 }
 
 /// Applies the rule's cache, rate and budget to an allowed request, in that order: a cached answer costs nothing
@@ -848,7 +1005,7 @@ pub(crate) struct Ask<'a> {
 pub(crate) async fn admit(
     spend: &Arc<Spend>,
     audit: Option<&Arc<AuditLog>>,
-    ask: Ask<'_>,
+    mut ask: Ask<'_>,
 ) -> Result<Admit, Refusal> {
     let limits = &ask.rule.limits;
     // What the caller knows the model as, with the deployment as detail when an alias picked it.
@@ -874,6 +1031,7 @@ pub(crate) async fn admit(
         reservations: Vec::new(),
         estimate_from: None,
         cache: None,
+        saved: None,
         body_len: ask.body.len(),
         streamed: None,
         route: ask.route.to_string(),
@@ -905,23 +1063,28 @@ pub(crate) async fn admit(
         Hints::default()
     };
     let mut cache_word = None;
-    let no_store = ask
-        .headers
-        .get_all(header::CACHE_CONTROL)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .any(|v| v.to_ascii_lowercase().contains("no-store"));
-    // Counting tokens is cheap and its answer is not an answer to the request: it is never cached. Nor is a Responses
-    // request naming stored context (QA12-4): the conversation or stored prompt can change while the body does not.
-    let stored = !hints.stored.is_empty() && ask.route.starts_with("/v1/responses");
     if let Some(ttl) = limits.cache_ttl_seconds {
-        if hints.stream != Some(true) && !no_store && !ask.free && !stored {
-            let key = cache_key(&ask);
-            if let Some((status, content_type, body)) =
-                locked(&spend.cache).get(&key, Instant::now())
-            {
-                let mut response = (status, body).into_response();
-                if let Some(content_type) = content_type {
+        if cacheable(&ask, &hints) {
+            let scope = scope_of(&ask);
+            let key = cache_key(&ask, &scope);
+            let probe = ask.probe.take();
+            let now = Instant::now();
+            let found = {
+                let mut cache = locked(&spend.cache);
+                match cache.get(&key, &scope, now) {
+                    Some(found) => Some((found, "exact", None)),
+                    None => probe.as_ref().and_then(|p| {
+                        let near =
+                            locked(&spend.vectors).near(&p.partition, &p.vector, p.threshold);
+                        near.into_iter().find_map(|(key, score)| {
+                            Some((cache.get(&key, &scope, now)?, "semantic", Some(score)))
+                        })
+                    }),
+                }
+            };
+            if let Some((found, matched, similarity)) = found {
+                let mut response = (found.status, found.body).into_response();
+                if let Some(content_type) = found.content_type {
                     response
                         .headers_mut()
                         .insert(header::CONTENT_TYPE, content_type);
@@ -930,10 +1093,23 @@ pub(crate) async fn admit(
                     HeaderName::from_static("x-gantry-cache"),
                     HeaderValue::from_static("hit"),
                 );
-                return Ok(Admit::Hit(response, Box::new(admitted)));
+                admitted.saved = Some(found.cost);
+                let hit = Hit {
+                    matched,
+                    similarity,
+                    origin: found.origin,
+                    scope: limits.cache_scope.word(),
+                };
+                return Ok(Admit::Hit(response, Box::new(admitted), hit));
             }
             cache_word = Some("miss");
-            admitted.cache = Some((key, Duration::from_secs(ttl)));
+            admitted.cache = Some(Keep {
+                key,
+                ttl: Duration::from_secs(ttl),
+                scope,
+                vector: probe.map(|p| (p.partition, p.vector)),
+                gate: None,
+            });
         }
     }
     if let Some(rpm) = limits.rpm {
@@ -1151,11 +1327,167 @@ pub(crate) async fn admit(
     ))
 }
 
+/// Whether a request's answer may be cached. Never a stream, a request sent with `Cache-Control: no-store`, a
+/// count of tokens (cheap, and not an answer to the request), nor a Responses request naming stored context
+/// (QA12-4): the conversation or stored prompt can change while the body does not.
+fn cacheable(ask: &Ask<'_>, hints: &Hints) -> bool {
+    let no_store = ask
+        .headers
+        .get_all(header::CACHE_CONTROL)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.to_ascii_lowercase().contains("no-store"));
+    let stored = !hints.stored.is_empty() && ask.route.starts_with("/v1/responses");
+    hints.stream != Some(true) && !no_store && !ask.free && !stored
+}
+
+/// Who may be served an answer cached for this request: the rule, and the person, or their team under a team
+/// scope. A person without a team keeps their own scope.
+fn scope_of(ask: &Ask<'_>) -> String {
+    let who = match ask.rule.limits.cache_scope {
+        CacheScope::Team if !ask.person.team.is_empty() => format!("team:{}", ask.person.team),
+        _ => format!("person:{}", ask.person.name),
+    };
+    format!("{}\0{who}", ask.rule.name)
+}
+
+/// The text of a request the semantic cache embeds, and the partition its embedding is compared within: the cache
+/// key of the body with its text left out. None when the rule has no semantic cache or the request is not one it
+/// compares (not cacheable, not a chat, messages or Responses request, no text, or too much of it), or when an
+/// identical request is already cached, so no embedding is paid for an exact hit.
+pub(crate) fn semantic_text(spend: &Spend, ask: &Ask<'_>) -> Option<([u8; 32], String)> {
+    ask.rule.limits.semantic.as_ref()?;
+    ask.rule.limits.cache_ttl_seconds?;
+    let path = ask.route.split('?').next().unwrap_or_default();
+    if !matches!(
+        path,
+        "/v1/chat/completions" | "/v1/messages" | "/v1/responses"
+    ) {
+        return None;
+    }
+    if !cacheable(ask, &hints(ask.body).ok()?) {
+        return None;
+    }
+    let scope = scope_of(ask);
+    if locked(&spend.cache).live(&cache_key(ask, &scope), &scope, Instant::now()) {
+        return None;
+    }
+    let mut body: Value = serde_json::from_slice(ask.body).ok()?;
+    let mut texts = Vec::new();
+    take_texts(&mut body, &mut texts);
+    let text = texts.join("\n");
+    if text.trim().is_empty() || text.len() > MAX_EMBEDDED_TEXT {
+        return None;
+    }
+    let blanked = Bytes::from(serde_json::to_vec(&body).ok()?);
+    let partition = cache_key(
+        &Ask {
+            body: &blanked,
+            probe: None,
+            ..*ask
+        },
+        &scope,
+    );
+    Some((partition, text))
+}
+
+/// Moves every string under a key that holds text (content, text, system, instructions, input) out of a body, in
+/// order. Roles, tools, parameters and anything that is not text (an image's data) stay, so they must match exactly.
+fn take_texts(value: &mut Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, field) in map.iter_mut() {
+                let text = matches!(
+                    key.as_str(),
+                    "content" | "text" | "system" | "instructions" | "input"
+                );
+                match field {
+                    Value::String(s) if text => out.push(std::mem::take(s)),
+                    _ => take_texts(field, out),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|item| take_texts(item, out)),
+        _ => {}
+    }
+}
+
+/// Places Anthropic cache breakpoints (`cache_control: {"type": "ephemeral"}`) on the stable prefix of a messages
+/// request that has none: the last tool, the end of the system prompt and the last block of the conversation, three
+/// of the four a request may carry. Returns the body and where it placed them, or None to send the body as it came:
+/// the caller placed their own, it names a key twice (a rewrite would pick one copy), or there is nowhere to place
+/// one. A string system prompt or message becomes one text block, which the messages API reads the same; nothing
+/// else changes. A prefix shorter than the model's minimum is simply not cached by the provider.
+pub(crate) fn prompt_cache(body: &Bytes) -> Option<(Bytes, Vec<&'static str>)> {
+    if body.windows(15).any(|w| w == b"\"cache_control\"") {
+        return None;
+    }
+    gantry_core::chat::reject_duplicate_keys(body).ok()?;
+    let mut request: Value = serde_json::from_slice(body).ok()?;
+    let mark = || serde_json::json!({ "type": "ephemeral" });
+    let block =
+        |text: &str| serde_json::json!({ "type": "text", "text": text, "cache_control": mark() });
+    // Thinking blocks take no breakpoint, nor does an empty text block (the provider refuses one).
+    let markable = |b: &Value| match b["type"].as_str() {
+        Some("thinking" | "redacted_thinking") | None => false,
+        Some("text") => b["text"].as_str().is_some_and(|t| !t.is_empty()),
+        Some(_) => true,
+    };
+    let mut marks = Vec::new();
+    if let Some(tool) = request["tools"].as_array_mut().and_then(|t| t.last_mut()) {
+        if let Some(tool) = tool.as_object_mut() {
+            tool.insert("cache_control".into(), mark());
+            marks.push("tools");
+        }
+    }
+    let system = &mut request["system"];
+    match system {
+        Value::String(text) if !text.is_empty() => {
+            *system = Value::Array(vec![block(text)]);
+            marks.push("system");
+        }
+        Value::Array(blocks) => {
+            if let Some(last) = blocks.last_mut().filter(|b| markable(b)) {
+                if let Some(last) = last.as_object_mut() {
+                    last.insert("cache_control".into(), mark());
+                    marks.push("system");
+                }
+            }
+        }
+        _ => {}
+    }
+    if let Some(content) = request["messages"]
+        .as_array_mut()
+        .and_then(|m| m.last_mut())
+        .and_then(|m| m.get_mut("content"))
+    {
+        match content {
+            Value::String(text) if !text.is_empty() => {
+                *content = Value::Array(vec![block(text)]);
+                marks.push("messages");
+            }
+            Value::Array(blocks) => {
+                if let Some(last) = blocks.last_mut().filter(|b| markable(b)) {
+                    if let Some(last) = last.as_object_mut() {
+                        last.insert("cache_control".into(), mark());
+                        marks.push("messages");
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if marks.is_empty() {
+        return None;
+    }
+    Some((Bytes::from(serde_json::to_vec(&request).ok()?), marks))
+}
+
 /// The cache key: the same body means the same answer only on the same route of the same provider and model, with
-/// the same headers that change what the provider does.
-fn cache_key(ask: &Ask<'_>) -> [u8; 32] {
+/// the same headers that change what the provider does, and only within the scope it was made for.
+fn cache_key(ask: &Ask<'_>, scope: &str) -> [u8; 32] {
     let mut joined = Vec::with_capacity(256);
-    for part in [ask.provider, ask.model, ask.route] {
+    for part in [scope, ask.provider, ask.model, ask.route] {
         joined.extend_from_slice(part.as_bytes());
         joined.push(0);
     }
@@ -1413,22 +1745,57 @@ impl Admitted {
                 .add(&self.person, &self.team, &self.key, charged, &now);
         }
         self.spend.metrics.charged(&self.team, &self.model, charged);
-        if let (Some((key, ttl)), Some((content_type, body)), true) = (
+        // What caching saved: a hit, what its answer cost when made; a provider's prompt cache, the prompt priced
+        // as if none of it were cached, less what it cost. A cache write costs more than input, so that can be less
+        // than nothing.
+        let saved = match (hit, usage, self.price.as_ref()) {
+            (true, _, _) => self.saved.map(|usd| ("answer", usd)),
+            (false, Some(u), Some(price))
+                if u.cache_read + u.cache_write + u.cache_write_1h > 0 =>
+            {
+                let uncached = Usage {
+                    input: u.input + u.cache_read + u.cache_write + u.cache_write_1h,
+                    output: u.output,
+                    ..Usage::default()
+                };
+                Some(("prompt", price.cost_usd(&uncached) - price.cost_usd(&u)))
+            }
+            _ => None,
+        };
+        if let Some((kind, usd)) = saved {
+            self.spend.metrics.saved(&self.team, kind, usd);
+        }
+        if let (Some(keep), Some((content_type, body)), true) = (
             self.cache.take(),
             answer,
             status.is_success() && complete && !hit,
         ) {
-            locked(&self.spend.cache).put(
-                key,
-                Cached {
-                    status,
-                    content_type,
-                    body,
-                    expires: Instant::now() + ttl,
-                    used: 0,
-                },
-                CACHE_BYTES,
-            );
+            let spend = self.spend.clone();
+            let cached = Cached {
+                status,
+                content_type,
+                body,
+                expires: Instant::now() + keep.ttl,
+                used: 0,
+                scope: keep.scope,
+                origin: self.decision.clone(),
+                cost: charged,
+            };
+            let (key, vector) = (keep.key, keep.vector);
+            let commit: Commit = Box::new(move || {
+                locked(&spend.cache).put(key, cached, CACHE_BYTES);
+                if let Some((partition, vector)) = vector {
+                    locked(&spend.vectors).push(Vector {
+                        partition,
+                        vector,
+                        key,
+                    });
+                }
+            });
+            match keep.gate {
+                Some(gate) => gate.settled(commit),
+                None => commit(),
+            }
         }
         self.audit.as_ref()?;
         let mut record = Map::new();
@@ -1498,6 +1865,9 @@ impl Admitted {
             reserved.map_or(Value::Null, Value::from),
         );
         record.insert("charged_usd".into(), charged.into());
+        if let Some((_, usd)) = saved {
+            record.insert("cache_saved_usd".into(), usd.into());
+        }
         if let Some(counted) = self.caller_paid {
             record.insert("caller_paid".into(), true.into());
             record.insert(
@@ -1714,21 +2084,121 @@ mod tests {
             body: Bytes::from_static(text.as_bytes()),
             expires,
             used: 0,
+            scope: "s".to_string(),
+            origin: String::new(),
+            cost: 0.0,
         };
         let later = now + Duration::from_secs(60);
         cache.put([1; 32], entry("aaaa", later), 10);
         cache.put([2; 32], entry("bbbb", later), 10);
-        assert!(cache.get(&[1; 32], now).is_some());
+        assert!(cache.get(&[1; 32], "s", now).is_some());
         // 12 bytes do not fit in 10: b, used least recently, goes.
         cache.put([3; 32], entry("cccc", later), 10);
-        assert!(cache.get(&[2; 32], now).is_none());
-        assert!(cache.get(&[1; 32], now).is_some() && cache.get(&[3; 32], now).is_some());
+        assert!(cache.get(&[2; 32], "s", now).is_none());
+        assert!(cache.get(&[1; 32], "s", now).is_some() && cache.get(&[3; 32], "s", now).is_some());
         assert_eq!(cache.bytes, 8);
         cache.put([4; 32], entry("much too large", later), 10);
-        assert!(cache.get(&[4; 32], now).is_none());
+        assert!(cache.get(&[4; 32], "s", now).is_none());
         cache.put([5; 32], entry("e", now), 10);
-        assert!(cache.get(&[5; 32], now).is_none());
+        assert!(cache.get(&[5; 32], "s", now).is_none());
         assert_eq!(cache.bytes, 8);
+    }
+
+    #[test]
+    fn a_cached_answer_is_read_only_in_its_own_scope() {
+        let mut cache = Cache::default();
+        let now = Instant::now();
+        let entry = Cached {
+            status: StatusCode::OK,
+            content_type: None,
+            body: Bytes::from_static(b"a"),
+            expires: now + Duration::from_secs(60),
+            used: 0,
+            scope: "rule\0person:cara".to_string(),
+            origin: "d1".to_string(),
+            cost: 0.5,
+        };
+        cache.put([1; 32], entry, 10);
+        assert!(cache.get(&[1; 32], "rule\0person:otto", now).is_none());
+        assert!(!cache.live(&[1; 32], "rule\0team:ops", now));
+        let found = cache.get(&[1; 32], "rule\0person:cara", now);
+        assert_eq!(
+            found.map(|f| (f.origin, f.cost)),
+            Some(("d1".to_string(), 0.5))
+        );
+    }
+
+    #[test]
+    fn the_semantic_index_compares_only_within_a_partition_and_above_the_threshold() {
+        let mut vectors = Vectors::default();
+        let push = |vectors: &mut Vectors, partition: u8, vector: Vec<f32>, key: u8| {
+            vectors.push(Vector {
+                partition: [partition; 32],
+                vector,
+                key: [key; 32],
+            });
+        };
+        push(&mut vectors, 1, vec![1.0, 0.0], 10);
+        push(&mut vectors, 1, vec![0.0, 1.0], 11);
+        push(&mut vectors, 2, vec![1.0, 0.0], 20);
+        push(&mut vectors, 1, vec![1.0, 0.0, 0.0], 12);
+        let near = vectors.near(&[1; 32], &[0.9, 0.1], 0.9);
+        assert_eq!(near.iter().map(|n| n.0).collect::<Vec<_>>(), vec![[10; 32]]);
+        assert!(vectors.near(&[3; 32], &[1.0, 0.0], 0.1).is_empty());
+        assert_eq!(cosine(&[0.0, 0.0], &[1.0, 0.0]), None);
+        // The oldest goes first once the index is full.
+        for i in 0..MAX_VECTORS {
+            let mut key = [9; 32];
+            key[..8].copy_from_slice(&(i as u64).to_le_bytes());
+            vectors.push(Vector {
+                partition: [9; 32],
+                vector: vec![1.0],
+                key,
+            });
+        }
+        assert!(vectors.0.len() <= MAX_VECTORS);
+        assert!(vectors.near(&[2; 32], &[1.0, 0.0], 0.9).is_empty());
+    }
+
+    #[test]
+    fn a_gated_answer_is_kept_only_after_an_explicit_pass_in_either_order() {
+        let kept = Arc::new(Mutex::new(0));
+        let commit = |kept: &Arc<Mutex<i32>>| -> Commit {
+            let kept = kept.clone();
+            Box::new(move || *locked(&kept) += 1)
+        };
+        let gate = Gate::default();
+        gate.settled(commit(&kept));
+        gate.passed(true);
+        let gate = Gate::default();
+        gate.passed(true);
+        gate.settled(commit(&kept));
+        assert_eq!(*locked(&kept), 2);
+        let gate = Gate::default();
+        gate.settled(commit(&kept));
+        gate.passed(false);
+        let gate = Gate::default();
+        gate.passed(false);
+        gate.settled(commit(&kept));
+        // Never decided: a check that failed or was never recorded.
+        Gate::default().settled(commit(&kept));
+        assert_eq!(*locked(&kept), 2);
+    }
+
+    #[test]
+    fn the_semantic_text_leaves_roles_and_parameters_in_the_partition() {
+        let mut body = serde_json::json!({
+            "model": "m",
+            "temperature": 0,
+            "system": "be terse",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        });
+        let mut texts = Vec::new();
+        take_texts(&mut body, &mut texts);
+        assert_eq!(texts, vec!["be terse", "hi"]);
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["temperature"], 0);
+        assert_eq!(body["messages"][0]["content"][0]["text"], "");
     }
 
     #[test]

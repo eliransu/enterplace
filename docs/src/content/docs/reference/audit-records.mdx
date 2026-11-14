@@ -64,6 +64,9 @@ Fields present only in some cases:
 | Field | Type | Present when |
 |---|---|---|
 | `cache` | string | The rule has a cache: `hit` when the answer came from the cache, `miss` when it could have and did not |
+| `cache_match`, `cache_scope`, `cache_origin`, `cache_similarity` | string or number | On a hit: `exact` or `semantic`, `person` or `team`, the decision that made the answer, and the similarity of a semantic hit. See [Caching](/routing/caching/#records-headers-and-metrics) |
+| `cache_embedding` | string | On a miss the semantic cache embedded: the embeddings decision |
+| `prompt_cache` | array | Where `prompt_cache: auto` placed cache breakpoints: `tools`, `system`, `messages` |
 | `translated` | `true` | The request was translated for the provider (`accept_chat`, `accept_messages`, Gemini, Vertex AI) |
 | `alias`, `deployment` | string | The model is an alias: the alias sent, and the deployment tried first as `provider/model` |
 | `limit` | object | Refused by a rate limit: `{"kind":"rpm","of":"rule","value":60}`, or `{"kind":"tpm","of":"rule","value":1000,"request_could_use":1228}` where `of` is `rule` or `key` |
@@ -96,6 +99,7 @@ Written when a forwarded request's answer ends: its whole body sent, its stream 
 | `status` | integer or null | The provider's HTTP status. `null` when the caller left before the answer started |
 | `ended` | string | `complete`, or `cut_off` when the caller went before the answer ended |
 | `cache` | string | `hit`, only for an answer served from the cache |
+| `cache_saved_usd` | number | What caching saved: the original answer's cost on a hit, or the uncached input price minus the cost when `prompt_cache: auto` marked the request (negative after a cache write) |
 | `usage` | string | `reported`, `partial`, `estimated`, `not_reported`, `caller_left` or `cache_hit` (below) |
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | integer or null | As the provider reported them. Input excludes cache reads and writes. `null` when not reported, `0` for a cache hit |
 | `price` | string | `known`, or `none` for a model with no price |

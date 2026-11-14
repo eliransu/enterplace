@@ -144,7 +144,8 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `guardrails` | list | `[]` | Names from the top-level `guardrails:`, run in this order. An undefined name is an error. |
 | `budget` | map | none | `{ usd: <above 0>, per: day \| month }`. See [Budgets and rate limits](/governance/budgets-and-rate-limits/). |
 | `rate` | map | none | `{ rpm: 1 to 1000000, tpm: 1 to 1000000000 }`, either or both. |
-| `cache` | map | none | `{ ttl_seconds: 1 to 86400 }`. See [Caching](/routing/caching/). |
+| `cache` | map | none | `{ ttl_seconds: 1 to 86400, scope: person or team, semantic: { model, threshold } }`. See [Caching](/routing/caching/). |
+| `prompt_cache` | string | `off` | `auto` marks cache breakpoints on Anthropic messages requests. See [Caching](/routing/caching/#prompt-caching). |
 | `buffer_stream` | boolean | `false` | Hold a streamed answer whole so `on: [answer]` guardrails check it first. Needs a guardrail with `on: [answer]`. |
 | `check_stream_every` | integer | none | Check a streamed answer every this many characters, sending only what was checked. See [guardrails](/governance/guardrails/#checking-a-stream-as-it-comes-check_stream_every). |
 | `passthrough` | list | `[]` | Native provider paths the rule may reach as sent. See [Passthrough](#passthrough). |
