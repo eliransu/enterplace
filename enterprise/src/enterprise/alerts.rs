@@ -14,6 +14,7 @@
 #[cfg(test)]
 mod tests;
 
+pub mod api;
 pub mod channels;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -117,6 +118,20 @@ CREATE TABLE enterprise_alerts (
 CREATE INDEX enterprise_alerts_rule ON enterprise_alerts (rule, fired_at);
 ";
 
+/// Requests, errors and latency per scope and day: the 14-day baseline of the unusual request, error and latency
+/// rules.
+pub const DAILY: &str = "
+CREATE TABLE enterprise_alert_daily (
+    scope text NOT NULL,
+    day text NOT NULL,
+    requests bigint NOT NULL DEFAULT 0,
+    errors bigint NOT NULL DEFAULT 0,
+    latency_ms bigint NOT NULL DEFAULT 0,
+    timed bigint NOT NULL DEFAULT 0,
+    PRIMARY KEY (scope, day)
+);
+";
+
 const NAV: &str = "Alerts";
 const READ: i64 = 2000;
 /// Records older than this when first read count, but do not fire.
@@ -143,9 +158,17 @@ pub enum RuleKind {
     AfterHours,
     UnusualSpend,
     System,
+    UnusualRequests,
+    UnusualErrors,
+    UnusualLatency,
+    DeploymentDown,
+    KeyExpiring,
+    CredentialFailing,
+    GuardrailVendorFailing,
+    ExportLagging,
 }
 
-pub const RULE_KINDS: [RuleKind; 11] = [
+pub const RULE_KINDS: [RuleKind; 19] = [
     RuleKind::Budget,
     RuleKind::RateLimit,
     RuleKind::Refusals,
@@ -157,6 +180,14 @@ pub const RULE_KINDS: [RuleKind; 11] = [
     RuleKind::AfterHours,
     RuleKind::UnusualSpend,
     RuleKind::System,
+    RuleKind::UnusualRequests,
+    RuleKind::UnusualErrors,
+    RuleKind::UnusualLatency,
+    RuleKind::DeploymentDown,
+    RuleKind::KeyExpiring,
+    RuleKind::CredentialFailing,
+    RuleKind::GuardrailVendorFailing,
+    RuleKind::ExportLagging,
 ];
 
 impl RuleKind {
@@ -173,6 +204,14 @@ impl RuleKind {
             Self::AfterHours => "after_hours",
             Self::UnusualSpend => "unusual_spend",
             Self::System => "system",
+            Self::UnusualRequests => "unusual_requests",
+            Self::UnusualErrors => "unusual_errors",
+            Self::UnusualLatency => "unusual_latency",
+            Self::DeploymentDown => "deployment_down",
+            Self::KeyExpiring => "key_expiring",
+            Self::CredentialFailing => "credential_failing",
+            Self::GuardrailVendorFailing => "guardrail_vendor_failing",
+            Self::ExportLagging => "export_lagging",
         }
     }
 
@@ -189,6 +228,14 @@ impl RuleKind {
             Self::AfterHours => "A key used after hours",
             Self::UnusualSpend => "Unusual spend by a person",
             Self::System => "Audit log or store trouble",
+            Self::UnusualRequests => "Unusual request volume against the last 14 days",
+            Self::UnusualErrors => "Unusual error rate against the last 14 days",
+            Self::UnusualLatency => "Unusual latency against the last 14 days",
+            Self::DeploymentDown => "A deployment fails every request",
+            Self::KeyExpiring => "A key nears its expiry",
+            Self::CredentialFailing => "A provider refuses its credential",
+            Self::GuardrailVendorFailing => "A guardrail service cannot be reached",
+            Self::ExportLagging => "Audit export falls behind",
         }
     }
 
@@ -198,9 +245,13 @@ impl RuleKind {
 
     fn severity(self) -> Severity {
         match self {
-            Self::System | Self::KillSwitch | Self::GuardrailBlock | Self::NewIp => {
-                Severity::Critical
-            }
+            Self::System
+            | Self::KillSwitch
+            | Self::GuardrailBlock
+            | Self::NewIp
+            | Self::DeploymentDown
+            | Self::CredentialFailing
+            | Self::GuardrailVendorFailing => Severity::Critical,
             _ => Severity::Warning,
         }
     }
@@ -209,7 +260,15 @@ impl RuleKind {
     fn once(self) -> bool {
         matches!(
             self,
-            Self::Budget | Self::KillSwitch | Self::NewIp | Self::AfterHours | Self::UnusualSpend
+            Self::Budget
+                | Self::KillSwitch
+                | Self::NewIp
+                | Self::AfterHours
+                | Self::UnusualSpend
+                | Self::UnusualRequests
+                | Self::UnusualErrors
+                | Self::UnusualLatency
+                | Self::KeyExpiring
         )
     }
 
@@ -222,14 +281,25 @@ impl RuleKind {
                 | Self::ProviderErrors
                 | Self::Latency
                 | Self::GuardrailBlock
+                | Self::DeploymentDown
+                | Self::CredentialFailing
+                | Self::GuardrailVendorFailing
+        )
+    }
+
+    /// Compared with the same scope's last 14 days, one alert per scope and day.
+    fn unusual(self) -> bool {
+        matches!(
+            self,
+            Self::UnusualRequests | Self::UnusualErrors | Self::UnusualLatency
         )
     }
 }
 
 /// The parameters a rule may have, as the form names them.
-const PARAMS: [&str; 13] = [
+const PARAMS: [&str; 14] = [
     "scope", "name", "period", "usd", "forecast", "count", "minutes", "by", "codes", "provider",
-    "ms", "hours", "factor",
+    "ms", "hours", "factor", "days",
 ];
 
 #[derive(Clone, Debug)]
@@ -309,7 +379,12 @@ impl Rule {
         number("minutes", 1.0, 1440.0)?;
         number("ms", 1.0, 3_600_000.0)?;
         number("factor", 1.0, 1000.0)?;
-        if !matches!(get("by").as_str(), "" | "all" | "person" | "team" | "key") {
+        number("days", 1.0, 365.0)?;
+        if kind.unusual() {
+            if !matches!(get("by").as_str(), "" | "team" | "key" | "provider") {
+                return Err("Compare by team, key or provider.".into());
+            }
+        } else if !matches!(get("by").as_str(), "" | "all" | "person" | "team" | "key") {
             return Err("Group by is all, person, team or key.".into());
         }
         match kind {
@@ -410,6 +485,44 @@ impl Rule {
                 p("factor", "3"),
                 p("usd", "5")
             ),
+            RuleKind::UnusualRequests => format!(
+                "a {}'s requests today are {} times its daily average of the last 14 days, and at least {}",
+                p("by", "team"),
+                p("factor", "3"),
+                p("count", "100")
+            ),
+            RuleKind::UnusualErrors => format!(
+                "a {}'s error rate today is {} times its rate over the last 14 days, with at least {} errors",
+                p("by", "team"),
+                p("factor", "3"),
+                p("count", "10")
+            ),
+            RuleKind::UnusualLatency => format!(
+                "a {}'s average latency today is {} times its average over the last 14 days, over at least {} requests",
+                p("by", "team"),
+                p("factor", "2"),
+                p("count", "20")
+            ),
+            RuleKind::DeploymentDown => format!(
+                "{} failures and no answer in {} minutes, by provider",
+                self.count(),
+                self.minutes()
+            ),
+            RuleKind::CredentialFailing => format!(
+                "a provider refuses its credential (401 or 403) {} times in {} minutes",
+                self.count(),
+                self.minutes()
+            ),
+            RuleKind::GuardrailVendorFailing => format!(
+                "a guardrail service cannot be reached {} times in {} minutes",
+                self.count(),
+                self.minutes()
+            ),
+            RuleKind::KeyExpiring => format!("a key expires within {} days", p("days", "7")),
+            RuleKind::ExportLagging => format!(
+                "an audit export destination is more than {} minutes behind",
+                p("minutes", "15")
+            ),
             _ => String::new(),
         }
     }
@@ -476,6 +589,10 @@ pub struct Engine {
     /// When each system alert last went out while the store was down, by rule and problem.
     offline: Mutex<HashMap<(i64, String), Instant>>,
     said: Mutex<String>,
+    /// The keys file (or the store's keys), for the rule on keys nearing their expiry.
+    keys: std::path::PathBuf,
+    /// When the state checks last ran: once a minute.
+    checked: Mutex<Option<Instant>>,
 }
 
 #[derive(Clone)]
@@ -488,6 +605,7 @@ pub fn register(
     extension: &mut gantry_server::Extension,
     exporter: &Arc<super::siem::Exporter>,
     env: &Env,
+    keys: std::path::PathBuf,
 ) -> Arc<Engine> {
     let engine = Arc::new(Engine {
         db: exporter.db.clone(),
@@ -507,8 +625,11 @@ pub fn register(
         cache: Mutex::new(Default::default()),
         offline: Mutex::new(HashMap::new()),
         said: Mutex::new(String::new()),
+        keys,
+        checked: Mutex::new(None),
     });
     let _ = exporter.alerts.set(engine.clone());
+    extension.admin = Some(Arc::new(api::AlertsApi::On(engine.clone())));
     let console = &mut extension.console;
     console.nav.push(("/console/alerts".into(), NAV.into()));
     console.routes = std::mem::take(&mut console.routes)
@@ -525,6 +646,10 @@ pub fn locked(extension: &mut gantry_server::Extension, status: &Status) {
         return;
     };
     let (code, message) = (refused.code, refused.message);
+    extension.admin = Some(Arc::new(api::AlertsApi::Locked {
+        code,
+        message: message.clone(),
+    }));
     let page = move || {
         let message = message.clone();
         async move {
@@ -653,6 +778,19 @@ impl Engine {
                 "audit_unreadable".into(),
                 format!("This replica's audit records cannot be read into Postgres: {err}"),
             ));
+        }
+        let due = {
+            let mut checked = lock(&self.checked);
+            let due = checked.is_none_or(|at| at.elapsed() >= Duration::from_secs(60));
+            if due {
+                *checked = Some(Instant::now());
+            }
+            due
+        };
+        if due {
+            if let Err(err) = self.checks().await {
+                self.say(&format!("alerts: {err}"));
+            }
         }
         match self.evaluate().await {
             Ok(()) => {}
@@ -823,6 +961,11 @@ impl Engine {
         let mut counts: BTreeMap<(i64, String, String), i64> = BTreeMap::new();
         let mut candidates: Vec<Candidate> = Vec::new();
         let mut addresses: Vec<(String, String)> = Vec::new();
+        // (scope, day): requests, errors, latency in ms, requests timed. Kept for every scope, rule or not, so a
+        // rule added later has its baseline.
+        let mut daily: BTreeMap<(String, String), [i64; 4]> = BTreeMap::new();
+        // Answers a deployment gave, counted beside its failures: a deployment that answers is not down.
+        let mut oks: BTreeMap<(i64, String, String), i64> = BTreeMap::new();
         let new_ip = rules.iter().any(|r| r.kind == RuleKind::NewIp);
         let (mut known_keys, mut known_pairs) = (HashSet::new(), HashSet::new());
         if new_ip {
@@ -864,13 +1007,64 @@ impl Engine {
                     self.remember(record);
                     None
                 }
-                "usage" | "attempts" | "answer_guardrails" => match record["id"].as_str() {
-                    Some(id) => self.decision(id).await,
-                    None => None,
-                },
+                "usage" | "attempts" | "answer_guardrails" | "upstream_error" => {
+                    match record["id"].as_str() {
+                        Some(id) => self.decision(id).await,
+                        None => None,
+                    }
+                }
                 _ => None,
             };
             let decision = joined.as_ref().map(|s| &s.decision);
+            let day = time.get(..10).unwrap_or_default().to_string();
+            {
+                let failed = match event {
+                    "usage" => record["status"]
+                        .as_u64()
+                        .is_some_and(|s| s >= 500 || s == 429),
+                    "upstream_error" => true,
+                    _ => false,
+                };
+                let timed = (event == "usage")
+                    .then(|| record["latency_ms"].as_i64())
+                    .flatten();
+                if event == "request" || failed || timed.is_some() {
+                    for by in ["team", "key", "provider"] {
+                        let value = record[by]
+                            .as_str()
+                            .or_else(|| decision.and_then(|d| d[by].as_str()))
+                            .filter(|v| !v.is_empty());
+                        let Some(value) = value else { continue };
+                        let slot = daily
+                            .entry((format!("{by}:{value}"), day.clone()))
+                            .or_default();
+                        slot[0] += i64::from(event == "request");
+                        slot[1] += i64::from(failed);
+                        if let Some(ms) = timed {
+                            slot[2] += ms;
+                            slot[3] += 1;
+                        }
+                    }
+                }
+            }
+            let unusual_scope = |rule: &Rule, record: &Value| -> Option<String> {
+                let by = match rule.text("by") {
+                    "" => "team",
+                    by => by,
+                };
+                record[by]
+                    .as_str()
+                    .or_else(|| decision.and_then(|d| d[by].as_str()))
+                    .filter(|v| !v.is_empty())
+                    .map(|v| format!("{by}:{v}:{day}"))
+            };
+            let provider_of = |record: &Value| {
+                record["provider"]
+                    .as_str()
+                    .or_else(|| decision.and_then(|d| d["provider"].as_str()))
+                    .unwrap_or("unknown")
+                    .to_string()
+            };
             let mut hit = |rule: &Rule, key: String, summary: String, count: i64| {
                 if rule.kind.windowed() {
                     *counts
@@ -1091,6 +1285,121 @@ impl Engine {
                             0,
                         );
                     }
+                    (RuleKind::UnusualRequests, "request") => {
+                        if let Some(key) = unusual_scope(rule, record) {
+                            hit(rule, key, String::new(), 0);
+                        }
+                    }
+                    (RuleKind::UnusualErrors, "usage" | "upstream_error")
+                        if event == "upstream_error"
+                            || record["status"]
+                                .as_u64()
+                                .is_some_and(|s| s >= 500 || s == 429) =>
+                    {
+                        if let Some(key) = unusual_scope(rule, record) {
+                            hit(rule, key, String::new(), 0);
+                        }
+                    }
+                    (RuleKind::UnusualLatency, "usage") if record["latency_ms"].is_number() => {
+                        if let Some(key) = unusual_scope(rule, record) {
+                            hit(rule, key, String::new(), 0);
+                        }
+                    }
+                    (RuleKind::DeploymentDown, "usage" | "upstream_error") => {
+                        let provider = provider_of(record);
+                        let failed = event == "upstream_error"
+                            || record["status"]
+                                .as_u64()
+                                .is_some_and(|s| s >= 500 || s == 429);
+                        if failed {
+                            hit(
+                                rule,
+                                format!("deployment:{provider}"),
+                                format!("{provider} gave no answer"),
+                                1,
+                            );
+                        } else {
+                            *oks.entry((
+                                rule.id,
+                                format!("ok:deployment:{provider}"),
+                                minute.clone(),
+                            ))
+                            .or_default() += 1;
+                        }
+                    }
+                    (RuleKind::DeploymentDown, "attempts") => {
+                        let tries = record["attempts"].as_array().cloned().unwrap_or_default();
+                        for attempt in tries.iter().rev().skip(1) {
+                            let provider = attempt["provider"].as_str().unwrap_or("unknown");
+                            let outcome = attempt["outcome"]
+                                .as_str()
+                                .map(str::to_string)
+                                .unwrap_or_else(|| attempt["outcome"].to_string());
+                            if failed_outcome(&outcome) {
+                                hit(
+                                    rule,
+                                    format!("deployment:{provider}"),
+                                    format!("{provider} failed with {outcome}"),
+                                    1,
+                                );
+                            }
+                        }
+                    }
+                    (RuleKind::CredentialFailing, "usage")
+                        if matches!(record["status"].as_u64(), Some(401 | 403)) =>
+                    {
+                        let provider = provider_of(record);
+                        hit(
+                            rule,
+                            format!("provider:{provider}"),
+                            format!(
+                                "{provider} refused Gantry's credential with {}",
+                                record["status"]
+                            ),
+                            1,
+                        );
+                    }
+                    (RuleKind::CredentialFailing, "attempts") => {
+                        let tries = record["attempts"].as_array().cloned().unwrap_or_default();
+                        for attempt in tries.iter().rev().skip(1) {
+                            let provider = attempt["provider"].as_str().unwrap_or("unknown");
+                            let outcome = attempt["outcome"]
+                                .as_str()
+                                .map(str::to_string)
+                                .unwrap_or_else(|| attempt["outcome"].to_string());
+                            if matches!(outcome.as_str(), "401" | "403") {
+                                hit(
+                                    rule,
+                                    format!("provider:{provider}"),
+                                    format!(
+                                        "{provider} refused Gantry's credential with {outcome}"
+                                    ),
+                                    1,
+                                );
+                            }
+                        }
+                    }
+                    (RuleKind::GuardrailVendorFailing, "request" | "answer_guardrails") => {
+                        for found in record["guardrails"].as_array().into_iter().flatten() {
+                            if found["kind"] == "unavailable" {
+                                let guardrail = found["guardrail"].as_str().unwrap_or("unknown");
+                                hit(
+                                    rule,
+                                    format!("guardrail:{guardrail}"),
+                                    format!(
+                                        "guardrail \"{guardrail}\" ({}) could not be reached and was {}",
+                                        found["detector"].as_str().unwrap_or("its service"),
+                                        if found["action"] == "block" {
+                                            "failed closed"
+                                        } else {
+                                            "skipped"
+                                        }
+                                    ),
+                                    1,
+                                );
+                            }
+                        }
+                    }
                     (RuleKind::System, "request")
                         if matches!(
                             record["code"].as_str(),
@@ -1129,6 +1438,26 @@ impl Engine {
                 .map_err(db_error)?;
             }
             for ((rule, key, minute), count) in &counts {
+                tx.execute(
+                    "INSERT INTO enterprise_alert_counts (rule, key, minute, count) VALUES ($1, $2, CAST($3::text AS timestamptz), $4) \
+                     ON CONFLICT (rule, key, minute) DO UPDATE SET count = enterprise_alert_counts.count + EXCLUDED.count",
+                    &[rule, key, minute, count],
+                )
+                .await
+                .map_err(db_error)?;
+            }
+            for ((scope, day), [requests, errors, latency, timed]) in &daily {
+                tx.execute(
+                    "INSERT INTO enterprise_alert_daily (scope, day, requests, errors, latency_ms, timed) VALUES ($1, $2, $3, $4, $5, $6) \
+                     ON CONFLICT (scope, day) DO UPDATE SET requests = enterprise_alert_daily.requests + EXCLUDED.requests, \
+                     errors = enterprise_alert_daily.errors + EXCLUDED.errors, latency_ms = enterprise_alert_daily.latency_ms + EXCLUDED.latency_ms, \
+                     timed = enterprise_alert_daily.timed + EXCLUDED.timed",
+                    &[scope, day, requests, errors, latency, timed],
+                )
+                .await
+                .map_err(db_error)?;
+            }
+            for ((rule, key, minute), count) in &oks {
                 tx.execute(
                     "INSERT INTO enterprise_alert_counts (rule, key, minute, count) VALUES ($1, $2, CAST($3::text AS timestamptz), $4) \
                      ON CONFLICT (rule, key, minute) DO UPDATE SET count = enterprise_alert_counts.count + EXCLUDED.count",
@@ -1221,6 +1550,21 @@ impl Engine {
             if total < rule.count() {
                 return Ok(None);
             }
+            if rule.kind == RuleKind::DeploymentDown {
+                let answered: i64 = client
+                    .query_one(
+                        "SELECT coalesce(sum(count), 0)::bigint FROM enterprise_alert_counts \
+                         WHERE rule = $1 AND key = $2 AND minute >= date_trunc('minute', now()) - make_interval(mins => $3)",
+                        &[&rule.id, &format!("ok:{}", c.key), &rule.minutes()],
+                    )
+                    .await
+                    .map_err(db_error)?
+                    .try_get(0)
+                    .map_err(db_error)?;
+                if answered > 0 {
+                    return Ok(None);
+                }
+            }
             return Ok(Some(format!(
                 "{total} in the last {} minutes for {} (threshold {}); the latest: {}.",
                 rule.minutes(),
@@ -1280,8 +1624,164 @@ impl Engine {
                     )
                 }))
             }
+            kind if kind.unusual() => self.unusual(rule, &c.key).await,
             _ => Ok(Some(c.summary.clone())),
         }
+    }
+
+    /// Today's requests, error rate or average latency of a scope (`team:payments:2026-11-14`) against its last 14
+    /// days. `None` while it is within the rule's factor or below its floor.
+    async fn unusual(&self, rule: &Rule, key: &str) -> Result<Option<String>, String> {
+        let (scope, day) = key.rsplit_once(':').unwrap_or_default();
+        let client = self.db.client().await?;
+        let sum =
+            |row: &gantry_server::store::tokio_postgres::Row, i: usize| -> Result<f64, String> {
+                Ok(row.try_get::<_, i64>(i).map_err(db_error)? as f64)
+            };
+        let today = client
+            .query_one(
+                "SELECT coalesce(sum(requests), 0)::bigint, coalesce(sum(errors), 0)::bigint, coalesce(sum(latency_ms), 0)::bigint, \
+                 coalesce(sum(timed), 0)::bigint FROM enterprise_alert_daily WHERE scope = $1 AND day = $2",
+                &[&scope, &day],
+            )
+            .await
+            .map_err(db_error)?;
+        let past = client
+            .query_one(
+                "SELECT coalesce(sum(requests), 0)::bigint, coalesce(sum(errors), 0)::bigint, coalesce(sum(latency_ms), 0)::bigint, \
+                 coalesce(sum(timed), 0)::bigint FROM enterprise_alert_daily WHERE scope = $1 AND day < $2 \
+                 AND day >= to_char(CAST($2 AS date) - 14, 'YYYY-MM-DD')",
+                &[&scope, &day],
+            )
+            .await
+            .map_err(db_error)?;
+        let (requests, errors, latency, timed) = (
+            sum(&today, 0)?,
+            sum(&today, 1)?,
+            sum(&today, 2)?,
+            sum(&today, 3)?,
+        );
+        let (p_requests, p_errors, p_latency, p_timed) = (
+            sum(&past, 0)?,
+            sum(&past, 1)?,
+            sum(&past, 2)?,
+            sum(&past, 3)?,
+        );
+        Ok(match rule.kind {
+            RuleKind::UnusualRequests => {
+                let (factor, floor) = (rule.number("factor", 3.0), rule.number("count", 100.0));
+                let average = p_requests / 14.0;
+                (requests >= floor && requests >= factor * average).then(|| format!(
+                    "{scope} has sent {requests} requests today, against a daily average of {average:.1} over the last 14 days."
+                ))
+            }
+            RuleKind::UnusualErrors => {
+                let (factor, floor) = (rule.number("factor", 3.0), rule.number("count", 10.0));
+                let rate = errors / requests.max(1.0);
+                let baseline = p_errors / p_requests.max(1.0);
+                (errors >= floor && rate >= factor * baseline).then(|| format!(
+                    "{scope} has had {errors} errors today, {:.1}% of its requests, against {:.1}% over the last 14 days.",
+                    rate * 100.0,
+                    baseline * 100.0
+                ))
+            }
+            _ => {
+                let (factor, floor) = (rule.number("factor", 2.0), rule.number("count", 20.0));
+                let average = latency / timed.max(1.0);
+                let baseline = p_latency / p_timed.max(1.0);
+                (timed >= floor && p_timed > 0.0 && average >= factor * baseline).then(|| format!(
+                    "{scope} has averaged {average:.0} ms a request today, against {baseline:.0} ms over the last 14 days."
+                ))
+            }
+        })
+    }
+
+    /// The rules that watch state rather than records: keys nearing their expiry, and audit export destinations
+    /// behind the chain. Run once a minute on the tick.
+    pub(crate) async fn checks(&self) -> Result<(), String> {
+        let (rules, channels) = self.load().await?;
+        for rule in rules.iter().filter(|r| r.enabled) {
+            match rule.kind {
+                RuleKind::KeyExpiring => {
+                    let days = rule.number("days", 7.0).clamp(1.0, 365.0);
+                    let now = audit::timestamp();
+                    let horizon = audit::rfc3339(
+                        SystemTime::now() + Duration::from_secs_f64(days * 86_400.0),
+                    );
+                    let path = self.keys.clone();
+                    let entries = tokio::task::spawn_blocking(move || {
+                        gantry_core::config::read_keys(&path).map(|text| {
+                            text.map(|t| {
+                                gantry_core::config::key_entries(&path, &t).unwrap_or_default()
+                            })
+                            .unwrap_or_default()
+                        })
+                    })
+                    .await
+                    .map_err(|err| format!("the keys could not be read: {err}"))??;
+                    for entry in entries {
+                        let Some(at) = &entry.expires else { continue };
+                        if gantry_core::policy::expiry_passed(at, &now)
+                            || !gantry_core::policy::expiry_passed(at, &horizon)
+                        {
+                            continue;
+                        }
+                        let prefix = entry.sha256.get(..8).unwrap_or_default();
+                        self.fire(
+                            rule,
+                            &format!("{prefix}:{at}"),
+                            &format!(
+                                "key {prefix} of {} (team {}) expires at {at}. Rotate it with POST /admin/keys/{prefix}/rotate or gantry key rotate before then.",
+                                entry.name, entry.team
+                            ),
+                            Vec::new(),
+                            &channels,
+                        )
+                        .await?;
+                    }
+                }
+                RuleKind::ExportLagging => {
+                    let minutes = rule.number("minutes", 15.0).clamp(1.0, 10_080.0);
+                    let client = self.db.client().await?;
+                    let rows = client
+                        .query(
+                            "SELECT d.id, d.kind, coalesce(c.n, 0), \
+                             (SELECT count(*) FROM enterprise_audit a WHERE a.replica = $1 AND a.n > coalesce(c.n, 0)), \
+                             (SELECT coalesce(extract(epoch FROM now() - min(a.time)), 0)::float8 FROM enterprise_audit a \
+                              WHERE a.replica = $1 AND a.n > coalesce(c.n, 0)) \
+                             FROM enterprise_export_destinations d \
+                             LEFT JOIN enterprise_export_cursors c ON c.destination = d.id AND c.replica = $1",
+                            &[&self.replica],
+                        )
+                        .await
+                        .map_err(db_error)?;
+                    drop(client);
+                    for row in rows {
+                        let id: i64 = row.try_get(0).map_err(db_error)?;
+                        let kind: String = row.try_get(1).map_err(db_error)?;
+                        let waiting: i64 = row.try_get(3).map_err(db_error)?;
+                        let age: f64 = row.try_get(4).map_err(db_error)?;
+                        if waiting == 0 || age < minutes * 60.0 {
+                            continue;
+                        }
+                        self.fire(
+                            rule,
+                            &format!("{}:destination:{id}", self.replica),
+                            &format!(
+                                "audit export destination {id} ({kind}) is {:.0} minutes behind replica {}: {waiting} records wait. Its last error is on the Audit export page.",
+                                age / 60.0,
+                                self.replica
+                            ),
+                            Vec::new(),
+                            &channels,
+                        )
+                        .await?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// Fires an alert unless the rule fired for this subject within its quiet period or too often this hour. Each

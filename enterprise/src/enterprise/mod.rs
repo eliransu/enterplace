@@ -33,7 +33,7 @@ const SCIM: &[&str] = &[scim::MIGRATION];
 /// Entry 2 is the captured text of audit export (`capture`).
 const SIEM: &[&str] = &[siem::MIGRATION, capture::MIGRATION];
 /// Alert channels, rules and what fired. Runs after `SIEM`: alerting reads the records it ingests.
-const ALERTS: &[&str] = &[alerts::MIGRATION];
+const ALERTS: &[&str] = &[alerts::MIGRATION, alerts::DAILY];
 
 /// Before each feature had its namespace, every enterprise table was one list under `enterprise`: members, scim,
 /// siem. On a database a binary of then wrote, this records the per-feature version that list's version implies, so
@@ -162,7 +162,7 @@ pub fn extend_with(
         );
         match registered {
             Ok(exporter) if alerts_on => {
-                alerts::register(&mut extension, &exporter, &env);
+                alerts::register(&mut extension, &exporter, &env, host.keys.to_path_buf());
             }
             Ok(_) => {}
             Err(err) => eprintln!("warning: audit export, retention and alerts are off: {err}"),
@@ -378,6 +378,8 @@ pub(crate) mod testing {
         })?;
         let keys = gw.loaded.keys_path.clone();
         gantry_core::keyfile::add_entry("noa", "platform", ADMIN_KEY, true, &keys)?;
+        // In effect at once, so the admin API knows the key too, not only the console.
+        gw.reloader.check(gantry_server::Trigger::FileChange);
         Ok(Gateway {
             app: gw.router.clone(),
             keys,
