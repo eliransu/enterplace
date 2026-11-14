@@ -160,6 +160,8 @@ const KNOWN: &[&str] = &[
     "person_claim",
     "team_claim",
     "trusted_proxies",
+    "cors",
+    "allowed_origins",
     "from",
     "regions",
     "session_affinity",
@@ -220,6 +222,44 @@ struct PolicyFile {
     jwt: Vec<JwtFile>,
     #[serde(default)]
     trusted_proxies: Vec<String>,
+    #[serde(default)]
+    cors: Option<CorsFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CorsFile {
+    allowed_origins: Vec<String>,
+}
+
+/// `cors:` checked: each origin a scheme and a host (and a port), as a browser sends it in `Origin`, or `*`.
+fn cors_of(file: &CorsFile) -> Result<crate::policy::Cors, String> {
+    if file.allowed_origins.is_empty() {
+        return Err("cors lists no origin. List the origins of the pages that call Gantry, such as allowed_origins: [https://pivot.claude.ai], or remove cors: to answer none.".into());
+    }
+    let mut origins = Vec::new();
+    for origin in &file.allowed_origins {
+        let origin = origin.trim().to_ascii_lowercase();
+        let host = origin
+            .strip_prefix("https://")
+            .or_else(|| origin.strip_prefix("http://"));
+        let fits = origin == "*"
+            || host.is_some_and(|h| {
+                !h.is_empty()
+                    && h.chars().all(|c| {
+                        c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']')
+                    })
+            });
+        if !fits {
+            return Err(format!(
+                "cors: \"{origin}\" is not an origin. Write the scheme and host the page is served from, such as https://pivot.claude.ai or http://localhost:3000, with no path and no trailing slash; or \"*\" for any origin."
+            ));
+        }
+        origins.push(origin);
+    }
+    Ok(crate::policy::Cors {
+        allowed_origins: origins,
+    })
 }
 
 /// One entry of `limits:`: one kind of scope (`global: true`, or a name or `*`), its organization, and its limits.
@@ -3770,6 +3810,17 @@ pub fn load_texts(
             Vec::new()
         }
     };
+    let cors = match parsed.cors.as_ref().map(cors_of).transpose() {
+        Ok(cors) => cors,
+        Err(problem) => {
+            errors.push(format!(
+                "{}:{}: {problem}",
+                policy_path.display(),
+                line_of_key(policy_text, "cors", 1, usize::MAX)
+            ));
+            None
+        }
+    };
     let audit_path = match &parsed.audit {
         Some(audit) => audit.path.clone(),
         None => policy_path.with_file_name("gantry-audit.jsonl"),
@@ -3783,7 +3834,8 @@ pub fn load_texts(
                 .with_roles(roles)
                 .with_orgs(parsed.orgs.clone())
                 .with_jwt(jwt)
-                .with_trusted_proxies(trusted_proxies),
+                .with_trusted_proxies(trusted_proxies)
+                .with_cors(cors),
             providers,
             audit_path,
             keys_path: keys_file.to_path_buf(),

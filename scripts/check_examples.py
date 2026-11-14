@@ -14,7 +14,7 @@ GANTRY = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "target" / "
 
 
 # The minimal policy a fragment is pasted into. A section the fragment has replaces the one here.
-SECTIONS = ["providers", "orgs", "guardrails", "mcp", "profiles", "rules", "limits", "roles", "prices", "audit", "console", "store"]
+SECTIONS = ["providers", "orgs", "guardrails", "mcp", "profiles", "rules", "limits", "roles", "prices", "audit", "console", "store", "cors"]
 MINIMAL = {
     "providers": "providers:\n  - name: openai\n    kind: openai\n    url: https://api.openai.com/v1\n"
     "    key_env: OPENAI_API_KEY\n    models: [gpt-4o-mini]\n",

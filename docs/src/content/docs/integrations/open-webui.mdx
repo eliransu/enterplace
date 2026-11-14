@@ -45,7 +45,14 @@ Requests go to `POST /v1/chat/completions`.
 - Features configured with other providers: embeddings for documents, web search, image generation.
 
 <Aside type="caution">
-Direct connections are called from the browser, so they need CORS, which Gantry does not send. Put a reverse proxy in front of Gantry that answers `OPTIONS` and allows Open WebUI's origin, or use the admin connection.
+Direct connections are called from the browser, so they need CORS. Allow Open WebUI's origin in the policy, and Gantry answers the preflight itself:
+
+```yaml
+cors:
+  allowed_origins: [https://chat.example.com]
+```
+
+Use the address people open Open WebUI at. Without `cors:` (off by default) direct connections fail in the browser; the admin connection needs none. See [Browser pages (CORS)](/governance/access-control/#browser-pages-cors).
 </Aside>
 
 ## Related

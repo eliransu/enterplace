@@ -50,6 +50,22 @@ List only your own load balancers in `trusted_proxies`. An address listed there 
 
 A request whose address cannot be known (Gantry embedded without a listener) is refused under a `from` list: it fails closed.
 
+## Browser pages (CORS)
+
+A page that calls Gantry from the browser, such as the Claude add-in for Office or an Open WebUI direct connection, needs Gantry to answer cross-origin requests. `cors:` lists the origins allowed to. It is off by default: without it Gantry sends no CORS headers and a browser refuses every cross-origin call.
+
+```yaml
+cors:
+  allowed_origins: [https://pivot.claude.ai, https://chat.example.com]
+```
+
+- An origin is the scheme and host (and port) the page is served from, as the browser sends it in `Origin`: `https://pivot.claude.ai`, `http://localhost:3000`. No path, no trailing slash. `"*"` allows any origin.
+- Gantry answers the `OPTIONS` preflight of a listed origin itself, with the methods it serves and the headers the page asked for, and records nothing for it: a preflight carries no key.
+- The call itself is decided, governed and recorded as any other, with the caller's own Gantry key in `Authorization` or `x-api-key`. Its answer names the origin and lets the page read `x-gantry-decision`.
+- Credentials are never allowed (`Access-Control-Allow-Credentials` is never sent, with `"*"` or without): callers authenticate with a key in a header, never a cookie.
+- The console and the admin API answer no other origin, whatever `cors:` lists.
+- A change applies on the next reload, with no restart.
+
 ## JWTs from your identity provider
 
 A workload or a person can call the model routes with an access token from your identity provider, sent as `Authorization: Bearer <jwt>`, in place of a Gantry key. Gantry checks it and decides and records the request as the person the token names.

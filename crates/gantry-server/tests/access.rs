@@ -616,3 +616,240 @@ async fn a_jwt_from_a_trusted_issuer_is_decided_and_recorded_as_its_person_and_a
     assert_eq!(chat(&gw.router, MAYA, "m").await?.0, StatusCode::OK);
     Ok(())
 }
+
+/// A request from a browser page: the same call with an `Origin`, or the preflight a browser sends first.
+fn from_origin(
+    method: &str,
+    path: &str,
+    origin: &str,
+    extra: &[(&str, &str)],
+) -> Result<Request<Body>, Error> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::ORIGIN, origin)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {MAYA}"));
+    for (name, value) in extra {
+        builder = builder.header(*name, *value);
+    }
+    Ok(builder.body(Body::from(r#"{"model":"m","messages":[]}"#))?)
+}
+
+fn allowed_origin(response: &axum::response::Response) -> Option<&str> {
+    response
+        .headers()
+        .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+        .and_then(|v| v.to_str().ok())
+}
+
+#[tokio::test]
+async fn cors_is_off_by_default_and_answers_only_the_origins_the_policy_lists() -> TestResult {
+    let port = provider().await?.port();
+    let preflight = [
+        ("access-control-request-method", "POST"),
+        (
+            "access-control-request-headers",
+            "authorization, content-type, anthropic-version",
+        ),
+    ];
+
+    // Off by default: no CORS header on an answer, and a preflight is not answered as one.
+    let (gw, _) = gateway("cors-off", port, "", "")?;
+    let response = gw
+        .router
+        .clone()
+        .oneshot(from_origin(
+            "POST",
+            "/v1/chat/completions",
+            "https://pivot.claude.ai",
+            &[],
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(allowed_origin(&response), None);
+    let response = gw
+        .router
+        .clone()
+        .oneshot(from_origin(
+            "OPTIONS",
+            "/v1/chat/completions",
+            "https://pivot.claude.ai",
+            &preflight,
+        )?)
+        .await?;
+    assert_ne!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(allowed_origin(&response), None);
+
+    let (gw, dir) = gateway(
+        "cors-on",
+        port,
+        "cors:\n  allowed_origins: [https://pivot.claude.ai, https://chat.example.com:8443]\n",
+        "",
+    )?;
+    let before = records(&dir)?.len();
+    // The preflight from a listed origin: answered here, with the method and the headers asked for, and no
+    // credentials: Gantry is called with a key in a header, never with cookies.
+    let response = gw
+        .router
+        .clone()
+        .oneshot(from_origin(
+            "OPTIONS",
+            "/v1/messages",
+            "https://pivot.claude.ai",
+            &preflight,
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(allowed_origin(&response), Some("https://pivot.claude.ai"));
+    let headers = response.headers();
+    let text = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert!(text("access-control-allow-methods").contains("POST"));
+    assert_eq!(
+        text("access-control-allow-headers"),
+        "authorization, content-type, anthropic-version"
+    );
+    assert_eq!(text("vary"), "Origin");
+    assert!(
+        headers
+            .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+            .is_none()
+    );
+    assert_eq!(
+        records(&dir)?.len(),
+        before,
+        "a preflight is no request: nothing to record"
+    );
+
+    // The call itself: governed and recorded as any other, with the origin allowed and the decision readable.
+    let response = gw
+        .router
+        .clone()
+        .oneshot(from_origin(
+            "POST",
+            "/v1/chat/completions",
+            "https://chat.example.com:8443",
+            &[],
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        allowed_origin(&response),
+        Some("https://chat.example.com:8443")
+    );
+    assert!(text_of(&response, "access-control-expose-headers").contains("x-gantry-decision"));
+    assert!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+            .is_none()
+    );
+
+    // An origin not listed gets nothing, and neither does the admin API, from any origin.
+    let response = gw
+        .router
+        .clone()
+        .oneshot(from_origin(
+            "POST",
+            "/v1/chat/completions",
+            "https://evil.example",
+            &[],
+        )?)
+        .await?;
+    assert_eq!(allowed_origin(&response), None);
+    let response = gw
+        .router
+        .clone()
+        .oneshot(from_origin(
+            "OPTIONS",
+            "/v1/chat/completions",
+            "https://evil.example",
+            &preflight,
+        )?)
+        .await?;
+    assert_ne!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(allowed_origin(&response), None);
+    let response = gw
+        .router
+        .clone()
+        .oneshot(from_origin(
+            "GET",
+            "/admin/keys",
+            "https://pivot.claude.ai",
+            &[],
+        )?)
+        .await?;
+    assert_eq!(allowed_origin(&response), None);
+
+    // Any origin is the literal `*`, which browsers refuse with credentials, and none are offered.
+    let (gw, _) = gateway("cors-any", port, "cors:\n  allowed_origins: ['*']\n", "")?;
+    let response = gw
+        .router
+        .clone()
+        .oneshot(from_origin(
+            "POST",
+            "/v1/chat/completions",
+            "https://anywhere.example",
+            &[],
+        )?)
+        .await?;
+    assert_eq!(allowed_origin(&response), Some("*"));
+    assert!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+            .is_none()
+    );
+    Ok(())
+}
+
+fn text_of(response: &axum::response::Response, name: &str) -> String {
+    response
+        .headers()
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn a_cors_origin_is_a_scheme_and_a_host_or_any_origin() -> TestResult {
+    let dir = dir("cors-check")?;
+    let check = |cors: &str| -> Result<Result<(), String>, Error> {
+        let policy = dir.join("gantry.policy.yaml");
+        std::fs::write(
+            &policy,
+            format!(
+                "version: 1\nproviders:\n  - name: mock\n    kind: openai\n    url: https://api.openai.com\n    key_env: MOCK_KEY\n    models: [m]\n{cors}rules:\n  - name: everyone\n    principals: {{ any: true }}\n    models: [m]\n"
+            ),
+        )?;
+        std::fs::write(dir.join("gantry.keys.yaml"), "keys: []\n")?;
+        Ok(gantry_core::config::load(&policy, None)
+            .map(|_| ())
+            .map_err(|errors| errors.join("\n")))
+    };
+    assert!(
+        check("cors:\n  allowed_origins: [https://pivot.claude.ai, 'http://localhost:3000']\n")?
+            .is_ok()
+    );
+    assert!(check("cors:\n  allowed_origins: ['*']\n")?.is_ok());
+    for (bad, says) in [
+        (
+            "cors:\n  allowed_origins: [https://pivot.claude.ai/]\n",
+            "no path",
+        ),
+        ("cors:\n  allowed_origins: [pivot.claude.ai]\n", "no path"),
+        ("cors:\n  allowed_origins: []\n", "lists no origin"),
+        ("cors:\n  origins: [https://pivot.claude.ai]\n", "origins"),
+    ] {
+        let err = check(bad)?.err().ok_or(format!("accepted {bad}"))?;
+        assert!(err.contains(says), "{bad}: {err}");
+    }
+    Ok(())
+}

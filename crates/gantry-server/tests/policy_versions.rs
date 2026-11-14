@@ -627,7 +627,7 @@ async fn the_console_adds_a_model_edits_a_key_and_shows_teams_and_versions() -> 
 }
 
 /// Each policy field the other branches added, in one version: organizations, profiles, scoped limits, roles,
-/// JWT issuers, trusted proxies, residency, capture, the semantic and prompt caches, file retention, parallel.
+/// JWT issuers, trusted proxies, CORS origins, residency, capture, the semantic and prompt caches, file retention, parallel.
 fn every_field(port: u16) -> String {
     format!(
         "version: 1
@@ -647,6 +647,8 @@ jwt:
     jwks_url: https://login.example.com/jwks
     team: ops
 trusted_proxies: [10.0.0.0/8]
+cors:
+  allowed_origins: [https://pivot.claude.ai]
 profiles:
   - name: standard
     models: [m]
@@ -713,6 +715,10 @@ async fn every_policy_field_survives_a_saved_version_and_none_needs_a_restart() 
     assert_eq!(policy.roles().len(), 1);
     assert_eq!(policy.scope_limits().len(), 1);
     assert_eq!(policy.jwt().len(), 1);
+    assert_eq!(
+        policy.cors().map(|c| c.allowed_origins.clone()),
+        Some(vec!["https://pivot.claude.ai".to_string()])
+    );
     assert_eq!(
         policy.client_ip("10.0.0.1".parse()?, &["198.51.100.4"]),
         "198.51.100.4".parse::<std::net::IpAddr>()?

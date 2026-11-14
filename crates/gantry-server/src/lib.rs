@@ -34,6 +34,7 @@ mod admin;
 mod alias;
 mod batch;
 pub mod cloud;
+mod cors;
 mod credentials;
 pub mod insights;
 mod jwt;
@@ -726,6 +727,7 @@ fn build(
             .route("/admin/policy/{*rest}", any(policy_api::handle));
     }
     let mcp = mcp::router(&state, config.mcp, config.mcp_setup)?;
+    let cors_state = state.clone();
     let router = router
         .merge(batch::routes(keep))
         .merge(realtime::routes())
@@ -740,7 +742,13 @@ fn build(
         }
         None => router,
     };
-    let router = router.merge(config.extension.routes);
+    // Over every route but the console's, nested below; the layer itself skips the admin API.
+    let router = router
+        .merge(config.extension.routes)
+        .layer(axum::middleware::from_fn_with_state(
+            cors_state,
+            cors::layer,
+        ));
     let router = match console {
         Some(console) => router.nest(
             "/console",

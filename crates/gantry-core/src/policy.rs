@@ -1046,6 +1046,29 @@ pub struct Policy {
     jwt: Vec<JwtTrust>,
     /// Proxies whose `X-Forwarded-For` names the client. A request from anywhere else is taken by its own address.
     trusted_proxies: Vec<Cidr>,
+    /// `cors:`: the browser origins that may call the gateway's routes. None, the default, answers no origin.
+    cors: Option<Cors>,
+}
+
+/// `cors:` in the policy: pages served from these origins may call Gantry from the browser.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cors {
+    /// Lowercase `scheme://host[:port]`, or `*` for any origin.
+    pub allowed_origins: Vec<String>,
+}
+
+impl Cors {
+    /// What `Access-Control-Allow-Origin` says to a request from `origin`: the origin itself when it is listed,
+    /// `*` when any origin is, nothing otherwise.
+    pub fn allow<'a>(&self, origin: &'a str) -> Option<&'a str> {
+        if self.allowed_origins.iter().any(|o| o == "*") {
+            return Some("*");
+        }
+        self.allowed_origins
+            .iter()
+            .any(|o| o.eq_ignore_ascii_case(origin))
+            .then_some(origin)
+    }
 }
 
 impl Policy {
@@ -1134,6 +1157,15 @@ impl Policy {
     pub fn with_trusted_proxies(mut self, proxies: Vec<Cidr>) -> Self {
         self.trusted_proxies = proxies;
         self
+    }
+
+    pub fn with_cors(mut self, cors: Option<Cors>) -> Self {
+        self.cors = cors;
+        self
+    }
+
+    pub fn cors(&self) -> Option<&Cors> {
+        self.cors.as_ref()
     }
 
     /// The client's address: the connection's, or, from a trusted proxy, the last address in `X-Forwarded-For`

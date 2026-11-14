@@ -7,6 +7,12 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Browser access
+
+- `cors:` in the policy: `allowed_origins` lists the browser origins (or `"*"`) that may call Gantry's routes. Off by
+  default. Gantry answers the preflight itself and never allows credentials; the console and the admin API answer no
+  other origin. The Claude for Office and Open WebUI guides use it in place of a reverse proxy.
+
 ### One repository, one image
 
 - The enterprise features moved into this repository as `enterprise/`, under their own commercial license
