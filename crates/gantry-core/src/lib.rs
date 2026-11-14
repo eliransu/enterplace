@@ -5,6 +5,7 @@ pub mod catalog;
 pub mod chat;
 pub mod config;
 pub mod eventstream;
+pub mod fntools;
 pub mod gemini;
 pub mod guard;
 pub mod id;

@@ -2887,6 +2887,53 @@ async fn decide(
             Ok(Next::Forward(_, bytes, _)) if path.starts_with(PASSTHROUGH) => bytes.is_empty(),
             _ => path == TRANSCRIPTIONS,
         };
+    // The function tools a request declares are checked against the rule's tools: before the guardrails read it.
+    let mut tool_entries = Vec::new();
+    if let Some(rule) = seen
+        .rule
+        .filter(|r| gantry_core::fntools::checked(&r.tools))
+    {
+        let mut refused = None;
+        if let Ok(Next::Forward(parts, bytes, _)) = &mut outcome
+            && let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(bytes)
+        {
+            let verdict = gantry_core::fntools::request(&mut body, &rule.tools, rule.tool_strip);
+            tool_entries = verdict.audit;
+            if !verdict.refused.is_empty() {
+                refused = Some(Refusal::new(
+                    StatusCode::FORBIDDEN,
+                    gantry_core::fntools::NOT_ALLOWED,
+                    gantry_core::fntools::refusal(&rule.name, &verdict.refused, &rule.tools, false),
+                ));
+            } else if verdict.changed {
+                match serde_json::to_vec(&body) {
+                    Ok(stripped) => {
+                        parts
+                            .headers
+                            .insert(header::CONTENT_LENGTH, HeaderValue::from(stripped.len()));
+                        *bytes = Bytes::from(stripped);
+                    }
+                    // Never forward the tools that were to be stripped because the stripped body could not be written.
+                    Err(_) => {
+                        refused = Some(Refusal::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            gantry_core::fntools::NOT_ALLOWED,
+                            "Refused: the request with its disallowed function tools taken out could not be written, so it was not sent. Tell your Gantry admin.",
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some(refusal) = refused
+            && let Err(refusal) = enforce(
+                &mut seen,
+                refusal,
+                policy.observing(rule.shadow_until.as_deref()),
+            )
+        {
+            outcome = Err(refusal);
+        }
+    }
     outcome = match outcome {
         Ok(Next::Forward(parts, bytes, held)) if on_request && !not_text => {
             let (checked, entries) = guarded(state, guards, &seen, decision, parts, bytes).await;
@@ -2899,6 +2946,11 @@ async fn decide(
         }
         other => other,
     };
+    if !tool_entries.is_empty() {
+        let mut all = tool_entries;
+        all.extend(found.take().unwrap_or_default());
+        found = Some(all);
+    }
     // Limits come after the guardrails: the cache key and the budget's estimate are of the body that is sent, masked
     // if a guardrail masked it, and a request a guardrail blocks is never served from the cache or counted.
     outcome = match outcome {
@@ -2928,9 +2980,16 @@ async fn decide(
     };
     // Guardrails on the answer travel with the request (or a cached answer) to the end, where the answer is whole.
     let on_answer: Vec<Guardrail> = guards.iter().filter(|g| g.on.answer).cloned().collect();
-    if !on_answer.is_empty() && matches!(path.as_str(), CHAT | MESSAGES | RESPONSES) {
+    let answer_tools = seen
+        .rule
+        .filter(|r| gantry_core::fntools::checked(&r.tools))
+        .map(|r| (r.name.clone(), r.tools.clone(), r.tool_strip));
+    if (!on_answer.is_empty() || answer_tools.is_some())
+        && matches!(path.as_str(), CHAT | MESSAGES | RESPONSES)
+    {
         let check = AnswerCheck {
             guards: on_answer,
+            tools: answer_tools,
             person: seen.person.map(|p| p.name.clone()).unwrap_or_default(),
             team: seen.person.map(|p| p.team.clone()).unwrap_or_default(),
             path: path.clone(),
@@ -3422,6 +3481,8 @@ async fn guarded(
 #[derive(Clone)]
 struct AnswerCheck {
     guards: Vec<Guardrail>,
+    /// The rule's name, `tools:` list and `tool_action: strip`, when the list names function tools.
+    tools: Option<(String, Vec<String>, bool)>,
     person: String,
     team: String,
     path: String,
@@ -3477,21 +3538,52 @@ async fn answer_guarded(
             "Refused: the provider's answer is not JSON Gantry can read, and guardrails must check it before it is passed on. Try again. If it keeps happening, tell your Gantry admin.",
         )
     };
+    let mut tools = gantry_core::fntools::Verdict::default();
+    let mut tools_refusal = None;
     let (mut answer, pointers, texts) = if streamed {
         let slots = stream_texts(&bytes).ok_or_else(unreadable)?;
         let texts = slots.into_iter().map(|(_, text)| text.into()).collect();
         (serde_json::Value::Null, Vec::new(), texts)
     } else {
-        let answer: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| unreadable())?;
+        let mut answer: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|_| unreadable())?;
+        if let Some((rule, patterns, strip)) = &check.tools {
+            tools = gantry_core::fntools::answer(&mut answer, patterns, *strip);
+            if !tools.refused.is_empty() {
+                tools_refusal = Some(gantry_core::fntools::refusal(
+                    rule,
+                    &tools.refused,
+                    patterns,
+                    true,
+                ));
+            }
+        }
         let pointers = answer_texts(&answer);
+        // Tool arguments given as a JSON object (Anthropic's tool_use input, Gemini's functionCall args) are read
+        // as their JSON text.
         let texts: Vec<serde_json::Value> = pointers
             .iter()
-            .map(|p| answer.pointer(p).cloned().unwrap_or_default())
+            .map(|p| match answer.pointer(p) {
+                Some(serde_json::Value::String(text)) => text.clone().into(),
+                Some(other) => other.to_string().into(),
+                None => serde_json::Value::Null,
+            })
             .collect();
         (answer, pointers, texts)
     };
-    let verdict = answer_verdict(state, &check, decision, &texts).await;
-    let word = match (&verdict.blocked, verdict.changed) {
+    let mut verdict = answer_verdict(state, &check, decision, &texts).await;
+    let mut all = std::mem::take(&mut tools.audit);
+    all.append(&mut verdict.audit);
+    verdict.audit = all;
+    if let Some(message) = &tools_refusal
+        && verdict.blocked.is_none()
+    {
+        verdict.blocked = Some(guard::Blocked {
+            guardrail: "tools".into(),
+            message: message.clone(),
+        });
+    }
+    let word = match (&verdict.blocked, verdict.changed || tools.changed) {
         (Some(_), _) => "block",
         (None, true) => "mask",
         (None, false) => "pass",
@@ -3518,6 +3610,15 @@ async fn answer_guarded(
     if let Some(gate) = gate {
         gate.passed(true);
     }
+    if let (Some(message), Some(blocked)) = (&tools_refusal, &verdict.blocked)
+        && blocked.guardrail == "tools"
+    {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            gantry_core::fntools::NOT_ALLOWED,
+            message.clone(),
+        ));
+    }
     if let Some(blocked) = verdict.blocked {
         let kinds: Vec<String> = verdict
             .audit
@@ -3535,7 +3636,7 @@ async fn answer_guarded(
             ),
         ));
     }
-    if !verdict.changed {
+    if !verdict.changed && !tools.changed {
         return Ok(Response::from_parts(parts, Body::from(bytes)));
     }
     let masked_text = |i: usize| {
@@ -3556,7 +3657,14 @@ async fn answer_guarded(
             answer.pointer_mut(pointer),
             verdict.body.pointer(&format!("/messages/{i}/content")),
         ) {
-            *slot = masked.clone();
+            if slot.is_string() {
+                *slot = masked.clone();
+            } else if let Some(text) = masked.as_str()
+                && text != texts[i].as_str().unwrap_or_default()
+            {
+                // Masked JSON arguments must still be JSON; arguments that are not are withheld, never sent unmasked.
+                *slot = serde_json::from_str(text).map_err(|_| unreadable())?;
+            }
         }
     }
     let masked = serde_json::to_vec(&answer).map_err(|_| unreadable())?;
@@ -3880,8 +3988,9 @@ fn replace_texts(value: &mut serde_json::Value, swap: &[(&str, &str)]) {
 }
 
 /// Where the model's text is in a whole answer, as JSON pointers: chat completions (`choices[].message.content`
-/// and tool call arguments), messages (`content[].text`, tool_use input is JSON and not text) and Responses
-/// (`output[].content[].text`).
+/// and tool call arguments), messages (`content[].text` and tool_use `input`), Responses (`output[].content[].text`
+/// and function_call `arguments`) and Gemini (`candidates[].content.parts[].text` and functionCall `args`). A
+/// pointer may lead to a JSON object (tool input or args), which the guardrails read as its JSON text.
 fn answer_texts(answer: &serde_json::Value) -> Vec<String> {
     let mut pointers = Vec::new();
     let list = |v: &serde_json::Value| v.as_array().cloned().unwrap_or_default();
@@ -3902,12 +4011,30 @@ fn answer_texts(answer: &serde_json::Value) -> Vec<String> {
             if block["text"].is_string() {
                 pointers.push(format!("/content/{i}/text"));
             }
+            if block["type"] == "tool_use" && block["input"].is_object() {
+                pointers.push(format!("/content/{i}/input"));
+            }
         }
     }
     for (i, item) in list(&answer["output"]).iter().enumerate() {
         for (j, part) in list(&item["content"]).iter().enumerate() {
             if part["text"].is_string() {
                 pointers.push(format!("/output/{i}/content/{j}/text"));
+            }
+        }
+        if item["type"] == "function_call" && item["arguments"].is_string() {
+            pointers.push(format!("/output/{i}/arguments"));
+        }
+    }
+    for (i, candidate) in list(&answer["candidates"]).iter().enumerate() {
+        for (j, part) in list(&candidate["content"]["parts"]).iter().enumerate() {
+            if part["text"].is_string() {
+                pointers.push(format!("/candidates/{i}/content/parts/{j}/text"));
+            }
+            if part["functionCall"]["args"].is_object() {
+                pointers.push(format!(
+                    "/candidates/{i}/content/parts/{j}/functionCall/args"
+                ));
             }
         }
     }

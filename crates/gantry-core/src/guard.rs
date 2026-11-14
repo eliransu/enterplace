@@ -850,7 +850,6 @@ pub struct TextPart {
 /// The text parts of a chat completions, messages, responses or embeddings request: the system prompt or
 /// instructions, every message's text, every input text, and the text inside tool results, text documents and
 /// search results. Images, files, tool definitions, tool arguments and all other fields are not text Gantry checks.
-// ponytail: tool_use arguments are not walked. Add them when a policy needs them checked.
 pub fn text_parts(body: &Value) -> Vec<TextPart> {
     let mut parts = Vec::new();
     content(body.get("system"), "/system", "system", &mut parts);
@@ -921,6 +920,38 @@ pub fn text_parts(body: &Value) -> Vec<TextPart> {
                 ),
                 _ => {}
             }
+        }
+    }
+    // Gemini's generateContent: systemInstruction and contents, each a list of parts of which the text ones count.
+    let gemini = |parts: &mut Vec<TextPart>, list: &Value, at: &str, role: &str| {
+        for (j, part) in list.as_array().into_iter().flatten().enumerate() {
+            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                parts.push(TextPart {
+                    path: format!("{at}/{j}/text"),
+                    role: role.to_string(),
+                    text: text.to_string(),
+                });
+            }
+        }
+    };
+    for key in ["systemInstruction", "system_instruction"] {
+        if let Some(list) = body.get(key).and_then(|s| s.get("parts")) {
+            gemini(&mut parts, list, &format!("/{key}/parts"), "system");
+        }
+    }
+    for (i, turn) in body
+        .get("contents")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let role = match turn.get("role").and_then(Value::as_str) {
+            Some("model") => "assistant",
+            _ => "user",
+        };
+        if let Some(list) = turn.get("parts") {
+            gemini(&mut parts, list, &format!("/contents/{i}/parts"), role);
         }
     }
     parts
@@ -1417,6 +1448,7 @@ fn place(path: &str) -> String {
         ("system", _) => "the system prompt".to_string(),
         ("instructions", _) => "the instructions".to_string(),
         ("input", None) => "the input".to_string(),
+        ("contents", Some(n)) => format!("content {}", n + 1),
         _ => return format!("at {path}"),
     };
     format!("in {words} ({path})")
@@ -2033,6 +2065,34 @@ pub fn since_seconds(text: &str) -> Result<u64, String> {
 
 /// Why `--since` has nothing to read: the audit log holds no text by design, and this build keeps no request bodies.
 pub const NO_CAPTURE: &str = "a backtest over recent traffic reads captured request bodies, and this Gantry keeps none: the audit log holds no prompt text by design. Pass a corpus of examples instead (--corpus <file.jsonl>, or \"corpus\" in the admin API).";
+
+#[cfg(test)]
+mod gemini_tests {
+    use super::*;
+
+    #[test]
+    fn gemini_system_instruction_and_contents_are_text_the_guardrails_read() {
+        let body = serde_json::json!({
+            "systemInstruction": {"parts": [{"text": "be brief"}]},
+            "contents": [{"role": "user", "parts": [{"text": "hi"}, {"inlineData": {}}]}, {"role": "model", "parts": [{"text": "yo"}]}]
+        });
+        let got: Vec<(String, String)> = text_parts(&body)
+            .into_iter()
+            .map(|p| (p.path, p.role))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "/systemInstruction/parts/0/text".to_string(),
+                    "system".to_string()
+                ),
+                ("/contents/0/parts/0/text".into(), "user".into()),
+                ("/contents/1/parts/0/text".into(), "assistant".into()),
+            ]
+        );
+    }
+}
 
 #[cfg(test)]
 mod redact_tests {
@@ -2902,6 +2962,7 @@ rules:
             limits: crate::policy::Limits::default(),
             passthrough: Vec::new(),
             tools: Vec::new(),
+            tool_strip: false,
             mcp: crate::mcp::McpRule::default(),
             org: None,
             profiles: Vec::new(),
@@ -3052,6 +3113,7 @@ rules:
                 limits: crate::policy::Limits::default(),
                 passthrough: Vec::new(),
                 tools: Vec::new(),
+                tool_strip: false,
                 mcp: crate::mcp::McpRule::default(),
                 org: None,
                 profiles: Vec::new(),

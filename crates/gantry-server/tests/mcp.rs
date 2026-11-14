@@ -1699,3 +1699,78 @@ async fn observe_mode_forwards_tools_the_rule_does_not_allow_and_records_them() 
     }
     Ok(())
 }
+
+async fn rpc_with(
+    app: &Router,
+    key: &str,
+    narrow: &str,
+    message: Value,
+) -> Result<(StatusCode, Value), Error> {
+    let request = Request::post("/mcp")
+        .header(header::AUTHORIZATION, format!("Bearer {key}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .header("x-gantry-mcp-tools", narrow)
+        .body(Body::from(message.to_string()))?;
+    let response = app.clone().oneshot(request).await?;
+    let status = response.status();
+    let body = response.into_body().collect().await?.to_bytes();
+    Ok((status, message_of(&body)))
+}
+
+fn listed(list: &Value) -> Vec<String> {
+    let mut names: Vec<String> = list["result"]["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t["name"].as_str().map(String::from))
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_and_a_header_narrow_the_rules_tools_and_never_widen_them() -> TestResult {
+    let calls = Calls::default();
+    let dir = setup("narrow", &calls).await?;
+    // Maya's key narrows her rule to docs; the header can narrow further, and cannot widen past either.
+    std::fs::write(
+        dir.join("gantry.keys.yaml"),
+        format!(
+            "keys:\n{}    mcp_tools: [\"docs.*\", \"github.create_issue\", \"!docs.read\"]\n",
+            entry("maya.cohen", "payments", MAYA)
+        ),
+    )?;
+    let app = gateway(&dir)?;
+    let list = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+    let (_, by_key) = rpc(&app, MAYA, list.clone()).await?;
+    assert_eq!(listed(&by_key), ["docs.search", "github.create_issue"]);
+    let (_, by_header) = rpc_with(&app, MAYA, "docs.*, github.*", list.clone()).await?;
+    assert_eq!(listed(&by_header), ["docs.search", "github.create_issue"]);
+    let (_, narrower) = rpc_with(&app, MAYA, "docs.*", list.clone()).await?;
+    assert_eq!(listed(&narrower), ["docs.search"]);
+
+    // A call the rule allows and the key leaves out is refused, naming the narrowing.
+    let (_, refused) = rpc(&app, MAYA, call(2, "github.list_issues")).await?;
+    assert_eq!(refused["error"]["data"]["gantry_code"], "tool_not_allowed");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("mcp_tools")),
+        "{refused}"
+    );
+    let (_, refused) = rpc_with(&app, MAYA, "docs.*", call(3, "github.create_issue")).await?;
+    assert_eq!(refused["error"]["data"]["gantry_code"], "tool_not_allowed");
+    // Widening is impossible: the rule still refuses what it never allowed.
+    let (_, refused) = rpc_with(&app, MAYA, "*", call(4, "github.delete_repo")).await?;
+    assert_eq!(refused["error"]["data"]["gantry_code"], "tool_not_allowed");
+    let (_, bad) = rpc_with(&app, MAYA, "not a tool", list).await?;
+    assert_eq!(
+        bad["error"]["data"]["gantry_code"], "invalid_request",
+        "{bad}"
+    );
+    assert!(ran(&calls).is_empty());
+    let (_, ok) = rpc(&app, MAYA, call(5, "docs.search")).await?;
+    assert_eq!(ok["result"]["content"][0]["text"], "docs ran search");
+    Ok(())
+}

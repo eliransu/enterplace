@@ -245,12 +245,13 @@ struct NewKey {
     routes: Option<Value>,
     #[serde(default)]
     from: Option<Value>,
+    #[serde(default)]
+    mcp_tools: Option<Value>,
 }
 
 /// The key fields `PATCH /admin/keys/<prefix>` changes. Name, team, org, role and admin are not among them: a new
 /// name or organization is a new key, and rights are given only when a key is issued.
-const UPDATABLE: &str =
-    "expires, budget, models, tpm, rpm, parallel, customer, tags, metadata, routes and from";
+const UPDATABLE: &str = "expires, budget, models, tpm, rpm, parallel, customer, tags, metadata, routes, from and mcp_tools";
 
 /// Sets one field of `entry` from its JSON value, or says what is wrong with it. `null` clears the field.
 fn apply(
@@ -354,6 +355,7 @@ fn apply(
             }
         }
         "routes" => entry.options.routes = list()?,
+        "mcp_tools" => entry.options.mcp_tools = list()?,
         "from" => entry.options.from = config::cidrs(&list()?)?,
         "metadata" => {
             entry.options.metadata = match value {
@@ -402,6 +404,7 @@ fn key_json(entry: &config::KeyEntry) -> Value {
         "routes": o.routes,
         "from": o.from.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "replaced_by": o.replaced_by,
+        "mcp_tools": o.mcp_tools,
     })
 }
 
@@ -924,7 +927,7 @@ async fn allow(
         "issue_key" => {
             let (bytes, _held) = read_body(Some(&person.name), state, &parts.headers, body).await?;
             let new: NewKey = serde_json::from_slice(&bytes).map_err(|err| {
-                refused(StatusCode::BAD_REQUEST, "invalid_request", format!("Refused: send a JSON object with \"name\" and \"team\", and optionally \"expires\", \"budget\", \"models\", \"tpm\", \"org\", \"customer\", \"tags\", \"parallel\", \"role\", \"rpm\", \"metadata\", \"routes\" and \"from\" ({err})."))
+                refused(StatusCode::BAD_REQUEST, "invalid_request", format!("Refused: send a JSON object with \"name\" and \"team\", and optionally \"expires\", \"budget\", \"models\", \"tpm\", \"org\", \"customer\", \"tags\", \"parallel\", \"role\", \"rpm\", \"metadata\", \"routes\", \"from\" and \"mcp_tools\" ({err})."))
             })?;
             let mut extra = config::KeyEntry::default();
             for (field, value) in [
@@ -932,6 +935,7 @@ async fn allow(
                 ("metadata", &new.metadata),
                 ("routes", &new.routes),
                 ("from", &new.from),
+                ("mcp_tools", &new.mcp_tools),
             ] {
                 if let Some(value) = value {
                     apply(&mut extra, field, value, &[]).map_err(|problem| {

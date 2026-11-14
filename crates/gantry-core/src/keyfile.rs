@@ -294,6 +294,12 @@ fn entry_text(name: &str, team: &str, hash: &str, attributes: &Attributes) -> St
     if !o.routes.is_empty() {
         entry.push_str(&format!("    routes: {}\n", json(o.routes.clone().into())));
     }
+    if !o.mcp_tools.is_empty() {
+        entry.push_str(&format!(
+            "    mcp_tools: {}\n",
+            json(o.mcp_tools.clone().into())
+        ));
+    }
     if !o.from.is_empty() {
         let from: Vec<String> = o.from.iter().map(ToString::to_string).collect();
         entry.push_str(&format!("    from: {}\n", json(from.into())));
@@ -323,6 +329,9 @@ pub fn options_json(options: &KeyOptions) -> Option<String> {
     }
     if !options.routes.is_empty() {
         map.insert("routes".into(), options.routes.clone().into());
+    }
+    if !options.mcp_tools.is_empty() {
+        map.insert("mcp_tools".into(), options.mcp_tools.clone().into());
     }
     if !options.from.is_empty() {
         let from: Vec<String> = options.from.iter().map(ToString::to_string).collect();
@@ -376,6 +385,7 @@ pub fn options_from_json(text: &str) -> Result<KeyOptions, String> {
         rpm: number("rpm")?,
         metadata,
         routes: list("routes")?,
+        mcp_tools: list("mcp_tools")?,
         from: config::cidrs(&list("from")?)?,
         replaced_by: value
             .get("replaced_by")
@@ -1082,6 +1092,7 @@ mod tests {
             routes: vec!["/v1/chat/completions".into()],
             from: vec!["10.0.0.0/8".parse()?, "2001:db8::/32".parse()?],
             replaced_by: None,
+            mcp_tools: vec!["github.*".into(), "!github.delete_repo".into()],
         };
         // The hierarchy's fields are written beside the options, a tag YAML reads specially ("yes") as text.
         let attributes = Attributes {
@@ -1115,6 +1126,10 @@ mod tests {
             },
             with(KeyOptions {
                 routes: vec!["v1/chat".into()],
+                ..KeyOptions::default()
+            }),
+            with(KeyOptions {
+                mcp_tools: vec!["no server".into()],
                 ..KeyOptions::default()
             }),
             Attributes {
