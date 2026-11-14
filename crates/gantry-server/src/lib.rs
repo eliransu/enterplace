@@ -2653,13 +2653,13 @@ async fn decide(
     let path = request.uri().path().to_string();
     // Holds the person a JWT names, for as long as the record of this request needs it.
     let minted = std::sync::OnceLock::new();
-    // The coding agent or SDK that sent it, for the request log. Cut like any caller-chosen string.
-    let agent: Option<String> = request
+    // The coding tool or SDK that sent it: the request log and the coverage report read it from the record.
+    let user_agent = request
         .headers()
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .filter(|v| !v.is_empty())
-        .map(|v| v.chars().take(200).collect());
+        .map(str::to_owned);
     let mut seen = Seen::default();
     let mut outcome = check(
         state, version, policy, request, &mut seen, &minted, client_ip,
@@ -2762,6 +2762,7 @@ async fn decide(
             person: seen.person.map(|p| p.name.as_str()),
             team: seen.person.map(|p| p.team.as_str()),
             client: client.as_deref(),
+            user_agent: user_agent.as_deref(),
             key: seen.key.as_deref(),
             method: &method,
             path: &path,
@@ -2778,9 +2779,6 @@ async fn decide(
         };
         // The record is written before anything is forwarded. A request that cannot be recorded does not happen.
         let mut record = gantry_core::audit::record(&entry);
-        if let Some(agent) = &agent {
-            record.insert("agent".into(), agent.as_str().into());
-        }
         if let Some(found) = &found {
             record.insert(
                 "guardrails".into(),

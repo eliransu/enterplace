@@ -163,7 +163,7 @@ async fn records_carry_the_agent_and_latency_and_a_failed_upstream_is_an_error()
     .await?;
     assert_eq!(status, StatusCode::OK);
     let decision = record(&audit, None, &id).await?;
-    assert_eq!(decision["agent"], "claude-cli/2.0.1 (external, cli)");
+    assert_eq!(decision["user_agent"], "claude-cli/2.0.1 (external, cli)");
     let usage = record(&audit, Some("usage"), &id).await?;
     assert!(usage["latency_ms"].as_u64().is_some(), "{usage}");
     assert!(
@@ -306,7 +306,7 @@ fn decision(id: &str, team: &str, allowed: bool) -> serde_json::Map<String, Valu
         provider: if allowed { "openai" } else { "" },
         ..gantry_core::audit::Entry::default()
     });
-    r.insert("agent".into(), "codex_cli_rs/0.1".into());
+    r.insert("user_agent".into(), "codex_cli_rs/0.1".into());
     r
 }
 
@@ -363,7 +363,7 @@ async fn the_index_holds_every_replica_and_answers_as_the_local_chain_does() -> 
         &[("team", "search")],
         &[("outcome", "error")],
         &[("outcome", "refused"), ("code", "model_not_allowed")],
-        &[("min_cost", "0.1"), ("agent", "codex_cli_rs")],
+        &[("min_cost", "0.1"), ("agent", "codex")],
         &[("min_ms", "2000")],
     ];
     for pairs in fields {

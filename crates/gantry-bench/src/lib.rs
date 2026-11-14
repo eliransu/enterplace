@@ -67,11 +67,23 @@ impl http_body::Body for Chunks {
 /// Starts an upstream that answers every chat request at once with a fixed body,
 /// or with a stream of chunks of different lengths when the request asks for one.
 pub async fn spawn_mock_upstream(addr: SocketAddr) -> Result<SocketAddr, BoxError> {
-    async fn chat(request: Request<Body>) -> Response {
+    spawn_mock_upstream_with_latency(addr, Duration::ZERO).await
+}
+
+/// The same upstream, waiting `latency` before each answer, as a real provider does. Bifrost publishes its
+/// overhead against a mock that takes about 1.5 s; this reproduces that setup.
+pub async fn spawn_mock_upstream_with_latency(
+    addr: SocketAddr,
+    latency: Duration,
+) -> Result<SocketAddr, BoxError> {
+    async fn chat(latency: Duration, request: Request<Body>) -> Response {
         // The mock reads at most 1 MiB: enough to look for the stream flag, and a bound on what a test can send it.
         let Ok(body) = axum::body::to_bytes(request.into_body(), 1 << 20).await else {
             return StatusCode::PAYLOAD_TOO_LARGE.into_response();
         };
+        if !latency.is_zero() {
+            tokio::time::sleep(latency).await;
+        }
         if body.windows(13).any(|w| w == b"\"stream\":true") {
             let mut chunks: VecDeque<Bytes> = STREAM_WORDS
                 .iter()
@@ -95,8 +107,11 @@ pub async fn spawn_mock_upstream(addr: SocketAddr) -> Result<SocketAddr, BoxErro
     let bound = listener.local_addr()?;
     // The mock answers both routes the same way: the bench measures the gateway, not the provider.
     let app = Router::new()
-        .route("/v1/chat/completions", post(chat))
-        .route("/v1/messages", post(chat));
+        .route(
+            "/v1/chat/completions",
+            post(move |request| chat(latency, request)),
+        )
+        .route("/v1/messages", post(move |request| chat(latency, request)));
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -244,7 +259,39 @@ fn own_time(response: &Response<hyper::body::Incoming>) -> Option<Duration> {
 /// Open loop on purpose: a slow answer does not delay the next request. A closed loop would hide
 /// exactly the stalls this is here to find.
 pub async fn run_load(target: SocketAddr, load: Load) -> Result<Report, BoxError> {
-    let client: Client<_, Body> = Client::builder(TokioExecutor::new()).build_http();
+    run_load_on(&load_client(), target, load).await
+}
+
+/// The load generator's HTTP client. Its pool keeps connections open between runs that share it.
+pub type LoadClient = Client<hyper_util::client::legacy::connect::HttpConnector, Body>;
+
+pub fn load_client() -> LoadClient {
+    Client::builder(TokioExecutor::new()).build_http()
+}
+
+/// Raises the rate to `load.rps` in five one-second steps, on `client`, so the connections a slow upstream
+/// needs (rate times latency, 7,500 at 5,000 a second and 1.5 s) are opened gradually and kept in its pool.
+/// Opened all at once, they overflow the listen queue and the run measures connection retries.
+/// Returns how many requests it sent.
+pub async fn ramp(client: &LoadClient, target: SocketAddr, load: Load) -> Result<usize, BoxError> {
+    let mut sent = 0;
+    for percent in [10, 25, 50, 75, 100] {
+        let step = Load {
+            rps: (load.rps * percent / 100).max(1),
+            duration: Duration::from_secs(1),
+            ..load
+        };
+        sent += run_load_on(client, target, step).await?.sent;
+    }
+    Ok(sent)
+}
+
+/// [`run_load`] on a client the caller keeps, so its warm connections are reused.
+pub async fn run_load_on(
+    client: &LoadClient,
+    target: SocketAddr,
+    load: Load,
+) -> Result<Report, BoxError> {
     let (path, body) = match (load.messages, load.stream) {
         (false, false) => ("/v1/chat/completions", CHAT_REQUEST),
         (false, true) => ("/v1/chat/completions", CHAT_REQUEST_STREAM),

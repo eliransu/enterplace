@@ -634,16 +634,15 @@ async fn serve(
     request: Request,
     decision: &str,
 ) -> Result<Response, Refusal> {
-    let client = request
-        .extensions()
-        .get::<crate::ClientAddr>()
-        .map(|addr| addr.0.ip().to_string());
+    // The client's own address, as the model routes record it: from a trusted proxy, the one it names.
+    let client = crate::client_ip(policy, request.extensions().get(), request.headers())
+        .map(|ip| ip.to_string());
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
     // Holds the person a JWT names, for as long as the record of this request needs it.
     let minted = std::sync::OnceLock::new();
     let mut seen = Seen::default();
-    let mut extra = Map::new();
+    let mut extra = user_agent_of(request.headers());
     let prepared = prepare(
         state, version, policy, request, decision, &minted, &mut seen, &mut extra,
     )
@@ -686,6 +685,23 @@ async fn serve(
         }
     };
     after(state, version, decision, ready, answer).await
+}
+
+/// The caller's `user-agent` as the decision record's field, cut as `audit::record` cuts it: the coverage report
+/// and the request log read it.
+pub(crate) fn user_agent_of(headers: &HeaderMap) -> Map<String, Value> {
+    let mut fields = Map::new();
+    if let Some(agent) = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
+    {
+        fields.insert(
+            "user_agent".into(),
+            agent.chars().take(200).collect::<String>().into(),
+        );
+    }
+    fields
 }
 
 fn release(state: &AppState, reserved: &[Value]) {
@@ -1837,6 +1853,8 @@ pub(crate) async fn record_decision(
         person: seen.person.map(|p| p.name.as_str()),
         team: seen.person.map(|p| p.team.as_str()),
         client,
+        // Carried in `extra` (`user_agent_of`), so the decision record names the tool as on the model routes.
+        user_agent: None,
         key: seen.key.as_deref(),
         method,
         path,

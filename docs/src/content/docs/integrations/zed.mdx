@@ -1,0 +1,78 @@
+---
+title: Zed
+description: Send Zed's agent and inline assistant through Gantry as an OpenAI-compatible or Anthropic-compatible provider.
+sidebar:
+  order: 13
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Zed takes extra providers under `language_models` in its `settings.json`. Add Gantry as one, and the Zed Agent, the inline assistant, commit messages and thread summaries send through it.
+
+## Setup
+
+<Tabs>
+<TabItem label="OpenAI compatible">
+
+```json title="settings.json"
+{
+  "language_models": {
+    "openai_compatible": {
+      "gantry": {
+        "api_url": "http://127.0.0.1:8080/v1",
+        "available_models": [
+          { "name": "gpt-4o-mini", "display_name": "gpt-4o-mini via Gantry", "max_tokens": 128000 }
+        ]
+      }
+    }
+  }
+}
+```
+
+Requests go to `POST /v1/chat/completions`. A model with `"capabilities": { "chat_completions": false }` uses `POST /v1/responses` instead.
+
+</TabItem>
+<TabItem label="Anthropic compatible">
+
+```json title="settings.json"
+{
+  "language_models": {
+    "anthropic_compatible": {
+      "gantry": {
+        "api_url": "http://127.0.0.1:8080",
+        "available_models": [
+          { "name": "claude-sonnet-4-5", "display_name": "Claude via Gantry", "max_tokens": 200000, "max_output_tokens": 32000 }
+        ]
+      }
+    }
+  }
+}
+```
+
+Requests go to `POST /v1/messages`, where refusals use Anthropic's error shape.
+
+</TabItem>
+</Tabs>
+
+Enter the Gantry key in the Agent panel's settings (**Add Provider** under LLM Providers), which keeps it in the system keychain, or set it in the variable Zed derives from the provider ID: `GANTRY_API_KEY` for the ID `gantry`. Zed's docs say not to put keys in `settings.json`.
+
+## What Gantry governs
+
+- Every request from the features that use `language_models`: the Zed Agent, the inline assistant, Git commit messages and thread summaries.
+
+## What Gantry does not see
+
+- Edit predictions. They have their own provider under `edit_predictions`, Zed's hosted Zeta model by default. The `open_ai_compatible_api` option there needs `POST /v1/completions`, which Gantry does not serve.
+- External agents and terminal threads, which use their own configuration. Point those agents at Gantry in their own settings, for example [Claude Code](/integrations/claude-code/).
+- Zed's hosted models and Copilot in Zed.
+
+<Aside type="note">
+This follows Zed's AI documentation (LLM providers, API access, edit prediction). It was not run through Gantry.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Anthropic's coding agent over the messages API." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code Gantry returns and what to do about it." />
+</CardGrid>

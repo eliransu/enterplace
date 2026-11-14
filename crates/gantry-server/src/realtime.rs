@@ -146,12 +146,12 @@ async fn open(
             &state,
             &version,
             &decision,
-            None,
+            client_ip.map(|ip| ip.to_string()).as_deref(),
             "GET",
             api.path(),
             &seen,
             refused,
-            Map::new(),
+            batch::user_agent_of(&headers),
         )
         .await
         {

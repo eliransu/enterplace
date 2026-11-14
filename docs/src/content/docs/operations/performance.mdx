@@ -1,0 +1,78 @@
+---
+title: Performance
+description: How Gantry's added latency is measured, two ways, one of them Bifrost's published setup, and the commands to reproduce both.
+sidebar:
+  order: 6
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+`gantry-bench` measures what Gantry adds to a request. This page states two methods: Bifrost's published setup, so the figures can be compared, and Gantry's own, which counts everything Gantry does on a request.
+
+<Aside type="caution">
+Numbers pending. The runs on this page wait for a quiet machine and for the cloud instances below. No figure is published until then.
+</Aside>
+
+## The two methods
+
+| | Bifrost's published setup | Gantry's own |
+|---|---|---|
+| Rate | 5,000 requests a second | 1,000 requests a second (the CI gate) and 5,000 |
+| Mock upstream | Answers after about 1.5 s | Answers at once |
+| Payload | A short chat request; an answer of about 1.4 KB (t3.medium) or 10 KB (t3.xlarge) | A short chat request; an answer of about 250 bytes |
+| Figure | Mean time inside the gateway, excluding JSON marshalling and the HTTP calls | Added latency at p50 and p99 as the client sees it, plus Gantry's self-time |
+| Hardware | AWS t3.medium (2 vCPU, 4 GB) and t3.xlarge (4 vCPU, 16 GB) | The machine the run is on, stated with the numbers |
+
+Bifrost's documentation does not state the mock's latency. Its measured HTTP request time was 1.56 s on t3.medium and 1.50 s on t3.xlarge, so 1.5 s reproduces it. It publishes means only, no percentiles, and does not name the load generator behind the published figures.
+
+## What each figure includes
+
+| Figure | Includes | Excludes |
+|---|---|---|
+| Bifrost overhead | Queue wait, key selection, message formatting, parameter and body preparation, request setup, error handling | JSON marshalling, the HTTP call to the provider, network |
+| Gantry self-time (`Server-Timing: gantry;dur=`) | Identifying the key, deciding against a policy of 1,000 keys, the secrets guardrail on the request, and the synced audit write | The wait for the provider, streaming the answer back |
+| Gantry added latency | Everything between the client and the mock: parsing, the decision, the guardrail, the audit write, both HTTP hops, forwarding the answer | Nothing: it is latency through Gantry minus latency to the mock alone |
+
+Gantry's self-time is the closest to Bifrost's figure, and it still includes work Bifrost's figure leaves out: a guardrail scan and an audit record written before the request is forwarded.
+
+## Reproduce
+
+<Tabs>
+<TabItem label="Bifrost's setup">
+
+```bash
+uptime   # run when the load average is well under the number of cores
+cargo run --release -p gantry-bench -- --rps 5000 --secs 120 --upstream-ms 1500
+```
+
+At 1.5 s and 5,000 a second, 7,500 requests are in flight, each on its own connection. Each target is warmed by raising the rate in five one-second steps on the client that then measures it, and the run against the mock alone and the run through Gantry are 35 seconds apart, so the closed connections of the first leave the machine's ephemeral ports (about 16,000 on macOS) before the second.
+
+</TabItem>
+<TabItem label="Gantry's own">
+
+```bash
+uptime
+cargo run --release -p gantry-bench -- --rps 1000 --secs 10 --max-p99-overhead-us 1000
+cargo run --release -p gantry-bench -- --rps 5000 --secs 10
+```
+
+</TabItem>
+</Tabs>
+
+The mock, Gantry and the load generator share one process and its CPU, so a busy machine inflates every figure. With the policy on, each run also checks that the audit log holds one decision record and one usage record per request, and that the chain verifies.
+
+## A cloud run on t3.medium and t3.xlarge
+
+To publish figures on the instance types Bifrost used, the owner provides:
+
+- An AWS access key pair for an account where Gantry may start two on-demand EC2 instances (t3.medium and t3.xlarge) in one region, with unlimited CPU credits turned on so a t3 does not throttle mid-run.
+- The region, and approval for about an hour of instance time.
+
+Each instance builds Gantry from the tagged release and runs both methods three times. The numbers, `uptime` before each run, the instance type and the commit are published here.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Running in production" href="/operations/operations/#bench" description="Every gantry-bench flag and the CI gate." />
+	<LinkCard title="Audit log" href="/governance/audit-log/" description="The record written before each request is forwarded." />
+</CardGrid>

@@ -64,7 +64,7 @@ pub const DIMENSIONS: &[Dimension] = &[
     Dimension {
         name: "agent",
         label: "Coding agent",
-        field: "agent",
+        field: "user_agent",
     },
     Dimension {
         name: "org",
@@ -199,15 +199,6 @@ fn text(record: &Value, field: &str) -> String {
         .to_string()
 }
 
-/// The product part of a user agent: `claude-cli/2.0.1 (external, cli)` is `claude-cli`.
-pub fn agent_name(agent: &str) -> String {
-    agent
-        .split(['/', ' '])
-        .find(|part| !part.is_empty())
-        .unwrap_or_default()
-        .to_string()
-}
-
 fn kinds(guardrails: Option<&Value>) -> Vec<String> {
     guardrails
         .and_then(Value::as_array)
@@ -232,7 +223,10 @@ fn labels_of(record: &Value) -> BTreeMap<String, Vec<String>> {
             _ => Vec::new(),
         };
         let values: Vec<String> = if dimension.name == "agent" {
-            values.iter().map(|a| agent_name(a)).collect()
+            values
+                .iter()
+                .map(|a| crate::audit::tool_of(Some(a)))
+                .collect()
         } else {
             values
         };
@@ -1117,7 +1111,10 @@ mod tests {
             provider: if allowed { "openai" } else { "" },
             ..crate::audit::Entry::default()
         });
-        r.insert("agent".into(), "claude-cli/2.0.1 (external, cli)".into());
+        r.insert(
+            "user_agent".into(),
+            "claude-cli/2.0.1 (external, cli)".into(),
+        );
         r.insert("tags".into(), serde_json::json!(["search", "beta"]));
         r
     }
@@ -1163,7 +1160,7 @@ mod tests {
             "openai-backup",
             "the provider that answered"
         );
-        assert_eq!(d1.label("agent"), "claude-cli");
+        assert_eq!(d1.label("agent"), "claude-code");
         assert_eq!(
             d1.labels.get("tag"),
             Some(&vec!["search".to_string(), "beta".to_string()])
@@ -1225,7 +1222,7 @@ mod tests {
         assert_eq!(ids(&q), ["D2"]);
         let q = Query::parse(&fields(&[("min_cost", "0.1")]))?;
         assert_eq!(ids(&q), ["D1"]);
-        let q = Query::parse(&fields(&[("min_ms", "1000"), ("agent", "claude-cli")]))?;
+        let q = Query::parse(&fields(&[("min_ms", "1000"), ("agent", "claude-code")]))?;
         assert_eq!(ids(&q), ["D3"]);
         let q = Query::parse(&fields(&[("tag", "beta"), ("to", "2000-01-01")]))?;
         assert!(ids(&q).is_empty());

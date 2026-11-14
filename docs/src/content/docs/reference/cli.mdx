@@ -19,7 +19,7 @@ gantry help
 |---|---|
 | Flags | `--name value`, separated by a space. A flag given twice is an error |
 | Keys file | `gantry.keys.yaml` beside the policy file for `serve` and `check`, unless `--keys` names another. `key new`, `key list` and `key prune` use `gantry.keys.yaml` in the current folder unless `--keys` names another |
-| Audit log | `gantry-audit.jsonl` in the current folder for `audit verify` and `audit repair` unless a file is named |
+| Audit log | `gantry-audit.jsonl` in the current folder for `audit verify`, `audit repair` and `audit coverage` unless a file is named |
 | Help | `gantry help`, `gantry --help` or `gantry -h` prints every command. `--help` after a command prints that command's usage line |
 | Exit codes | `0` on success. `1` when a check fails (`check`, `audit verify`, `audit repair`). `2` for a usage error or a command that could not run |
 
@@ -230,6 +230,28 @@ gantry audit repair /var/lib/gantry/gantry-audit.jsonl --yes
 ```
 
 Exit `0` when there is nothing to repair or the repair is done. Exit `1` when it only showed the cut line, or refused: a broken chain, a whole last line, a lock file present, or a file that grew meanwhile. See [Running in production](/operations/operations/#disk-full-and-audit-repair).
+
+## audit coverage
+
+Counts the request records in the audit log per person and coding tool, read from each record's `user_agent`. With `--keys`, every key holder who sent nothing is listed too.
+
+```text
+gantry audit coverage [<file>] [--keys <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<file>` | `gantry-audit.jsonl` | The audit log, sealed segments included |
+| `--keys` | none | The keys file the gateway serves with. Each name in it with no requests gets a row with tool `-` and last seen `never` |
+
+```text
+person	team	tool	requests	refused	last_seen
+ana	payments	claude-code	2	1	2026-11-14T09:12:01.120Z
+ana	payments	codex	1	0	2026-11-14T09:13:44.902Z
+cara	payments	-	0	0	never
+```
+
+The output is tab-separated. See [Coverage](/governance/coverage/) for how the tool is named.
 
 ## prices
 

@@ -69,6 +69,7 @@ Fields present only in some cases:
 | `cache_match`, `cache_scope`, `cache_origin`, `cache_similarity` | string or number | On a hit: `exact` or `semantic`, `person` or `team`, the decision that made the answer, and the similarity of a semantic hit. See [Caching](/routing/caching/#records-headers-and-metrics) |
 | `cache_embedding` | string | On a miss the semantic cache embedded: the embeddings decision |
 | `prompt_cache` | array | Where `prompt_cache: auto` placed cache breakpoints: `tools`, `system`, `messages` |
+| `user_agent` | string | The caller sent a `user-agent` header, cut to 200 characters. [Coverage](/governance/coverage/) counts requests per tool from it. Not on MCP records |
 | `translated` | `true` | The request was translated for the provider (`accept_chat`, `accept_messages`, Gemini, Vertex AI) |
 | `alias`, `deployment` | string | The model is an alias: the alias sent, and the deployment tried first as `provider/model` |
 | `limit` | object | Refused by a limit: `{"kind":"rpm","of":"rule","value":60}`, `{"kind":"tpm","of":"rule","value":1000,"request_could_use":1228}` or `{"kind":"parallel","of":"key","value":4}`, where `of` is `rule` or `key` |
@@ -78,7 +79,6 @@ Fields present only in some cases:
 | `key_rotated` | object | The key was rotated and is in its grace: `{"replaced_by": "8a41c2d0", "expires": "2026-11-16T09:14:02Z"}` |
 | `auth`, `jwt_issuer`, `jwt_subject` | string | The caller sent a [JWT](/governance/access-control/#jwts-from-your-identity-provider): `auth` is `jwt`, with the token's issuer and subject. Never the token |
 | `ip_not_allowed` | string | An `ip_not_allowed` refusal: `key` or `rule`, whichever `from` list refused it |
-| `agent` | string | The request carried a `User-Agent` header: the coding agent or SDK that sent it, cut to 200 characters |
 | `guardrails` | array or string | The rule has guardrails. One entry per guardrail and kind found; an empty list means they ran and found nothing. The string `not_run: the body is audio` for a transcription |
 
 A `guardrails` entry:

@@ -1,0 +1,46 @@
+---
+title: JetBrains AI Assistant
+description: Send AI Assistant's chat and assigned features through Gantry as an OpenAI-compatible provider.
+sidebar:
+  order: 14
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+JetBrains AI Assistant takes a third-party provider of kind OpenAI-compatible. With Gantry there and a Gantry key, chat and the features you assign to Gantry's models send their prompts through Gantry. It needs no JetBrains AI subscription.
+
+## Setup
+
+<Steps>
+
+1. Open **Settings | Tools | AI Assistant | Providers & API keys**.
+2. Under **Third-party AI providers**, set **Provider** to **OpenAI-compatible**.
+3. Enter the Gantry key in **API Key** and Gantry's address with `/v1` in **URL**, for example `http://127.0.0.1:8080/v1`.
+4. Check **Tool calling**, then **Test Connection** and **Apply**.
+5. Under **Models Assignment**, choose Gantry's models for **Core features** and **Instant helpers**. Until you do, they are used in AI Chat only.
+
+</Steps>
+
+Requests go to `POST /v1/chat/completions`. AI Assistant lists the models from `GET /v1/models`, which returns the models the key may use.
+
+## What Gantry governs
+
+- AI Chat with a Gantry model, and every feature assigned to Gantry's models.
+
+## What Gantry does not see
+
+- A feature the assigned models do not support. AI Assistant sends its prompt and context to the JetBrains AI service instead.
+- Code completion and next edit suggestions. They use JetBrains' Mellum model unless **AI Completion** is set to an OpenAI-compatible provider with a fill-in-the-middle model, which Gantry does not serve.
+- Junie, which takes a JetBrains AI subscription or an OpenAI or Anthropic key, and no custom URL.
+- Anything an IDE Services or JetBrains Central admin routes elsewhere.
+
+<Aside type="note">
+This follows JetBrains' AI Assistant 2026.3 documentation (custom models, models settings, BYOK). It was not run through Gantry.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue a key per person, with expiry and a budget." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code Gantry returns and what to do about it." />
+</CardGrid>

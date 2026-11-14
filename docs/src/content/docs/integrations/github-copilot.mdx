@@ -1,0 +1,100 @@
+---
+title: GitHub Copilot
+description: Send Copilot Chat in VS Code, Copilot CLI and the GitHub Copilot app through Gantry with bring your own key.
+sidebar:
+  order: 10
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Copilot's bring your own key (BYOK) sends chat and agent requests from the developer's machine straight to the endpoint you configure. Point that endpoint at Gantry with a Gantry key, and each request is identified, decided and recorded. Gantry can be on `127.0.0.1` or a private network: GitHub's servers are not in the path.
+
+## Setup
+
+<Tabs>
+<TabItem label="VS Code chat">
+
+1. Open the model picker in the Chat view and choose **Manage Language Models**, or run **Chat: Manage Language Models**.
+2. Choose **Add Models**, then **Custom Endpoint**.
+3. VS Code opens `chatLanguageModels.json`. Describe Gantry there:
+
+```json title="chatLanguageModels.json"
+[
+  {
+    "vendor": "customendpoint",
+    "name": "Gantry",
+    "apiKey": "${input:gantry-key}",
+    "apiType": "chat-completions",
+    "url": "http://127.0.0.1:8080/v1",
+    "models": [
+      {
+        "id": "gpt-4o-mini",
+        "name": "gpt-4o-mini via Gantry",
+        "toolCalling": true,
+        "vision": false,
+        "maxInputTokens": 120000,
+        "maxOutputTokens": 8000
+      }
+    ]
+  }
+]
+```
+
+`apiType` picks the route: `chat-completions` (`POST /v1/chat/completions`), `responses` (`POST /v1/responses`, `openai` providers only) or `messages` (`POST /v1/messages`, sent with `x-api-key`). With `url` set, VS Code also lists models from `GET /v1/models`, which returns the models the key may use. `toolCalling: true` is needed for agent mode.
+
+On Copilot Business and Enterprise, an admin must enable the policy **Bring Your Own Language Model Key in VS Code** first.
+
+</TabItem>
+<TabItem label="Copilot CLI">
+
+```json title="~/.copilot/providers.json"
+{
+  "providers": [
+    { "name": "gantry", "type": "openai", "baseUrl": "http://127.0.0.1:8080/v1", "apiKey": "gantry_..." }
+  ],
+  "models": [
+    {
+      "id": "gpt-4o-mini",
+      "provider": "gantry",
+      "capabilities": { "supports": { "toolCalls": true, "streaming": true } }
+    }
+  ]
+}
+```
+
+```bash
+COPILOT_OFFLINE=true copilot --model gantry/gpt-4o-mini
+```
+
+`type: openai` sends to `POST /v1/chat/completions`; add `"wireApi": "responses"` for `POST /v1/responses`. `type: anthropic` with `baseUrl` at Gantry's address without `/v1` uses `POST /v1/messages`. `COPILOT_PROVIDERS_CONFIG` names another file. The file holds the key itself, so keep it readable by its owner only. With BYOK the CLI needs no GitHub sign-in.
+
+</TabItem>
+<TabItem label="Copilot app">
+
+In the GitHub Copilot app, open **Settings**, then **Model providers**, then **Add provider**. Choose the OpenAI-compatible endpoint, give it a display name, Gantry's address with `/v1` and the Gantry key, then **Add provider**. The app keeps the key in the system credential store. It needs a GitHub sign-in, and no Copilot plan when every model is your own.
+
+</TabItem>
+</Tabs>
+
+## What Gantry governs
+
+- Every chat and agent request sent to the custom endpoint: identity, the rule's model list, budgets, guardrails and one audit record each.
+- Copilot CLI's records carry the user agent of its OpenAI SDK (`OpenAI/JS <version>`), so [Coverage](/governance/coverage/) shows them as `OpenAI/JS`, not as Copilot.
+
+## What Gantry does not see
+
+- Inline suggestions (code completions), semantic search and other embedding features. They stay on GitHub and are not available through BYOK.
+- Utility tasks in VS Code (titles, commit messages, intent detection), which use GitHub's models while a Copilot token exists. Set `chat.utilityModel` and `chat.utilitySmallModel` to a Gantry model to send them through Gantry.
+- Copilot CLI telemetry, unless `COPILOT_OFFLINE=true`, which also limits the CLI to the BYOK provider.
+- Organization or enterprise custom models set up on github.com. GitHub holds that key and calls the provider from its own servers, so a client never reaches Gantry. Use per-user BYOK instead.
+
+<Aside type="note">
+This follows GitHub's and VS Code's documentation. Copilot CLI was run headless (`copilot -p` with `COPILOT_OFFLINE=true`) against a local Gantry and a mock provider: one allowed request on `/v1/chat/completions`. The CLI did not expand a `${VAR}` written in `apiKey`, so the key goes in the file. The VS Code and app setups were not run.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue a key per person, with expiry and a budget." />
+	<LinkCard title="Translation" href="/routing/translation/" description="Claude models over chat completions with accept_chat." />
+</CardGrid>

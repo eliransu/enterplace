@@ -1,0 +1,58 @@
+---
+title: Roo Code
+description: Configure Roo Code in VS Code to send its requests through Gantry over OpenAI's or Anthropic's API.
+sidebar:
+  order: 15
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Roo Code is configured like [Cline](/integrations/cline/), in its settings panel in VS Code. It reaches Gantry over OpenAI's chat completions API or Anthropic's messages API, with a Gantry key in place of a provider key.
+
+## Setup
+
+<Tabs>
+<TabItem label="OpenAI Compatible">
+
+| Setting | Value |
+|---|---|
+| API Provider | OpenAI Compatible |
+| Base URL | Gantry's address with `/v1`, for example `http://127.0.0.1:8080/v1` |
+| API Key | The Gantry key |
+| Model | The model as the policy names it |
+
+Requests go to `POST /v1/chat/completions`. Roo Code uses native tool calling only, so the model must support tools. Roo Code's documentation gives no example base URL, so the `/v1` ending follows the OpenAI convention. A 404 `unknown_route` from Gantry means the path is wrong.
+
+</TabItem>
+<TabItem label="Anthropic">
+
+| Setting | Value |
+|---|---|
+| API Provider | Anthropic |
+| Anthropic API Key | The Gantry key |
+| Use custom base URL | Checked, with Gantry's address and no `/v1`, for example `http://127.0.0.1:8080` |
+
+Requests go to `POST /v1/messages`, where refusals use Anthropic's error shape.
+
+</TabItem>
+</Tabs>
+
+## What Gantry governs
+
+- Every model request Roo Code makes with this provider.
+
+## What Gantry does not see
+
+- Telemetry, sent to PostHog by default with the VS Code machine ID. Turn it off in Roo Code's settings.
+- Codebase indexing. Its embedder is a separate setting with its own provider and key, and the vectors go to the Qdrant instance you choose. To send embeddings through Gantry, set **Embedder Provider** to OpenAI Compatible with Gantry's `/v1` address: Gantry serves `POST /v1/embeddings` to `openai` providers.
+
+<Aside type="note">
+This follows Roo Code's documentation. Roo Code's repository was archived in May 2026. It was not run through Gantry.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Cline" href="/integrations/cline/" description="The same setup in Cline." />
+	<LinkCard title="Kilo Code" href="/integrations/kilo-code/" description="A custom provider in Kilo Code." />
+</CardGrid>

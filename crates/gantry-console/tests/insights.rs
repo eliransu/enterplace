@@ -105,7 +105,7 @@ fn setup(name: &str) -> Result<Setup, Error> {
             provider: if allowed { "openai" } else { "" },
             ..Entry::default()
         });
-        r.insert("agent".into(), "claude-cli/2.0.1".into());
+        r.insert("user_agent".into(), "claude-cli/2.0.1".into());
         r
     };
     log.append_record(&decision(
@@ -222,7 +222,7 @@ async fn the_request_log_filters_and_proves_each_row() -> TestResult {
     let (_, _, page) = send(
         &s.app,
         get(
-            "/console/requests?outcome=refused&agent=claude-cli",
+            "/console/requests?outcome=refused&agent=claude-code",
             &cookie,
         )?,
     )
@@ -333,6 +333,6 @@ async fn analytics_show_totals_percentiles_rankings_and_forecasts() -> TestResul
         get("/console/analytics?by=agent&window=24h", &cookie)?,
     )
     .await?;
-    assert!(page.contains(">claude-cli<") && page.contains("per hour"));
+    assert!(page.contains(">claude-code<") && page.contains("per hour"));
     Ok(())
 }
