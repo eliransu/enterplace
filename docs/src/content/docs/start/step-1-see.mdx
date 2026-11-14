@@ -1,0 +1,111 @@
+---
+title: "Step 1: See"
+description: Run Gantry in observe mode, point your AI tools at it, and see which tools and models are in use and what they cost. Nothing is blocked.
+sidebar:
+  order: 2
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+## What you get
+
+A list of the AI tools and models in use and what each one costs, per key, from the first day. Nothing is blocked.
+
+## The one change
+
+Run Gantry and point your tools at it.
+
+<Steps>
+
+1. On the machine that will run Gantry, set the provider keys you already have and start it:
+
+    ```bash
+    export OPENAI_API_KEY=sk-...
+    export ANTHROPIC_API_KEY=sk-ant-...
+    gantry start
+    ```
+
+    `gantry start` asks which providers you use and writes `gantry.policy.yaml` with observe mode on and one rule that allows everyone. It prints an admin key once, prints the settings for Claude Code, Codex and Cursor, and starts the gateway.
+
+2. Make one key for the people who try it first:
+
+    ```bash
+    gantry key new pilot --team pilot
+    ```
+
+    The command prints the key once, with the lines Claude Code and the OpenAI SDKs read.
+
+3. Each person puts those lines in their tool. The [coding tool guides](/integrations/coding-tools/) cover Claude Code, Codex, Cursor and the rest.
+
+</Steps>
+
+In observe mode Gantry forwards every request from a key it knows. A request with a missing or wrong key, or for a model your providers do not list, is still refused.
+
+## Check it worked
+
+Open `http://127.0.0.1:8080/console` and sign in with the admin key. The banner says **Observe mode: nothing is blocked**.
+
+- **Analytics** (`/console/analytics`): rank by coding agent, model or key to see requests, tokens and cost for each.
+- **Requests** (`/console/requests`): one row per request, with its model and cost. Filter by coding agent to see one tool.
+
+<Aside type="note">
+Developers on Claude Team or Enterprise seats cannot send their requests through a gateway. Use the [Claude Team watch setup](/integrations/claude-team/) for them instead.
+</Aside>
+
+## When you're ready
+
+You can see tools, models and cost, with one line per key. To see people and teams, go to [Step 2: Know](/start/step-2-know/).
+
+## More
+
+### The policy `gantry start` writes
+
+With both provider keys set, the file looks like this:
+
+```yaml title="gantry.policy.yaml"
+version: 1
+mode: observe
+providers:
+  - name: openai
+    preset: openai
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini, gpt-4o]
+  - name: anthropic
+    preset: anthropic
+    key_env: ANTHROPIC_API_KEY
+    models: [claude-sonnet-5-5, claude-haiku-5-5]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+```
+
+Add a model to a provider's `models` list to serve it. The provider keys stay in the environment and never appear in the file.
+
+### What observe mode does
+
+| Situation | In observe mode |
+|---|---|
+| A rule, budget, rate limit or guardrail would refuse the request | Forwarded, and recorded as `would_refuse` with the refusal code |
+| No key, an unknown key or a revoked key | Refused |
+| A model no provider lists | Refused |
+| A [kill switch](/governance/kill-switches/) matches | Refused with `killed` |
+
+`gantry check` warns while `mode: observe` is in the policy. Delete the line to enforce the policy from the next request.
+
+### Run it without questions
+
+| Flag | Does |
+|---|---|
+| `--providers openai,anthropic` | Names the providers instead of asking |
+| `--yes` | Accepts every default, for scripts and CI |
+| `--dir <path>` | Writes the files in that folder |
+| `--force` | Overwrites an existing `gantry.policy.yaml`. Without it, `gantry start` refuses to |
+| `--no-serve` | Writes the files and does not start the gateway |
+
+### Related
+
+- [Quickstart](/getting-started/quickstart/): the same result by hand, with each part of the policy explained.
+- [Deploy](/deploy/overview/): run Gantry as a container for the whole company.
+- [Coverage](/governance/coverage/): `gantry audit coverage` counts requests per person and tool from the terminal.
+- [Request log and analytics](/operations/request-log/): every filter on the two console pages.

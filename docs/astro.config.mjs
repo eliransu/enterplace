@@ -22,7 +22,23 @@ export default defineConfig({
 			customCss: ['./src/styles/gantry.css'],
 			lastUpdated: true,
 			sidebar: [
-				{ label: 'Getting started', items: [{ label: 'Overview', link: '/' }, { autogenerate: { directory: 'getting-started' } }] },
+				{
+					label: 'Start here',
+					items: [
+						'start/why',
+						'start/step-1-see',
+						'start/step-2-know',
+						'start/step-3-limit',
+						'start/step-4-protect',
+						'start/step-5-prove',
+						'start/plan',
+						// These four keep their /getting-started/ addresses, so no link to them breaks.
+						'getting-started/quickstart',
+						'getting-started/how-it-works',
+						'getting-started/status',
+						'getting-started/changelog',
+					],
+				},
 				group('Deploy', 'deploy'),
 				group('Integrations', 'integrations'),
 				group('Governance', 'governance'),

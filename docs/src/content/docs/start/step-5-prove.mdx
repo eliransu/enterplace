@@ -1,0 +1,65 @@
+---
+title: "Step 5: Prove"
+description: Keep the audit log outside the container, verify its hash chain, and hold evidence of every request for an auditor or the board.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## What you get
+
+One record for every request, allowed or refused, kept where a restart cannot lose it, with a check that shows no record was changed.
+
+## The one change
+
+Gantry has written an audit record for every request since step 1. Put the file on storage that outlives the container. Mount a volume at `/var/lib/gantry`, move the existing `gantry-audit.jsonl` onto it, add this line to `gantry.policy.yaml`, and restart Gantry once:
+
+```yaml title="gantry.policy.yaml (added)"
+audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+```
+
+Each record holds who asked, the model, the decision, the rule behind it and the cost. It holds no prompt or answer text.
+
+## Check it worked
+
+```bash
+gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+```
+
+```text
+/var/lib/gantry/gantry-audit.jsonl: 9 records in an unbroken chain from record 1 to record 9.
+5 requests, 1 configuration record, 0 admin records, 3 usage records.
+Last hash: 1ae338b73793e850d4a1a345e1648c1addde566b34dc70b1688fe50a887f7fb1
+```
+
+Every record carries the hash of the one before it, so a changed, removed or reordered record breaks the chain at that record. The console's **Audit log** page has a **Verify** button that runs the same check.
+
+Copy the `Last hash` line of the output to a place the Gantry host cannot write, such as a ticket. Later, `gantry audit verify <file> --expect-last <hash>` shows that nothing up to that record was changed or removed.
+
+## When you're ready
+
+All five steps are in place. The [rollout plan](/start/plan/) puts them on one page for the people you report to.
+
+## More
+
+### Gantry Enterprise
+
+These three need Gantry Enterprise and a license:
+
+| Feature | What it adds | Page |
+|---|---|---|
+| SIEM export (Enterprise) | Sends every record to Splunk, Datadog, Elasticsearch, Microsoft Sentinel or object storage as it is written | [SIEM export](/operations/siem-export/) |
+| Retention (Enterprise) | Deletes records older than a set number of days while the chain stays verifiable | [Retention and legal hold](/operations/retention/) |
+| Legal hold (Enterprise) | Stops all deletion until an owner lifts it | [Retention and legal hold](/operations/retention/#legal-hold) |
+
+### In the open source edition
+
+- Ship the audit file to your log system with Vector, Fluent Bit or the OpenTelemetry Collector: [Shipping the audit log](/operations/observability/#shipping-the-audit-log).
+- Report who is covered: `gantry audit coverage` counts requests per person and tool and names key holders who sent nothing. See [Coverage](/governance/coverage/).
+- Keep every policy change as a version, with a second admin's approval before it goes live. This needs a Postgres [store](/operations/store/): [Editing the policy](/operations/console-editing/).
+- Read what each field of a record means: [Audit records](/reference/audit-records/) and [Audit log](/governance/audit-log/).
+
+<Aside type="caution">
+Anyone who can write the audit file can rewrite the whole chain consistently. The last hash kept somewhere else is what catches that.
+</Aside>
