@@ -1,0 +1,137 @@
+---
+title: SCIM provisioning
+description: Let Okta or Microsoft Entra ID add, update and remove console members and push groups as teams. An enterprise feature, license feature scim.
+sidebar:
+  order: 9
+---
+
+import { Aside, Steps, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+With a license that includes `scim` and `members` (see [License key](/operations/license/)), `gantry-enterprise` serves a SCIM 2.0 API. Your identity provider creates [members](/operations/members/), keeps their names and teams current, pushes its groups as teams, and removes people when they leave. Removing someone revokes every key named with their email at once.
+
+SCIM writes the members tables in Postgres, so the policy needs a `store:` section (see [Shared store](/operations/store/)).
+
+## What is provisioned
+
+| SCIM | In Gantry |
+|---|---|
+| `userName` | The person's email. Keys named with this email are theirs. It does not change after creation. |
+| `name.givenName`, `name.familyName`, `name.formatted`, `displayName` | The person's name. |
+| `externalId` | Kept and returned, so the identity provider can match by it. |
+| `active: false` | Removes the person and revokes their keys. |
+| `urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department` | The person's team, while they are in no group. |
+| Group `displayName` | A team. `Platform Eng` becomes team `platform-eng`. |
+| Group `members` | The people in that team. |
+
+A person SCIM creates is a viewer in team `default` (or their department). Other attributes, such as `title`, `phoneNumbers` or `password`, are accepted and not stored.
+
+### Groups and teams
+
+A person in one or more groups takes the team of the first group by name. On the console's **SCIM** page an owner or admin marks a group as an admin group: its members are admins, and members of no admin group are viewers. Owners keep their role whatever their groups. A person removed from their last group returns to team `default` as a viewer.
+
+### Removing people
+
+Deactivating a person (`active: false`, by `PATCH` or `PUT`) or deleting them (`DELETE /Users/{id}`) does the same as **Remove member** in the console: their console session ends, and every key whose name is their email, in any case, is revoked. Gateways on the same database stop accepting those keys within a second. The last owner is never removed: the API answers `409` with `scimType: mutability`.
+
+A person reactivated later is provisioned again as a new member. Issue their keys again.
+
+## Create a SCIM token
+
+<Steps>
+
+1. Sign in to the console as an owner (an admin key acts as an owner) and open **SCIM**.
+2. Under **SCIM tokens**, name the token after the identity provider and select **Create SCIM token**.
+3. Copy the token (`gscim_...`) and the **SCIM base URL**, which is your gateway's address followed by `/console/scim/v2`, for example `https://gantry.example.com/console/scim/v2`. Gantry keeps only the token's SHA-256 and shows it once.
+
+</Steps>
+
+**Revoke token** on the same page stops a token at once. Only owners create and revoke tokens. The page also shows when each token was last used.
+
+## Connect your identity provider
+
+<Tabs syncKey="idp">
+<TabItem label="Okta">
+
+<Steps>
+
+1. In the Okta Admin Console, open **Applications** > **Applications** > **Create App Integration**, pick **SWA** or **SAML 2.0**, and create the app.
+2. On the app's **General** tab, select **Edit** under **App Settings**, set **Provisioning** to **SCIM**, and save.
+3. On the **Provisioning** tab, under **Integration**, set:
+   - **SCIM connector base URL**: the SCIM base URL from Gantry.
+   - **Unique identifier field for users**: `userName`.
+   - **Supported provisioning actions**: **Push New Users**, **Push Profile Updates** and **Push Groups**.
+   - **Authentication Mode**: **HTTP Header**, with the SCIM token as the bearer token.
+4. Select **Test Connector Configuration**, then **Save**.
+5. Under **Provisioning** > **To App**, enable **Create Users**, **Update User Attributes** and **Deactivate Users**.
+6. Assign people on the **Assignments** tab. Push groups on the **Push Groups** tab.
+
+</Steps>
+
+Make sure the Okta username is the person's email, since it becomes `userName`.
+
+</TabItem>
+<TabItem label="Microsoft Entra ID">
+
+<Steps>
+
+1. In the Microsoft Entra admin center, open **Enterprise applications** > **New application** > **Create your own application**, and choose the non-gallery option.
+2. Open the app's **Provisioning** page and set **Provisioning Mode** to **Automatic**.
+3. Under **Admin Credentials**, set **Tenant URL** to the SCIM base URL from Gantry and **Secret Token** to the SCIM token. Select **Test Connection**, then **Save**.
+4. Under **Mappings**, keep **Provision Microsoft Entra ID Users** with `userName` mapped from `userPrincipalName` or `mail` (whichever holds the email) and `department` mapped to the enterprise extension's `department`. Keep **Provision Microsoft Entra ID Groups** with `displayName` and `members`.
+5. Assign users and groups under **Users and groups**, set **Scope** to **Sync only assigned users and groups**, and set **Provisioning Status** to **On**.
+
+</Steps>
+
+Entra ID sends `active` as `"False"` or, with the `aadOptscim062020` flag on the tenant URL, as `false`. Gantry accepts both.
+
+</TabItem>
+</Tabs>
+
+## Password links
+
+A person SCIM creates has no password. They sign in with [single sign-on](/governance/single-sign-on/), or an owner or admin gives them a link to set one: on the **SCIM** page, under **Waiting for a password**, select **Create password link**. Gantry shows the link once. It works once, for 3 days, and only while the person has no password. Setting a password of at least 12 characters signs them in.
+
+## The API
+
+All routes take `Authorization: Bearer gscim_...` and answer `application/scim+json`.
+
+| Route | Methods |
+|---|---|
+| `/console/scim/v2/ServiceProviderConfig` | `GET` |
+| `/console/scim/v2/ResourceTypes`, `/ResourceTypes/{User,Group}` | `GET` |
+| `/console/scim/v2/Schemas`, `/Schemas/{id}` | `GET` |
+| `/console/scim/v2/Users` | `GET` (filter `userName eq`, `externalId eq`, `id eq`; `startIndex`, `count`), `POST` |
+| `/console/scim/v2/Users/{id}` | `GET`, `PUT`, `PATCH`, `DELETE` |
+| `/console/scim/v2/Groups` | `GET` (filter `displayName eq`, `externalId eq`, `id eq`; `excludedAttributes=members`), `POST` |
+| `/console/scim/v2/Groups/{id}` | `GET`, `PUT`, `PATCH`, `DELETE` |
+
+`PATCH` takes the forms both providers send: `op` in any case, operations with or without a `path`, `members[value eq "..."]` paths, and attributes by their full schema name. Bulk, sorting and ETags are not supported, and `ServiceProviderConfig` says so.
+
+Each address may send 1,200 requests a minute. After 10 requests with a wrong token in a minute, the address waits out the minute. Both answer `429` with `Retry-After`.
+
+Every change through SCIM, and every refused one, is an admin record in the audit log, in the same chain as requests, with `person` set to `scim:<token name>`. Requests with a wrong token are recorded as `scim_request` with code `bad_token`.
+
+## Errors
+
+Errors use SCIM's error shape, with a `detail` that names the cause and the fix.
+
+| Status | `scimType` | When |
+|---|---|---|
+| 400 | `invalidValue` | `userName` is not an email, a person is created inactive, a group member is not a person, or a group name has no letters or digits. |
+| 400 | `invalidFilter` | A filter other than the ones listed above. |
+| 400 | `invalidSyntax` | The body is not JSON, or a `PATCH` has no `Operations`. |
+| 400 | `mutability` | A `userName` change. Deprovision the person and provision the new email. |
+| 401 | | A missing, wrong or revoked token. |
+| 403 | | The license does not include `scim` and `members`; `detail` says which and carries the code `license_required`. |
+| 404 | | No person or group has that ID. |
+| 409 | `uniqueness` | The email or group name exists already. |
+| 409 | `mutability` | Removing the last owner. |
+| 429 | | Rate limited. |
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Members and roles" href="/operations/members/" />
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" />
+	<LinkCard title="License key" href="/operations/license/" />
+</CardGrid>
