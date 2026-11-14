@@ -421,8 +421,7 @@ pub(crate) async fn delete(state: &AppState, provider: &Upstream, key: &str) -> 
     }
 }
 
-/// The names of the Cloud Storage objects under `prefix`.
-// ponytail: the first page of the listing (1000 objects); a batch writes a handful of result files.
+/// The names of the Cloud Storage objects under `prefix`, every page of the listing.
 async fn list(state: &AppState, provider: &Upstream, prefix: &str) -> Result<Vec<String>, Failed> {
     let batch = provider.batch.as_ref().ok_or(Failed {
         status: None,
@@ -433,30 +432,42 @@ async fn list(state: &AppState, provider: &Upstream, prefix: &str) -> Result<Vec
         .as_deref()
         .unwrap_or("https://storage.googleapis.com");
     let (bucket, _) = batch.bucket_and_prefix();
-    let url = format!(
-        "{base}/storage/v1/b/{bucket}/o?prefix={}",
-        sigv4::uri_encode(prefix, false)
-    );
-    let bytes = send(
-        state,
-        provider,
-        Method::GET,
-        &url,
-        HeaderMap::new(),
-        Bytes::new(),
-        "s3",
-    )
-    .await?;
-    let listing: Value = serde_json::from_slice(&bytes).unwrap_or_default();
-    Ok(listing["items"]
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|i| i["name"].as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default())
+    let mut names = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut url = format!(
+            "{base}/storage/v1/b/{bucket}/o?prefix={}",
+            sigv4::uri_encode(prefix, false)
+        );
+        if let Some(token) = &token {
+            url.push_str(&format!("&pageToken={}", sigv4::uri_encode(token, false)));
+        }
+        let bytes = send(
+            state,
+            provider,
+            Method::GET,
+            &url,
+            HeaderMap::new(),
+            Bytes::new(),
+            "s3",
+        )
+        .await?;
+        let listing: Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        names.extend(
+            listing["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|i| i["name"].as_str().map(String::from)),
+        );
+        // A token that does not move on would loop forever: the listing ends there.
+        match listing["nextPageToken"].as_str() {
+            Some(next) if !next.is_empty() && token.as_deref() != Some(next) => {
+                token = Some(next.to_string());
+            }
+            _ => return Ok(names),
+        }
+    }
 }
 
 /// The base of the provider's batch API: Bedrock's control plane, or Vertex AI's location.

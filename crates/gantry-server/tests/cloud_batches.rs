@@ -91,8 +91,8 @@ fn run_job(cloud: &mut Cloud, job: &Value) {
         .to_string();
     let lines =
         String::from_utf8_lossy(cloud.objects.get(&input).map_or(&[][..], |v| v)).into_owned();
-    let mut out = String::new();
-    for line in lines.lines() {
+    // Vertex AI shards its output: here one file per line, so reading every line needs every page of the listing.
+    for (n, line) in lines.lines().enumerate() {
         let line: Value = serde_json::from_str(line).unwrap_or_default();
         let row = if line.get("custom_id").is_some() {
             json!({"custom_id": line["custom_id"], "request": line["request"], "response": message("fine", 500, 50)})
@@ -106,13 +106,11 @@ fn run_job(cloud: &mut Cloud, job: &Value) {
             }
             json!({"status": "", "processed_time": "2026-11-14T00:00:00Z", "request": request, "response": {"candidates":[{"content":{"role":"model","parts":[{"text":"fine"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":200,"candidatesTokenCount":20,"totalTokenCount":220}}})
         };
-        out.push_str(&row.to_string());
-        out.push('\n');
+        cloud.objects.insert(
+            format!("{output}/prediction-model-1/predictions_{n:05}.jsonl"),
+            format!("{row}\n").into_bytes(),
+        );
     }
-    cloud.objects.insert(
-        format!("{output}/prediction-model-1/predictions.jsonl"),
-        out.into_bytes(),
-    );
 }
 
 async fn handle(State(cloud): State<Shared>, request: Request) -> Response {
@@ -192,14 +190,22 @@ async fn handle(State(cloud): State<Shared>, request: Request) -> Response {
         let (bucket, object) = rest.split_once("/o").unwrap_or((rest, ""));
         let object = decode(object.trim_start_matches('/'));
         if object.is_empty() {
+            // One object a page, so a reader that ignores nextPageToken misses the rest.
             let prefix = format!("{bucket}/{}", param("prefix").unwrap_or_default());
-            let items: Vec<Value> = cloud
+            let after = param("pageToken").unwrap_or_default();
+            let mut keys = cloud
                 .objects
                 .keys()
-                .filter(|k| k.starts_with(&prefix))
-                .map(|k| json!({ "name": k.trim_start_matches(&format!("{bucket}/")) }))
-                .collect();
-            return reply(StatusCode::OK, json!({ "items": items }));
+                .filter(|k| k.starts_with(&prefix) && k.as_str() > after.as_str());
+            let Some(key) = keys.next() else {
+                return reply(StatusCode::OK, json!({}));
+            };
+            let mut page =
+                json!({ "items": [{ "name": key.trim_start_matches(&format!("{bucket}/")) }] });
+            if keys.next().is_some() {
+                page["nextPageToken"] = key.as_str().into();
+            }
+            return reply(StatusCode::OK, page);
         }
         let key = format!("{bucket}/{object}");
         if method == Method::DELETE {
