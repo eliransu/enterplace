@@ -1,0 +1,97 @@
+name: deploy
+on:
+  push:
+    branches: [main]
+    paths: [deploy/compose/**, deploy/terraform/**, deploy/cloudflare/**, Dockerfile, src/**, Cargo.toml, Cargo.lock, .github/workflows/deploy.yml]
+  pull_request:
+    paths: [deploy/compose/**, deploy/terraform/**, deploy/cloudflare/**, Dockerfile, src/**, Cargo.toml, Cargo.lock, .github/workflows/deploy.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The Cloudflare template's Worker type-checks against the pinned wrangler, containers and workers-types.
+  cloudflare:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npx tsc --noEmit
+
+  terraform:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [aws-ecs, gcp-cloud-run, azure-container-apps]
+    defaults:
+      run:
+        working-directory: deploy/terraform/${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false && terraform validate
+      - working-directory: deploy/terraform/${{ matrix.module }}/examples/basic
+        run: terraform init -backend=false -input=false && terraform validate
+      # A plan with no cloud account: AWS and Google plan with fake credentials and their lookups skipped; azurerm
+      # needs a real token first, so its example is planned through `terraform test` with the provider mocked.
+      - working-directory: deploy/terraform/${{ matrix.module }}/examples/basic
+        run: |
+          if [ -d tests ]; then terraform test; else terraform plan -input=false -lock=false; fi
+
+  # The Docker guide as a customer follows it: the files come from the docs page, the image from the registry.
+  compose:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/gantry-enterprise:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gantry-enterprise
+      # The open source branch with this branch's name when there is one, else main: a change that spans both
+      # repositories is built and tested together.
+      - id: oss
+        env:
+          TOKEN: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ref=main
+          git ls-remote --exit-code --heads "https://x-access-token:$TOKEN@github.com/${{ github.repository_owner }}/gantry.git" "$BRANCH" >/dev/null && ref=$BRANCH
+          echo "gantry at $ref"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/gantry
+          path: gantry
+          ref: ${{ steps.oss.outputs.ref }}
+          # The open source repository is private for now, and the default token reads only this one.
+          token: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # image.yml publishes main only, and may still be building this commit: then the image is built here, from the
+      # same two checkouts, and tagged with the name the registry would give it.
+      - name: The image for this commit
+        run: |
+          if docker pull "$IMAGE"; then
+            echo "pulled the published $IMAGE"
+          else
+            echo "$IMAGE is not published: building it here"
+            docker build -f gantry-enterprise/Dockerfile -t "$IMAGE" .
+          fi
+      - name: The Docker guide, from an empty folder
+        run: GANTRY_IMAGE="$IMAGE" gantry-enterprise/deploy/compose/test/run.sh gantry/docs/src/content/docs/deploy/docker.mdx

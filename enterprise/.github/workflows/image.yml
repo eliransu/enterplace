@@ -1,0 +1,209 @@
+# Builds the image for amd64 and arm64 and pushes it to ghcr.io/ggantry/gantry-enterprise, a private package, tagged
+# with the commit sha (and the version, on a v* tag). On a pull request or a branch, it builds both and pushes nothing.
+# On a v* tag it also checks that both repositories name that version, and makes a GitHub Release of this private
+# repository with the CHANGELOG section and the image digest. How to release: RELEASING.md.
+name: image
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/gantry-enterprise
+  PUBLISH: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  # Cargo.toml, CHANGELOG.md and the Helm chart of both repositories name one version; on a v* tag, that tag's.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gantry-enterprise
+      - id: oss
+        env:
+          TOKEN: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ref=main
+          url="https://x-access-token:$TOKEN@github.com/${{ github.repository_owner }}/gantry.git"
+          git ls-remote --exit-code "$url" "refs/heads/$BRANCH" >/dev/null && ref=$BRANCH
+          if [ "${{ github.ref_type }}" = tag ]; then
+            git ls-remote --exit-code "$url" "refs/tags/$BRANCH" >/dev/null || { echo "::error::gantry has no tag $BRANCH. Tag both repositories (RELEASING.md)."; exit 1; }
+            ref=$BRANCH
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/gantry
+          path: gantry
+          ref: ${{ steps.oss.outputs.ref }}
+          token: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
+      # Strict on a tag. On a branch a mismatch is a warning, so a branch whose open source twin is behind still builds.
+      - id: check
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then tag=${{ github.ref_name }}; fail() { echo "::error::$1"; exit 1; }
+          else tag=; fail() { echo "::warning::$1"; }; fi
+          python3 gantry/scripts/version.py --root gantry-enterprise $tag || fail "gantry-enterprise: version check failed (above)"
+          python3 gantry/scripts/version.py --root gantry $tag || fail "gantry: version check failed (above)"
+          ent=$(sed -n 's/^version = "\(.*\)"/\1/p' gantry-enterprise/Cargo.toml | head -1)
+          oss=$(sed -n 's/^version = "\(.*\)"/\1/p' gantry/Cargo.toml | head -1)
+          [ "$ent" = "$oss" ] || fail "gantry-enterprise is $ent and gantry is $oss: one version for both. Bump both (RELEASING.md)."
+          echo "version=$ent" >> "$GITHUB_OUTPUT"
+          python3 gantry/scripts/version.py --root gantry-enterprise --notes > release-notes.md || fail "no CHANGELOG section for $ent"
+          cat release-notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  build:
+    needs: version
+    strategy:
+      matrix:
+        include:
+          # Each architecture on its own kind of runner: a Rust build under QEMU emulation takes hours.
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gantry-enterprise
+      # The open source branch with this branch's name when there is one, else main: a change that spans both
+      # repositories is built and tested together.
+      - id: oss
+        env:
+          TOKEN: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ref=main
+          url="https://x-access-token:$TOKEN@github.com/${{ github.repository_owner }}/gantry.git"
+          git ls-remote --exit-code "$url" "refs/heads/$BRANCH" >/dev/null && ref=$BRANCH
+          # A release image carries the open source repository at the same tag, never main.
+          if [ "${{ github.ref_type }}" = tag ]; then
+            git ls-remote --exit-code "$url" "refs/tags/$BRANCH" >/dev/null || { echo "::error::gantry has no tag $BRANCH. Tag both repositories (RELEASING.md)."; exit 1; }
+            ref=$BRANCH
+          fi
+          echo "gantry at $ref"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      # The open source repository is private: GANTRY_REPO_TOKEN is a token that can read it.
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/gantry
+          path: gantry
+          ref: ${{ steps.oss.outputs.ref }}
+          token: ${{ secrets.GANTRY_REPO_TOKEN || github.token }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: env.PUBLISH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: gantry-enterprise/Dockerfile
+          platforms: ${{ matrix.platform }}
+          # By digest: the merge job below puts both architectures under one tag.
+          outputs: ${{ env.PUBLISH == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || 'type=docker,name=gantry-enterprise:check' }}
+      - name: Check the size and user
+        if: env.PUBLISH != 'true'
+        run: |
+          size=$(docker image inspect gantry-enterprise:check --format '{{.Size}}')
+          echo "${{ matrix.platform }}: $size bytes"
+          [ "$size" -lt $((50 * 1024 * 1024)) ]
+          [ "$(docker image inspect gantry-enterprise:check --format '{{.Config.User}}')" = 65532:65532 ]
+      - name: Keep the digest
+        if: env.PUBLISH == 'true'
+        run: |
+          mkdir -p digests
+          d="${{ steps.build.outputs.digest }}"
+          touch "digests/${d#sha256:}"
+      - uses: actions/upload-artifact@v4
+        if: env.PUBLISH == 'true'
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: digests/*
+          retention-days: 1
+
+  merge:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=long,prefix=
+            # The newest build of main. Production pins a commit SHA or a version instead.
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+      - name: One tag for both architectures
+        working-directory: digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$IMAGE@sha256:%s " *)
+          docker buildx imagetools inspect "$IMAGE:${{ github.sha }}"
+
+  # The repository is private, so the release is too. Its notes name the image by digest, which no later push can move.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, merge]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - name: GitHub Release with the image digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)
+          [ -n "$digest" ] && [ "$digest" != null ] || { echo "::error::no image $IMAGE:$VERSION"; exit 1; }
+          {
+            echo "Image: \`$IMAGE:$VERSION\`"
+            echo
+            echo "Digest: \`$IMAGE@$digest\` (amd64 and arm64). Pin the digest in production."
+            echo
+            echo "Open source changes: the gantry repository's release $GITHUB_REF_NAME."
+            echo
+            cat release-notes.md
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" --repo "${{ github.repository }}" --verify-tag \
+            --title "Gantry Enterprise $VERSION" --notes-file notes.md

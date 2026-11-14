@@ -1,0 +1,17 @@
+Gantry Enterprise is starting as {{ .Values.replicaCount }} replica(s) ({{ include "gantry.fullname" . }}), each with its own audit log.
+{{- if .Values.postgres.enabled }}
+
+The bundled Postgres is for trials only. Use a managed database in production.
+{{- end }}
+{{- if not .Values.keys.existingSecret }}
+
+No keys yet. Make a keys file with the open source CLI and give it to the chart as a Secret:
+  gantry key new admin --team platform --admin --keys gantry.keys.yaml
+  kubectl create secret generic gantry-keys --from-file=gantry.keys.yaml
+  helm upgrade {{ .Release.Name }} <chart> --reuse-values --set keys.existingSecret=gantry-keys
+The Secret seeds new volumes only: a replica that already has a keys file keeps it.
+{{- end }}
+
+Reach it from this machine:
+  kubectl port-forward svc/{{ include "gantry.fullname" . }} 8080:{{ .Values.service.port }}
+  curl http://127.0.0.1:8080/healthz

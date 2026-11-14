@@ -1,0 +1,9 @@
+**/target
+**/node_modules
+**/.git
+**/dist
+gantry/docs
+gantry/site
+**/.terraform
+**/*.tfstate*
+**/.terraform.lock.hcl

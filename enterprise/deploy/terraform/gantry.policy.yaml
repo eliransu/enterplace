@@ -1,0 +1,16 @@
+# A starting policy for the modules. It keeps its last two lines: the audit log on the volume, and the store.
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com/v1
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-4o-mini]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [gpt-4o-mini]
+# The volume, not /etc/gantry: the policy is mounted read-only.
+audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+# Keys, kill switches and budgets live in Postgres. The variable holds the connection string, never this file.
+store: { postgres_url_env: DATABASE_URL }
