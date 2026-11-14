@@ -799,3 +799,100 @@ async fn mcp_servers_are_stored_shown_and_approved_or_blocked() -> Result<(), Er
     assert_eq!(decided[1]["code"], "invalid_request");
     Ok(())
 }
+
+/// The IDs of the enrolment tokens `key`'s holder is shown that still work.
+async fn listed_ids(app: &Router, key: &str) -> Result<Vec<String>, Error> {
+    let listed = call(app, "GET", "/console/devices/tokens", key, None).await?;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
+    Ok(listed.body["tokens"]
+        .as_array()
+        .map(|tokens| {
+            tokens
+                .iter()
+                .filter(|t| t["status"] == "active")
+                .filter_map(|t| t["id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+#[tokio::test]
+async fn an_admin_kept_to_an_organization_or_to_teams_reaches_only_its_own_enrolment_tokens()
+-> Result<(), Error> {
+    let Some(url) = database("devices_confined").await? else {
+        return Ok(());
+    };
+    let policy = format!("{POLICY}{CONFINED}");
+    let gw = gateway_policy(
+        "devices_confined",
+        &url,
+        &licensed(&["devices"]),
+        &[],
+        &policy,
+    )?;
+    confined_admins(&gw)?;
+    let app = &gw.app;
+    let tokens = "/console/devices/tokens";
+    let make = async |key: &str, body: Value| -> Result<Reply, Error> {
+        call(app, "POST", tokens, key, Some(body)).await
+    };
+    let id = |reply: &Reply| reply.body["id"].as_str().unwrap_or_default().to_string();
+    let revoke = async |key: &str, id: &str| -> Result<StatusCode, Error> {
+        Ok(call(app, "DELETE", &format!("{tokens}/{id}"), key, None)
+            .await?
+            .status)
+    };
+    let pay = make(ADMIN_KEY, json!({ "label": "a", "team": "payments" })).await?;
+    let web = make(ADMIN_KEY, json!({ "label": "b", "team": "web" })).await?;
+    let every = make(ADMIN_KEY, json!({ "label": "c" })).await?;
+    assert_eq!(every.status, StatusCode::CREATED, "{}", every.text);
+    let (pay, web, every) = (id(&pay), id(&web), id(&every));
+
+    // Kept to organization acme: a token it makes is acme's, and it reaches no token of the install or another.
+    assert!(listed_ids(app, ACME_KEY).await?.is_empty());
+    let acme = make(ACME_KEY, json!({ "label": "x", "team": "payments" })).await?;
+    assert_eq!(acme.status, StatusCode::CREATED, "{}", acme.text);
+    let acme = id(&acme);
+    assert_eq!(listed_ids(app, ACME_KEY).await?, [acme.clone()]);
+    for outside in [&pay, &every] {
+        assert_eq!(revoke(ACME_KEY, outside).await?, StatusCode::NOT_FOUND);
+    }
+    let listed = call(app, "GET", tokens, ADMIN_KEY, None).await?;
+    assert_eq!(listed.body["tokens"][3]["org"], "acme", "{}", listed.text);
+    assert_eq!(listed.body["tokens"][0]["org"], "", "{}", listed.text);
+
+    // Kept to team payments: that team's tokens alone. No team is every team, which is more than it reaches.
+    assert_eq!(
+        listed_ids(app, PAYMENTS_KEY).await?,
+        [pay.clone(), acme.clone()]
+    );
+    for body in [
+        json!({ "label": "x", "team": "web" }),
+        json!({ "label": "x" }),
+    ] {
+        let refused = make(PAYMENTS_KEY, body).await?;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text);
+        assert_eq!(
+            refused.body["error"]["code"], "outside_role",
+            "{}",
+            refused.text
+        );
+        assert!(refused.text.contains("teams payments"), "{}", refused.text);
+    }
+    let own = make(PAYMENTS_KEY, json!({ "label": "x", "team": "payments" })).await?;
+    assert_eq!(own.status, StatusCode::CREATED, "{}", own.text);
+    for outside in [&web, &every] {
+        assert_eq!(revoke(PAYMENTS_KEY, outside).await?, StatusCode::NOT_FOUND);
+    }
+    assert_eq!(revoke(PAYMENTS_KEY, &pay).await?, StatusCode::OK);
+    assert_eq!(revoke(ACME_KEY, &acme).await?, StatusCode::OK);
+
+    // What neither could reach still works.
+    assert_eq!(listed_ids(app, ADMIN_KEY).await?, [web, every, id(&own)]);
+    assert!(
+        admin_records(&gw)?
+            .iter()
+            .any(|r| r["action"] == "device_token_created" && r["code"] == "outside_role")
+    );
+    Ok(())
+}

@@ -21,7 +21,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use gantry_console::{
-    Admin, Console, Form, Tls, Via, bare_page, foreign,
+    Admin, Console, Form, Tls, bare_page, foreign,
     html::{self, esc},
     redirect, same_origin,
 };
@@ -82,6 +82,12 @@ CREATE TABLE enterprise_device_drift (
     tool text NOT NULL,
     at timestamptz NOT NULL DEFAULT now()
 );
+";
+
+/// The organization an enrolment token belongs to, for installs with `orgs:`. Empty for none. An admin whose role
+/// is kept to one organization sees and revokes its tokens alone.
+pub const MIGRATION_4: &str = "
+ALTER TABLE enterprise_device_tokens ADD COLUMN org text NOT NULL DEFAULT '';
 ";
 
 /// A device is bound to the first person and token scope (the token's team, empty for every team) that reported
@@ -328,12 +334,13 @@ impl Devices {
         })
     }
 
-    async fn tokens(&self) -> Result<Vec<Value>, String> {
+    /// The tokens `admin` may see: every one, or those within their role's organization and teams.
+    async fn tokens(&self, admin: &Admin) -> Result<Vec<Value>, String> {
         let client = self.db.client().await?;
         let rows = client
             .query(
                 &format!("SELECT id, label, team, created_by, to_char(created_at AT TIME ZONE 'UTC', {TIME}), to_char(expires_at AT TIME ZONE 'UTC', {TIME}), \
-                 CASE WHEN revoked_at IS NOT NULL THEN 'revoked' WHEN expires_at < now() THEN 'expired' ELSE 'active' END \
+                 CASE WHEN revoked_at IS NOT NULL THEN 'revoked' WHEN expires_at < now() THEN 'expired' ELSE 'active' END, org \
                  FROM enterprise_device_tokens ORDER BY created_at"),
                 &[],
             )
@@ -343,7 +350,14 @@ impl Devices {
             .iter()
             .map(|r| {
                 let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
-                json!({ "id": get(0), "label": get(1), "team": get(2), "created_by": get(3), "created_at": get(4), "expires_at": get(5), "status": get(6) })
+                json!({ "id": get(0), "label": get(1), "team": get(2), "org": get(7), "created_by": get(3), "created_at": get(4), "expires_at": get(5), "status": get(6) })
+            })
+            .filter(|t| {
+                admin.covers(
+                    t["org"].as_str().unwrap_or(""),
+                    t["team"].as_str().unwrap_or(""),
+                    None,
+                )
             })
             .collect())
     }
@@ -537,6 +551,8 @@ impl Devices {
     ) -> Result<(String, String, String), (StatusCode, &'static str, String)> {
         let label = label.trim();
         let team = team.trim();
+        // The token belongs to its creator's organization: someone kept to one makes tokens for it alone.
+        let org = admin.org.clone().unwrap_or_default();
         let bad = |message: String| (StatusCode::BAD_REQUEST, "invalid_request", message);
         let problem = if label.is_empty() || label.chars().count() > 64 {
             Some("Enter a label of 1 to 64 characters, such as jamf-engineering.".to_string())
@@ -577,6 +593,17 @@ impl Devices {
                 "Your role is viewer. An owner or admin can create enrolment tokens.".into(),
             ));
         }
+        if let Some(message) = outside(admin, &org, team, "enrolment token") {
+            let _ = console
+                .audit(
+                    Some(admin),
+                    "device_token_created",
+                    json!({ "label": label, "team": team }),
+                    Some("outside_role"),
+                )
+                .await;
+            return Err((StatusCode::FORBIDDEN, "outside_role", message));
+        }
         let unavailable = |e: String| (StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", e);
         let token = format!("{PREFIX}{}", random_hex(32).map_err(unavailable)?);
         let id = format!("dt-{}", random_hex(4).map_err(unavailable)?);
@@ -584,7 +611,7 @@ impl Devices {
             .audit(
                 Some(admin),
                 "device_token_created",
-                json!({ "id": id, "label": label, "team": team, "days": days }),
+                json!({ "id": id, "label": label, "team": team, "org": org, "days": days }),
                 None,
             )
             .await
@@ -592,9 +619,9 @@ impl Devices {
         let client = self.db.client().await.map_err(unavailable)?;
         let row = client
             .query_one(
-                &format!("INSERT INTO enterprise_device_tokens (id, label, team, token_sha256, created_by, expires_at) \
-                 VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6)) RETURNING to_char(expires_at AT TIME ZONE 'UTC', {TIME})"),
-                &[&id, &label, &team, &sha256_hex(token.as_bytes()), &admin.name, &days],
+                &format!("INSERT INTO enterprise_device_tokens (id, label, team, token_sha256, created_by, expires_at, org) \
+                 VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6), $7) RETURNING to_char(expires_at AT TIME ZONE 'UTC', {TIME})"),
+                &[&id, &label, &team, &sha256_hex(token.as_bytes()), &admin.name, &days, &org],
             )
             .await
             .map_err(|e| unavailable(db_error(e)))?;
@@ -624,6 +651,17 @@ impl Devices {
             ));
         }
         let unavailable = |e: String| (StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", e);
+        // A token outside the role's reach is, to its holder, not there: neither revoked nor recorded as revoked.
+        if admin.confined()
+            && !self
+                .tokens(admin)
+                .await
+                .map_err(unavailable)?
+                .iter()
+                .any(|t| t["id"] == id)
+        {
+            return Ok(false);
+        }
         console
             .audit(
                 Some(admin),
@@ -921,14 +959,46 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
 
 // ---------------------------------------------------------------- the admin API
 
-/// Who an admin API call is from: a console session, or an admin key as bearer.
-async fn api_admin(console: &Console, d: &Devices, headers: &HeaderMap) -> Option<Admin> {
+/// Who an admin API call is from: a console session, or an admin key as bearer. Either way with the role's reach:
+/// a key whose role is kept to an organization, teams or customers is kept to them here too.
+pub(super) async fn api_admin(
+    console: &Console,
+    keys: &std::path::Path,
+    headers: &HeaderMap,
+) -> Option<Admin> {
     let key = bearer(headers);
     if key.is_empty() {
         return console.signed_in(headers).await;
     }
-    let entry = d.holder(key).filter(|e| e.admin)?;
-    Some(Admin::of_role(&entry.name, &entry.team, false, Via::Key))
+    console.admin_of_key(&key_holder(keys, key).filter(|e| e.admin)?)
+}
+
+/// Why `admin` may not make or touch a token of this organization and team, when their role keeps them from it.
+/// A token for every team is outside a role kept to some teams, and no token is within a role kept to customers:
+/// a token names no customer.
+pub(super) fn outside(admin: &Admin, org: &str, team: &str, what: &str) -> Option<String> {
+    if admin.covers(org, team, None) {
+        return None;
+    }
+    let mut reach = Vec::new();
+    if let Some(org) = &admin.org {
+        reach.push(format!("organization {org}"));
+    }
+    if !admin.teams.is_empty() {
+        reach.push(format!("teams {}", admin.teams.join(", ")));
+    }
+    if !admin.customers.is_empty() {
+        reach.push(format!("customers {}", admin.customers.join(", ")));
+    }
+    let fix = if admin.customers.is_empty() {
+        "Name a team and organization within it, or ask an admin of the whole install."
+    } else {
+        "A token names no customer, so ask an admin of the whole install."
+    };
+    Some(format!(
+        "Your role is kept to {}, and this {what} is outside it. {fix}",
+        reach.join(" and ")
+    ))
 }
 
 pub(super) fn not_admin() -> Response {
@@ -944,10 +1014,10 @@ async fn list_tokens(
     Ext(d): Ext<Devices>,
     headers: HeaderMap,
 ) -> Response {
-    if api_admin(&console, &d, &headers).await.is_none() {
+    let Some(admin) = api_admin(&console, &d.keys, &headers).await else {
         return not_admin();
-    }
-    match d.tokens().await {
+    };
+    match d.tokens(&admin).await {
         Ok(tokens) => Json(json!({ "tokens": tokens })).into_response(),
         Err(e) => fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     }
@@ -963,7 +1033,7 @@ async fn create_token_api(
     if bearer(&headers).is_empty() && !same_origin(&headers) {
         return foreign();
     }
-    let Some(admin) = api_admin(&console, &d, &headers).await else {
+    let Some(admin) = api_admin(&console, &d.keys, &headers).await else {
         return not_admin();
     };
     let body: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
@@ -992,7 +1062,7 @@ async fn revoke_token_api(
     if bearer(&headers).is_empty() && !same_origin(&headers) {
         return foreign();
     }
-    let Some(admin) = api_admin(&console, &d, &headers).await else {
+    let Some(admin) = api_admin(&console, &d.keys, &headers).await else {
         return not_admin();
     };
     match d.revoke(&console, &admin, &id).await {
@@ -1016,7 +1086,7 @@ async fn remove_device_api(
     if bearer(&headers).is_empty() && !same_origin(&headers) {
         return foreign();
     }
-    let Some(admin) = api_admin(&console, &d, &headers).await else {
+    let Some(admin) = api_admin(&console, &d.keys, &headers).await else {
         return not_admin();
     };
     let viewer = role_of(&admin) == Role::Viewer;
@@ -1064,7 +1134,7 @@ async fn list_mcp_api(
     Ext(d): Ext<Devices>,
     headers: HeaderMap,
 ) -> Response {
-    if api_admin(&console, &d, &headers).await.is_none() {
+    if api_admin(&console, &d.keys, &headers).await.is_none() {
         return not_admin();
     }
     match d.mcp_servers().await {
@@ -1084,7 +1154,7 @@ async fn decide_mcp_api(
     if bearer(&headers).is_empty() && !same_origin(&headers) {
         return foreign();
     }
-    let Some(admin) = api_admin(&console, &d, &headers).await else {
+    let Some(admin) = api_admin(&console, &d.keys, &headers).await else {
         return not_admin();
     };
     let body: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
@@ -1105,7 +1175,7 @@ async fn devices_json(
     Ext(d): Ext<Devices>,
     headers: HeaderMap,
 ) -> Response {
-    if api_admin(&console, &d, &headers).await.is_none() {
+    if api_admin(&console, &d.keys, &headers).await.is_none() {
         return not_admin();
     }
     match d.devices().await {
@@ -1293,7 +1363,7 @@ fn mcp_list(servers: &[Value], can_edit: bool) -> String {
 
 async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<String, String> {
     let can_edit = role_of(admin) != Role::Viewer;
-    let tokens = d.tokens().await?;
+    let tokens = d.tokens(admin).await?;
     let devices = d.devices().await?;
     let (traffic, profiles, drift, refusals) = {
         let client = d.db.client().await?;

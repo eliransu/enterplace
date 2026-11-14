@@ -86,6 +86,13 @@ every store migration is expand-only:
 - Every start records its version in `gantry_writer` when it is newer than the one there. A binary facing a schema
   ahead of its own accepts it only when that version is strictly newer and at most one minor version ahead (a major
   version counts as one step from its last minor), and otherwise refuses with both versions named.
+- A release that adds a migration is a minor release. `scripts/version.py` refuses a version that is not a minor
+  version above the previous tag when any migration list changed since that tag, in any namespace, open source or
+  enterprise, and names the namespace. It reads the fingerprints in `release/migrations.txt` and
+  `enterprise/migrations.txt`; the test `the_migration_fingerprints_file_matches_the_code` of gantry-server and of
+  gantry-enterprise fails when a file is behind the code and says how to write it again
+  (`GANTRY_WRITE_MIGRATIONS=1 cargo test -p gantry-server the_migration_fingerprints_file_matches_the_code`, and
+  the same with `-p gantry-enterprise`). The check needs the tags: clone with history.
 - `scripts/mixed_version_check.py` runs in release.yml against the previous tag. The store test
   `serve_refuses_to_start_without_its_store_or_on_a_newer_schema` covers the one-minor and two-minor cases.
 

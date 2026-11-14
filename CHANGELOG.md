@@ -88,6 +88,28 @@ one repository. How a release is made: RELEASING.md.
 - The daily digest's spend and top users include watched cost, and a `Watched:` line says how much of it was.
 - The hosted app's watch page is not carried over: a console page waits for a design.
 
+### Security
+
+- Watch tokens and device enrolment tokens follow the admin's role (Gantry Enterprise). An admin whose role is kept
+  to teams (`teams:`) could create, list and revoke watch tokens and enrolment tokens of any team, and an admin key
+  sent as a bearer token to `/console/watch/tokens` or `/console/devices/tokens` acted with no role at all, so its
+  organization or teams were not applied. Now a role kept to an organization, teams or customers reaches only its
+  own tokens, by key and by console session: a token outside it is not listed, revoking it answers `404`, and
+  creating one answers `403` with `outside_role` (`other_org` for another organization). A role kept to teams
+  cannot create a token without a team.
+- Enrolment tokens belong to the organization of the admin who created them (`org` in the list). Tables:
+  `enterprise_device_tokens.org` (namespace `enterprise.devices`, migration 4).
+
+### Releasing
+
+- `scripts/version.py` (run by CI, `scripts/release.sh bump` and the release workflows) fails when a store
+  migration list changed since the previous release tag and the version is not a minor version above that tag,
+  naming the namespace and the version to bump to. The lists' fingerprints are kept in `release/migrations.txt` and
+  `enterprise/migrations.txt`, which a test of each crate checks against the code.
+- `PgStore::close` stops a store's thread and closes its connections, for a program that embeds the gateway and is
+  done with its store before it exits. The enterprise tests call it: a finished test used to leave its connections
+  open, and a run on 16 cores peaked near 100 of them. It now peaks under 50.
+
 ### Fixed: a parallel place comes back with the answer
 
 - A request's place under a `parallel` limit (key or `limits:`) is given back as soon as its answer has ended, not

@@ -18,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        # With tags and history: scripts/version.py compares the store migrations with the previous tag's.
+        with:
+          fetch-depth: 0
       # A tag must be v<Cargo.toml version> with a dated CHANGELOG section. A dry run dates the section in this
       # runner only, as `scripts/release.sh bump` does before a real tag, and checks the result the same way.
       - name: The tag, Cargo.toml and CHANGELOG.md agree

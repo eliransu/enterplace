@@ -1866,3 +1866,182 @@ async fn setup_creates_its_token_through_a_gateway_that_listens() -> Result<(), 
     assert!(closed.is_err_and(|e| e.contains("could not be reached")));
     Ok(())
 }
+
+/// The IDs of the tokens `key`'s holder is shown.
+async fn listed_ids(app: &Router, key: &str) -> Result<Vec<String>, Error> {
+    let listed = send(app, "GET", "/console/watch/tokens", key, JSON, Vec::new()).await?;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
+    Ok(listed.body["tokens"]
+        .as_array()
+        .map(|tokens| {
+            tokens
+                .iter()
+                .filter(|t| t["status"] != "revoked")
+                .filter_map(|t| t["id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+async fn as_key(
+    app: &Router,
+    method: &str,
+    path: &str,
+    key: &str,
+    body: Value,
+) -> Result<Reply, Error> {
+    let body = if body.is_null() {
+        Vec::new()
+    } else {
+        body.to_string().into_bytes()
+    };
+    send(app, method, path, key, JSON, body).await
+}
+
+#[tokio::test]
+async fn an_admin_kept_to_an_organization_or_to_teams_reaches_only_its_own_watch_tokens()
+-> Result<(), Error> {
+    let Some(url) = database("watch_confined").await? else {
+        return Ok(());
+    };
+    let policy = format!("{POLICY}{CONFINED}");
+    let gw = gateway_policy("watch_confined", &url, &licensed(&["watch"]), &[], &policy)?;
+    confined_admins(&gw)?;
+    let app = &gw.app;
+    let tokens = "/console/watch/tokens";
+    let (acme_pay, _) = new_token(
+        app,
+        json!({ "label": "a", "team": "payments", "org": "acme" }),
+    )
+    .await?;
+    let (acme_web, _) =
+        new_token(app, json!({ "label": "b", "team": "web", "org": "acme" })).await?;
+    let (globex_pay, _) = new_token(
+        app,
+        json!({ "label": "c", "team": "payments", "org": "globex" }),
+    )
+    .await?;
+    let (plain_pay, _) = new_token(app, json!({ "label": "d", "team": "payments" })).await?;
+    let (plain_web, _) = new_token(app, json!({ "label": "e", "team": "web" })).await?;
+
+    // Kept to organization acme: its tokens alone, to see, make and revoke.
+    assert_eq!(
+        listed_ids(app, ACME_KEY).await?,
+        [acme_pay.clone(), acme_web.clone()]
+    );
+    let other = as_key(
+        app,
+        "POST",
+        tokens,
+        ACME_KEY,
+        json!({ "label": "x", "team": "web", "org": "globex" }),
+    )
+    .await?;
+    assert_eq!(other.status, StatusCode::FORBIDDEN, "{}", other.text);
+    assert_eq!(other.body["error"]["code"], "other_org", "{}", other.text);
+    let own = as_key(
+        app,
+        "POST",
+        tokens,
+        ACME_KEY,
+        json!({ "label": "x", "team": "web" }),
+    )
+    .await?;
+    assert_eq!(own.status, StatusCode::CREATED, "{}", own.text);
+    let own = own.body["id"].as_str().unwrap_or_default().to_string();
+    for outside in [&globex_pay, &plain_pay] {
+        let gone = as_key(
+            app,
+            "DELETE",
+            &format!("{tokens}/{outside}"),
+            ACME_KEY,
+            Value::Null,
+        )
+        .await?;
+        assert_eq!(gone.status, StatusCode::NOT_FOUND, "{}", gone.text);
+    }
+    let gone = as_key(
+        app,
+        "DELETE",
+        &format!("{tokens}/{acme_web}"),
+        ACME_KEY,
+        Value::Null,
+    )
+    .await?;
+    assert_eq!(gone.status, StatusCode::OK, "{}", gone.text);
+
+    // Kept to team payments: that team's tokens alone, in any organization.
+    assert_eq!(
+        listed_ids(app, PAYMENTS_KEY).await?,
+        [acme_pay.clone(), globex_pay.clone(), plain_pay.clone()]
+    );
+    // Signed in to the console with the same key, the same reach.
+    let mut browser = Browser::default();
+    browser
+        .go(app, "POST", "/console/sign-in", &[("key", PAYMENTS_KEY)])
+        .await?;
+    let seen = browser.go(app, "GET", tokens, &[]).await?;
+    assert_eq!(seen.status, StatusCode::OK, "{}", seen.text);
+    assert!(
+        seen.text.contains(&plain_pay)
+            && !seen.text.contains(&plain_web)
+            && !seen.text.contains(&acme_web),
+        "{}",
+        seen.text
+    );
+    for body in [
+        json!({ "label": "x", "team": "web" }),
+        // No team is every team, which is more than the role reaches.
+        json!({ "label": "x", "person": "dana@acme.co" }),
+    ] {
+        let refused = as_key(app, "POST", tokens, PAYMENTS_KEY, body).await?;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text);
+        assert_eq!(
+            refused.body["error"]["code"], "outside_role",
+            "{}",
+            refused.text
+        );
+        assert!(refused.text.contains("teams payments"), "{}", refused.text);
+    }
+    let made = as_key(
+        app,
+        "POST",
+        tokens,
+        PAYMENTS_KEY,
+        json!({ "label": "x", "team": "payments" }),
+    )
+    .await?;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.text);
+    let made = made.body["id"].as_str().unwrap_or_default().to_string();
+    let gone = as_key(
+        app,
+        "DELETE",
+        &format!("{tokens}/{plain_web}"),
+        PAYMENTS_KEY,
+        Value::Null,
+    )
+    .await?;
+    assert_eq!(gone.status, StatusCode::NOT_FOUND, "{}", gone.text);
+    let gone = as_key(
+        app,
+        "DELETE",
+        &format!("{tokens}/{plain_pay}"),
+        PAYMENTS_KEY,
+        Value::Null,
+    )
+    .await?;
+    assert_eq!(gone.status, StatusCode::OK, "{}", gone.text);
+
+    // What neither could reach still works, and the refused attempts are in the audit log as refusals.
+    assert_eq!(
+        listed_ids(app, ADMIN_KEY).await?,
+        [acme_pay, globex_pay, plain_web, own, made]
+    );
+    gw.log.flush();
+    let log = std::fs::read_to_string(&gw.audit)?;
+    assert!(
+        log.contains("outside_role") && log.contains("other_org"),
+        "{log}"
+    );
+    Ok(())
+}

@@ -39,6 +39,7 @@ const DEVICES: &[&str] = &[
     devices::MIGRATION,
     devices::MIGRATION_2,
     devices::MIGRATION_3,
+    devices::MIGRATION_4,
 ];
 /// Watch tokens, what tells a repeated export apart, and the daily sums of what Claude Code reported.
 const WATCH: &[&str] = &[watch::MIGRATION, watch::MIGRATION_2];
@@ -56,6 +57,27 @@ FROM gantry_migrations, (VALUES ('enterprise.members', 1), ('enterprise.scim', 2
 WHERE namespace = 'enterprise' AND version >= entry
 ON CONFLICT (namespace) DO NOTHING;
 "];
+
+/// Every enterprise migration list by namespace. A feature's tables are created from here alone, and the release
+/// check compares their fingerprints with the previous tag's (`enterprise/migrations.txt`).
+const NAMESPACES: &[(&str, &[&str])] = &[
+    ("enterprise.split", SPLIT),
+    ("enterprise.members", MEMBERS),
+    ("enterprise.scim", SCIM),
+    ("enterprise.siem", SIEM),
+    ("enterprise.alerts", ALERTS),
+    ("enterprise.devices", DEVICES),
+    ("enterprise.watch", WATCH),
+];
+
+fn migrate(pg: &PgStore, namespace: &str) -> Result<(), String> {
+    match NAMESPACES.iter().find(|(name, _)| *name == namespace) {
+        Some((name, list)) => pg.migrate(name, list),
+        None => Err(format!(
+            "{namespace} has no migration list. Add it to NAMESPACES in enterprise/src/enterprise/mod.rs."
+        )),
+    }
+}
 
 /// What the enterprise binary adds to the gateway it serves, for `status` (the license loaded at start).
 pub fn extend(status: &Status, host: Host<'_>) -> Result<Extension, String> {
@@ -178,24 +200,24 @@ pub fn extend_with(
         );
         return Ok(extension);
     };
-    pg.migrate("enterprise.split", SPLIT)?;
+    migrate(pg, "enterprise.split")?;
     if members_on {
-        pg.migrate("enterprise.members", MEMBERS)?;
+        migrate(pg, "enterprise.members")?;
     }
     if scim_on {
-        pg.migrate("enterprise.scim", SCIM)?;
+        migrate(pg, "enterprise.scim")?;
     }
     if siem_on || retention_on || alerts_on {
-        pg.migrate("enterprise.siem", SIEM)?;
+        migrate(pg, "enterprise.siem")?;
     }
     if alerts_on {
-        pg.migrate("enterprise.alerts", ALERTS)?;
+        migrate(pg, "enterprise.alerts")?;
     }
     if devices_on {
-        pg.migrate("enterprise.devices", DEVICES)?;
+        migrate(pg, "enterprise.devices")?;
     }
     if watch_on {
-        pg.migrate("enterprise.watch", WATCH)?;
+        migrate(pg, "enterprise.watch")?;
     }
     let db = Arc::new(Db::new(pg.clone()));
     if watch_on {
@@ -552,6 +574,20 @@ pub(crate) mod testing {
         pub log: std::sync::Arc<gantry_core::audit::AuditLog>,
         pub audit: PathBuf,
         pub governed: gantry_server::Governed,
+        _store: Closes,
+    }
+
+    /// Closes the gateway's store when the test drops its gateway. The reloader and the store's own tasks hold the
+    /// store for as long as the process runs, so without this every finished test left its connections open and a
+    /// run on many cores passed Postgres's default of 100.
+    struct Closes(Option<std::sync::Arc<gantry_server::store::PgStore>>);
+
+    impl Drop for Closes {
+        fn drop(&mut self) {
+            if let Some(store) = &self.0 {
+                store.close();
+            }
+        }
     }
 
     /// The gateway `serve` runs, with the enterprise features `status` unlocks, and one admin key, noa's.
@@ -599,9 +635,14 @@ pub(crate) mod testing {
             .collect();
         let vars: super::siem::sinks::Env =
             std::sync::Arc::new(move |name| vars.get(name).cloned());
+        let store = std::sync::Mutex::new(None);
         let gw = gantry_server::governed_with(&policy, None, &env, &|host| {
+            if let Ok(mut store) = store.lock() {
+                *store = host.postgres.cloned();
+            }
             super::extend_with(status, host, vars.clone())
         })?;
+        let store = Closes(store.into_inner().ok().flatten());
         let keys = gw.loaded.keys_path.clone();
         gantry_core::keyfile::add_entry("noa", "platform", ADMIN_KEY, true, &keys)?;
         // In effect at once, so the admin API knows the key too, not only the console.
@@ -613,7 +654,32 @@ pub(crate) mod testing {
             log: gw.log.clone(),
             audit: gw.loaded.audit_path.clone(),
             governed: gw,
+            _store: store,
         })
+    }
+
+    /// Two roles that may issue and revoke: one kept to organization acme, one kept to team payments.
+    pub const CONFINED: &str = "orgs: [acme, globex]\nroles:\n  - name: acme-admin\n    permissions: [issue_keys, revoke_keys]\n    org: acme\n  - name: payments-admin\n    permissions: [issue_keys, revoke_keys]\n    teams: [payments]\n";
+    pub const ACME_KEY: &str = "gantry_acme_0123456789abcdef0123456789ab";
+    pub const PAYMENTS_KEY: &str = "gantry_pay_0123456789abcdef0123456789abc";
+
+    /// Adds an admin key for each role of [`CONFINED`], which the gateway's policy must hold.
+    pub fn confined_admins(gw: &Gateway) -> Result<(), Error> {
+        for (name, key, role) in [
+            ("ada", ACME_KEY, "acme-admin"),
+            ("pia", PAYMENTS_KEY, "payments-admin"),
+        ] {
+            let attributes = gantry_core::keyfile::Attributes {
+                admin: true,
+                role: Some(role.into()),
+                ..Default::default()
+            };
+            gantry_core::keyfile::add_with(name, "platform", key, &attributes, &gw.keys)?;
+        }
+        gw.governed
+            .reloader
+            .check(gantry_server::Trigger::FileChange);
+        Ok(())
     }
 
     /// A browser: keeps the console cookie and sends forms from the console's own origin.
@@ -746,6 +812,17 @@ mod tests {
 #[cfg(test)]
 mod migration_tests {
     use super::testing::*;
+
+    #[test]
+    fn the_migration_fingerprints_file_matches_the_code() -> Result<(), Error> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations.txt");
+        gantry_server::store::PgStore::check_migration_manifest(
+            &path,
+            super::NAMESPACES,
+            "cargo test -p gantry-enterprise the_migration_fingerprints_file_matches_the_code",
+        )?;
+        Ok(())
+    }
     use gantry_server::store::tokio_postgres::{self, Client, NoTls};
 
     async fn connect(url: &str) -> Result<Client, Error> {

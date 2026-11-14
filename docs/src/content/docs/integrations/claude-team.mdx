@@ -150,6 +150,8 @@ A watch token starts with `gantry_watch_`, lasts 1 to 365 days (90 unless `--day
 
 In an install with organizations (`orgs:` in the policy), `"org": "acme"` (`gantry watch setup --org acme`) makes a token that organization's: its records carry `org`, and with [`audit: { per_org: true }`](/governance/audit-log/) they go to that organization's chain. The organization must be one the policy lists under `orgs:`. Someone whose role is kept to one organization creates, lists and revokes that organization's tokens only.
 
+A [role](/governance/access-control/) kept to teams (`teams:`) reaches the watch tokens of those teams only, with an admin key as with a console session. Such a role cannot create a token without a team, since that token would cover every team: the answer is `403` with `outside_role`. A token outside the role is not listed, and revoking it answers `404`. A role kept to `customers:` reaches no watch token.
+
 ```sh
 # List: label, team or person, expiry, last export, status
 curl -H "Authorization: Bearer $GANTRY_ADMIN_KEY" https://gantry.example.com/console/watch/tokens

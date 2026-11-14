@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::{credentials::MasterKey, store::PgStore};
 
 /// The MCP gateway's tables, applied once per database under their own namespace.
-const MIGRATIONS: &[&str] = &["
+pub(crate) const MIGRATIONS: &[&str] = &["
 CREATE TABLE gantry_mcp (
     kind text NOT NULL,
     id text NOT NULL,

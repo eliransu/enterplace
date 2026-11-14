@@ -266,7 +266,7 @@ const LEASE_MARGIN_MS: u64 = 500;
 /// The store, with the runtime its connection and poller run on. Its own runtime, so the command line (which
 /// blocks) and the server (which awaits) can both call it, and a busy server does not delay the poll.
 pub struct PgStore {
-    runtime: Option<tokio::runtime::Runtime>,
+    runtime: Mutex<Option<tokio::runtime::Runtime>>,
     handle: tokio::runtime::Handle,
     inner: Arc<Inner>,
 }
@@ -280,10 +280,7 @@ impl std::fmt::Debug for PgStore {
 
 impl Drop for PgStore {
     fn drop(&mut self) {
-        // Dropping a runtime waits for its tasks, which is refused inside another runtime (a test, the server).
-        if let Some(runtime) = self.runtime.take() {
-            runtime.shutdown_background();
-        }
+        self.close();
     }
 }
 
@@ -399,7 +396,7 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
     });
     let store = PgStore {
         handle: runtime.handle().clone(),
-        runtime: Some(runtime),
+        runtime: Mutex::new(Some(runtime)),
         inner: inner.clone(),
     };
     let first = inner.clone();
@@ -1722,6 +1719,68 @@ async fn migrate_namespace(
 
 /// For a binary that embeds the gateway and keeps tables of its own in the store's database.
 impl PgStore {
+    /// Stops the store's thread, which closes its connection and every [`connect`](Self::connect) one. Calls after
+    /// it are refused as a store that stopped. A gateway that is done with its store before the process ends calls
+    /// it: the tasks that hold the store keep it, and its connections, open otherwise.
+    pub fn close(&self) {
+        let runtime = self
+            .runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        // Dropping a runtime waits for its tasks, which is refused inside another runtime (a test, the server).
+        if let Some(runtime) = runtime {
+            runtime.shutdown_background();
+        }
+    }
+
+    /// Every migration list of the open source store, by namespace (`core` is the gateway's own schema). The
+    /// release check compares their fingerprints with the previous tag's (`release/migrations.txt`).
+    #[doc(hidden)]
+    pub fn migration_lists() -> Vec<(&'static str, &'static [&'static str])> {
+        vec![
+            ("core", MIGRATIONS),
+            ("gantry_policy", POLICY_MIGRATIONS),
+            ("gantry_routing", ROUTING_MIGRATIONS),
+            (crate::batch::NAMESPACE, crate::batch::MIGRATIONS),
+            (crate::insights::NAMESPACE, crate::insights::MIGRATIONS),
+            ("mcp", crate::mcp::keep::MIGRATIONS),
+        ]
+    }
+
+    /// The fingerprint file of `lists`: a line per namespace with how many migrations it has and a hash of them.
+    #[doc(hidden)]
+    pub fn migration_manifest(lists: &[(&str, &[&str])]) -> String {
+        let mut out = String::from(
+            "# Store migrations by namespace: entries, SHA-256 of them. Written by a test (see RELEASING.md), read by\n# scripts/version.py: a change since the previous tag needs a minor version bump.\n",
+        );
+        for (namespace, migrations) in lists {
+            let hash = gantry_core::id::sha256_hex(migrations.join("\0").as_bytes());
+            out += &format!("{namespace} {} {hash}\n", migrations.len());
+        }
+        out
+    }
+
+    /// Checks the fingerprint file at `path` against `lists`, or writes it when GANTRY_WRITE_MIGRATIONS is set.
+    /// `Err` says how to bring it up to date. For the manifest test of each crate that keeps migrations.
+    #[doc(hidden)]
+    pub fn check_migration_manifest(
+        path: &std::path::Path,
+        lists: &[(&str, &[&str])],
+        test: &str,
+    ) -> Result<(), String> {
+        let now = Self::migration_manifest(lists);
+        if std::env::var_os("GANTRY_WRITE_MIGRATIONS").is_some() {
+            return std::fs::write(path, now).map_err(|err| format!("{}: {err}", path.display()));
+        }
+        if std::fs::read_to_string(path).is_ok_and(|kept| kept == now) {
+            return Ok(());
+        }
+        Err(format!(
+            "{} does not match the store migrations in the code. If a migration was added, write it again with GANTRY_WRITE_MIGRATIONS=1 {test}, commit it, and bump the minor version once a release tag exists (scripts/version.py checks). If a shipped migration was edited, undo that: add a new entry instead.",
+            path.display()
+        ))
+    }
     /// A new connection to the store's database, with the store's TLS settings. Its own, so it may hold a
     /// transaction: the store's shared connection never does. Its I/O runs on the store's thread.
     pub async fn connect(&self) -> Result<Client, String> {
@@ -2654,6 +2713,36 @@ impl<S: AsyncRead + AsyncWrite + Unpin> TlsStream for Tls<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_migration_fingerprints_file_matches_the_code() -> Result<(), String> {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../release/migrations.txt");
+        PgStore::check_migration_manifest(
+            &path,
+            &PgStore::migration_lists(),
+            "cargo test -p gantry-server the_migration_fingerprints_file_matches_the_code",
+        )
+    }
+
+    #[test]
+    fn a_migration_added_or_edited_changes_its_namespaces_fingerprint_alone() {
+        let lines = |lists: &[(&str, &[&str])]| -> Vec<String> {
+            PgStore::migration_manifest(lists)
+                .lines()
+                .filter(|l| !l.starts_with('#'))
+                .map(str::to_string)
+                .collect()
+        };
+        let before = lines(&[("core", &["a", "b"]), ("mcp", &["c"])]);
+        let added = lines(&[("core", &["a", "b", "x"]), ("mcp", &["c"])]);
+        let edited = lines(&[("core", &["a", "B"]), ("mcp", &["c"])]);
+        assert!(before[0].starts_with("core 2 ") && added[0].starts_with("core 3 "));
+        assert!(before[0] != added[0] && before[0] != edited[0] && added[0] != edited[0]);
+        assert_eq!((&before[1], &before[1]), (&added[1], &edited[1]));
+        // Where one entry ends and the next starts is part of the fingerprint.
+        assert!(lines(&[("n", &["ab", "c"])]) != lines(&[("n", &["a", "bc"])]));
+    }
 
     #[test]
     fn an_older_gantry_runs_beside_a_newer_one_only_one_minor_version_apart() {

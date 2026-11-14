@@ -929,6 +929,18 @@ impl Console {
         (sso::b64url(digest.as_ref()) == pending.challenge).then_some((pending.email, pending.team))
     }
 
+    /// The admin a key file entry is when its key is sent as a bearer token: its role read from the policy now and
+    /// kept to the key's organization, as a console sign-in with the key gives. `None` when the role is not known.
+    pub fn admin_of_key(&self, entry: &config::KeyEntry) -> Option<Admin> {
+        let role = self.role(entry.role.as_deref().unwrap_or("admin"), &entry.org)?;
+        Some(admin_of(
+            entry.name.clone(),
+            entry.team.clone(),
+            &role,
+            Via::Key,
+        ))
+    }
+
     /// Who the request is signed in as, checked again now. `None` when no one is: send them to /console/sign-in.
     pub async fn signed_in(&self, headers: &HeaderMap) -> Option<Admin> {
         self.admin(headers).await

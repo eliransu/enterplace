@@ -43,9 +43,12 @@ Tokens can be managed without the console, with an admin key (`admin: true` in t
 
 | Call | Does |
 |---|---|
-| `GET /console/devices/tokens` | Lists tokens: `id`, `label`, `team`, `created_by`, `created_at`, `expires_at`, `status` (`active`, `expired`, `revoked`). Never the token |
+| `GET /console/devices/tokens` | Lists tokens: `id`, `label`, `team`, `org`, `created_by`, `created_at`, `expires_at`, `status` (`active`, `expired`, `revoked`). Never the token |
 | `POST /console/devices/tokens` | Creates one from `{"label": "...", "team": "...", "days": 90}` (`team` and `days` optional). Answers `201` with `id`, `token` and `expires_at`, the only time the token is shown |
 | `DELETE /console/devices/tokens/<id>` | Revokes it |
+
+An admin whose role is kept to an organization or to teams reaches only its own enrolment tokens, with an admin key as with a console session. A token belongs to the organization of the admin who created it (`org`, empty for an admin of the whole install). A role kept to teams creates tokens for those teams only, and not a token without a team (`403`, `outside_role`). A token outside the role is not listed, and revoking it answers `404`.
+
 | `GET /console/devices/devices.json` | Every device as last reported, the file `gantry audit coverage --devices` reads |
 | `DELETE /console/devices/devices/<device_id>` | Removes a device and its binding, so its next report binds it again. An admin record `device_removed` |
 | `GET /console/devices/mcp` | Every MCP server devices reported, once per transport and target: `servers` (names), `tools`, `devices`, `via_gantry`, `decision` (`approved`, `blocked`, `pending`), `decided_by`, `decided_at` |
