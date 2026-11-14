@@ -159,13 +159,13 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
         .collect::<Result<_, tokio_postgres::Error>>()?;
     assert_eq!(rows, vec![("demo".to_string(), 1)]);
-    // The gateway's own schema version is untouched by the namespace: its three migrations (keys, shared limits and
-    // sessions, credentials).
+    // The gateway's own schema version is untouched by the namespace: its four migrations (keys, shared limits and
+    // sessions, credentials, the hierarchy's key fields).
     let core: i32 = client
         .query_one("SELECT max(version) FROM gantry_schema", &[])
         .await?
         .try_get(0)?;
-    assert_eq!(core, 3);
+    assert_eq!(core, 4);
 
     // Its own connection, so a transaction is safe on it.
     let tx = client.transaction().await?;

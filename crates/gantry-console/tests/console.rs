@@ -2223,3 +2223,89 @@ async fn an_answer_guardrail_shows_on_its_request_and_the_price_source_shows() -
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_custom_role_sees_only_the_pages_it_may_and_an_org_role_only_its_keys() -> TestResult {
+    const FIN_KEY: &str = "gantry_fin_key_for_tests";
+    const KEEPER_KEY: &str = "gantry_keeper_key_for_tests";
+    let s = setup("roles")?;
+    let policy = format!(
+        "{POLICY}orgs: [acme]\nroles:\n  - name: finance\n    permissions: [see_spend]\n  - name: keeper\n    permissions: [see_keys, issue_keys]\n"
+    );
+    std::fs::write(s.dir.join("gantry.policy.yaml"), policy)?;
+    std::fs::write(
+        s.keys(),
+        format!(
+            "{}  - name: fin\n    team: money\n    sha256: {}\n    role: finance\n  - name: keeper\n    team: ops\n    sha256: {}\n    org: acme\n    role: keeper\n  - name: acme-bot\n    team: bots\n    sha256: {}\n    org: acme\n",
+            keys_text(),
+            sha256_hex(FIN_KEY.as_bytes()),
+            sha256_hex(KEEPER_KEY.as_bytes()),
+            sha256_hex(b"gantry_acme_bot_key")
+        ),
+    )?;
+    let cookie_of = |headers: &HeaderMap| {
+        headers
+            .get(header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .map(|c| c.split(';').next().unwrap_or("").to_string())
+            .unwrap_or_default()
+    };
+    let (status, headers, _) = send(
+        &s.app,
+        post("/console/sign-in", "", &format!("key={FIN_KEY}"))?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let fin = cookie_of(&headers);
+    let (status, _, _) = send(&s.app, get("/console/spend", &fin)?).await?;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, body) = send(&s.app, get("/console/people", &fin)?).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body.contains("does not have the see_keys permission"),
+        "{body}"
+    );
+    // The audit log is not its page: it starts on spend.
+    let (status, headers, _) = send(&s.app, get("/console/audit", &fin)?).await?;
+    assert_eq!(
+        (status, location(&headers)),
+        (StatusCode::SEE_OTHER, "/console/spend")
+    );
+
+    let (_, headers, _) = send(
+        &s.app,
+        post("/console/sign-in", "", &format!("key={KEEPER_KEY}"))?,
+    )
+    .await?;
+    let keeper = cookie_of(&headers);
+    let (status, _, body) = send(&s.app, get("/console/people", &keeper)?).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains("acme-bot") && !body.contains("maya.cohen"),
+        "an org role sees its org's keys only"
+    );
+    // It may issue a key, and the key goes into its organization.
+    let (status, _, body) = send(
+        &s.app,
+        post("/console/people/issue", &keeper, "name=acme-new&team=bots")?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let saved = std::fs::read_to_string(s.keys())?;
+    let new = saved.split("- name: acme-new").nth(1).ok_or("no entry")?;
+    assert!(new.contains("org: acme"), "{saved}");
+    // It may not revoke: revoke_keys is not in its role.
+    let bot = sha256_hex(b"gantry_acme_bot_key");
+    let (status, _, _) = send(
+        &s.app,
+        post(
+            "/console/people/revoke",
+            &keeper,
+            &format!("sha256={bot}&confirm=acme-bot"),
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(std::fs::read_to_string(s.keys())?.contains(&bot));
+    Ok(())
+}

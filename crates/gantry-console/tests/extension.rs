@@ -26,11 +26,13 @@ const HOST: &str = "127.0.0.1:19851";
 
 fn ada() -> Admin {
     Admin {
-        name: "ada@example.com".into(),
-        team: "research".into(),
-        read_only: true,
         role: "viewer".into(),
-        via: Via::Account("acct-1".into()),
+        ..Admin::of_role(
+            "ada@example.com",
+            "research",
+            true,
+            Via::Account("acct-1".into()),
+        )
     }
 }
 

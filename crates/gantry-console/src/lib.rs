@@ -30,6 +30,7 @@ use axum::{
 use gantry_core::{
     audit::{self, AuditLog},
     config, id, keyfile,
+    policy::{Permission, Role, builtin_role},
 };
 use serde_json::{Map, Value, json};
 
@@ -67,8 +68,9 @@ const FLOOD: u64 = 100;
 enum Who {
     /// Signed in with an admin key, by its hash.
     Key(String),
-    /// Signed in through single sign-on.
-    Sso { email: String, read_only: bool },
+    /// Signed in through single sign-on, with the role the identity provider's claim gave: `admin`, `read_only`
+    /// or a role from the policy's `roles:`.
+    Sso { email: String, role: String },
     /// Signed in to an account an [`Extension`] keeps, by its ID. The extension says who it is on every request.
     Account(String),
 }
@@ -113,8 +115,12 @@ struct Session {
 fn who_text(who: &Who) -> String {
     match who {
         Who::Key(sha) => format!("key {sha}"),
-        Who::Sso { email, read_only } => {
-            format!("sso {} {email}", if *read_only { "read" } else { "admin" })
+        // `read` is how sessions opened before custom roles name the read-only role.
+        Who::Sso { email, role } => {
+            format!(
+                "sso {} {email}",
+                if role == "read_only" { "read" } else { role }
+            )
         }
         Who::Account(account) => format!("account {account}"),
     }
@@ -128,7 +134,7 @@ fn who_of(text: &str) -> Option<Who> {
             let (role, email) = rest.split_once(' ')?;
             Who::Sso {
                 email: email.to_string(),
-                read_only: role != "admin",
+                role: if role == "read" { "read_only" } else { role }.to_string(),
             }
         }
         "account" => Who::Account(rest.to_string()),
@@ -250,6 +256,10 @@ pub struct Admin {
     /// The role the pages show under the name.
     pub role: String,
     pub via: Via,
+    /// What the person may do. Each page and action checks the one it needs.
+    pub permissions: Vec<Permission>,
+    /// The organization whose keys, records and spend alone the person sees, when the role keeps them to one.
+    pub org: Option<String>,
 }
 
 /// How a person signed in to the console.
@@ -264,6 +274,33 @@ pub enum Via {
 }
 
 impl Admin {
+    /// An admin of everything, or a read-only viewer of everything, as before roles: for extensions and tests.
+    pub fn of_role(name: &str, team: &str, read_only: bool, via: Via) -> Admin {
+        let role = builtin_role(if read_only { "read_only" } else { "admin" });
+        Admin {
+            name: name.to_string(),
+            team: team.to_string(),
+            read_only,
+            role: sso_role(read_only),
+            via,
+            permissions: role.map(|r| r.permissions).unwrap_or_default(),
+            org: None,
+        }
+    }
+
+    /// Whether the person holds `permission`.
+    pub fn may(&self, permission: Permission) -> bool {
+        self.permissions.contains(&permission)
+    }
+
+    /// Whether a record (an audit log line) is one this person may see: every record for someone not kept to an
+    /// organization, else only those of theirs.
+    pub fn sees(&self, line: &str) -> bool {
+        self.org
+            .as_ref()
+            .is_none_or(|org| line.contains(&format!("\"org\":\"{org}\"")))
+    }
+
     /// How the pages show who is signed in.
     fn label(&self) -> String {
         format!("{}, {}", self.name, self.role)
@@ -272,6 +309,23 @@ impl Admin {
 
 fn sso_role(read_only: bool) -> String {
     if read_only { "read only" } else { "admin" }.to_string()
+}
+
+/// The person a role signs in, with the role's permissions and organization.
+fn admin_of(name: String, team: String, role: &Role, via: Via) -> Admin {
+    let read_only = !role.may(Permission::IssueKeys);
+    Admin {
+        name,
+        team,
+        read_only,
+        role: match role.name.as_str() {
+            "admin" | "read_only" => sso_role(read_only),
+            custom => custom.to_string(),
+        },
+        via,
+        permissions: role.permissions.clone(),
+        org: role.org.clone(),
+    }
 }
 
 /// What an admin record says: what was done, by whom, to what.
@@ -610,30 +664,22 @@ impl Console {
             }
         };
         let admin = match who {
-            Who::Key(sha) => admin_entry(&self.config().keys, &sha).map(|e| Admin {
-                name: e.name,
-                team: e.team,
-                read_only: false,
-                role: sso_role(false),
-                via: Via::Key,
+            // The key's role is read with the policy every time, so a role taken away ends its sessions at once.
+            Who::Key(sha) => admin_entry(&self.config().keys, &sha).and_then(|e| {
+                let role = self.role(e.role.as_deref().unwrap_or("admin"), &e.org)?;
+                Some(admin_of(e.name, e.team, &role, Via::Key))
             }),
             // The policy file is read every time, so removing console.sso or a person's email ends their session at once.
-            Who::Sso { email, read_only } => {
+            Who::Sso { email, role } => {
                 let domain = email.rsplit_once('@').map_or("", |(_, d)| d);
-                self.sso_config()
-                    .ok()
+                let allowed = self.sso_config().ok().flatten().is_some_and(|sso| {
+                    sso.allowed_emails.contains(&email)
+                        || sso.allowed_domains.iter().any(|d| d == domain)
+                });
+                allowed
+                    .then(|| self.role(&role, ""))
                     .flatten()
-                    .filter(|sso| {
-                        sso.allowed_emails.contains(&email)
-                            || sso.allowed_domains.iter().any(|d| d == domain)
-                    })
-                    .map(|_| Admin {
-                        name: email,
-                        team: String::new(),
-                        read_only,
-                        role: sso_role(read_only),
-                        via: Via::Sso,
-                    })
+                    .map(|role| admin_of(email, String::new(), &role, Via::Sso))
             }
             Who::Account(account) => match &self.0.accounts {
                 Some(accounts) => accounts(account).await,
@@ -661,6 +707,28 @@ impl Console {
     }
 
     /// `console.sso` from the policy file as it is now. `Err` when the file has problems: no one signs in through it then.
+    /// A role by name, from the policy as it is now, kept to `org` when the key has one. Only the built-in ones
+    /// when the policy does not load: a custom role then signs no one in.
+    fn role(&self, name: &str, org: &str) -> Option<Role> {
+        let c = self.config();
+        let mut role = match config::load(&c.policy, Some(&c.keys)) {
+            Ok(loaded) => loaded.policy.role(name),
+            Err(_) => builtin_role(name),
+        }?;
+        if !org.is_empty() {
+            role.org = Some(org.to_string());
+        }
+        Some(role)
+    }
+
+    /// The roles of the policy as it is now, for single sign-on.
+    fn roles(&self) -> Vec<Role> {
+        let c = self.config();
+        config::load(&c.policy, Some(&c.keys))
+            .map(|loaded| loaded.policy.roles().to_vec())
+            .unwrap_or_default()
+    }
+
     fn sso_config(&self) -> Result<Option<config::Sso>, String> {
         let c = self.config();
         let text = std::fs::read_to_string(&c.policy)
@@ -885,7 +953,7 @@ fn admin_entry(keys: &std::path::Path, sha256: &str) -> Option<config::KeyEntry>
     config::key_entries(keys, &text)
         .ok()?
         .into_iter()
-        .find(|e| e.admin && e.sha256 == sha256)
+        .find(|e| (e.admin || e.role.is_some()) && e.sha256 == sha256)
 }
 
 async fn root(State(console): State<Console>, headers: HeaderMap) -> Response {
@@ -1266,13 +1334,14 @@ async fn sso_callback(
     if let Some(cli) = cli_cookie(&console, &headers, query.get("state")) {
         return cli_finish(&console, &cli, finished).await;
     }
-    match finished.and_then(|(claims, sso)| sso::admit(&claims, &sso)) {
-        Ok((email, read_only)) => {
+    let roles = console.roles();
+    match finished.and_then(|(claims, sso)| sso::admit(&claims, &sso, &roles)) {
+        Ok((email, role)) => {
             let act = Act {
                 action: "console_sign_in",
                 by: Some((&email, "")),
                 key: None,
-                target: json!({ "via": "sso", "role": if read_only { "read_only" } else { "admin" } }),
+                target: json!({ "via": "sso", "role": role }),
             };
             if record(&console, &act, None, None).await.is_err() {
                 return page(
@@ -1280,7 +1349,7 @@ async fn sso_callback(
                     pages::sign_in("", NOT_RECORDED, true),
                 );
             }
-            let session = match console.open_session(Who::Sso { email, read_only }).await {
+            let session = match console.open_session(Who::Sso { email, role }).await {
                 Ok(session) => session,
                 Err(err) => {
                     return page(
@@ -1694,13 +1763,52 @@ fn read(path: &std::path::Path) -> Result<Option<String>, String> {
     }
 }
 
+/// The page a person without the permission a page needs gets instead of it.
+fn not_permitted(admin: &Admin, permission: Permission) -> Response {
+    page(
+        StatusCode::FORBIDDEN,
+        pages::notice(
+            "Not for your role",
+            &format!(
+                "Your role, {}, does not have the {} permission this page needs. Ask a Gantry admin to add it to the role under roles: in the policy.",
+                admin.role,
+                permission.word()
+            ),
+            "/console/policy",
+            "Open the policy",
+        ),
+    )
+}
+
+/// The audit log as a person may see it: whole, or only their organization's records.
+fn log_for(admin: &Admin, log: Result<Option<String>, String>) -> Result<Option<String>, String> {
+    if admin.org.is_none() {
+        return log;
+    }
+    log.map(|text| {
+        text.map(|text| {
+            text.lines()
+                .filter(|line| admin.sees(line))
+                .map(|line| format!("{line}\n"))
+                .collect()
+        })
+    })
+}
+
 async fn audit_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
     let Some(admin) = console.admin(&headers).await else {
         return redirect("/console/sign-in");
     };
+    if !admin.may(Permission::SeeRecords) {
+        // The audit log is where the console starts: a role without it starts on a page it may see.
+        if admin.may(Permission::SeeSpend) {
+            return redirect("/console/spend");
+        }
+        return not_permitted(&admin, Permission::SeeRecords);
+    }
     let config = console.config();
     // ponytail: the whole audit log is read and parsed on every request. Fine for today's logs; an index or a tail read when they reach many megabytes.
-    let log = read(&config.audit);
+    let log = log_for(&admin, read(&config.audit));
     let policy = read(&config.policy).ok().flatten();
     let loaded = config::load(&config.policy, Some(&config.keys)).ok();
     let body = pages::audit(&pages::AuditView {
@@ -1746,6 +1854,9 @@ async fn people_page(State(console): State<Console>, headers: HeaderMap, uri: Ur
     let Some(admin) = console.admin(&headers).await else {
         return redirect("/console/sign-in");
     };
+    if !admin.may(Permission::SeeKeys) {
+        return not_permitted(&admin, Permission::SeeKeys);
+    }
     let query = Form::of(&uri);
     // A read-only person gets no dialog for an action they cannot take, even from a typed address.
     let dialog = if admin.read_only {
@@ -1763,13 +1874,32 @@ fn people_body(console: &Console, admin: &Admin, query: &Form, dialog: pages::Di
         admin: &admin.label(),
         query,
         keys_path: &config.keys,
-        keys: read(&config.keys),
-        log: read(&config.audit).ok().flatten(),
+        keys: keys_for(admin, &config.keys, read(&config.keys)),
+        log: log_for(admin, read(&config.audit)).ok().flatten(),
         dialog,
         read_only: admin.read_only,
         // A list that cannot be read shows no one stopped here; the audit log's banner says it cannot be read.
         kills: gantry_core::kill::read(&gantry_core::kill::path_beside(&config.keys))
             .unwrap_or_default(),
+    })
+}
+
+/// The keys file as a person may see it: whole, or written again with only their organization's keys.
+fn keys_for(
+    admin: &Admin,
+    path: &std::path::Path,
+    text: Result<Option<String>, String>,
+) -> Result<Option<String>, String> {
+    let Some(org) = &admin.org else {
+        return text;
+    };
+    text.map(|text| {
+        text.map(|text| {
+            let entries = config::key_entries(path, &text).unwrap_or_default();
+            let mine: Vec<config::KeyEntry> =
+                entries.into_iter().filter(|e| e.org == *org).collect();
+            keyfile::keys_text(&mine)
+        })
     })
 }
 
@@ -1803,9 +1933,11 @@ async fn issue(State(console): State<Console>, headers: HeaderMap, body: String)
                 gantry_core::policy::Period::Month
             },
         }),
+        // A person kept to one organization issues keys in it.
+        org: admin.org.clone().unwrap_or_default(),
         ..keyfile::Attributes::default()
     };
-    if admin.read_only {
+    if !admin.may(Permission::IssueKeys) {
         read_only(&console, &admin, "issue_key").await;
         return page(
             StatusCode::BAD_REQUEST,
@@ -1902,10 +2034,10 @@ async fn revoke(State(console): State<Console>, headers: HeaderMap, body: String
         .flatten()
         .and_then(|text| config::key_entries(&keys, &text).ok())
         .and_then(|entries| entries.into_iter().find(|e| e.sha256 == sha256));
-    let Some(entry) = entry else {
+    let Some(entry) = entry.filter(|e| admin.org.as_ref().is_none_or(|o| *o == e.org)) else {
         return redirect("/console/people");
     };
-    if admin.read_only {
+    if !admin.may(Permission::RevokeKeys) {
         read_only(&console, &admin, "revoke_key").await;
         return page(
             StatusCode::BAD_REQUEST,
@@ -2067,9 +2199,9 @@ async fn credential_change(
             credentials_body(&console, &admin, &Form(Vec::new()), dialog),
         )
     };
-    if admin.read_only {
+    if !admin.may(Permission::Credentials) || admin.org.is_some() {
         read_only(&console, &admin, action).await;
-        return back("You are signed in read only: ask an admin to change credentials.".into());
+        return back("Your role may not change credentials, which serve the whole install: ask an admin to change them.".into());
     }
     let Some(store) = gantry_core::store::attached(&console.config().keys) else {
         return back("Credentials need the store. Keep provider keys in key_env.".into());
@@ -2166,9 +2298,12 @@ async fn spend_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
     let Some(admin) = console.admin(&headers).await else {
         return redirect("/console/sign-in");
     };
+    if !admin.may(Permission::SeeSpend) {
+        return not_permitted(&admin, Permission::SeeSpend);
+    }
     let config = console.config();
     // ponytail: the whole audit log is read on every request, as the audit page does.
-    let log = read(&config.audit);
+    let log = log_for(&admin, read(&config.audit));
     let loaded = config::load(&config.policy, Some(&config.keys));
     page(
         StatusCode::OK,
@@ -2398,11 +2533,15 @@ mod tests {
             Who::Key("ab12".into()),
             Who::Sso {
                 email: "maya@acme.com".into(),
-                read_only: true,
+                role: "read_only".into(),
             },
             Who::Sso {
                 email: "lee@acme.com".into(),
-                read_only: false,
+                role: "admin".into(),
+            },
+            Who::Sso {
+                email: "fin@acme.com".into(),
+                role: "finance".into(),
             },
             Who::Account("acct 7".into()),
         ] {

@@ -896,7 +896,7 @@ fn limit_story(record: &Value, ctx: &Context<'_>) -> Option<Story> {
     if s(record, "code") == "rate_limited" {
         return rate_story(record, ctx, rule);
     }
-    let budget = rule.limits.budget?;
+    let budget = rule.limits.budget()?;
     let per_day = budget.per == gantry_core::policy::Period::Day;
     let time = s(record, "time");
     // A team rule counts the team's spend; a name or `any` rule counts the person's.
@@ -3138,6 +3138,7 @@ pub fn policy(
                     let who = match &r.who {
                         Who::Team(team) => format!("Team {}", esc(team)),
                         Who::Name(name) => esc(name),
+                        Who::Tag(tag) => format!("Keys tagged {}", esc(tag)),
                         Who::Any => "Everyone else".into(),
                     };
                     let models = match &r.models {
@@ -3161,7 +3162,7 @@ pub fn policy(
                             .collect();
                         let _ = write!(meta, " Guardrails: {}.", names.join(", "));
                     }
-                    if let Some(b) = r.limits.budget {
+                    if let Some(b) = r.limits.budget() {
                         let _ = write!(meta, " Budget ${} a {}.", money(b.usd), b.per.word());
                     }
                     if let Some(rpm) = r.limits.rpm {
@@ -3353,10 +3354,11 @@ pub fn spend(view: &SpendView<'_>) -> String {
     let mut meters: Vec<(Meter, Who)> = rules
         .iter()
         .filter_map(|rule| {
-            let budget = rule.limits.budget?;
+            let budget = rule.limits.budget()?;
             let label = match &rule.who {
                 Who::Team(team) => team.clone(),
                 Who::Name(name) => name.clone(),
+                Who::Tag(tag) => format!("tag {tag}"),
                 Who::Any => String::new(),
             };
             Some((

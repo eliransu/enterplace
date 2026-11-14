@@ -1185,7 +1185,11 @@ fn key_new_makes_the_first_admin_and_prints_an_env_block_to_paste() -> TestResul
 
     for (bad, says) in [
         (&["--expires", "soon"][..], "It takes a UTC date"),
-        (&["--budget", "20/week"], "--budget is"),
+        (&["--budget", "20/fortnight"], "--budget is"),
+        (
+            &["--budget", "20/day@Mars/Olympus"],
+            "not a time zone Gantry knows",
+        ),
         // UX11 n3: a key that is refused on its first request is never issued.
         (&["--expires", "2020-01-01"], "has passed"),
         (&["--expires", "2026-02-30"], "2026-02-30 is not a date"),
@@ -1597,5 +1601,130 @@ fn guardrail_test_backtests_a_defined_guardrail_on_a_corpus() -> TestResult {
     assert!(String::from_utf8(out.stderr)?.contains("It defines: tickets."));
     let out = gantry(&["guardrail", "test"], &[])?;
     assert!(String::from_utf8(out.stderr)?.contains("Usage: gantry guardrail test <name>"));
+    Ok(())
+}
+
+#[test]
+fn key_new_writes_hierarchy_fields_and_explain_names_each_limit_and_its_source() -> TestResult {
+    let dir = std::env::temp_dir().join(format!("gantry-cli-explain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let policy = dir.join("gantry.policy.yaml");
+    let keys = dir.join("gantry.keys.yaml");
+    std::fs::write(
+        &policy,
+        "version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini]
+orgs: [acme]
+rules:
+  - name: other-org
+    org: other
+    principals: { any: true }
+    models: []
+  - name: shop
+    principals: { team: shop }
+    models: [gpt-4o-mini]
+    customers: [\"*\"]
+limits:
+  - { customer: \"*\", budget: { usd: 5, per: day } }
+  - { customer: \"*\", org: acme, budget: { usd: 9, per: day } }
+",
+    )?;
+    let (p, k) = (policy.to_string_lossy(), keys.to_string_lossy());
+    let out = gantry(&["check", &p], &[])?;
+    // A rule for an organization the policy does not list is refused by name.
+    assert!(
+        String::from_utf8(out.stderr)?.contains("organization \"other\" is not listed under orgs")
+    );
+    std::fs::write(
+        &policy,
+        std::fs::read_to_string(&policy)?.replace("orgs: [acme]", "orgs: [acme, other]"),
+    )?;
+    let out = gantry(
+        &[
+            "key",
+            "new",
+            "backend",
+            "--team",
+            "shop",
+            "--org",
+            "acme",
+            "--tags",
+            "web,search",
+            "--parallel",
+            "4",
+            "--budget",
+            "100/month@America/New_York",
+            "--quiet",
+            "--keys",
+            &k,
+        ],
+        &[],
+    )?;
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let saved = std::fs::read_to_string(&keys)?;
+    assert!(
+        saved.contains("tz: America/New_York")
+            && saved.contains("org: acme")
+            && saved.contains("parallel: 4"),
+        "{saved}"
+    );
+    let out = gantry(
+        &[
+            "explain",
+            &p,
+            "--keys",
+            &k,
+            "--key",
+            "backend",
+            "--model",
+            "gpt-4o-mini",
+            "--customer",
+            "globex",
+        ],
+        &[],
+    )?;
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let explained: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+    assert_eq!(explained["verdict"], "allow");
+    assert_eq!(
+        explained["skipped"][0]["why"],
+        "is for organization \"other\""
+    );
+    let limits = explained["limits"].as_array().ok_or("no limits")?;
+    let customer = limits
+        .iter()
+        .find(|l| l["of"] == "customer")
+        .ok_or("no customer limit")?;
+    assert_eq!(customer["usd"], 9.0);
+    assert!(
+        customer["overrides"][0]
+            .as_str()
+            .is_some_and(|o| o.contains("customer: *")),
+        "{customer}"
+    );
+    assert!(
+        limits
+            .iter()
+            .any(|l| l["of"] == "key" && l["per"] == "month@America/New_York")
+    );
+    assert!(
+        limits
+            .iter()
+            .any(|l| l["of"] == "key" && l["limit"] == "parallel")
+    );
     Ok(())
 }

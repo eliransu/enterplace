@@ -20,6 +20,27 @@ same version. How a release is made: RELEASING.md in the gantry-enterprise repos
   `gantry-detectors-v2` corpus. A URL's login part is no longer reported as an email address.
 - `type: model_armor`: Google Cloud Model Armor through sanitizeUserPrompt and sanitizeModelResponse.
 
+### Access and budget hierarchy
+
+- Organizations: `orgs:` in the policy, `org:` on keys, rules, limits and roles. Each organization has its own rules,
+  budgets, keys and console view; counters and records are kept per organization.
+- End customers (`customer:` on a key, or `x-gantry-customer` for names a rule's `customers:` lists) and request tags
+  (`tags:` on a key, or `x-gantry-tags` for tags a rule lists). An unlisted name is refused by name. Records carry
+  `org`, `customer` and `tags`; `principals: { tag: ... }` names keys by tag.
+- Budgets at every scope through `limits:` (global, organization, team, person, key, customer, tag, model), several
+  per place, per model on a rule, with periods from a minute to a year (`day`, `week`, `6h`, `3mo`, ...) aligned to
+  an IANA time zone (`tz:`). Fixed-length windows such as `per: 30d` start again every 30 days.
+- `parallel:` on a rule, a key or a scope caps requests in flight, shared across replicas with a store
+  (`parallel_limited`).
+- Within a kind of scope each limit comes from the most specific entry; `gantry explain` and `GET /admin/explain` list
+  every limit that applies with where it is written, what it overrides and (from the gateway) what it has spent.
+- Access profiles (`profiles:`) a rule includes: models, guardrails, tools and limits, with the rule's own values
+  winning and every override listed.
+- Console roles (`roles:`) with fine-grained permissions (`see_keys`, `issue_keys`, `revoke_keys`, `kill`,
+  `credentials`, `edit_policy`, `see_spend`, `see_records`, `see_bodies`), given to keys with `role:` or through
+  single sign-on with `sso_values`, enforced in the console and the admin API.
+- The store's schema gains a fourth migration: the new key fields.
+
 ## [0.1.0] - Unreleased
 
 The first tagged release: a governed AI gateway in one static binary. Every request carries a person's or workload's

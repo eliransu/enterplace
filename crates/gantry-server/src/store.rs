@@ -121,6 +121,10 @@ CREATE TABLE gantry_credentials (
 CREATE TABLE gantry_master (id integer PRIMARY KEY CHECK (id = 1), sealed bytea NOT NULL);
 INSERT INTO gantry_versions VALUES ('credentials', 0);
 ",
+    "
+ALTER TABLE gantry_keys ADD COLUMN org text, ADD COLUMN customer text, ADD COLUMN tags text[],
+    ADD COLUMN parallel integer, ADD COLUMN role text;
+",
 ];
 
 /// What the master key seals once per database, so a gateway with another master key is refused at start rather
@@ -750,7 +754,7 @@ impl Inner {
     async fn read_keys(&self, client: &Client) -> Result<Vec<KeyEntry>, String> {
         let rows = client
             .query(
-                "SELECT name, team, sha256, admin, expires, budget_usd, budget_per, models, tpm FROM gantry_keys ORDER BY id",
+                "SELECT name, team, sha256, admin, expires, budget_usd, budget_per, models, tpm, org, customer, tags, parallel, role FROM gantry_keys ORDER BY id",
                 &[],
             )
             .await
@@ -761,6 +765,9 @@ impl Inner {
             let usd: Option<f64> = row.try_get(5).map_err(field)?;
             let per: Option<String> = row.try_get(6).map_err(field)?;
             let tpm: Option<i32> = row.try_get(8).map_err(field)?;
+            let parallel: Option<i32> = row.try_get(12).map_err(field)?;
+            let org: Option<String> = row.try_get(9).map_err(field)?;
+            let tags: Option<Vec<String>> = row.try_get(11).map_err(field)?;
             keys.push(KeyEntry {
                 name: row.try_get(0).map_err(field)?,
                 team: row.try_get(1).map_err(field)?,
@@ -769,16 +776,21 @@ impl Inner {
                 expires: row.try_get(4).map_err(field)?,
                 budget: usd.map(|usd| Budget {
                     usd,
-                    // Only Gantry writes this column. Anything but a month is read as a day, the tighter of the two.
-                    per: if per.as_deref() == Some("month") {
-                        Period::Month
-                    } else {
-                        Period::Day
-                    },
+                    // Only Gantry writes this column. A word no version writes is read as a day, the tightest common
+                    // period.
+                    per: per
+                        .as_deref()
+                        .and_then(Period::from_word)
+                        .unwrap_or(Period::Day),
                 }),
                 models: row.try_get(7).map_err(field)?,
                 // A value out of range becomes 0, which the loader refuses: the change is then not used at all.
                 tpm: tpm.map(|t| u32::try_from(t).unwrap_or(0)),
+                org: org.unwrap_or_default(),
+                customer: row.try_get(10).map_err(field)?,
+                tags: tags.unwrap_or_default(),
+                parallel: parallel.map(|t| u32::try_from(t).unwrap_or(0)),
+                role: row.try_get(13).map_err(field)?,
             });
         }
         Ok(keys)
@@ -947,7 +959,7 @@ impl Inner {
             sum.1 += change.reserved;
         }
         let scope: Vec<&str> = merged.keys().map(|b| b.scope.as_str()).collect();
-        let per: Vec<&str> = merged.keys().map(|b| b.per.word()).collect();
+        let per: Vec<String> = merged.keys().map(|b| b.per.word()).collect();
         let period: Vec<&str> = merged.keys().map(|b| b.period.as_str()).collect();
         let spent: Vec<f64> = merged.values().map(|v| v.0).collect();
         let reserved: Vec<f64> = merged.values().map(|v| v.1).collect();
@@ -1260,12 +1272,14 @@ impl Store for PgStore {
             Box::pin(async move {
                 let per = entry.budget.map(|b| b.per.word());
                 let tpm = entry.tpm.map(|t| i32::try_from(t).unwrap_or(i32::MAX));
+                let parallel = entry.parallel.map(|t| i32::try_from(t).unwrap_or(i32::MAX));
+                let org = (!entry.org.is_empty()).then_some(&entry.org);
                 // The name is looked up in the snapshot before the insert: whether it already had a key.
                 let row = client
                     .query_one(
                         "WITH added AS (\
-                           INSERT INTO gantry_keys (sha256, name, team, admin, expires, budget_usd, budget_per, models, tpm) \
-                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (sha256) DO NOTHING RETURNING 1), \
+                           INSERT INTO gantry_keys (sha256, name, team, admin, expires, budget_usd, budget_per, models, tpm, org, customer, tags, parallel, role) \
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) ON CONFLICT (sha256) DO NOTHING RETURNING 1), \
                          bumped AS (UPDATE gantry_versions SET version = version + 1 \
                            WHERE name = 'keys' AND EXISTS (SELECT 1 FROM added)) \
                          SELECT EXISTS (SELECT 1 FROM added), EXISTS (SELECT 1 FROM gantry_keys WHERE name = $2)",
@@ -1279,6 +1293,11 @@ impl Store for PgStore {
                             &per,
                             &entry.models,
                             &tpm,
+                            &org,
+                            &entry.customer,
+                            &entry.tags,
+                            &parallel,
+                            &entry.role,
                         ],
                     )
                     .await

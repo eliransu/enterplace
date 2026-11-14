@@ -156,6 +156,16 @@ rules:
   - name: paired
     principals: {{ team: paired }}
     models: [pair]
+  - name: shop
+    principals: {{ team: shop }}
+    models: [m]
+    customers: [\"*\"]
+  - name: held
+    principals: {{ team: held }}
+    models: [slow]
+limits:
+  - {{ customer: \"*\", budget: {{ usd: 0.006, per: day, tz: America/New_York }} }}
+  - {{ team: held, parallel: 2 }}
 ",
         dead = DEAD.get_or_init(closed_port)
     )
@@ -429,6 +439,97 @@ async fn two_gateways_sending_at_once_never_pass_one_budget() -> TestResult {
         .await?;
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
         assert_eq!(code(&body), "budget_exceeded", "{body}");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_customer_budget_and_a_parallel_limit_hold_across_two_gateways() -> TestResult {
+    let Some(url) = database("hierarchy").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let (a_dir, b_dir) = (dir("hier-a")?, dir("hier-b")?);
+    let a = gateway(&a_dir, &url, port)?;
+    add_key(&a, "shop", "shop", PAT, false)?;
+    add_key(&a, "held", "held", LEE, false)?;
+    let b = gateway(&b_dir, &url, port)?;
+    until(&b.router, LEE, Duration::from_secs(2), |s, _| {
+        s != StatusCode::UNAUTHORIZED
+    })
+    .await?;
+    // Twenty at once for one customer, half through each gateway: two of $0.003 fit in its $0.006.
+    let mut tasks = Vec::new();
+    for i in 0..20 {
+        let app = if i % 2 == 0 {
+            a.router.clone()
+        } else {
+            b.router.clone()
+        };
+        tasks.push(tokio::spawn(async move {
+            let mut request = request("POST", "/v1/chat/completions", PAT, BUDGETED)
+                .map_err(|e| e.to_string())?;
+            request.headers_mut().insert(
+                "x-gantry-customer",
+                header::HeaderValue::from_static("globex"),
+            );
+            answer(&app, request).await.map_err(|e| e.to_string())
+        }));
+    }
+    let mut admitted = 0;
+    for task in tasks {
+        let (status, body) = task.await??;
+        match status {
+            StatusCode::OK => admitted += 1,
+            StatusCode::TOO_MANY_REQUESTS => assert_eq!(code(&body), "budget_exceeded", "{body}"),
+            other => return Err(format!("unexpected {other}: {body}").into()),
+        }
+    }
+    assert_eq!(
+        admitted, 2,
+        "two requests of $0.003 fit in the customer's $0.006, across both gateways"
+    );
+    // Six slow requests at once, three through each gateway: two may be in flight for the team.
+    let slow = r#"{"model":"slow","messages":[]}"#;
+    let mut tasks = Vec::new();
+    for i in 0..6 {
+        let app = if i % 2 == 0 {
+            a.router.clone()
+        } else {
+            b.router.clone()
+        };
+        tasks.push(tokio::spawn(async move {
+            let request =
+                request("POST", "/v1/chat/completions", LEE, slow).map_err(|e| e.to_string())?;
+            answer(&app, request).await.map_err(|e| e.to_string())
+        }));
+    }
+    let mut admitted = 0;
+    for task in tasks {
+        let (status, body) = task.await??;
+        match status {
+            StatusCode::OK => admitted += 1,
+            StatusCode::TOO_MANY_REQUESTS => assert_eq!(code(&body), "parallel_limited", "{body}"),
+            other => return Err(format!("unexpected {other}: {body}").into()),
+        }
+    }
+    assert_eq!(
+        admitted, 2,
+        "two in flight at once for the team, across both gateways"
+    );
+    // The places are given back when the answers end: the store settles twice a second.
+    let start = Instant::now();
+    loop {
+        let (status, body) = answer(
+            &b.router,
+            request("POST", "/v1/chat/completions", LEE, slow)?,
+        )
+        .await?;
+        if status == StatusCode::OK {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "{body}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     Ok(())
 }

@@ -62,6 +62,10 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`rate_limited`](#rate_limited) | 429 | `rate_limit_error` |
 | [`budget_exceeded`](#budget_exceeded) | 429 | `rate_limit_error` |
 | [`key_budget_exceeded`](#key_budget_exceeded) | 429 | `rate_limit_error` |
+| [`parallel_limited`](#parallel_limited) | 429 | `rate_limit_error` |
+| [`customer_not_allowed`](#customer_not_allowed) | 403 | `permission_error` |
+| [`tag_not_allowed`](#tag_not_allowed) | 403 | `permission_error` |
+| [`bad_header`](#bad_header) | 400 | `invalid_request_error` |
 | [`no_price`](#no_price) | 403 | `invalid_request_error` |
 | [`audit_unavailable`](#audit_unavailable) | 503 | `api_error` |
 | [`store_unavailable`](#store_unavailable) | 503 | `api_error` |
@@ -259,7 +263,7 @@ Also 403 when a guardrail with `on: [answer]` withheld the model's whole answer.
 
 ### budget_exceeded
 
-**429.** Spent, plus what requests in flight reserved, plus the most this request could cost would pass the rule's `budget`. The message says how much is spent of how much, what requests in flight hold, and when the budget starts again (UTC).
+**429.** Spent, plus what requests in flight reserved, plus the most this request could cost would pass a `budget` of the rule or of a `limits:` scope (global, organization, team, person, customer, tag, model). The message names the scope, how much is spent of how much, what requests in flight hold, where the budget is written, and when it starts again in its time zone. The record's `applied` field names the scope's counter and the entry.
 
 **Fix:** wait for the period to end, send a smaller `max_tokens`, or ask an admin to raise the budget.
 
@@ -268,6 +272,30 @@ Also 403 when a guardrail with `on: [answer]` withheld the model's whole answer.
 **429.** The key has a `budget:` of its own, and its spend plus what its requests in flight reserved plus the most this request could cost would pass it. The message names the key by the first 8 hex characters of its hash.
 
 **Fix:** wait for the period to end, or ask an admin to raise the key's budget.
+
+### parallel_limited
+
+**429.** A `parallel:` limit of the rule, the key or a `limits:` scope already has that many requests in flight. `Retry-After: 1`.
+
+**Fix:** send it again when one of them has finished, or ask an admin to raise the limit.
+
+### customer_not_allowed
+
+**403.** `x-gantry-customer` names a customer the rule's `customers:` does not list, or another customer than the one the key is for.
+
+**Fix:** leave the header out, use that customer's key, or ask an admin to list the customer (or `"*"`) on the rule.
+
+### tag_not_allowed
+
+**403.** `x-gantry-tags` holds a tag the rule's `tags:` does not list. Tags are refused by name so they cannot be forged.
+
+**Fix:** remove the tag, or ask an admin to add it to the rule.
+
+### bad_header
+
+**400.** `x-gantry-customer` or `x-gantry-tags` is sent more than once, holds a name with characters Gantry does not accept, or brings the request to more than 16 tags.
+
+**Fix:** send each header once, with names in letters, digits, `.`, `-`, `_` and `@`.
 
 ### no_price
 

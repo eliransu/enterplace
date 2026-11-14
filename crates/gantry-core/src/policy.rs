@@ -25,9 +25,36 @@ pub struct Principal {
     pub models: Option<Vec<String>>,
     /// Most tokens this key may use per minute, on top of its rule's limit.
     pub tpm: Option<u32>,
+    /// The organization the key belongs to. Empty for an install with one: scopes then keep their names of before
+    /// organizations, so spend counted before them still counts.
+    pub org: String,
+    /// The end customer every request with this key is for, set by an admin. A header cannot change it.
+    pub customer: Option<String>,
+    /// Tags every request with this key carries, set by an admin, on top of the ones a rule lets the caller send.
+    pub tags: Vec<String>,
+    /// Most requests this key may have in flight at once.
+    pub parallel: Option<u32>,
+    /// The console role the key signs in with, from the policy's `roles:`. `admin: true` is the role `admin`.
+    pub role: Option<String>,
 }
 
 impl Principal {
+    /// `name` inside the key's organization, as counters and records name it: `acme/payments`, or `payments` alone
+    /// in an install without organizations.
+    pub fn within(&self, name: &str) -> String {
+        within(&self.org, name)
+    }
+
+    /// The counter of the key's team.
+    pub fn team_scope(&self) -> String {
+        format!("team:{}", self.within(&self.team))
+    }
+
+    /// The counter of the key's person.
+    pub fn person_scope(&self) -> String {
+        format!("person:{}", self.within(&self.name))
+    }
+
     /// Whether the key has expired at `now`, a record timestamp such as `2026-11-13T09:14:02.120Z`.
     pub fn expired(&self, now: &str) -> bool {
         self.expires
@@ -45,11 +72,22 @@ pub fn expiry_passed(at: &str, now: &str) -> bool {
     }
 }
 
+/// `name` inside organization `org`, or `name` alone outside any.
+pub fn within(org: &str, name: &str) -> String {
+    if org.is_empty() {
+        name.to_string()
+    } else {
+        format!("{org}/{name}")
+    }
+}
+
 /// Who a rule applies to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Who {
     Team(String),
     Name(String),
+    /// Every key whose entry carries this tag. A tag the caller sends in a header never picks a rule.
+    Tag(String),
     Any,
 }
 
@@ -60,19 +98,328 @@ pub enum Models {
     Only(Vec<String>),
 }
 
-/// How often a budget starts again from zero, at midnight UTC.
+/// The calendar unit a budget period counts in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Period {
+pub enum Unit {
+    Minute,
+    Hour,
     Day,
+    Week,
     Month,
+    Year,
+}
+
+impl Unit {
+    fn name(self) -> &'static str {
+        match self {
+            Unit::Minute => "minute",
+            Unit::Hour => "hour",
+            Unit::Day => "day",
+            Unit::Week => "week",
+            Unit::Month => "month",
+            Unit::Year => "year",
+        }
+    }
+
+    fn short(self) -> &'static str {
+        match self {
+            Unit::Minute => "min",
+            Unit::Hour => "h",
+            Unit::Day => "d",
+            Unit::Week => "w",
+            Unit::Month => "mo",
+            Unit::Year => "y",
+        }
+    }
+
+    /// Roughly how many minutes one unit lasts, to refuse a period longer than a year.
+    fn minutes(self) -> u64 {
+        match self {
+            Unit::Minute => 1,
+            Unit::Hour => 60,
+            Unit::Day => 1440,
+            Unit::Week => 7 * 1440,
+            Unit::Month => 31 * 1440,
+            Unit::Year => 366 * 1440,
+        }
+    }
+}
+
+/// How often a budget starts again from zero: every `every` units, aligned to the calendar of `tz` (UTC when
+/// `None`). Windows are counted from 1970-01-01 00:00 in that zone, so `per: day` starts at each local midnight,
+/// `per: 3mo` at each quarter and `per: 6h` at 00:00, 06:00, 12:00 and 18:00.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Period {
+    pub every: u32,
+    pub unit: Unit,
+    /// An IANA zone name such as `America/New_York`, interned: there are a few hundred and each is kept once.
+    pub tz: Option<&'static str>,
+}
+
+// The names of before periods had a unit and a zone, so every caller written against them still reads.
+#[allow(non_upper_case_globals)]
+impl Period {
+    pub const Day: Period = Period {
+        every: 1,
+        unit: Unit::Day,
+        tz: None,
+    };
+    pub const Month: Period = Period {
+        every: 1,
+        unit: Unit::Month,
+        tz: None,
+    };
+    pub const Hour: Period = Period {
+        every: 1,
+        unit: Unit::Hour,
+        tz: None,
+    };
+}
+
+/// Zone names already checked, each leaked once so a `Period` stays `Copy`. Bounded by the zone database.
+fn intern_tz(name: &str) -> &'static str {
+    static NAMES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    let mut names = match NAMES.lock() {
+        Ok(names) => names,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(known) = names.iter().find(|n| **n == name) {
+        return known;
+    }
+    let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
+    names.push(leaked);
+    leaked
+}
+
+/// Days from 1970-01-01 to a civil date (proleptic Gregorian).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// The civil date of a day counted from 1970-01-01.
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (
+        if m <= 2 {
+            yoe + era * 400 + 1
+        } else {
+            yoe + era * 400
+        },
+        m,
+        d,
+    )
+}
+
+/// Seconds since the epoch of a record timestamp, `2026-11-13T09:14:02.120Z`. None for another shape.
+pub fn unix_seconds(time: &str) -> Option<i64> {
+    let num = |r: std::ops::Range<usize>| time.get(r)?.parse::<i64>().ok();
+    let days = days_from_civil(num(0..4)?, num(5..7)?, num(8..10)?);
+    let (h, mi, s) = (
+        num(11..13).unwrap_or(0),
+        num(14..16).unwrap_or(0),
+        num(17..19).unwrap_or(0),
+    );
+    Some(days * 86_400 + h * 3600 + mi * 60 + s)
 }
 
 impl Period {
-    pub fn word(self) -> &'static str {
-        match self {
-            Period::Day => "day",
-            Period::Month => "month",
+    /// Reads `per` (`day`, `week`, `month`, `year`, `hour`, `minute`, or a count of units such as `6h`, `15min`,
+    /// `7d`, `2w`, `3mo`) and `tz` (an IANA name, or none for UTC). The message names the fix.
+    pub fn parse(per: &str, tz: Option<&str>) -> Result<Period, String> {
+        let unit_of = |word: &str| match word {
+            "minute" | "min" => Some(Unit::Minute),
+            "hour" | "h" => Some(Unit::Hour),
+            "day" | "d" => Some(Unit::Day),
+            "week" | "w" => Some(Unit::Week),
+            "month" | "mo" => Some(Unit::Month),
+            "year" | "y" => Some(Unit::Year),
+            _ => None,
+        };
+        let digits = per.bytes().take_while(u8::is_ascii_digit).count();
+        let (count, word) = per.split_at(digits);
+        let every = if count.is_empty() {
+            Some(1)
+        } else {
+            count.parse::<u32>().ok().filter(|n| *n >= 1)
+        };
+        let shape = || {
+            format!(
+                "per is \"{per}\". A budget starts again each minute, hour, day, week, month or year, or every so many of them: write per: day, per: month, or a count such as per: 6h, 15min, 7d, 2w or 3mo."
+            )
+        };
+        let (Some(every), Some(unit)) = (every, unit_of(word)) else {
+            return Err(shape());
+        };
+        if u64::from(every) * unit.minutes() > Unit::Year.minutes() {
+            return Err(format!(
+                "per is \"{per}\", longer than a year. A budget starts again at least once a year: write per: year or a shorter period."
+            ));
         }
+        let tz = match tz {
+            None | Some("UTC") => None,
+            Some(name) => match jiff::tz::TimeZone::get(name) {
+                Ok(_) => Some(intern_tz(name)),
+                Err(_) => {
+                    return Err(format!(
+                        "tz is \"{name}\", which is not a time zone Gantry knows. Write an IANA name such as America/New_York, Europe/Berlin or Asia/Jerusalem, or leave tz out for UTC."
+                    ));
+                }
+            },
+        };
+        Ok(Period { every, unit, tz })
+    }
+
+    /// The name counters keep the period under. `day` and `month` in UTC keep the names of before.
+    pub fn word(self) -> String {
+        let base = if self.every == 1 {
+            self.unit.name().to_string()
+        } else {
+            format!("{}{}", self.every, self.unit.short())
+        };
+        match self.tz {
+            None => base,
+            Some(tz) => format!("{base}@{tz}"),
+        }
+    }
+
+    /// Reads back what [`Period::word`] wrote. None for a word no version of Gantry writes.
+    pub fn from_word(word: &str) -> Option<Period> {
+        let (per, tz) = match word.split_once('@') {
+            Some((per, tz)) => (per, Some(tz)),
+            None => (word, None),
+        };
+        Period::parse(per, tz).ok()
+    }
+
+    /// The period as a person reads it after "this": `day`, `6 hours`, `month (America/New_York)`.
+    pub fn describe(self) -> String {
+        let base = if self.every == 1 {
+            self.unit.name().to_string()
+        } else {
+            format!("{} {}s", self.every, self.unit.name())
+        };
+        match self.tz {
+            None => base,
+            Some(tz) => format!("{base} ({tz})"),
+        }
+    }
+
+    /// Seconds to add to a UTC time to read the clock in the period's zone at that instant.
+    fn offset(self, unix: i64) -> i64 {
+        let Some(name) = self.tz else {
+            return 0;
+        };
+        match (
+            jiff::tz::TimeZone::get(name),
+            jiff::Timestamp::from_second(unix),
+        ) {
+            (Ok(tz), Ok(at)) => i64::from(tz.to_offset(at).seconds()),
+            // The name was checked when the policy loaded: the bundled database cannot lose it.
+            _ => 0,
+        }
+    }
+
+    /// The window `time` (a record timestamp) falls in, named by when it starts on the zone's clock: `2026-11`,
+    /// `2026-11-13`, `2026-11-13T09`, `2026-11-13T09:15`, `2026`. Names of one period sort in time order.
+    pub fn label(self, time: &str) -> String {
+        // The common case, and the hot path's: one day or one month in UTC is the start of the timestamp itself.
+        if self.tz.is_none() && self.every == 1 {
+            match self.unit {
+                Unit::Day => return time.get(..10).unwrap_or(time).to_string(),
+                Unit::Month => return time.get(..7).unwrap_or(time).to_string(),
+                _ => {}
+            }
+        }
+        let unix = unix_seconds(time).unwrap_or(0);
+        let local = unix + self.offset(unix);
+        let every = i64::from(self.every);
+        let days = local.div_euclid(86_400);
+        let minutes = local.div_euclid(60);
+        match self.unit {
+            Unit::Minute | Unit::Hour => {
+                let size = if self.unit == Unit::Hour { 60 } else { 1 } * every;
+                let start = minutes.div_euclid(size) * size;
+                let (y, m, d) = civil_from_days(start.div_euclid(1440));
+                let (h, mi) = (start.rem_euclid(1440) / 60, start.rem_euclid(60));
+                if self.unit == Unit::Hour {
+                    format!("{y:04}-{m:02}-{d:02}T{h:02}")
+                } else {
+                    format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}")
+                }
+            }
+            Unit::Day | Unit::Week => {
+                // Weeks start on Monday: 1969-12-29 was one.
+                let (size, from) = if self.unit == Unit::Week {
+                    (7 * every, -3)
+                } else {
+                    (every, 0)
+                };
+                let start = (days - from).div_euclid(size) * size + from;
+                let (y, m, d) = civil_from_days(start);
+                format!("{y:04}-{m:02}-{d:02}")
+            }
+            Unit::Month | Unit::Year => {
+                let (y, m, _) = civil_from_days(days);
+                let months = if self.unit == Unit::Year { 12 } else { 1 } * every;
+                let start = ((y - 1970) * 12 + m - 1).div_euclid(months) * months;
+                if self.unit == Unit::Year {
+                    format!("{:04}", 1970 + start.div_euclid(12))
+                } else {
+                    format!(
+                        "{:04}-{:02}",
+                        1970 + start.div_euclid(12),
+                        start.rem_euclid(12) + 1
+                    )
+                }
+            }
+        }
+    }
+
+    /// When the window named `label` ends, on the zone's clock: `2026-12-01 00:00 UTC`.
+    pub fn resets(self, label: &str) -> String {
+        let num = |r: std::ops::Range<usize>| label.get(r).and_then(|t| t.parse::<i64>().ok());
+        let every = i64::from(self.every);
+        let (y, m) = (num(0..4).unwrap_or(1970), num(5..7).unwrap_or(1));
+        let start_days = days_from_civil(y, m, num(8..10).unwrap_or(1));
+        let (days, minute) = match self.unit {
+            Unit::Year => (days_from_civil(y + every, 1, 1), 0),
+            Unit::Month => {
+                let next = (y * 12 + m - 1) + every;
+                (
+                    days_from_civil(next.div_euclid(12), next.rem_euclid(12) + 1, 1),
+                    0,
+                )
+            }
+            Unit::Week => (start_days + 7 * every, 0),
+            Unit::Day => (start_days + every, 0),
+            Unit::Hour | Unit::Minute => {
+                let size = if self.unit == Unit::Hour { 60 } else { 1 } * every;
+                let start =
+                    start_days * 1440 + num(11..13).unwrap_or(0) * 60 + num(14..16).unwrap_or(0);
+                let end = start + size;
+                (end.div_euclid(1440), end.rem_euclid(1440))
+            }
+        };
+        let (y, m, d) = civil_from_days(days);
+        format!(
+            "{y:04}-{m:02}-{d:02} {:02}:{:02} {}",
+            minute / 60,
+            minute % 60,
+            self.tz.unwrap_or("UTC")
+        )
     }
 }
 
@@ -86,11 +433,34 @@ pub struct Budget {
 // The loader refuses a budget that is not a finite number, so equality is total.
 impl Eq for Budget {}
 
+/// A budget of a rule: counted for every model it reaches, or for the listed ones only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cap {
+    pub budget: Budget,
+    /// Empty counts every model. Otherwise only requests for these (by the name sent, an alias, or the model it
+    /// is sent to) count, in a counter of their own.
+    pub models: Vec<String>,
+    /// The access profile it came from, when the rule took it from one.
+    pub from: Option<String>,
+}
+
+impl Cap {
+    /// Whether a request for `sent`, sent to `model`, counts against this budget.
+    pub fn counts(&self, sent: &str, model: &str) -> bool {
+        self.models.is_empty() || self.models.iter().any(|m| m == sent || m == model)
+    }
+}
+
 /// What a rule limits besides the models. The default limits nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Limits {
-    /// Counted per team for a team rule, and per person for a name rule or an `any` rule.
-    pub budget: Option<Budget>,
+    /// Counted per team for a team rule, and per person for a name rule or an `any` rule. Several may apply at
+    /// once: a daily and a monthly one, or one for an expensive model only.
+    pub budgets: Vec<Cap>,
+    /// Most requests in flight at once, counted where the budget is.
+    pub parallel: Option<u32>,
+    /// The access profile each of rpm, tpm and parallel came from, when the rule took it from one.
+    pub inherited: Vec<(&'static str, String)>,
     /// Requests per minute, per person.
     pub rpm: Option<u32>,
     /// Tokens per minute (prompt and answer), counted where the budget is: per team for a team rule, per person
@@ -141,6 +511,16 @@ pub struct Semantic {
 // The loader refuses a threshold that is not a finite number, so equality is total.
 impl Eq for Semantic {}
 
+impl Limits {
+    /// The first budget that counts every model: what a page with room for one shows.
+    pub fn budget(&self) -> Option<Budget> {
+        self.budgets
+            .iter()
+            .find(|c| c.models.is_empty())
+            .map(|c| c.budget)
+    }
+}
+
 /// What a rule does with a provider key the caller sends in `x-gantry-provider-key`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CallerKey {
@@ -170,6 +550,16 @@ pub struct Rule {
     pub tools: Vec<String>,
     /// MCP prompts, resources and tools that need an admin's approval.
     pub mcp: crate::mcp::McpRule,
+    /// The organization whose callers the rule applies to. `None` applies to callers of every organization.
+    pub org: Option<String>,
+    /// The access profiles the rule includes, in order, already merged into its models, guardrails and limits.
+    pub profiles: Vec<String>,
+    /// Tags a caller may send in `x-gantry-tags`. `*` allows any. An unlisted tag is refused by name.
+    pub tags: Vec<String>,
+    /// End customers a caller may name in `x-gantry-customer`. `*` allows any. Empty allows none.
+    pub customers: Vec<String>,
+    /// What the rule set over a profile it includes, for the explanation: `rate.tpm 100000 of profile "standard"`.
+    pub overrides: Vec<String>,
 }
 
 /// One provider and the path prefixes of its own API a rule may reach as sent.
@@ -195,10 +585,35 @@ impl Rule {
     }
 
     fn applies_to(&self, principal: &Principal) -> bool {
-        match &self.who {
-            Who::Any => true,
-            Who::Team(team) => *team == principal.team,
-            Who::Name(name) => *name == principal.name,
+        self.org.as_ref().is_none_or(|org| *org == principal.org)
+            && match &self.who {
+                Who::Any => true,
+                Who::Team(team) => *team == principal.team,
+                Who::Name(name) => *name == principal.name,
+                Who::Tag(tag) => principal.tags.contains(tag),
+            }
+    }
+
+    /// Who the rule names, as a person reads it.
+    pub fn names(&self) -> String {
+        let who = match &self.who {
+            Who::Any => "every caller".to_string(),
+            Who::Team(team) => format!("team \"{team}\""),
+            Who::Name(name) => format!("\"{name}\""),
+            Who::Tag(tag) => format!("keys tagged \"{tag}\""),
+        };
+        match &self.org {
+            Some(org) => format!("{who} of organization \"{org}\""),
+            None => who,
+        }
+    }
+
+    /// The rule as an explanation names it: `rule "payments-team" (line 12)`.
+    pub fn label(&self) -> String {
+        if self.line > 0 {
+            format!("rule \"{}\" (line {})", self.name, self.line)
+        } else {
+            format!("rule \"{}\"", self.name)
         }
     }
 
@@ -208,6 +623,218 @@ impl Rule {
             Models::Only(models) => models.iter().any(|allowed| allowed == model),
         }
     }
+}
+
+impl Rule {
+    /// Whether a caller under this rule may send `tag` in `x-gantry-tags`.
+    pub fn accepts_tag(&self, tag: &str) -> bool {
+        self.tags.iter().any(|t| t == "*" || t == tag)
+    }
+
+    /// Whether a caller under this rule may name `customer` in `x-gantry-customer`.
+    pub fn accepts_customer(&self, customer: &str) -> bool {
+        self.customers.iter().any(|c| c == "*" || c == customer)
+    }
+}
+
+/// What a `limits:` entry is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ScopeKind {
+    /// Everything the install sends, together.
+    Global,
+    Org,
+    Team,
+    Person,
+    Key,
+    /// An end customer of the company's product, named by a key or a header.
+    Customer,
+    Tag,
+    Model,
+}
+
+impl ScopeKind {
+    pub fn word(self) -> &'static str {
+        match self {
+            ScopeKind::Global => "global",
+            ScopeKind::Org => "org",
+            ScopeKind::Team => "team",
+            ScopeKind::Person => "person",
+            ScopeKind::Key => "key",
+            ScopeKind::Customer => "customer",
+            ScopeKind::Tag => "tag",
+            ScopeKind::Model => "model",
+        }
+    }
+}
+
+/// One entry of the policy's `limits:` list: the limits of one scope, or of each scope of a kind (`*`), within one
+/// organization or all of them. A request counts against every kind at once; within a kind, each limit comes from
+/// the most specific entry that sets it, and the entries it overrides are named in the explanation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScopeLimit {
+    pub kind: ScopeKind,
+    /// The team, person, key prefix, customer, tag, model or organization, or `*` for each one. Empty for global.
+    pub name: String,
+    /// Confines an entry of another kind to one organization.
+    pub org: Option<String>,
+    pub line: usize,
+    pub budgets: Vec<Budget>,
+    pub rpm: Option<u32>,
+    pub tpm: Option<u32>,
+    pub parallel: Option<u32>,
+}
+
+impl ScopeLimit {
+    /// The entry as an explanation names it: `limits { team: *, org: acme } (line 40)`.
+    pub fn label(&self) -> String {
+        let what = match (self.kind, &self.org) {
+            (ScopeKind::Global, _) => "global: true".to_string(),
+            (kind, Some(org)) => format!("{}: {}, org: {org}", kind.word(), self.name),
+            (kind, None) => format!("{}: {}", kind.word(), self.name),
+        };
+        if self.line > 0 {
+            format!("limits {{ {what} }} (line {})", self.line)
+        } else {
+            format!("limits {{ {what} }}")
+        }
+    }
+}
+
+/// One limit that applies to a request, where it came from and what it overrode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Limit {
+    Budget(Budget),
+    Rpm(u32),
+    Tpm(u32),
+    Parallel(u32),
+}
+
+impl Limit {
+    pub fn word(&self) -> &'static str {
+        match self {
+            Limit::Budget(_) => "budget",
+            Limit::Rpm(_) => "rpm",
+            Limit::Tpm(_) => "tpm",
+            Limit::Parallel(_) => "parallel",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Applied {
+    /// The kind of scope: `rule`, `key`, or a [`ScopeKind`] word.
+    pub of: &'static str,
+    /// The counter it is kept in: `team:payments`, `customer:acme/globex`, `global`.
+    pub scope: String,
+    /// The scope as a refusal names it: `team "payments"`, `customer "globex"`.
+    pub whose: String,
+    pub limit: Limit,
+    /// Where it is written: `rule "payments-team" (line 12)`, `limits { customer: * } (line 40)`.
+    pub source: String,
+    /// The entries of the same kind that set this limit too, less specific, and so did not apply.
+    pub overrides: Vec<String>,
+}
+
+/// What of a request picks the limits it counts against, besides its key and rule.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Context<'a> {
+    /// The model name the caller sent, an alias's included.
+    pub sent: &'a str,
+    /// The model it is sent to: the alias's deployment, or `sent`.
+    pub model: &'a str,
+    pub customer: Option<&'a str>,
+    pub tags: &'a [String],
+}
+
+/// A permission a console role may grant. The admin API checks the same ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Permission {
+    /// See keys and who holds them.
+    SeeKeys,
+    IssueKeys,
+    RevokeKeys,
+    /// Turn kill switches on and off.
+    Kill,
+    /// Add, rotate and remove provider credentials.
+    Credentials,
+    /// Change the policy.
+    EditPolicy,
+    /// See spend, budgets and the explanation of a caller's limits.
+    SeeSpend,
+    /// See the audit log's records.
+    SeeRecords,
+    /// See captured request and answer bodies.
+    SeeBodies,
+}
+
+impl Permission {
+    pub const ALL: [Permission; 9] = [
+        Permission::SeeKeys,
+        Permission::IssueKeys,
+        Permission::RevokeKeys,
+        Permission::Kill,
+        Permission::Credentials,
+        Permission::EditPolicy,
+        Permission::SeeSpend,
+        Permission::SeeRecords,
+        Permission::SeeBodies,
+    ];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Permission::SeeKeys => "see_keys",
+            Permission::IssueKeys => "issue_keys",
+            Permission::RevokeKeys => "revoke_keys",
+            Permission::Kill => "kill",
+            Permission::Credentials => "credentials",
+            Permission::EditPolicy => "edit_policy",
+            Permission::SeeSpend => "see_spend",
+            Permission::SeeRecords => "see_records",
+            Permission::SeeBodies => "see_bodies",
+        }
+    }
+
+    pub fn from_word(word: &str) -> Option<Permission> {
+        Permission::ALL.into_iter().find(|p| p.word() == word)
+    }
+}
+
+/// A console role: what its holders may do, and within which organization.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Role {
+    pub name: String,
+    pub permissions: Vec<Permission>,
+    /// Confines its holders to one organization's keys, records and spend.
+    pub org: Option<String>,
+    /// Values of the identity provider's role claim that sign a person in with this role.
+    pub sso_values: Vec<String>,
+    pub line: usize,
+}
+
+impl Role {
+    pub fn may(&self, permission: Permission) -> bool {
+        self.permissions.contains(&permission)
+    }
+}
+
+/// The roles every install has: `admin` may do everything, `read_only` may look at keys, spend and records.
+pub fn builtin_role(name: &str) -> Option<Role> {
+    let permissions = match name {
+        "admin" => Permission::ALL.to_vec(),
+        "read_only" => vec![
+            Permission::SeeKeys,
+            Permission::SeeSpend,
+            Permission::SeeRecords,
+        ],
+        _ => return None,
+    };
+    Some(Role {
+        name: name.to_string(),
+        permissions,
+        org: None,
+        sso_values: Vec::new(),
+        line: 0,
+    })
 }
 
 /// The outcome of checking one request from a known caller.
@@ -233,6 +860,12 @@ pub struct Policy {
     prices: PriceOverrides,
     /// Virtual MCP servers, served at `/mcp/<name>`.
     bundles: Vec<crate::mcp::Bundle>,
+    /// The `limits:` list, in file order.
+    limits: Vec<ScopeLimit>,
+    /// The roles the policy defines beside the built-in ones.
+    roles: Vec<Role>,
+    /// The organizations `orgs:` lists.
+    orgs: Vec<String>,
 }
 
 impl Policy {
@@ -244,9 +877,59 @@ impl Policy {
         Self {
             keys,
             rules,
-            prices: PriceOverrides::new(),
-            bundles: Vec::new(),
+            ..Self::default()
         }
+    }
+
+    /// Sets the `limits:` list, for the loader and for embedders that build a policy in code.
+    pub fn with_scope_limits(mut self, limits: Vec<ScopeLimit>) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    pub fn with_orgs(mut self, orgs: Vec<String>) -> Self {
+        self.orgs = orgs;
+        self
+    }
+
+    pub fn orgs(&self) -> &[String] {
+        &self.orgs
+    }
+
+    pub fn with_roles(mut self, roles: Vec<Role>) -> Self {
+        self.roles = roles;
+        self
+    }
+
+    pub fn scope_limits(&self) -> &[ScopeLimit] {
+        &self.limits
+    }
+
+    pub fn roles(&self) -> &[Role] {
+        &self.roles
+    }
+
+    /// A role by name: one the policy defines, else a built-in one.
+    pub fn role(&self, name: &str) -> Option<Role> {
+        self.roles
+            .iter()
+            .find(|r| r.name == name)
+            .cloned()
+            .or_else(|| builtin_role(name))
+    }
+
+    /// The role a key signs in to the console and the admin API with: its `role:`, else `admin` for an admin key.
+    /// A key whose org is set is confined to it, whatever its role says.
+    pub fn role_of(&self, who: &Principal) -> Option<Role> {
+        let mut role = match (&who.role, who.admin) {
+            (Some(name), _) => self.role(name)?,
+            (None, true) => builtin_role("admin")?,
+            (None, false) => return None,
+        };
+        if !who.org.is_empty() {
+            role.org = Some(who.org.clone());
+        }
+        Some(role)
     }
 
     pub fn with_mcp_bundles(mut self, bundles: Vec<crate::mcp::Bundle>) -> Self {
@@ -301,7 +984,28 @@ impl Policy {
             passthrough: Vec::new(),
             tools: Vec::new(),
             mcp: crate::mcp::McpRule::default(),
+            org: None,
+            profiles: Vec::new(),
+            tags: Vec::new(),
+            customers: Vec::new(),
+            overrides: Vec::new(),
         });
+        self
+    }
+
+    /// Changes the rule added last, for tests and embedders that build a policy in code.
+    pub fn with_rule_change(mut self, change: impl FnOnce(&mut Rule)) -> Self {
+        if let Some(rule) = self.rules.last_mut() {
+            change(rule);
+        }
+        self
+    }
+
+    /// Changes the key added before, for tests and embedders that build a policy in code.
+    pub fn with_key_change(mut self, key: &str, change: impl FnOnce(&mut Principal)) -> Self {
+        if let Some(who) = self.keys.get_mut(&sha256(key.as_bytes())) {
+            change(who);
+        }
         self
     }
 
@@ -377,6 +1081,390 @@ impl Policy {
             Some(rule) => Decision::Allow(rule),
         }
     }
+}
+
+/// Each limit one kind of scope sets for a request: per limit, the most specific entry that sets it.
+/// `entries` are (rank, source, entry), lower rank more specific; file order breaks a tie.
+fn resolve(
+    of: &'static str,
+    scope: &str,
+    whose: &str,
+    mut entries: Vec<(u8, String, &ScopeLimit)>,
+    out: &mut Vec<Applied>,
+) {
+    if entries.is_empty() {
+        return;
+    }
+    entries.sort_by_key(|(rank, _, _)| *rank);
+    let mut fields: Vec<(Limit, &String)> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for (_, source, entry) in &entries {
+        for budget in &entry.budgets {
+            fields.push((Limit::Budget(*budget), source));
+        }
+        for (limit, value) in [
+            (Limit::Rpm as fn(u32) -> Limit, entry.rpm),
+            (Limit::Tpm, entry.tpm),
+            (Limit::Parallel, entry.parallel),
+        ] {
+            if let Some(value) = value {
+                fields.push((limit(value), source));
+            }
+        }
+    }
+    // A field is a limit's kind, and for a budget its period: a daily budget does not override a monthly one.
+    let field = |limit: &Limit| match limit {
+        Limit::Budget(b) => format!("budget {}", b.per.word()),
+        other => other.word().to_string(),
+    };
+    for (limit, source) in &fields {
+        let name = field(limit);
+        if seen.contains(&name) {
+            continue;
+        }
+        seen.push(name.clone());
+        let overrides = fields
+            .iter()
+            .filter(|(other, from)| field(other) == name && *from != *source)
+            .map(|(_, from)| (*from).clone())
+            .collect();
+        out.push(Applied {
+            of,
+            scope: scope.to_string(),
+            whose: whose.to_string(),
+            limit: *limit,
+            source: (*source).clone(),
+            overrides,
+        });
+    }
+}
+
+impl Policy {
+    /// Every limit a request from `who`, decided by `rule`, counts against: its rule's, its key's, and those of the
+    /// `limits:` list for the global total, its organization, team, person, customer, each tag and its model.
+    /// Allocates nothing for a policy with none.
+    pub fn applied(&self, who: &Principal, rule: &Rule, ctx: Context<'_>) -> Vec<Applied> {
+        let mut out = Vec::new();
+        // The hot path of a policy with no limits at all: nothing to name, so nothing is formatted.
+        let l = &rule.limits;
+        if self.limits.is_empty()
+            && l.budgets.is_empty()
+            && l.rpm.is_none()
+            && l.tpm.is_none()
+            && l.parallel.is_none()
+            && who.budget.is_none()
+            && who.tpm.is_none()
+            && who.parallel.is_none()
+        {
+            return out;
+        }
+        let (base, whose) = match &rule.who {
+            Who::Team(_) => (
+                who.team_scope(),
+                format!("team \"{}\"", who.within(&who.team)),
+            ),
+            _ => (who.person_scope(), format!("\"{}\"", who.within(&who.name))),
+        };
+        let under = rule.label();
+        let from = |profile: Option<&String>| match profile {
+            Some(profile) => format!("profile \"{profile}\" via {under}"),
+            None => under.clone(),
+        };
+        for cap in &rule.limits.budgets {
+            if !cap.counts(ctx.sent, ctx.model) {
+                continue;
+            }
+            let scope = if cap.models.is_empty() {
+                base.clone()
+            } else {
+                format!("{base} models:{}", cap.models.join(","))
+            };
+            out.push(Applied {
+                of: "rule",
+                scope,
+                whose: whose.clone(),
+                limit: Limit::Budget(cap.budget),
+                source: from(cap.from.as_ref()),
+                overrides: Vec::new(),
+            });
+        }
+        let inherited = |field: &str| {
+            rule.limits
+                .inherited
+                .iter()
+                .find(|(f, _)| *f == field)
+                .map(|(_, p)| p)
+        };
+        let person_whose = format!("\"{}\"", who.within(&who.name));
+        for (limit, scope, whose, field) in [
+            (
+                rule.limits.rpm.map(Limit::Rpm),
+                who.person_scope(),
+                &person_whose,
+                "rpm",
+            ),
+            (rule.limits.tpm.map(Limit::Tpm), base.clone(), &whose, "tpm"),
+            (
+                rule.limits.parallel.map(Limit::Parallel),
+                base.clone(),
+                &whose,
+                "parallel",
+            ),
+        ] {
+            if let Some(limit) = limit {
+                out.push(Applied {
+                    of: "rule",
+                    scope,
+                    whose: whose.clone(),
+                    limit,
+                    source: from(inherited(field)),
+                    overrides: Vec::new(),
+                });
+            }
+        }
+        // The key's own limits, from its entry in the keys file, are the most specific of the key kind.
+        let own = ScopeLimit {
+            kind: ScopeKind::Key,
+            name: who.key.clone(),
+            org: None,
+            line: 0,
+            budgets: who.budget.into_iter().collect(),
+            rpm: None,
+            tpm: who.tpm,
+            parallel: who.parallel,
+        };
+        let key_whose = format!("the key {} of \"{}\"", who.key, who.name);
+        let mut keyed = Vec::new();
+        if !own.budgets.is_empty() || own.tpm.is_some() || own.parallel.is_some() {
+            keyed.push((0, format!("key {} (keys file)", who.key), &own));
+        }
+        if self.limits.is_empty() {
+            resolve(
+                "key",
+                &format!("key:{}", who.key),
+                &key_whose,
+                keyed,
+                &mut out,
+            );
+            return out;
+        }
+        // Rank within a kind: this name in this org, every name in this org, this name anywhere, every name anywhere.
+        let rank = |entry: &ScopeLimit, name: &str| -> Option<u8> {
+            let in_org = match &entry.org {
+                None => false,
+                Some(org) if *org == who.org => true,
+                Some(_) => return None,
+            };
+            let exact = if entry.name == name {
+                true
+            } else if entry.name == "*" {
+                false
+            } else {
+                return None;
+            };
+            Some(match (in_org, exact) {
+                (true, true) => 1,
+                (true, false) => 2,
+                (false, true) => 3,
+                (false, false) => 4,
+            })
+        };
+        let of_kind = |kind: ScopeKind, names: &[&str]| -> Vec<(u8, String, &ScopeLimit)> {
+            self.limits
+                .iter()
+                .filter(|e| e.kind == kind)
+                .filter_map(|e| {
+                    names
+                        .iter()
+                        .filter_map(|n| rank(e, n))
+                        .min()
+                        .map(|r| (r, e.label(), e))
+                })
+                .collect()
+        };
+        keyed.extend(of_kind(ScopeKind::Key, &[&who.key]));
+        resolve(
+            "key",
+            &format!("key:{}", who.key),
+            &key_whose,
+            keyed,
+            &mut out,
+        );
+        let global: Vec<_> = self
+            .limits
+            .iter()
+            .filter(|e| e.kind == ScopeKind::Global)
+            .map(|e| (0, e.label(), e))
+            .collect();
+        resolve("global", "global", "the whole install", global, &mut out);
+        if !who.org.is_empty() {
+            // An org entry's own name is its org: `{ org: acme }` alone, or `{ org: "*" }` for each.
+            let orgs: Vec<_> = self
+                .limits
+                .iter()
+                .filter(|e| e.kind == ScopeKind::Org)
+                .filter_map(|e| match e.name.as_str() {
+                    n if n == who.org => Some((0, e.label(), e)),
+                    "*" => Some((1, e.label(), e)),
+                    _ => None,
+                })
+                .collect();
+            let whose = format!("organization \"{}\"", who.org);
+            resolve("org", &format!("org:{}", who.org), &whose, orgs, &mut out);
+        }
+        let team_whose = format!("team \"{}\"", who.within(&who.team));
+        resolve(
+            "team",
+            &who.team_scope(),
+            &team_whose,
+            of_kind(ScopeKind::Team, &[&who.team]),
+            &mut out,
+        );
+        resolve(
+            "person",
+            &who.person_scope(),
+            &person_whose,
+            of_kind(ScopeKind::Person, &[&who.name]),
+            &mut out,
+        );
+        if let Some(customer) = ctx.customer {
+            let scope = format!("customer:{}", who.within(customer));
+            let whose = format!("customer \"{}\"", who.within(customer));
+            resolve(
+                "customer",
+                &scope,
+                &whose,
+                of_kind(ScopeKind::Customer, &[customer]),
+                &mut out,
+            );
+        }
+        for tag in ctx.tags {
+            let scope = format!("tag:{}", who.within(tag));
+            let whose = format!("tag \"{}\"", who.within(tag));
+            resolve(
+                "tag",
+                &scope,
+                &whose,
+                of_kind(ScopeKind::Tag, &[tag]),
+                &mut out,
+            );
+        }
+        // A model entry counts by the name it lists: the alias sent, or the model it is sent to.
+        let mut models: Vec<&str> = vec![ctx.sent];
+        if ctx.model != ctx.sent && !ctx.model.is_empty() {
+            models.push(ctx.model);
+        }
+        for name in models {
+            let entries: Vec<_> = of_kind(ScopeKind::Model, &[name])
+                .into_iter()
+                // `*` counts each model once, under the name sent.
+                .filter(|(_, _, e)| e.name == name || (e.name == "*" && name == ctx.sent))
+                .collect();
+            let scope = format!("model:{}", who.within(name));
+            let whose = format!("model \"{name}\"");
+            resolve("model", &scope, &whose, entries, &mut out);
+        }
+        out
+    }
+
+    /// Why a request from `who` for `ctx.sent` would be allowed or refused, and every limit that would apply with
+    /// where it is written and what it overrides. The admin API adds what each budget has spent.
+    pub fn explain(&self, who: &Principal, ctx: Context<'_>) -> serde_json::Value {
+        use serde_json::json;
+        let mut skipped = Vec::new();
+        for rule in &self.rules {
+            if rule.applies_to(who) {
+                break;
+            }
+            let why = match &rule.org {
+                Some(org) if *org != who.org => format!("is for organization \"{org}\""),
+                _ => format!("names {}", rule.names()),
+            };
+            skipped.push(json!({ "rule": rule.name, "line": rule.line, "why": why }));
+        }
+        let decision = self.decide(who, ctx.sent);
+        let (verdict, rule) = match decision {
+            Decision::Allow(rule) => ("allow", Some(rule)),
+            Decision::NoRule => ("no_rule", None),
+            Decision::ModelNotAllowed(rule) => ("model_not_allowed", Some(rule)),
+            Decision::KeyModelNotAllowed(rule) => ("key_model_not_allowed", Some(rule)),
+        };
+        let mut problems = Vec::new();
+        if let (Some(rule), Some(customer)) = (rule, ctx.customer) {
+            if who.customer.as_deref().is_some_and(|c| c != customer) {
+                problems.push(format!(
+                    "the key is for customer \"{}\", and a header cannot name another",
+                    who.customer.as_deref().unwrap_or_default()
+                ));
+            } else if who.customer.is_none() && !rule.accepts_customer(customer) {
+                problems.push(format!(
+                    "{} does not let a caller name customer \"{customer}\"",
+                    rule.label()
+                ));
+            }
+        }
+        if let Some(rule) = rule {
+            for tag in ctx.tags.iter().filter(|t| !who.tags.contains(t)) {
+                if !rule.accepts_tag(tag) {
+                    problems.push(format!(
+                        "{} does not let a caller send tag \"{tag}\"",
+                        rule.label()
+                    ));
+                }
+            }
+        }
+        let limits: Vec<serde_json::Value> = rule
+            .map(|rule| self.applied(who, rule, ctx))
+            .unwrap_or_default()
+            .iter()
+            .map(applied_json)
+            .collect();
+        json!({
+            "caller": {
+                "name": who.name,
+                "team": who.team,
+                "org": (!who.org.is_empty()).then_some(&who.org),
+                "key": who.key,
+                "customer": ctx.customer,
+                "tags": ctx.tags,
+            },
+            "model": ctx.sent,
+            "verdict": if problems.is_empty() { verdict } else { "refused" },
+            "problems": problems,
+            "skipped": skipped,
+            "rule": rule.map(|r| json!({
+                "name": r.name,
+                "line": r.line,
+                "org": r.org,
+                "profiles": r.profiles,
+                "overrides": r.overrides,
+            })),
+            "limits": limits,
+        })
+    }
+}
+
+/// One applied limit as the explanation and refusal records show it.
+pub fn applied_json(a: &Applied) -> serde_json::Value {
+    let mut v = serde_json::json!({
+        "of": a.of,
+        "scope": a.scope,
+        "limit": a.limit.word(),
+        "source": a.source,
+        "overrides": a.overrides,
+    });
+    if let Some(fields) = v.as_object_mut() {
+        match a.limit {
+            Limit::Budget(b) => {
+                fields.insert("usd".into(), b.usd.into());
+                fields.insert("per".into(), b.per.word().into());
+            }
+            Limit::Rpm(n) | Limit::Tpm(n) | Limit::Parallel(n) => {
+                fields.insert("value".into(), n.into());
+            }
+        }
+    }
+    v
 }
 
 #[cfg(test)]
@@ -487,5 +1575,251 @@ mod tests {
             decide(&policy(), "key-dana", "model-a"),
             Some(Decision::NoRule)
         );
+    }
+
+    #[test]
+    fn periods_align_to_the_calendar_of_their_zone() -> Result<(), String> {
+        let utc = |per: &str| Period::parse(per, None);
+        let ny = |per: &str| Period::parse(per, Some("America/New_York"));
+        let t = "2026-12-01T04:30:00.000Z";
+        assert_eq!(utc("month")?.label(t), "2026-12");
+        // Still 30 November, 23:30, in New York: the November window.
+        assert_eq!(ny("month")?.label(t), "2026-11");
+        assert_eq!(ny("month")?.label("2026-12-01T05:30:00.000Z"), "2026-12");
+        assert_eq!(
+            ny("month")?.resets("2026-11"),
+            "2026-12-01 00:00 America/New_York"
+        );
+        // Daylight saving: midnight in New York is 05:00 UTC in winter and 04:00 UTC in summer.
+        assert_eq!(ny("day")?.label("2026-07-01T03:59:00Z"), "2026-06-30");
+        assert_eq!(ny("day")?.label("2026-07-01T04:00:00Z"), "2026-07-01");
+        assert_eq!(utc("week")?.label("2026-11-14T10:00:00Z"), "2026-11-09");
+        assert_eq!(utc("week")?.resets("2026-11-09"), "2026-11-16 00:00 UTC");
+        assert_eq!(utc("6h")?.label("2026-11-14T13:59:00Z"), "2026-11-14T12");
+        assert_eq!(utc("6h")?.resets("2026-11-14T12"), "2026-11-14 18:00 UTC");
+        assert_eq!(
+            utc("15min")?.label("2026-11-14T13:59:00Z"),
+            "2026-11-14T13:45"
+        );
+        assert_eq!(
+            utc("15min")?.resets("2026-11-14T23:45"),
+            "2026-11-15 00:00 UTC"
+        );
+        assert_eq!(utc("3mo")?.label("2026-11-14T13:59:00Z"), "2026-10");
+        assert_eq!(utc("3mo")?.resets("2026-10"), "2027-01-01 00:00 UTC");
+        assert_eq!(utc("year")?.label("2026-11-14T13:59:00Z"), "2026");
+        assert_eq!(utc("30d")?.resets("2026-10-29"), "2026-11-28 00:00 UTC");
+        assert_eq!(utc("day")?.word(), "day");
+        assert_eq!(ny("month")?.word(), "month@America/New_York");
+        assert_eq!(
+            Period::from_word("6h@Europe/Berlin"),
+            Period::parse("6h", Some("Europe/Berlin")).ok()
+        );
+        assert_eq!(Period::from_word("month"), Some(Period::Month));
+        for bad in ["fortnight", "0d", "13mo", "2y", "d6"] {
+            assert!(utc(bad).is_err(), "{bad}");
+        }
+        assert!(Period::parse("day", Some("Mars/Olympus")).is_err());
+        Ok(())
+    }
+
+    fn scope(kind: ScopeKind, name: &str, org: Option<&str>, line: usize) -> ScopeLimit {
+        ScopeLimit {
+            kind,
+            name: name.into(),
+            org: org.map(Into::into),
+            line,
+            budgets: Vec::new(),
+            rpm: None,
+            tpm: None,
+            parallel: None,
+        }
+    }
+
+    fn day(usd: f64) -> Budget {
+        Budget {
+            usd,
+            per: Period::Day,
+        }
+    }
+
+    #[test]
+    fn each_limit_comes_from_the_most_specific_entry_and_names_what_it_overrides() {
+        let mut every = scope(ScopeKind::Person, "*", None, 10);
+        every.budgets = vec![
+            day(5.0),
+            Budget {
+                usd: 50.0,
+                per: Period::Month,
+            },
+        ];
+        let mut in_acme = scope(ScopeKind::Person, "*", Some("acme"), 11);
+        in_acme.budgets = vec![day(8.0)];
+        let mut maya = scope(ScopeKind::Person, "maya", Some("acme"), 12);
+        maya.budgets = vec![day(30.0)];
+        maya.parallel = Some(2);
+        let mut customers = scope(ScopeKind::Customer, "*", None, 13);
+        customers.rpm = Some(30);
+        let mut global = scope(ScopeKind::Global, "", None, 14);
+        global.parallel = Some(500);
+        let mut other_org = scope(ScopeKind::Team, "*", Some("globex"), 15);
+        other_org.tpm = Some(1);
+        let mut key_default = scope(ScopeKind::Key, "*", None, 16);
+        key_default.budgets = vec![day(1.0)];
+        key_default.parallel = Some(9);
+        let policy = Policy::new()
+            .with_key("k", "maya", "payments")
+            .with_key_change("k", |p| {
+                p.org = "acme".into();
+                p.budget = Some(day(3.0));
+            })
+            .with_rule("pay", Who::Team("payments".into()), Models::Any)
+            .with_scope_limits(vec![
+                every,
+                in_acme,
+                maya,
+                customers,
+                global,
+                other_org,
+                key_default,
+            ]);
+        let Some(who) = policy.identify("k") else {
+            panic!("the key is in the policy");
+        };
+        let Some(rule) = policy.rule_for(who) else {
+            panic!("the rule names the key");
+        };
+        let tags = vec!["search".to_string()];
+        let applied = policy.applied(
+            who,
+            rule,
+            Context {
+                sent: "gpt-4o",
+                model: "gpt-4o",
+                customer: Some("globex-shop"),
+                tags: &tags,
+            },
+        );
+        let find = |of: &str, limit: &str| {
+            applied
+                .iter()
+                .filter(|a| a.of == of && a.limit.word() == limit)
+                .collect::<Vec<_>>()
+        };
+        let person = find("person", "budget");
+        assert_eq!(person.len(), 2, "{applied:?}");
+        // The daily budget is maya's own; the monthly one is inherited from every person.
+        assert_eq!(person[0].limit, Limit::Budget(day(30.0)));
+        assert_eq!(person[0].scope, "person:acme/maya");
+        assert_eq!(
+            person[0].overrides,
+            vec![
+                "limits { person: *, org: acme } (line 11)".to_string(),
+                "limits { person: * } (line 10)".to_string(),
+            ]
+        );
+        assert_eq!(person[1].source, "limits { person: * } (line 10)");
+        assert!(person[1].overrides.is_empty());
+        // The key's own budget beats the default for every key, which still gives it parallel.
+        let key = find("key", "budget");
+        assert_eq!(key[0].limit, Limit::Budget(day(3.0)));
+        assert_eq!(key[0].source, format!("key {} (keys file)", who.key));
+        assert_eq!(find("key", "parallel")[0].limit, Limit::Parallel(9));
+        assert_eq!(
+            find("customer", "rpm")[0].scope,
+            "customer:acme/globex-shop"
+        );
+        assert_eq!(find("global", "parallel")[0].scope, "global");
+        // Another organization's entry never applies.
+        assert!(find("team", "tpm").is_empty());
+        let explained = policy.explain(
+            who,
+            Context {
+                sent: "gpt-4o",
+                model: "gpt-4o",
+                customer: Some("globex-shop"),
+                tags: &tags,
+            },
+        );
+        assert_eq!(explained["verdict"], "refused");
+        assert_eq!(explained["rule"]["name"], "pay");
+        assert!(
+            explained["problems"][0]
+                .as_str()
+                .is_some_and(|p| p.contains("does not let a caller name customer \"globex-shop\""))
+        );
+        assert!(explained["limits"].as_array().is_some_and(|l| {
+            l.iter()
+                .any(|x| x["scope"] == "person:acme/maya" && x["usd"] == 30.0)
+        }));
+    }
+
+    #[test]
+    fn a_rule_for_an_org_or_a_tag_names_only_its_callers() {
+        let policy = Policy::new()
+            .with_key("a", "maya", "payments")
+            .with_key_change("a", |p| p.org = "acme".into())
+            .with_key("g", "omer", "payments")
+            .with_key_change("g", |p| {
+                p.org = "globex".into();
+                p.tags = vec!["ci".into()];
+            })
+            .with_rule("acme-payments", Who::Team("payments".into()), Models::Any)
+            .with_rule_change(|r| r.org = Some("acme".into()))
+            .with_rule("ci", Who::Tag("ci".into()), Models::Only(vec!["m".into()]));
+        let decide = |key: &str, model: &str| {
+            policy
+                .identify(key)
+                .map(|who| matches!(policy.decide(who, model), Decision::Allow(_)))
+        };
+        assert_eq!(decide("a", "anything"), Some(true));
+        assert_eq!(decide("g", "anything"), Some(false));
+        assert_eq!(decide("g", "m"), Some(true));
+        let Some(omer) = policy.identify("g") else {
+            panic!("omer is in the policy");
+        };
+        let explained = policy.explain(
+            omer,
+            Context {
+                sent: "m",
+                model: "m",
+                ..Context::default()
+            },
+        );
+        assert_eq!(
+            explained["skipped"][0]["why"],
+            "is for organization \"acme\""
+        );
+        assert_eq!(explained["verdict"], "allow");
+    }
+
+    #[test]
+    fn roles_grant_permissions_and_an_org_key_is_confined() {
+        let finance = Role {
+            name: "finance".into(),
+            permissions: vec![Permission::SeeSpend],
+            org: None,
+            sso_values: Vec::new(),
+            line: 3,
+        };
+        let policy = Policy::new()
+            .with_key("a", "admin", "ops")
+            .with_key_change("a", |p| p.admin = true)
+            .with_key("f", "fin", "money")
+            .with_key_change("f", |p| {
+                p.role = Some("finance".into());
+                p.org = "acme".into();
+            })
+            .with_key("n", "nobody", "x")
+            .with_roles(vec![finance]);
+        let role = |k: &str| policy.identify(k).and_then(|who| policy.role_of(who));
+        assert!(
+            role("a").is_some_and(|r| Permission::ALL.iter().all(|p| r.may(*p)) && r.org.is_none())
+        );
+        assert!(role("f").is_some_and(|r| r.may(Permission::SeeSpend)
+            && !r.may(Permission::IssueKeys)
+            && r.org.as_deref() == Some("acme")));
+        assert!(role("n").is_none());
+        assert!(builtin_role("read_only").is_some_and(|r| !r.may(Permission::SeeBodies)));
     }
 }

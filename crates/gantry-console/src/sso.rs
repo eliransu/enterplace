@@ -547,10 +547,13 @@ pub(crate) fn admit_self(
 }
 
 /// Who the claims are and what role they get, or why they are not let in.
+/// The role is `admin` for an admin value, else the first policy role whose `sso_values` the claim holds, else
+/// `read_only` for a read-only value.
 pub(crate) fn admit(
     claims: &Value,
     sso: &Sso,
-) -> Result<(String, bool), (Option<String>, Refusal)> {
+    roles: &[gantry_core::policy::Role],
+) -> Result<(String, String), (Option<String>, Refusal)> {
     let email = verified_email(claims)?;
     if !listed(&email, &sso.allowed_emails, &sso.allowed_domains) {
         let message = format!(
@@ -565,12 +568,14 @@ pub(crate) fn admit(
     };
     let has = |list: &[String]| values.iter().any(|v| list.iter().any(|l| l == v));
     if has(&sso.admin_values) {
-        Ok((email, false))
+        Ok((email, "admin".into()))
+    } else if let Some(role) = roles.iter().find(|r| has(&r.sso_values)) {
+        Ok((email, role.name.clone()))
     } else if has(&sso.read_only_values) {
-        Ok((email, true))
+        Ok((email, "read_only".into()))
     } else {
         let message = format!(
-            "{email} has no console role: its \"{}\" claim holds none of the values in admin_values or read_only_values. Ask an admin to add you to the right group at the identity provider.",
+            "{email} has no console role: its \"{}\" claim holds none of the values in admin_values, read_only_values or a role's sso_values. Ask an admin to add you to the right group at the identity provider.",
             sso.role_claim
         );
         Err((Some(email), refuse("sso_role", message)))
