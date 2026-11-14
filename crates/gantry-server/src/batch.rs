@@ -995,6 +995,18 @@ async fn prepare<'a>(
                 &bytes,
             )
             .await?;
+            if upload.owned.purpose == "batch" {
+                check_max_lines(policy, rule, upload.owned.lines, seen)?;
+            }
+            count_creation(
+                state,
+                policy,
+                person,
+                rule,
+                upload.owned.models.first().map(String::as_str),
+                seen,
+            )
+            .await?;
             extra.insert("object".into(), "file".into());
             extra.insert("purpose".into(), upload.owned.purpose.as_str().into());
             extra.insert("lines".into(), upload.owned.lines.into());
@@ -1152,6 +1164,18 @@ async fn prepare<'a>(
                 crate::killed(state, person, &key_sha256, Some(model))?;
             }
             seen.model = file.models.first().cloned();
+            // The policy may have changed since the upload: its batch limits hold now too.
+            check_max_lines(policy, rule, file.lines, seen)?;
+            check_max_open(state, policy, person, rule, seen).await?;
+            count_creation(
+                state,
+                policy,
+                person,
+                rule,
+                seen.model.clone().as_deref(),
+                seen,
+            )
+            .await?;
             let reserved = reserve(state, policy, person, rule, &file, file_id, seen).await?;
             let mut created = Owned::new(Item::Batch, &file.provider, person, seen, decision);
             created.purpose = file.model_of.get("").cloned().unwrap_or_default();
@@ -1201,6 +1225,8 @@ async fn prepare<'a>(
                 }
                 items.push((i + 1, custom_id, "/v1/messages", request["params"].clone()));
             }
+            check_max_lines(policy, rule, items.len(), seen)?;
+            check_max_open(state, policy, person, rule, seen).await?;
             let checked = check_lines(
                 state,
                 policy,
@@ -1216,6 +1242,7 @@ async fn prepare<'a>(
             seen.would_refuse
                 .extend(checked.would_refuse.iter().cloned());
             let first = checked.models.first().cloned().unwrap_or_default();
+            count_creation(state, policy, person, rule, Some(&first), seen).await?;
             let provider = pick(version, Kind::Anthropic, &parts.headers, Some(&first))?;
             if let Some(other) = checked
                 .models
@@ -1342,6 +1369,99 @@ async fn prepare<'a>(
     }?;
     out.headers = headers;
     Ok(out)
+}
+
+/// A file or batch creation is one request against every rpm limit that applies (the rule's, the key's and the
+/// `limits:` list's), as a model request is.
+async fn count_creation(
+    state: &AppState,
+    policy: &Policy,
+    person: &Principal,
+    rule: &Rule,
+    model: Option<&str>,
+    seen: &mut Seen<'_>,
+) -> Result<(), Refusal> {
+    let model = model.unwrap_or_default();
+    let applied = policy.applied(
+        person,
+        rule,
+        gantry_core::policy::Context {
+            sent: model,
+            model,
+            customer: seen.customer.as_deref(),
+            tags: &seen.tags,
+        },
+    );
+    let mut observed = Vec::new();
+    spend::count_rpm(&state.spend, &applied, rule, &mut observed).await?;
+    for (refusal, by) in observed {
+        crate::observed(seen, refusal, by);
+    }
+    Ok(())
+}
+
+/// The rule's `batch: { max_lines }`: a batch of more lines is refused before the provider sees it.
+fn check_max_lines(
+    policy: &Policy,
+    rule: &Rule,
+    lines: usize,
+    seen: &mut Seen<'_>,
+) -> Result<(), Refusal> {
+    let Some(most) = rule.limits.batch_max_lines else {
+        return Ok(());
+    };
+    if lines <= most as usize {
+        return Ok(());
+    }
+    crate::enforce(
+        seen,
+        bad(
+            "batch_too_many_lines",
+            format!(
+                "Refused: the batch holds {lines} lines, and rule \"{}\" allows at most {most} in one batch (batch.max_lines). Split it into batches of {most} lines or fewer.",
+                rule.name
+            ),
+        ),
+        policy.observing(rule.shadow_until.as_deref()),
+    )
+}
+
+/// The rule's `batch: { max_open }`: a person with that many batches not yet ended is refused another.
+async fn check_max_open(
+    state: &AppState,
+    policy: &Policy,
+    person: &Principal,
+    rule: &Rule,
+    seen: &mut Seen<'_>,
+) -> Result<(), Refusal> {
+    let Some(most) = rule.limits.batch_max_open else {
+        return Ok(());
+    };
+    let me = person.within(&person.name);
+    let open = state
+        .owned
+        .all()
+        .await
+        .into_iter()
+        .filter(|(_, o)| {
+            matches!(o.item, Item::Batch | Item::MessageBatch) && !o.settled && o.owner() == me
+        })
+        .count();
+    if open < most as usize {
+        return Ok(());
+    }
+    crate::enforce(
+        seen,
+        Refusal::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "batch_too_many_open",
+            format!(
+                "Refused: you have {open} batches that have not ended, and rule \"{}\" allows at most {most} open at once (batch.max_open). Wait for one to end, or cancel one, and send this again.",
+                rule.name
+            ),
+        ),
+        policy.observing(rule.shadow_until.as_deref()),
+    )
 }
 
 fn masked_unwritable() -> Refusal {

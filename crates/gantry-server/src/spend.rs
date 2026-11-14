@@ -995,6 +995,68 @@ struct Hints {
     stored: Vec<&'static str>,
 }
 
+/// Counts one request against every rpm limit in `applied` (from `Policy::applied`): the rule's, the key's and the
+/// `limits:` list's. One over its limit refuses, unless it is observed: then it is counted all the same and pushed to
+/// `observed`.
+pub(crate) async fn count_rpm(
+    spend: &Spend,
+    applied_all: &[Applied],
+    rule: &Rule,
+    observed: &mut Vec<(Refusal, &'static str)>,
+) -> Result<(), Refusal> {
+    for applied in applied_all {
+        let Limit::Rpm(rpm) = applied.limit else {
+            continue;
+        };
+        let counted = match &spend.store {
+            None => spend.rate(&applied.scope, rpm, Instant::now()),
+            Some(store) => match spend
+                .take(store, &format!("rpm:{}", applied.scope), 1, u64::from(rpm))
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(Short::Over(wait)) => Err(wait),
+                Err(Short::Down(err)) => return Err(rate_store_unavailable(&err)),
+            },
+        };
+        if let Err(wait) = counted {
+            let mut refusal = Refusal::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                format!(
+                    "Refused: {} has sent {rpm} requests in the last minute, the most {} allows. Send this one again in {wait} seconds.",
+                    applied.whose,
+                    allows(applied, rule)
+                ),
+            );
+            refusal.retry_after = Some(wait);
+            refusal.record = Some(Box::new(limit_record(
+                applied,
+                serde_json::json!({ "kind": "rpm", "of": applied.of, "value": rpm }),
+            )));
+            let Some(by) = applied.shadow else {
+                return Err(refusal);
+            };
+            observed.push((refusal, by));
+            // Observed: counted all the same, so the minute's count is the one enforcement will see.
+            match &spend.store {
+                None => {
+                    let _ = spend.rate(&applied.scope, u32::MAX, Instant::now());
+                }
+                Some(store) => {
+                    if let Err(Short::Down(err)) = spend
+                        .take_past(store, &format!("rpm:{}", applied.scope), 1)
+                        .await
+                    {
+                        return Err(rate_store_unavailable(&err));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// What a form (an image edit or variation, a transcription) tells the estimate: how many images its `n` asks for.
 fn form_hints(body: &[u8]) -> Result<Hints, String> {
     // The form was read strictly before it got here; its boundary is its first line.
@@ -1462,56 +1524,7 @@ pub(crate) async fn admit(
             });
         }
     }
-    for applied in ask.applied {
-        let Limit::Rpm(rpm) = applied.limit else {
-            continue;
-        };
-        let counted = match &spend.store {
-            None => spend.rate(&applied.scope, rpm, Instant::now()),
-            Some(store) => match spend
-                .take(store, &format!("rpm:{}", applied.scope), 1, u64::from(rpm))
-                .await
-            {
-                Ok(_) => Ok(()),
-                Err(Short::Over(wait)) => Err(wait),
-                Err(Short::Down(err)) => return Err(rate_store_unavailable(&err)),
-            },
-        };
-        if let Err(wait) = counted {
-            let mut refusal = Refusal::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limited",
-                format!(
-                    "Refused: {} has sent {rpm} requests in the last minute, the most {} allows. Send this one again in {wait} seconds.",
-                    applied.whose,
-                    allows(applied, ask.rule)
-                ),
-            );
-            refusal.retry_after = Some(wait);
-            refusal.record = Some(Box::new(limit_record(
-                applied,
-                serde_json::json!({ "kind": "rpm", "of": applied.of, "value": rpm }),
-            )));
-            let Some(by) = applied.shadow else {
-                return Err(refusal);
-            };
-            observed.push((refusal, by));
-            // Observed: counted all the same, so the minute's count is the one enforcement will see.
-            match &spend.store {
-                None => {
-                    let _ = spend.rate(&applied.scope, u32::MAX, Instant::now());
-                }
-                Some(store) => {
-                    if let Err(Short::Down(err)) = spend
-                        .take_past(store, &format!("rpm:{}", applied.scope), 1)
-                        .await
-                    {
-                        return Err(rate_store_unavailable(&err));
-                    }
-                }
-            }
-        }
-    }
+    count_rpm(spend, ask.applied, ask.rule, &mut observed).await?;
     let tpm_applied: Vec<&Applied> = ask
         .applied
         .iter()

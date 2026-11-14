@@ -60,6 +60,7 @@ const KNOWN: &[&str] = &[
     "usd",
     "per",
     "rate",
+    "batch",
     "rpm",
     "cache",
     "ttl_seconds",
@@ -608,7 +609,18 @@ struct RuleFile {
     #[serde(default)]
     file_retention_days: Option<i64>,
     #[serde(default)]
+    batch: Option<RuleBatchFile>,
+    #[serde(default)]
     shadow_until: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleBatchFile {
+    #[serde(default)]
+    max_lines: Option<i64>,
+    #[serde(default)]
+    max_open: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -2716,6 +2728,29 @@ fn limits(
                 "{}: file_retention_days is how many days a file uploaded through Gantry is kept before it is deleted at the provider, 1 to 30, for example file_retention_days: 7. To keep the provider's default, remove the line.",
                 at("file_retention_days")
             )),
+        }
+    }
+    if let Some(batch) = &rule.batch {
+        let mut count = |value: Option<i64>, name: &str, example: &str| match value
+            .map(u32::try_from)
+        {
+            None => None,
+            Some(Ok(n @ 1..)) => Some(n),
+            Some(_) => {
+                errors.push(format!(
+                    "{}: batch.{name} is a whole number, 1 or more, for example batch: {{ {name}: {example} }}. To set no limit, remove it.",
+                    at("batch")
+                ));
+                None
+            }
+        };
+        limits.batch_max_lines = count(batch.max_lines, "max_lines", "50000");
+        limits.batch_max_open = count(batch.max_open, "max_open", "5");
+        if batch.max_lines.is_none() && batch.max_open.is_none() {
+            errors.push(format!(
+                "{}: batch sets max_lines, max_open or both, for example batch: {{ max_lines: 50000, max_open: 5 }}. To set no batch limit, remove it.",
+                at("batch")
+            ));
         }
     }
     if let Some(every) = rule.check_stream_every {
@@ -5043,6 +5078,35 @@ guardrails:
                 refused.contains("file_retention_days") && refused.contains("1 to 30"),
                 "{days}: {refused}"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_rule_batch_limit_loads_and_a_bad_one_says_the_fix() -> TestResult {
+        let with = |extra: &str| {
+            GOOD.replace(
+                "    models: [gpt-4o-mini]\n",
+                &format!("    models: [gpt-4o-mini]\n{extra}"),
+            )
+        };
+        let loaded = check(
+            "batch-limits",
+            &with("    batch: { max_lines: 100, max_open: 2 }\n"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        let limits = &loaded.policy.rule_list()[0].limits;
+        assert_eq!(
+            (limits.batch_max_lines, limits.batch_max_open),
+            (Some(100), Some(2))
+        );
+        for bad in ["{ max_lines: 0 }", "{ max_open: -1 }", "{}"] {
+            let refused = check("batch-bad", &with(&format!("    batch: {bad}\n")), None)?
+                .err()
+                .ok_or("a bad batch limit loaded")?
+                .join("\n");
+            assert!(refused.contains("batch"), "{bad}: {refused}");
         }
         Ok(())
     }
