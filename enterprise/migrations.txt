@@ -1,0 +1,9 @@
+# Store migrations by namespace: entries, SHA-256 of them. Written by a test (see RELEASING.md), read by
+# scripts/version.py: a change since the previous tag needs a minor version bump.
+enterprise.split 1 ad4ba8af54056b3748e74813919765b7d68f2d8ac1b99003922ad510c5423793
+enterprise.members 1 6e8e2b227435e2a8229eac6a0c36151e42bcee25c2e4a282b0a0d7e2a336b680
+enterprise.scim 1 80902d207347573699af14af67336fd86d0fc83a7540cec2cef5a7ca93c7eaa0
+enterprise.siem 2 b515c5bde3286904efcf8b103333d5f07c00b4469552931b72c2138dc3d6519b
+enterprise.alerts 2 17c1f2a4009186417dae65a5830700a85633d38485b02ce57ab7839f4a3cf9cf
+enterprise.devices 4 0ec090bbb81cad83c2246f8167e06622a8fe8bfd1653c487be7a1f3f00d62235
+enterprise.watch 2 c3a0847a654233ae234e19efb8180c59e656ec304d322cc09ef47d245d17d6b3

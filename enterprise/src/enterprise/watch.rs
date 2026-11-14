@@ -24,13 +24,13 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use gantry_console::{Admin, Console, Via, foreign, same_origin};
+use gantry_console::{Admin, Console, foreign, same_origin};
 use gantry_core::{audit, config, id::sha256_hex};
 use serde_json::{Map, Value, json};
 
 use self::otlp::{Attrs, Event, Point};
 use super::Db;
-use super::devices::{Json, bearer, fail, key_holder, not_admin};
+use super::devices::{Json, api_admin, bearer, fail, not_admin, outside};
 use super::siem::{Role, db_error, random_hex, role_of};
 use crate::license::Status;
 use gantry_server::store::tokio_postgres::Client;
@@ -905,18 +905,8 @@ async fn receive(w: Watch, headers: HeaderMap, body: Bytes, signal: Signal) -> R
 
 // ---------------------------------------------------------------- the admin API
 
-/// Who an admin API call is from: a console session, or an admin key as bearer.
-async fn api_admin(console: &Console, w: &Watch, headers: &HeaderMap) -> Option<Admin> {
-    let key = bearer(headers);
-    if key.is_empty() {
-        return console.signed_in(headers).await;
-    }
-    let entry = key_holder(&w.keys, key).filter(|e| e.admin)?;
-    Some(Admin::of_role(&entry.name, &entry.team, false, Via::Key))
-}
-
 impl Watch {
-    /// The tokens `admin` may see: every one, or their organization's when their role keeps them to one.
+    /// The tokens `admin` may see: every one, or those within their role's organization and teams.
     async fn tokens(&self, admin: &Admin) -> Result<Vec<Value>, String> {
         let client = self.db.client().await?;
         let rows = client
@@ -926,9 +916,9 @@ impl Watch {
                      coalesce(to_char(last_used AT TIME ZONE 'UTC', {TIME}), ''), \
                      CASE WHEN revoked_at IS NOT NULL THEN 'revoked' WHEN expires_at < now() THEN 'expired' \
                      WHEN last_used IS NULL THEN 'waiting for the first export' ELSE 'receiving' END \
-                     , org FROM enterprise_watch_tokens WHERE $1 = '' OR org = $1 ORDER BY created_at"
+                     , org FROM enterprise_watch_tokens ORDER BY created_at"
                 ),
-                &[&admin.org.as_deref().unwrap_or("")],
+                &[],
             )
             .await
             .map_err(db_error)?;
@@ -938,6 +928,13 @@ impl Watch {
                 let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
                 json!({ "id": get(0), "label": get(1), "person": get(2), "team": get(3), "org": get(9), "created_by": get(4),
                         "created_at": get(5), "expires_at": get(6), "last_export": get(7), "status": get(8) })
+            })
+            .filter(|t| {
+                admin.covers(
+                    t["org"].as_str().unwrap_or(""),
+                    t["team"].as_str().unwrap_or(""),
+                    None,
+                )
             })
             .collect())
     }
@@ -992,6 +989,8 @@ impl Watch {
                     admin.org.as_deref().unwrap_or_default()
                 ),
             ))
+        } else if let Some(message) = outside(admin, &org, &team, "watch token") {
+            Some((StatusCode::FORBIDDEN, "outside_role", message))
         } else if !org.is_empty() && !orgs.contains(&org) {
             Some((
                 StatusCode::BAD_REQUEST,
@@ -1063,6 +1062,17 @@ impl Watch {
                 "Your role is viewer. An owner or admin can revoke watch tokens.".into(),
             ));
         }
+        // A token outside the role's reach is, to its holder, not there: neither revoked nor recorded as revoked.
+        if admin.confined()
+            && !self
+                .tokens(admin)
+                .await
+                .map_err(unavailable)?
+                .iter()
+                .any(|t| t["id"] == id)
+        {
+            return Ok(false);
+        }
         console
             .audit(Some(admin), action, json!({ "id": id }), None)
             .await
@@ -1070,8 +1080,8 @@ impl Watch {
         let client = self.db.client().await.map_err(unavailable)?;
         let changed = client
             .execute(
-                "UPDATE enterprise_watch_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL AND ($2 = '' OR org = $2)",
-                &[&id, &admin.org.as_deref().unwrap_or("")],
+                "UPDATE enterprise_watch_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL",
+                &[&id],
             )
             .await
             .map_err(|e| unavailable(db_error(e)))?;
@@ -1154,7 +1164,7 @@ async fn list_tokens(
     Ext(w): Ext<Watch>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(admin) = api_admin(&console, &w, &headers).await else {
+    let Some(admin) = api_admin(&console, &w.keys, &headers).await else {
         return not_admin();
     };
     match w.tokens(&admin).await {
@@ -1173,7 +1183,7 @@ async fn create_token(
     if bearer(&headers).is_empty() && !same_origin(&headers) {
         return foreign();
     }
-    let Some(admin) = api_admin(&console, &w, &headers).await else {
+    let Some(admin) = api_admin(&console, &w.keys, &headers).await else {
         return not_admin();
     };
     let body: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
@@ -1196,7 +1206,7 @@ async fn revoke_token(
     if bearer(&headers).is_empty() && !same_origin(&headers) {
         return foreign();
     }
-    let Some(admin) = api_admin(&console, &w, &headers).await else {
+    let Some(admin) = api_admin(&console, &w.keys, &headers).await else {
         return not_admin();
     };
     match w.revoke(&console, &admin, &id).await {
@@ -1218,7 +1228,7 @@ async fn summary(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    if api_admin(&console, &w, &headers).await.is_none() {
+    if api_admin(&console, &w.keys, &headers).await.is_none() {
         return not_admin();
     }
     let days = uri

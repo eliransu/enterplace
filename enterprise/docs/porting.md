@@ -55,9 +55,12 @@ left as it was, so an older replica still starts during a rolling upgrade. Teste
    `migrations/*.sql`, and its tests in `cloud/tests/test_*.py`.
 2. Write its tests first, in `src/enterprise/<feature>/tests.rs`, with `enterprise::testing` (a gateway on a fresh
    database, a browser that keeps the console cookie).
-3. Give its tables their own list in `src/enterprise/mod.rs` and run it with `pg.migrate("enterprise.<feature>", ..)`
-   in `extend`, only when the feature is unlocked (after the lists of any feature whose tables it alters, as SCIM
+3. Give its tables their own list in `src/enterprise/mod.rs`, name it in `NAMESPACES` and run it with
+   `migrate(pg, "enterprise.<feature>")` in `extend`, only when the feature is unlocked (after the lists of any feature whose tables it alters, as SCIM
    runs after members). A later change to its tables is a new entry in that list. Never edit one that has shipped.
+   Either change is written to `enterprise/migrations.txt` with
+   `GANTRY_WRITE_MIGRATIONS=1 cargo test -p gantry-enterprise the_migration_fingerprints_file_matches_the_code`, and
+   needs a minor version once a release tag exists (RELEASING.md).
 4. Add `src/enterprise/<feature>.rs` with `FEATURE`, `register` and `locked`, and call them from `extend`.
 5. Write its page in the docs site (`docs/src/content/docs/operations/`), as `members.mdx`.
 

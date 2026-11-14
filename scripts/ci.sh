@@ -33,9 +33,8 @@ elif [ -n "${CI:-}" ]; then
   exit 1
 else
   echo "store tests skipped: set GANTRY_TEST_DATABASE_URL, for example after"
-  # Each test gateway holds a handful of connections and cargo runs one test per core: on a machine with many
-  # cores the enterprise tests pass Postgres's default of 100 at once.
-  echo "  docker run -d --name gantry-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:16 -c max_connections=300"
+  # Every test database stays in the container (about 1 GB a run): remove the container when done.
+  echo "  docker run -d --name gantry-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:16"
   echo "  export GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres"
 fi
 cargo test --workspace --locked

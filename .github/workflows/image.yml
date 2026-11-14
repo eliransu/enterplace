@@ -33,6 +33,9 @@ jobs:
       version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        # With tags and history: scripts/version.py compares the store migrations with the previous tag's.
+        with:
+          fetch-depth: 0
       # Strict on a tag. On a branch a mismatch is a warning, so a branch between releases still builds.
       - id: check
         run: |
