@@ -442,11 +442,13 @@ dependencies = [
  "gantry-server",
  "http-body-util",
  "ring",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",
  "tower",
  "ureq",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

@@ -14,7 +14,7 @@
 //! the records. Legal hold is set by an owner with a reason, and recorded.
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub mod sinks;
 
@@ -38,7 +38,7 @@ use gantry_console::{
 use gantry_core::audit::{self, AuditLog};
 use serde_json::{Value, json};
 
-use super::Db;
+use super::{Db, alerts, capture};
 use crate::license::Status;
 use sinks::{Batch, Dest, Env, KINDS, Kind, Sinks};
 
@@ -116,18 +116,26 @@ pub struct Setup {
     pub env: Env,
     pub siem: bool,
     pub retention: bool,
+    /// Read the chain into the table even without `siem`: alerting reads it there.
+    pub alerts: bool,
+    /// The gateway's capture hook, when `siem` is on: destinations may opt in to prompt and answer text.
+    pub captures: Option<Arc<capture::Captures>>,
 }
 
 /// One replica's exporter: reads its chain into the table, sends it on, and applies retention to it.
 pub(crate) struct Exporter {
-    db: Arc<Db>,
-    log: Arc<AuditLog>,
+    pub(crate) db: Arc<Db>,
+    pub(crate) log: Arc<AuditLog>,
     path: PathBuf,
-    replica: String,
+    pub(crate) replica: String,
     siem: bool,
     retention: bool,
-    key: Option<[u8; 32]>,
-    sinks: Arc<Sinks>,
+    pub(crate) key: Option<[u8; 32]>,
+    pub(crate) sinks: Arc<Sinks>,
+    captures: Option<Arc<capture::Captures>>,
+    /// Alerting reads what each tick read in, then evaluates it. Set once, after both are made.
+    pub(crate) alerts: std::sync::OnceLock<Arc<alerts::Engine>>,
+    alerts_on: bool,
     /// Where the last read stopped, so the next one does not read the file from the start.
     hint: Mutex<Option<Hint>>,
     /// Failures in a row and when to try again, by destination.
@@ -150,7 +158,10 @@ struct Export {
 }
 
 /// Adds the audit export page, the pull API and the exporter that runs beside the gateway.
-pub fn register(extension: &mut gantry_server::Extension, setup: Setup) -> Result<(), String> {
+pub fn register(
+    extension: &mut gantry_server::Extension,
+    setup: Setup,
+) -> Result<Arc<Exporter>, String> {
     let replica = replica_id(&setup.audit_path, &setup.env)?;
     let key = match (setup.env)(KEY_ENV).filter(|k| !k.trim().is_empty()) {
         None => None,
@@ -170,6 +181,9 @@ pub fn register(extension: &mut gantry_server::Extension, setup: Setup) -> Resul
         retention: setup.retention,
         key,
         sinks: Arc::new(Sinks::new(setup.env)),
+        captures: setup.captures,
+        alerts: std::sync::OnceLock::new(),
+        alerts_on: setup.alerts,
         hint: Mutex::new(None),
         backoff: Mutex::new(std::collections::HashMap::new()),
         said: Mutex::new(String::new()),
@@ -182,7 +196,13 @@ pub fn register(extension: &mut gantry_server::Extension, setup: Setup) -> Resul
     if let Ok(runtime) = tokio::runtime::Handle::try_current() {
         runtime.spawn(exporter.clone().run(tick));
     }
-    let export = Export { exporter };
+    let export = Export {
+        exporter: exporter.clone(),
+    };
+    // Alerting alone reads the chain and adds no export page.
+    if !(export.exporter.siem || export.exporter.retention) {
+        return Ok(exporter);
+    }
     let console = &mut extension.console;
     console.nav.push(("/console/siem".into(), NAV.into()));
     console.routes = std::mem::take(&mut console.routes)
@@ -196,7 +216,7 @@ pub fn register(extension: &mut gantry_server::Extension, setup: Setup) -> Resul
                 .layer(Ext(export)),
         );
     }
-    Ok(())
+    Ok(exporter)
 }
 
 /// Without either feature the page and the pull API say why, and there is no nav entry.
@@ -290,14 +310,14 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-fn parse_key(text: &str) -> Option<[u8; 32]> {
+pub(crate) fn parse_key(text: &str) -> Option<[u8; 32]> {
     let bytes = unhex(text)?;
     bytes.try_into().ok()
 }
 
 // ---------------------------------------------------------------- secrets at rest
 
-fn seal_secret(key: &[u8; 32], plain: &str) -> Result<String, String> {
+pub(crate) fn seal_secret(key: &[u8; 32], plain: &str) -> Result<String, String> {
     use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
     use ring::rand::SecureRandom;
     let mut nonce = [0u8; 12];
@@ -318,7 +338,7 @@ fn seal_secret(key: &[u8; 32], plain: &str) -> Result<String, String> {
     ))
 }
 
-fn open_secret(key: Option<&[u8; 32]>, sealed: &str) -> Result<String, String> {
+pub(crate) fn open_secret(key: Option<&[u8; 32]>, sealed: &str) -> Result<String, String> {
     use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
     if sealed.is_empty() {
         return Ok(String::new());
@@ -340,7 +360,7 @@ fn open_secret(key: Option<&[u8; 32]>, sealed: &str) -> Result<String, String> {
     String::from_utf8(plain.to_vec()).map_err(|_| wrong.to_string())
 }
 
-fn db_error(err: impl std::fmt::Display) -> String {
+pub(crate) fn db_error(err: impl std::fmt::Display) -> String {
     format!(
         "The audit export tables could not be read or written: {err}. Check that Postgres is up and the store's connection string is right, then try again."
     )
@@ -441,6 +461,7 @@ struct Settings {
     by: String,
     at: String,
     pull: bool,
+    capture_hours: i32,
 }
 
 impl Exporter {
@@ -449,8 +470,8 @@ impl Exporter {
         let row = client
             .query_one(
                 "SELECT retention_days, legal_hold, coalesce(legal_hold_reason, ''), coalesce(legal_hold_by, ''), \
-                 coalesce(to_char(legal_hold_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"'), ''), pull_sha256 IS NOT NULL \
-                 FROM enterprise_export_settings",
+                 coalesce(to_char(legal_hold_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"'), ''), pull_sha256 IS NOT NULL, \
+                 capture_hours FROM enterprise_export_settings",
                 &[],
             )
             .await
@@ -462,6 +483,7 @@ impl Exporter {
             by: row.try_get(3).map_err(db_error)?,
             at: row.try_get(4).map_err(db_error)?,
             pull: row.try_get(5).map_err(db_error)?,
+            capture_hours: row.try_get(6).map_err(db_error)?,
         })
     }
 
@@ -580,13 +602,68 @@ impl Exporter {
             .collect()
     }
 
-    async fn send(&self, dest: &Dest, batch: Batch) -> Result<(), String> {
+    async fn send(&self, dest: &Dest, mut batch: Batch) -> Result<(), String> {
+        if dest.kind.per_request() {
+            self.join(dest, &mut batch).await?;
+        }
         let mut dest = dest.clone();
         dest.secret = open_secret(self.key.as_ref(), &dest.secret)?;
         let sinks = self.sinks.clone();
         tokio::task::spawn_blocking(move || sinks.deliver(&dest, &batch))
             .await
             .map_err(|err| format!("the sender stopped: {err}"))?
+    }
+
+    /// For a per-request destination: each usage record's decision record, and its stored text when the
+    /// destination opted in for that request's team.
+    async fn join(&self, dest: &Dest, batch: &mut Batch) -> Result<(), String> {
+        let ids: Vec<String> = batch
+            .usage()
+            .filter_map(|u| u["id"].as_str().map(str::to_string))
+            .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let rows = {
+            let client = self.db.client().await?;
+            client
+                .query(
+                    "SELECT line FROM enterprise_audit WHERE replica = $1 AND (line::jsonb)->>'id' = ANY($2) \
+                     AND (line::jsonb)->>'event' IS NULL",
+                    &[&batch.replica, &ids],
+                )
+                .await
+                .map_err(db_error)?
+        };
+        for row in rows {
+            let line: String = row.try_get(0).map_err(db_error)?;
+            let decision: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+            if let Some(id) = decision["id"].as_str() {
+                batch.joined.entry(id.to_string()).or_default().decision = decision.clone();
+            }
+        }
+        if capture::opted_in(dest).is_some() {
+            for (id, (team, text)) in capture::texts(&self.db, self.key.as_ref(), &ids).await? {
+                if capture::for_dest(dest, &team) {
+                    batch.joined.entry(id).or_default().text = Some(text);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Stores the text captured since the last tick for the destinations that opted in, and deletes expired text.
+    async fn captured(&self, dests: &[Dest]) -> Result<(), String> {
+        let Some(captures) = &self.captures else {
+            return Ok(());
+        };
+        captures.set(dests);
+        let hours = self.settings().await?.capture_hours;
+        captures
+            .flush(&self.db, &self.replica, self.key.as_ref(), hours)
+            .await?;
+        capture::prune(&self.db).await?;
+        Ok(())
     }
 
     /// Records the outcome of a delivery on the destination.
@@ -613,7 +690,10 @@ impl Exporter {
     /// Sends each destination this replica's next batch, past its cursor. A destination that failed waits, doubling
     /// up to five minutes.
     pub(crate) async fn ship(&self) -> Result<(), String> {
-        for (dest, created) in self.destinations().await? {
+        let dests = self.destinations().await?;
+        self.captured(&dests.iter().map(|d| d.0.clone()).collect::<Vec<_>>())
+            .await?;
+        for (dest, created) in dests {
             let waiting = self
                 .backoff
                 .lock()
@@ -834,12 +914,20 @@ impl Exporter {
         let mut retained: Option<Instant> = None;
         loop {
             tokio::time::sleep(tick).await;
-            if self.siem {
-                let worked = async {
+            if self.siem || self.alerts_on {
+                let read = async {
                     while self.ingest().await? == READ {}
-                    self.ship().await
+                    Ok::<(), String>(())
+                }
+                .await;
+                if let Some(engine) = self.alerts.get() {
+                    engine.tick(read.as_ref().err()).await;
+                }
+                let worked = match read {
+                    Ok(()) if self.siem => self.ship().await,
+                    other => other,
                 };
-                if let Err(err) = worked.await {
+                if let Err(err) = worked {
                     self.say(&format!("audit export: {err}"));
                 }
             }
@@ -856,14 +944,14 @@ impl Exporter {
 // ---------------------------------------------------------------- who may do what
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Role {
+pub(crate) enum Role {
     Owner,
     Admin,
     Viewer,
 }
 
 /// As the members feature maps it: an admin key acts as owner, single sign-on as admin (viewer when read only).
-fn role_of(admin: &Admin) -> Role {
+pub(crate) fn role_of(admin: &Admin) -> Role {
     match &admin.via {
         _ if admin.read_only => Role::Viewer,
         Via::Key => Role::Owner,
@@ -872,7 +960,7 @@ fn role_of(admin: &Admin) -> Role {
     }
 }
 
-fn banner(text: &str, error: bool) -> String {
+pub(crate) fn banner(text: &str, error: bool) -> String {
     let edge = if error {
         r#" style="border-color: var(--flame)""#
     } else {
@@ -884,20 +972,20 @@ fn banner(text: &str, error: bool) -> String {
     )
 }
 
-fn hidden(name: &str, value: &str) -> String {
+pub(crate) fn hidden(name: &str, value: &str) -> String {
     format!(
         r#"<input type="hidden" name="{name}" value="{}">"#,
         esc(value)
     )
 }
 
-fn small_button(label: &str) -> String {
+pub(crate) fn small_button(label: &str) -> String {
     format!(
         r#"<button class="g-btn g-btn--quiet g-btn--sm t-small" type="submit">{label}</button>"#
     )
 }
 
-fn input(id: &str, label: &str, value: &str, extra: &str, hint: &str) -> String {
+pub(crate) fn input(id: &str, label: &str, value: &str, extra: &str, hint: &str) -> String {
     html::field(&Field {
         id,
         name: id,
@@ -910,7 +998,7 @@ fn input(id: &str, label: &str, value: &str, extra: &str, hint: &str) -> String 
     })
 }
 
-fn section(title: &str, inner: &str) -> String {
+pub(crate) fn section(title: &str, inner: &str) -> String {
     format!(
         r#"<section class="g-section g-stack"><h2 class="t-md" style="margin: 0">{title}</h2>{inner}</section>"#
     )
@@ -982,6 +1070,31 @@ async fn main(
     if ex.siem {
         out += &destinations_section(export, edit).await?;
         out += &pull_section(&settings, owner);
+        let hours = settings.capture_hours;
+        out += &section(
+            "Captured text",
+            &format!(
+                r#"<p class="t-body" style="margin: 0">Prompt and answer text is captured only while a destination opts in, redacted before it is stored, and deleted <span class="t-mono-sm" id="capture-hours">{hours}</span> hours after its request, sent or not. It is never in the audit log.</p>{}"#,
+                if edit {
+                    form(
+                        "capture_hours",
+                        &format!(
+                            r#"<div class="g-toolbar">{}{}</div>"#,
+                            input(
+                                "hours",
+                                "Hours",
+                                &hours.to_string(),
+                                r#" type="number" min="1" max="168" required"#,
+                                "1 to 168."
+                            ),
+                            html::button("Save", "", "submit", "")
+                        ),
+                    )
+                } else {
+                    String::new()
+                }
+            ),
+        );
         if edit {
             let today = audit::timestamp().get(..10).unwrap_or_default().to_string();
             out += &section(
@@ -1010,7 +1123,7 @@ async fn destinations_section(export: &Export, edit: bool) -> Result<String, Str
              coalesce(to_char(d.last_success_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS \"UTC\"'), 'never'), \
              coalesce(d.last_error, ''), coalesce(to_char(d.last_error_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS \"UTC\"'), ''), \
              (SELECT count(*) FROM enterprise_audit a LEFT JOIN enterprise_export_cursors c ON c.destination = d.id AND c.replica = a.replica \
-              WHERE a.n > coalesce(c.n, 0) AND a.time >= d.created_at) \
+              WHERE a.n > coalesce(c.n, 0) AND a.time >= d.created_at), d.options \
              FROM enterprise_export_destinations d ORDER BY d.id",
             &[],
         )
@@ -1048,6 +1161,20 @@ async fn destinations_section(export: &Export, edit: bool) -> Result<String, Str
                 format!(r#"<span id="pending-{id}">{pending}</span>"#),
             ),
             ("Last success", esc(&text(4)?)),
+            (
+                "Prompt text",
+                format!(r#"<span id="text-{id}">{}</span>"#, {
+                    let options: Value = serde_json::from_str(&text(8)?).unwrap_or(Value::Null);
+                    match (
+                        options["text"] == true,
+                        options["text_teams"].as_str().unwrap_or_default(),
+                    ) {
+                        (false, _) => "never sent".to_string(),
+                        (true, "") => "sent redacted, every team".to_string(),
+                        (true, teams) => format!("sent redacted, teams {}", esc(teams)),
+                    }
+                }),
+            ),
             (
                 "Last error",
                 format!(r#"<span id="error-{id}">{}</span>"#, esc(&last_error)),
@@ -1106,14 +1233,14 @@ async fn destinations_section(export: &Export, edit: bool) -> Result<String, Str
             &form(
                 "save",
                 &format!(
-                    r#"<div class="g-select-wrap"><select class="g-input g-select t-body" name="kind" aria-label="Kind">{kinds}</select>{}</div>{}{}{}{}{}{}{}<div class="g-head__actions">{}</div>"#,
+                    r#"<div class="g-select-wrap"><select class="g-input g-select t-body" name="kind" aria-label="Kind">{kinds}</select>{}</div>{}{}{}{}{}{}{}{}{}<div class="g-head__actions">{}</div>"#,
                     html::icon("down"),
                     input(
                         "url",
                         "URL",
                         "",
                         " required",
-                        "https only. Splunk: https://splunk:8088/services/collector/event. Datadog: https://http-intake.logs.datadoghq.com/api/v2/logs. Elasticsearch: the index, https://es:9200/gantry-audit. OTLP: https://collector:4318/v1/logs. Sentinel: the data collection endpoint's stream URL. S3: https://s3.eu-west-1.amazonaws.com/bucket/prefix. GCS: https://storage.googleapis.com/bucket/prefix. Azure: https://account.blob.core.windows.net/container/prefix."
+                        "https only. Splunk: https://splunk:8088/services/collector/event. Datadog: https://http-intake.logs.datadoghq.com/api/v2/logs. Elasticsearch: the index, https://es:9200/gantry-audit. OTLP: https://collector:4318/v1/logs. Sentinel: the data collection endpoint's stream URL. S3: https://s3.eu-west-1.amazonaws.com/bucket/prefix. GCS: https://storage.googleapis.com/bucket/prefix. Azure: https://account.blob.core.windows.net/container/prefix. LLM traces: https://phoenix:6006/v1/traces, or http://localhost:4318/v1/traces for a Datadog Agent. Langfuse: https://cloud.langfuse.com. Callback: your HTTPS endpoint."
                     ),
                     input(
                         "token",
@@ -1144,6 +1271,13 @@ async fn destinations_section(export: &Export, edit: bool) -> Result<String, Str
                         "S3 only. Empty: the AWS default credential chain (IAM role)."
                     ),
                     input(
+                        "public_key",
+                        "Public key",
+                        "",
+                        r#" autocomplete="off""#,
+                        "Langfuse only: the project's public key, pk-lf-..."
+                    ),
+                    input(
                         "tenant",
                         "Tenant ID",
                         "",
@@ -1156,6 +1290,15 @@ async fn destinations_section(export: &Export, edit: bool) -> Result<String, Str
                         "",
                         "",
                         "Sentinel app registration, or a user-assigned managed identity."
+                    ),
+                    String::from(
+                        r#"<label class="t-body"><input type="checkbox" name="text"> Send prompt and answer text, redacted</label><p class="t-small g-muted" style="margin: 0">Trace and callback destinations only. Off by default. Text is captured at request time from then on, redacted by Gantry's secrets and PII detectors, kept encrypted and apart from the audit log for the hours set below, and sent only here. The choice is recorded in the audit log.</p>"#
+                    ) + &input(
+                        "text_teams",
+                        "Text for teams",
+                        "",
+                        "",
+                        "Comma-separated teams whose text is sent. Empty: every team."
                     ),
                     html::button("Save destination", "", "submit", "")
                 ),
@@ -1371,6 +1514,7 @@ async fn change(
         "retention" => "retention_set",
         "hold_on" => "legal_hold_on",
         "hold_off" => "legal_hold_off",
+        "capture_hours" => "export_capture_hours_set",
         _ => return Err("Unknown action. Use the buttons on this page.".into()),
     };
     let refuse = |code: &'static str, details: Value, message: String| async move {
@@ -1441,21 +1585,37 @@ async fn change(
                 .await;
             }
             let token = form.get("token").trim().to_string();
-            if kind.needs_secret() && kind != Kind::Webhook && token.is_empty() {
+            if kind.needs_secret() && !kind.signs() && token.is_empty() {
                 return Err(format!(
                     "Enter the {} in Secret.",
                     match kind {
                         Kind::Datadog => "Datadog API key",
                         Kind::Elastic => "Elasticsearch API key",
+                        Kind::Langfuse => "Langfuse secret key (sk-lf-...)",
                         _ => "HEC token",
                     }
                 ));
+            }
+            if kind == Kind::Langfuse && form.get("public_key").trim().is_empty() {
+                return Err("Enter the Langfuse public key (pk-lf-...) in Public key.".into());
+            }
+            let text = form.get("text") == "on";
+            if text && !kind.per_request() {
+                return refuse(
+                    "text_not_supported",
+                    json!({ "kind": kind.word() }),
+                    "Prompt and answer text can only go to a trace or callback destination (LLM traces, Langfuse, HTTP callback). Audit destinations get the records, which hold no text.".into(),
+                )
+                .await;
+            }
+            if text && ex.key.is_none() {
+                return Err(format!("Captured text is kept encrypted. {NO_KEY}"));
             }
             if kind == Kind::S3 && !form.get("access_key_id").trim().is_empty() && token.is_empty()
             {
                 return Err("With an access key ID, enter its secret access key in Secret.".into());
             }
-            let secret = if kind == Kind::Webhook {
+            let secret = if kind.signs() {
                 format!("gsig_{}", random_hex(32)?)
             } else {
                 token
@@ -1465,13 +1625,28 @@ async fn change(
                 (Some(key), false) => seal_secret(key, &secret)?,
                 (None, false) => return Err(NO_KEY.into()),
             };
-            let options: serde_json::Map<String, Value> =
-                ["header", "region", "access_key_id", "tenant", "client_id"]
-                    .into_iter()
-                    .filter(|k| !form.get(k).trim().is_empty())
-                    .map(|k| (k.to_string(), Value::from(form.get(k).trim())))
-                    .collect();
-            record(json!({ "kind": kind.word(), "url": url })).await?;
+            let mut options: serde_json::Map<String, Value> = [
+                "header",
+                "region",
+                "access_key_id",
+                "tenant",
+                "client_id",
+                "public_key",
+            ]
+            .into_iter()
+            .filter(|k| !form.get(k).trim().is_empty())
+            .map(|k| (k.to_string(), Value::from(form.get(k).trim())))
+            .collect();
+            let text_teams = capture::teams(form.get("text_teams")).join(",");
+            if text {
+                options.insert("text".into(), Value::from(true));
+                options.insert("text_teams".into(), Value::from(text_teams.clone()));
+            }
+            // The opt-in is in the record, so who turned text on, for which teams, is in the chain.
+            record(
+                json!({ "kind": kind.word(), "url": url, "text": text, "text_teams": text_teams }),
+            )
+            .await?;
             let client = ex.db.client().await?;
             let row = client
                 .query_one(
@@ -1481,7 +1656,7 @@ async fn change(
                 .await
                 .map_err(db_error)?;
             let id: i64 = row.try_get(0).map_err(db_error)?;
-            let once = if kind == Kind::Webhook {
+            let once = if kind.signs() {
                 section(
                     "Signing secret",
                     &format!(
@@ -1611,6 +1786,33 @@ async fn change(
                 .map_err(db_error)?;
             Ok(("Revoked the pull token.".into(), String::new()))
         }
+        "export_capture_hours_set" => {
+            let hours: i32 = form.get("hours").trim().parse().unwrap_or(0);
+            if !(1..=capture::HOURS_MAX).contains(&hours) {
+                return refuse(
+                    "invalid_hours",
+                    json!({ "hours": form.get("hours") }),
+                    format!(
+                        "Keep captured text for a whole number of hours from 1 to {}.",
+                        capture::HOURS_MAX
+                    ),
+                )
+                .await;
+            }
+            record(json!({ "hours": hours })).await?;
+            let client = ex.db.client().await?;
+            client
+                .execute(
+                    "UPDATE enterprise_export_settings SET capture_hours = $1",
+                    &[&hours],
+                )
+                .await
+                .map_err(db_error)?;
+            Ok((
+                format!("Captured text is now deleted {hours} hours after its request."),
+                String::new(),
+            ))
+        }
         "retention_set" => {
             let days: i32 = form.get("retention_days").trim().parse().unwrap_or(0);
             if !(30..=3650).contains(&days) {
@@ -1659,7 +1861,7 @@ async fn change(
     }
 }
 
-fn random_hex(bytes: usize) -> Result<String, String> {
+pub(crate) fn random_hex(bytes: usize) -> Result<String, String> {
     use ring::rand::SecureRandom;
     let mut out = vec![0u8; bytes];
     ring::rand::SystemRandom::new()

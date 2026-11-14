@@ -73,6 +73,11 @@ The open source checkout must sit beside this one as `../gantry`, since the crat
 - SIEM export and retention with legal hold (`siem.rs`, `siem/sinks.rs`, features `siem` and `retention`). One org
   per install and one replica per audit log: each replica reads its own chain into `enterprise_audit` and sends it
   on; retention seals and retires whole segments through `gantry_core::audit::{seal, retire}`.
+- LLM observability destinations (OTLP traces with GenAI conventions, Langfuse, HTTP callback) and opt-in prompt text
+  (`siem/sinks.rs`, `capture.rs`, feature `siem`): text comes through `gantry_server::Capture`, redacted and kept
+  encrypted for a limited time, never in the chain.
+- Alerting (`alerts.rs`, `alerts/channels.rs`, feature `alerts`): rules on the records `enterprise_audit` holds,
+  evaluated on the exporter's tick.
 
 ## Still to port
 
