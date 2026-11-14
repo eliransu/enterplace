@@ -1,0 +1,119 @@
+---
+title: JumpCloud
+description: Connect the Gantry admin console to JumpCloud with OpenID Connect or SAML 2.0, and give people roles from their JumpCloud user groups.
+sidebar:
+  order: 6
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+JumpCloud can sign people in to the admin console with OpenID Connect (`console.sso`) or SAML 2.0 (`console.saml`). In both, JumpCloud sends the user groups that connect the person to the app, and Gantry maps the group names to a console role and, at `gantry login`, to a team.
+
+The examples use `https://gantry.example.com` for your Gantry address and the user groups `gantry-admins` and `gantry-viewers`.
+
+## OpenID Connect
+
+<Steps>
+
+1. In the JumpCloud Admin Portal, go to **Access** > **SSO Applications** and click **Add New Application**. Choose **Custom Application**, then **Manage Single Sign-On (SSO)** and **Configure SSO with OIDC**. Enter a display label and continue to **Configure Application**.
+
+2. On the **SSO** tab:
+   - **Redirect URIs**: `https://gantry.example.com/console/sso/callback` (`gantry login` comes back on the same URI)
+   - **Client Authentication Type**: **Client Secret Basic** or **Client Secret POST** (not **Public (None PKCE)**: Gantry sends a client secret and a PKCE challenge)
+   - **Login URL**: `https://gantry.example.com/console`
+
+3. Under **Attribute Mapping**, add the **Email** and **Profile** scopes. Turn on the group attribute and name it `groups`.
+
+4. Click **Activate**. JumpCloud shows the client ID and client secret once: copy them now.
+
+5. On the app's **User Groups** tab, select `gantry-admins` and `gantry-viewers` and save. Only groups bound to the app appear in the `groups` claim.
+
+</Steps>
+
+```yaml title="gantry.policy.yaml"
+console:
+  sso:
+    issuer: https://oauth.id.jumpcloud.com/
+    client_id: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
+    client_secret_env: GANTRY_SSO_SECRET
+    redirect_url: https://gantry.example.com/console/sso/callback
+    allowed_domains: [example.com]
+    role_claim: groups
+    admin_values: [gantry-admins]
+    read_only_values: [gantry-viewers]
+```
+
+The issuer for the US region is `https://oauth.id.jumpcloud.com/`, trailing slash included. Organizations in the EU or India regions use their region's issuer; copy it from the discovery document your JumpCloud region publishes. Set the secret where Gantry runs: `GANTRY_SSO_SECRET=...`.
+
+## SAML 2.0
+
+<Steps>
+
+1. Go to **Access** > **SSO Applications** and click **Add New Application**. Choose **Custom Application** (or search for `Custom SAML App`), then **Manage Single Sign-On (SSO)** and **Configure SSO with SAML**. Enter a display label, save, and choose **Configure Application**.
+
+2. On the **SSO** tab:
+   - **IdP Entity ID**: a unique value of your choice, for example `https://gantry.example.com/jumpcloud`. This becomes `idp_entity_id`.
+   - **SP Entity ID**: `https://gantry.example.com/console/saml/metadata`
+   - **ACS URLs**: `https://gantry.example.com/console/saml/acs`
+   - **SAMLSubject NameID**: `email`, with **SAMLSubject NameID Format** set to the emailAddress format
+   - **Signature Algorithm**: RSA-SHA256 (the default; Gantry refuses RSA-SHA1)
+   - Signing: sign the assertion, or both the response and the assertion
+   - **Login URL**: `https://gantry.example.com/console/saml/start`, so the User Portal tile starts an SP-initiated sign-in
+   - **Declare Redirect Endpoint**: on, so the IdP metadata lists the HTTP-Redirect binding Gantry uses
+
+3. Add a user attribute named `email` mapped to the user's email. Turn on the group attribute and set **Groups Attribute Name** to `groups`. JumpCloud refuses to activate the app if the name is empty.
+
+4. Save. JumpCloud generates the signing certificate. Copy the **IDP URL** (`idp_sso_url`) and download the IdP certificate, or use **Export Metadata** to get all three IdP values in one file.
+
+5. On the app's **User Groups** tab, select `gantry-admins` and `gantry-viewers` and save.
+
+</Steps>
+
+{/* not checked: the certificate is a placeholder */}
+```yaml title="gantry.policy.yaml"
+console:
+  saml:
+    idp_entity_id: https://gantry.example.com/jumpcloud
+    idp_sso_url: https://sso.jumpcloud.com/saml2/gantry-console
+    idp_certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIFcDCCA1igAwIBAgIUa...
+      -----END CERTIFICATE-----
+    sp_entity_id: https://gantry.example.com/console/saml/metadata
+    acs_url: https://gantry.example.com/console/saml/acs
+    email_attribute: email
+    role_attribute: groups
+    admin_values: [gantry-admins]
+    read_only_values: [gantry-viewers]
+    allowed_domains: [example.com]
+```
+
+<Aside type="note">
+JumpCloud sends only the user groups bound to the app. A person in `gantry-admins` gets the admin role only after `gantry-admins` is selected on the app's **User Groups** tab.
+</Aside>
+
+## Teams and custom roles
+
+The group names feed a custom role's `sso_values` under `roles:` and a team's `sso_values` under `teams:`. Bind those groups to the app as well. At `gantry login`, a person listed in a team's `members` gets that team, otherwise the first team whose `sso_values` match one of their groups, otherwise `self_issue.team`.
+
+## Check it
+
+<Steps>
+
+1. Open `https://gantry.example.com/console` in a private window and click the sign-in button.
+
+2. Sign in as a member of `gantry-admins`. The console opens with the admin role.
+
+3. Sign in as a member of `gantry-viewers` only. The console opens read only.
+
+</Steps>
+
+A refusal with `sso_role` means the groups held no configured value. Check that the group is bound to the app and that its name in the policy matches JumpCloud exactly.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Every console.sso field, check and refusal code." />
+	<LinkCard title="SAML 2.0" href="/governance/saml/" description="Every console.saml field and what Gantry checks." />
+	<LinkCard title="Console roles" href="/governance/policy/#console-roles" description="Custom roles with sso_values." />
+</CardGrid>

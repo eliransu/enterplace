@@ -1,0 +1,104 @@
+---
+title: Teams
+description: List teams in the policy with an owner, members and identity provider groups, manage them with /admin/teams, and keep admins to their teams.
+sidebar:
+  order: 5
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Every key names a team, and rules, budgets and limits are written per team. The policy's `teams:` adds what a key cannot say: who owns a team, who is in it, and which identity provider groups put a person in it. `gantry login` uses it to put each developer's key in the right team, and console sign-in records it.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini]
+rules:
+  - name: payments
+    principals: { team: payments }
+    models: [gpt-4o-mini]
+    budget: { usd: 500, per: month }
+teams:
+  - name: payments
+    owner: maya@example.com
+    members: [omer@example.com]
+    sso_values: [payments-eng]
+    metadata: { cost_center: "4410" }
+roles:
+  - name: payments-lead
+    permissions: [see_keys, issue_keys, revoke_keys, see_spend, see_records]
+    teams: [payments]
+    sso_values: [payments-leads]
+```
+
+## Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | required | The team keys and rules name. |
+| `owner` | string | none | Email of the person answerable for the team. |
+| `members` | list | `[]` | Emails of the people in the team. A person is in one team only. |
+| `sso_values` | list | `[]` | Values of the identity provider's role claim (`console.sso.role_claim`) or SAML role attribute that put a person in this team. |
+| `metadata` | map | `{}` | Your own notes, such as a cost center. At most 32 entries. |
+
+Teams that only keys name keep working: `teams:` is needed only for owners, members and groups.
+
+## Which team a person is in
+
+At `gantry login` and at console sign-in, a person's team is:
+
+1. the team whose `members` lists their email, else
+2. the first team whose `sso_values` holds one of their group values, else
+3. for `gantry login`, `console.sso.self_issue.team` when it is written.
+
+When `teams:` places people (some team has `members` or `sso_values`) and places this person nowhere, and `self_issue.team` is not written, `gantry login` refuses with `sso_team` and says to add them. With no such teams, `gantry login` puts keys in `self_issue.team` (`developers` unless set), as before.
+
+## Roles kept to teams
+
+A [console role](/governance/policy/#console-roles) with `teams:` keeps its holders to those teams, as `org:` keeps them to an organization; `customers:` keeps them to those end customers. In the console and the admin API such a person:
+
+- sees only the keys of their teams, and only the audit records, requests, analytics and spend of their teams;
+- issues keys only in their teams (and, kept to one customer, for that customer), and cannot move a key out;
+- revokes, rotates and changes only their teams' keys;
+- may give a new key only a role kept within the same teams;
+- cannot set kill switches, change provider credentials, edit the policy or change teams, which act on the whole install.
+
+Each refusal is recorded with `not_permitted` and names what the role is kept to.
+
+## The teams API
+
+`GET /admin/teams` lists every team, from `teams:` and from keys, with its owner, members, groups, metadata, whether the policy lists it (`in_policy`) and its keys. `GET /admin/teams/<name>` shows one. Reading needs `see_keys`; a role kept to teams sees its teams.
+
+```bash
+curl -s https://gantry.example.com/admin/teams -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+```
+
+Changing a team saves a new policy version, so it needs [the policy kept in the store](/operations/store/) (`store.policy_from: store`) and `edit_policy` in a role kept to no part of the install. Each change is checked as `gantry check` checks a file, recorded in the audit chain, waits for a second admin when `store.approval: true`, and is live on every gateway within 2 seconds.
+
+```bash
+curl -s https://gantry.example.com/admin/teams -X POST \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H "X-Gantry-Note: new team" \
+  -d '{"name": "web", "owner": "omer@example.com", "sso_values": ["web-eng"]}'
+curl -s https://gantry.example.com/admin/teams/web -X PUT \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -d '{"owner": "omer@example.com", "members": ["dana@example.com"]}'
+curl -s https://gantry.example.com/admin/teams/web -X DELETE -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+```
+
+`PUT` replaces the team's fields with the body. The answer is the new version, as `PUT /admin/policy` answers ([Console editing](/operations/console-editing/)). A policy kept in the file is refused with `policy_in_file`: change `teams:` in the file.
+
+<Aside type="note">
+A form edit writes the policy without its comments, as the console's Models page does. Change teams in the policy editor to keep them.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Console sign-in and gantry login." />
+	<LinkCard title="Policy" href="/governance/policy/#console-roles" description="Console roles and permissions." />
+</CardGrid>

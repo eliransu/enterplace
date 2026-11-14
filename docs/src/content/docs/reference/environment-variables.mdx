@@ -76,6 +76,24 @@ The region comes from the provider's `region` in the policy, not from the enviro
 
 Read for a `vertex` or `vertex_anthropic` provider without `key_env`: `GOOGLE_APPLICATION_CREDENTIALS` (a service account key or gcloud user file), `CLOUDSDK_CONFIG` (where gcloud keeps its sign-in) and `GCE_METADATA_HOST` (another metadata server address). See [Vertex AI](/providers/vertex/#credentials).
 
+## Secret managers
+
+A variable the policy names may hold `vault://`, `aws-sm://`, `gcp-sm://` or `azure-kv://` instead of the secret (enterprise feature `secrets`). See [Secret managers](/operations/secret-managers/).
+
+| Variable | Default | Holds |
+|---|---|---|
+| `GANTRY_SECRETS_REFRESH_SECONDS` | `300` | How often references are read again, at least 10 |
+| `VAULT_ADDR` | none | The Vault address |
+| `VAULT_TOKEN` | none | A Vault token. Else `~/.vault-token`, else Kubernetes auth |
+| `VAULT_K8S_ROLE`, `VAULT_K8S_MOUNT`, `VAULT_K8S_TOKEN_PATH` | none, `kubernetes`, the pod's token | Vault's Kubernetes auth method |
+| `VAULT_NAMESPACE` | none | A Vault Enterprise namespace |
+| `AWS_ENDPOINT_URL_SECRETS_MANAGER` | the region's | Another Secrets Manager address, such as a VPC endpoint |
+| `CLOUDSDK_API_ENDPOINT_OVERRIDES_SECRETMANAGER` | `https://secretmanager.googleapis.com/` | Another Secret Manager address |
+| `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_FEDERATED_TOKEN_FILE`, `AZURE_AUTHORITY_HOST` | none | Signing in to Microsoft Entra ID for Key Vault |
+| `IDENTITY_ENDPOINT`, `IDENTITY_HEADER` | none | The App Service and Container Apps managed identity, as Azure sets them |
+
+AWS and Google credentials are found as in the sections above.
+
 ## gantry serve --unchecked
 
 | Variable | Default | Holds |

@@ -104,6 +104,10 @@ Built in the open crates rather than ported: policy versions with approval, dry 
 limits, budgets, kill switches, sessions and routing state across replicas on the store; JWT sign-in to the admin
 API.
 
+- Secret managers in `serve` (`managers.rs`, feature `secrets`): not a port but the same pattern for the open
+  source hook `gantry_core::secrets::Source`, installed by `main.rs` before the server starts when the license
+  unlocks the feature.
+
 ## Still to port
 
 Reports, workload identity, Claude Code watch mode, TOTP. The

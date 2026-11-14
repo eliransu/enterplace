@@ -18,6 +18,11 @@ hyper-rustls.workspace = true
 http-body-util.workspace = true
 # Verifies ID token signatures (RS256, ES256). Already in the build through rustls; named here to call it directly.
 ring = "0.17"
+# SAML responses are XML: a namespace-aware tree for exclusive canonicalization and signature checks. No
+# dependencies of its own, no unsafe code, and DTDs refused by default.
+roxmltree = "0.21.2"
+# SAML instants are xs:dateTime; already in the build through gantry-core.
+jiff.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

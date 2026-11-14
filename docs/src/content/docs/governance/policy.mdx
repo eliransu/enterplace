@@ -318,7 +318,19 @@ roles:
   - name: acme-keys
     permissions: [see_keys, issue_keys, revoke_keys]
     org: acme
+  - name: payments-lead
+    permissions: [see_keys, issue_keys, see_spend, see_records]
+    teams: [payments]
 ```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | required | Not `admin` or `read_only`. |
+| `permissions` | list | required | From the table below. |
+| `org` | string | none | Keeps holders to one [organization](#organizations). |
+| `teams` | list | `[]` | Keeps holders to these teams' keys, records, requests and spend. See [Teams](/governance/teams/#roles-kept-to-teams). |
+| `customers` | list | `[]` | Keeps holders to these end customers' keys, records, requests and spend. |
+| `sso_values` | list | `[]` | Identity provider values that give the role at single sign-on. |
 
 | Permission | Lets a person |
 |---|---|

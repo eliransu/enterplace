@@ -145,14 +145,14 @@ async fn allow(state: &AppState, request: Request, call: &mut Call) -> Result<Pl
     let person = &crate::admin::caller(state, policy, key, call).await?;
     // The policy governs every organization: its API needs edit_policy, from a role not kept to one of them.
     match policy.role_of(person) {
-        Some(role)
-            if role.may(gantry_core::policy::Permission::EditPolicy) && role.org.is_none() => {}
+        Some(role) if role.may(gantry_core::policy::Permission::EditPolicy) && !role.confined() => {
+        }
         Some(role) => {
             return Err(refused(
                 StatusCode::FORBIDDEN,
                 "not_permitted",
                 format!(
-                    "Refused: the policy API needs the edit_policy permission in a role that is not kept to one organization, and role \"{}\" of \"{}\" is not such a role. Ask a Gantry admin.",
+                    "Refused: the policy API needs the edit_policy permission in a role that is not kept to an organization, teams or customers, and role \"{}\" of \"{}\" is not such a role. Ask a Gantry admin.",
                     role.name, person.name
                 ),
             ));
@@ -267,7 +267,7 @@ fn if_match(headers: &HeaderMap) -> Result<Option<i64>, Refusal> {
     value.parse().map(Some).map_err(|_| missing())
 }
 
-fn refusal(err: &Refused) -> Refusal {
+pub(crate) fn refusal(err: &Refused) -> Refusal {
     let (status, code) = match err {
         Refused::Invalid(_) => (StatusCode::BAD_REQUEST, "invalid_policy"),
         Refused::ReadOnly(_) => (StatusCode::CONFLICT, "policy_in_file"),
@@ -413,7 +413,7 @@ async fn act(state: &AppState, plan: Plan, by: &str) -> Result<Response, Refusal
 
 /// The answer to a change: the version, its diff, and whether this gateway uses it yet. Others follow within 2
 /// seconds.
-async fn changed(
+pub(crate) async fn changed(
     state: &AppState,
     done: Result<PolicyVersion, Refused>,
     status: StatusCode,

@@ -124,7 +124,7 @@ fn env(name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{name} is not set. Set it in the node's environment."))
 }
 
-fn http_error(what: &str, err: ureq::Error) -> String {
+pub fn http_error(what: &str, err: ureq::Error) -> String {
     match err {
         ureq::Error::Status(code, _) => {
             format!(
@@ -153,51 +153,19 @@ impl Secret {
                 vault_value(&body, field)?
             }
             Source::AwsSm { arn, field } => {
-                let region = region(arn).unwrap_or_default();
                 let credentials = sigv4::Credentials {
                     access_key_id: env("AWS_ACCESS_KEY_ID")?,
                     secret_access_key: env("AWS_SECRET_ACCESS_KEY")?,
                     session_token: std::env::var("AWS_SESSION_TOKEN").ok(),
                 };
-                // The variable the AWS SDKs read to reach Secrets Manager at another address, such as a VPC endpoint.
-                let base = std::env::var("AWS_ENDPOINT_URL_SECRETS_MANAGER")
-                    .unwrap_or_else(|_| format!("https://secretsmanager.{region}.amazonaws.com"));
-                let host = base
-                    .split_once("://")
-                    .map_or(base.as_str(), |(_, h)| h)
-                    .trim_end_matches('/');
-                let payload = serde_json::json!({ "SecretId": arn }).to_string();
-                let headers = [
-                    ("content-type", "application/x-amz-json-1.1"),
-                    ("host", host),
-                    ("x-amz-target", "secretsmanager.GetSecretValue"),
-                ];
-                let request = sigv4::Request {
-                    method: "POST",
-                    path: "/",
-                    query: "",
-                    headers: &headers,
-                    payload: payload.as_bytes(),
-                };
-                let signed = sigv4::sign(
+                let base = std::env::var("AWS_ENDPOINT_URL_SECRETS_MANAGER").ok();
+                let body = aws_get(
+                    agent,
                     &credentials,
-                    region,
-                    "secretsmanager",
-                    &request,
-                    &sigv4::amz_date_now(),
-                );
-                let mut req = agent.post(&format!("{}/", base.trim_end_matches('/')));
-                for (name, value) in headers.iter().filter(|(n, _)| *n != "host") {
-                    req = req.set(name, value);
-                }
-                for (name, value) in &signed {
-                    req = req.set(name, value);
-                }
-                let body: Value = req
-                    .send_string(&payload)
-                    .map_err(|err| http_error("AWS Secrets Manager", err))?
-                    .into_json()
-                    .map_err(|err| format!("AWS sent a response that is not JSON: {err}"))?;
+                    region(arn).unwrap_or_default(),
+                    arn,
+                    base.as_deref(),
+                )?;
                 aws_value(&body, field.as_deref())?
             }
         };
@@ -207,6 +175,55 @@ impl Secret {
         }
         Ok(value.to_owned())
     }
+}
+
+/// A GetSecretValue call to AWS Secrets Manager, signed with `credentials`. `base` is the endpoint when it is not
+/// the region's own (AWS_ENDPOINT_URL_SECRETS_MANAGER, as the AWS SDKs read it: a VPC endpoint, or a test).
+pub fn aws_get(
+    agent: &ureq::Agent,
+    credentials: &sigv4::Credentials,
+    region: &str,
+    secret_id: &str,
+    base: Option<&str>,
+) -> Result<Value, String> {
+    let base = base
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("https://secretsmanager.{region}.amazonaws.com"));
+    let host = base
+        .split_once("://")
+        .map_or(base.as_str(), |(_, h)| h)
+        .trim_end_matches('/');
+    let payload = serde_json::json!({ "SecretId": secret_id }).to_string();
+    let headers = [
+        ("content-type", "application/x-amz-json-1.1"),
+        ("host", host),
+        ("x-amz-target", "secretsmanager.GetSecretValue"),
+    ];
+    let request = sigv4::Request {
+        method: "POST",
+        path: "/",
+        query: "",
+        headers: &headers,
+        payload: payload.as_bytes(),
+    };
+    let signed = sigv4::sign(
+        credentials,
+        region,
+        "secretsmanager",
+        &request,
+        &sigv4::amz_date_now(),
+    );
+    let mut req = agent.post(&format!("{}/", base.trim_end_matches('/')));
+    for (name, value) in headers.iter().filter(|(n, _)| *n != "host") {
+        req = req.set(name, value);
+    }
+    for (name, value) in &signed {
+        req = req.set(name, value);
+    }
+    req.send_string(&payload)
+        .map_err(|err| http_error("AWS Secrets Manager", err))?
+        .into_json()
+        .map_err(|err| format!("AWS sent a response that is not JSON: {err}"))
 }
 
 /// Where the node keeps a managed key.

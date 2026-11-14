@@ -197,6 +197,36 @@ one repository. How a release is made: RELEASING.md.
   versions behind refuses the database, naming both versions. Store migration 6 adds the `gantry_writer` table, which
   records the newest version that started on the database. Versions released before this one refuse any newer schema
   at restart, so for the upgrade to this version keep old pods from restarting during the rollout.
+### Identity
+
+- SAML 2.0 sign-in to the console (`console.saml`), beside OpenID Connect: service provider metadata at
+  `/console/saml/metadata`, requests by HTTP-Redirect and answers by HTTP-POST at `/console/saml/acs`. Only signed
+  assertions are taken (enveloped signatures, exclusive canonicalization, SHA-256 or SHA-512 with RSA or ECDSA),
+  verified against `idp_certificate` (two certificates during a rotation); wrong audience, recipient or issuer,
+  expired, replayed, unstarted, encrypted and wrapped assertions are refused and recorded (`saml_*` codes). Groups
+  give roles (`admin_values`, `read_only_values`, roles' `sso_values`) and teams.
+- Teams as a policy object: `teams:` with `owner`, `members` by email, `sso_values` and `metadata`, listed beside
+  the teams keys name. `GET /admin/teams` and `GET /admin/teams/<name>`; `POST`, `PUT` and `DELETE` save a new policy
+  version when the policy is kept in the store. The console's Teams page shows owners.
+- `gantry login` puts a developer's key in their team: the team that lists their email, else the first whose
+  `sso_values` match their `role_claim` values, else `self_issue.team`. When `teams:` places people and places this
+  one nowhere, and `self_issue.team` is not written, the login is refused with `sso_team`.
+- Console roles kept to teams (`teams:`) or end customers (`customers:`), as `org:` keeps one to an organization: in
+  the console and the admin API their holders see, issue, change and revoke only those keys, and see only those
+  audit records, requests, analytics and spend. They cannot set kill switches, change credentials, the policy or
+  teams.
+- Setup guides for Okta, Microsoft Entra ID, Google Workspace, OneLogin, Keycloak and JumpCloud, for OpenID Connect
+  and SAML.
+
+### Secrets
+
+- Secret managers in `gantry serve` (enterprise feature `secrets`): a variable the policy names with `*_env` may hold
+  `vault://<path>#<field>`, `aws-sm://<name>`, `gcp-sm://projects/<p>/secrets/<s>` or `azure-kv://<vault>/<secret>`.
+  Each is read at start (a failure stops the start, naming the variable), kept in memory, and read again every
+  `GANTRY_SECRETS_REFRESH_SECONDS` (300) and on SIGHUP; a rotated provider key is used for new requests within a
+  second. Each manager signs in with its platform's chain (Vault token or Kubernetes auth, the AWS default chain,
+  Application Default Credentials, Entra client secret, workload or managed identity). Without the feature a
+  reference stops the start with the fix, and is never sent as a key.
 
 ### Browser access
 

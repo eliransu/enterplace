@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Connect the admin console to your identity provider (Okta, Microsoft Entra ID, Google, Keycloak or any OpenID Connect provider). People sign in with their company account and get the role their groups say. The same setup lets developers get their own expiring Gantry key with `gantry login`, without an admin.
+Connect the admin console to your identity provider (Okta, Microsoft Entra ID, Google, Keycloak or any OpenID Connect provider). For SAML 2.0, see [SAML sign-in](/governance/saml/); for each provider's own steps, see [Identity providers](/governance/identity-providers/okta/). People sign in with their company account and get the role their groups say. The same setup lets developers get their own expiring Gantry key with `gantry login`, without an admin.
 
 ## Example
 
@@ -117,6 +117,7 @@ Every sign-in, refusal and sign-out is an `admin` record in the audit chain, wit
 | `sso_config` | `console.sso` is not set, or the policy file has problems. |
 | `sso_secret` | The client secret variable named by `client_secret_env` is not usable. |
 | `sso_self_issue` | `gantry login` with no `self_issue` section, or an email not on its lists. |
+| `sso_team` | `gantry login`, and `teams:` places the person in no team. See [Teams](/governance/teams/#which-team-a-person-is-in). |
 
 Refused sign-ins are recorded one by one, up to 100 a minute from each client address (an IPv6 client counts by its /64). Past that, the address's minute is summed in one `console_sso_refusals` record with the count per code. A minute with 100 or more starts writes one `console_sso_starts` record.
 
@@ -142,7 +143,7 @@ gantry login https://gantry.example.com
 
 The key:
 
-- is named by the person's email and put in the `self_issue` team,
+- is named by the person's email and put in their [team](/governance/teams/#which-team-a-person-is-in): the team that lists their email, else the first whose `sso_values` match their `role_claim` values, else the `self_issue` team,
 - expires after `expires_days`,
 - is recorded as an `admin` record with `action: self_issue_key`, the email as `person`, and the key's hash prefix and expiry in `target`.
 
@@ -158,7 +159,7 @@ Logging in again gives up the previous key and rewrites `env`, so a profile that
 |---|---|---|---|
 | `allowed_domains` | list | `[]` | Email domains that may self-issue. |
 | `allowed_emails` | list | `[]` | Whole addresses that may self-issue. |
-| `team` | string | `developers` | The team the keys are in. Write a rule for it. |
+| `team` | string | `developers` | The team of a person `teams:` places nowhere. When `teams:` places people and this is not written, such a person is refused with `sso_team`. Write a rule for it. |
 | `expires_days` | integer | `30` | Days a key works, 1 to 365. |
 
 No `self_issue` section, no `gantry login`. No console role is needed: the key is for the person's own requests, which the policy's rules decide. An email outside the lists, or not verified, is refused and recorded with `sso_self_issue` or `sso_email`, and the CLI prints why.
@@ -206,8 +207,6 @@ The flow is the same as the console's: authorization code with PKCE, a `state` t
 Anyone who signs in with a password can turn on two-step sign-in under **Account security** on the organizations page. Gantry shows a key to add to an authenticator app (1Password, Google Authenticator, Microsoft Authenticator, Authy), asks for one code to confirm, and shows 10 recovery codes once. Each recovery code works once.
 
 After that, a matching password asks for the current 6-digit code. A code works once, and five wrong codes end the attempt, so the password must be entered again. SSO sign-ins skip this step: your provider runs its own MFA.
-
-SAML is not supported yet. Most providers that offer SAML also offer OpenID Connect for the same application.
 
 ## Related
 

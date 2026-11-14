@@ -53,6 +53,11 @@ The admin API exists only when Gantry serves from a keys file. Under `gantry ser
 | `PUT` | `/admin/credentials/<name>` | `rotate_credential` | Gives a credential a new value |
 | `DELETE` | `/admin/credentials/<name>` | `remove_credential` | Removes a credential |
 | `POST` | `/admin/guardrails/test` | `test_guardrail` | Backtests a guardrail over a corpus. See [Guardrails](/governance/guardrails/) |
+| `GET` | `/admin/teams` | `list_teams` | Lists the teams, from `teams:` and from keys, with their keys |
+| `GET` | `/admin/teams/<name>` | `show_team` | One team |
+| `POST` | `/admin/teams` | `create_team` | Adds a team to `teams:`, as a new policy version |
+| `PUT` | `/admin/teams/<name>` | `update_team` | Replaces a team's owner, members, groups and metadata, as a new policy version |
+| `DELETE` | `/admin/teams/<name>` | `delete_team` | Takes a team out of `teams:`, as a new policy version |
 
 Any other method or path under `/admin` is refused with 404 `unknown_route` and recorded.
 
@@ -279,6 +284,20 @@ curl -X POST http://127.0.0.1:8080/admin/credentials \
 ```
 
 `PUT /admin/credentials/<name>` takes `{"value": "..."}` and answers 200 with the credential: every gateway on the store sends the new value within 2 seconds. `DELETE /admin/credentials/<name>` answers 200 with `removed`; a credential the policy in use names is 409 `credential_in_use`. `GET /admin/credentials` answers `{"credentials": [...]}`. The record of each call names the credential, its vendor and fingerprint, never the value.
+
+## Teams
+
+Reading needs `see_keys`; a role [kept to teams](/governance/teams/#roles-kept-to-teams) sees its teams. A change needs `edit_policy` in a role kept to no part of the install, and the policy kept in the store (`store.policy_from: store`); otherwise 409 `policy_in_file`. See [Teams](/governance/teams/#the-teams-api).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes, for `POST` | The team's name. A `PUT` body that names another team is 400 |
+| `owner` | string | no | An email |
+| `members` | list | no | Emails. A person in another team's members is 400 `invalid_policy` |
+| `sso_values` | list | no | Group values that put a person in the team |
+| `metadata` | map | no | Your own notes |
+
+A change answers 201 (`POST`) or 200 with the policy version it saved, `in_effect` and a message, as a policy change does. A team already listed is 409 `team_exists`; a team the policy does not list is 404 `no_such_team`.
 
 <Aside type="caution">
 An admin key can issue keys and stop all traffic. Keep admin keys in your secret manager, and revoke one the moment it may have leaked.

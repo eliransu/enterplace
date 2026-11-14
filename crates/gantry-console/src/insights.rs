@@ -29,10 +29,18 @@ use crate::{
 
 const PER_PAGE: usize = 50;
 
-/// Keeps a person whose role is kept to one organization to that organization's requests.
+/// Keeps a person whose role is kept to an organization, teams or customers to their requests.
 fn scoped(admin: &Admin, query: &mut Query) {
     if let Some(org) = &admin.org {
         query.labels.push(("org".into(), org.clone()));
+    }
+    if !admin.teams.is_empty() {
+        query.within.push(("team".into(), admin.teams.clone()));
+    }
+    if !admin.customers.is_empty() {
+        query
+            .within
+            .push(("customer".into(), admin.customers.clone()));
     }
 }
 

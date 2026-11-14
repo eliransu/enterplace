@@ -9,6 +9,7 @@ mod edit;
 pub mod html;
 mod insights;
 mod pages;
+mod saml;
 mod sso;
 
 use std::{
@@ -70,9 +71,13 @@ const FLOOD: u64 = 100;
 enum Who {
     /// Signed in with an admin key, by its hash.
     Key(String),
-    /// Signed in through single sign-on, with the role the identity provider's claim gave: `admin`, `read_only`
-    /// or a role from the policy's `roles:`.
-    Sso { email: String, role: String },
+    /// Signed in through single sign-on (OpenID Connect or SAML), with the role the identity provider's claim gave:
+    /// `admin`, `read_only` or a role from the policy's `roles:`; and the team `teams:` put them in, or "".
+    Sso {
+        email: String,
+        role: String,
+        team: String,
+    },
     /// Signed in to an account an [`Extension`] keeps, by its ID. The extension says who it is on every request.
     Account(String),
 }
@@ -118,11 +123,13 @@ fn who_text(who: &Who) -> String {
     match who {
         Who::Key(sha) => format!("key {sha}"),
         // `read` is how sessions opened before custom roles name the read-only role.
-        Who::Sso { email, role } => {
-            format!(
-                "sso {} {email}",
-                if role == "read_only" { "read" } else { role }
-            )
+        Who::Sso { email, role, team } => {
+            let role = if role == "read_only" { "read" } else { role };
+            if team.is_empty() {
+                format!("sso {role} {email}")
+            } else {
+                format!("sso {role} {email} {team}")
+            }
         }
         Who::Account(account) => format!("account {account}"),
     }
@@ -133,10 +140,13 @@ fn who_of(text: &str) -> Option<Who> {
     Some(match kind {
         "key" => Who::Key(rest.to_string()),
         "sso" => {
-            let (role, email) = rest.split_once(' ')?;
+            let (role, rest) = rest.split_once(' ')?;
+            // Sessions opened before teams have no team after the email.
+            let (email, team) = rest.split_once(' ').unwrap_or((rest, ""));
             Who::Sso {
                 email: email.to_string(),
                 role: if role == "read" { "read_only" } else { role }.to_string(),
+                team: team.to_string(),
             }
         }
         "account" => Who::Account(rest.to_string()),
@@ -263,6 +273,10 @@ pub struct Admin {
     pub permissions: Vec<Permission>,
     /// The organization whose keys, records and spend alone the person sees, when the role keeps them to one.
     pub org: Option<String>,
+    /// The teams whose keys, records and spend alone the person sees, when the role keeps them to some.
+    pub teams: Vec<String>,
+    /// The end customers whose keys, records and spend alone the person sees, when the role keeps them to some.
+    pub customers: Vec<String>,
 }
 
 /// How a person signed in to the console.
@@ -288,7 +302,27 @@ impl Admin {
             via,
             permissions: role.map(|r| r.permissions).unwrap_or_default(),
             org: None,
+            teams: Vec::new(),
+            customers: Vec::new(),
         }
+    }
+
+    /// Whether the person is kept to part of the install: an organization, teams or customers.
+    pub fn confined(&self) -> bool {
+        self.org.is_some() || !self.teams.is_empty() || !self.customers.is_empty()
+    }
+
+    /// Whether a key of this organization, team and end customer is one the person may see and act on.
+    pub fn covers(&self, org: &str, team: &str, customer: Option<&str>) -> bool {
+        self.org.as_ref().is_none_or(|o| o == org)
+            && (self.teams.is_empty() || self.teams.iter().any(|t| t == team))
+            && (self.customers.is_empty()
+                || customer.is_some_and(|c| self.customers.iter().any(|x| x == c)))
+    }
+
+    /// Whether a key file entry is within the person's reach.
+    pub fn covers_entry(&self, entry: &config::KeyEntry) -> bool {
+        self.covers(&entry.org, &entry.team, entry.customer.as_deref())
     }
 
     /// Whether the person holds `permission`.
@@ -296,12 +330,21 @@ impl Admin {
         self.permissions.contains(&permission)
     }
 
-    /// Whether a record (an audit log line) is one this person may see: every record for someone not kept to an
-    /// organization, else only those of theirs.
+    /// Whether a record (an audit log line) is one this person may see: every record for someone not kept to part
+    /// of the install, else only those of their organization, teams and customers.
     pub fn sees(&self, line: &str) -> bool {
-        self.org
-            .as_ref()
-            .is_none_or(|org| line.contains(&format!("\"org\":\"{org}\"")))
+        if !self.confined() {
+            return true;
+        }
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            return false;
+        };
+        let field = |name: &str| record.get(name).and_then(Value::as_str);
+        self.covers(
+            field("org").unwrap_or_default(),
+            field("team").unwrap_or_default(),
+            field("customer"),
+        )
     }
 
     /// How the pages show who is signed in.
@@ -328,6 +371,8 @@ fn admin_of(name: String, team: String, role: &Role, via: Via) -> Admin {
         via,
         permissions: role.permissions.clone(),
         org: role.org.clone(),
+        teams: role.teams.clone(),
+        customers: role.customers.clone(),
     }
 }
 
@@ -449,6 +494,9 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .route("/sign-out", get(sign_out))
         .route("/sso/start", get(sso_start))
         .route("/sso/callback", get(sso_callback))
+        .route("/saml/start", get(saml_start))
+        .route("/saml/acs", post(saml_acs))
+        .route("/saml/metadata", get(saml_metadata))
         // `gantry login` opens the browser here: the same sign-in, then a personal key for the CLI instead of a session.
         .route("/cli/login", get(sso_start))
         .route("/cli/token", post(cli_token))
@@ -680,16 +728,15 @@ impl Console {
                 Some(admin_of(e.name, e.team, &role, Via::Key))
             }),
             // The policy file is read every time, so removing console.sso or a person's email ends their session at once.
-            Who::Sso { email, role } => {
-                let domain = email.rsplit_once('@').map_or("", |(_, d)| d);
-                let allowed = self.sso_config().ok().flatten().is_some_and(|sso| {
-                    sso.allowed_emails.contains(&email)
-                        || sso.allowed_domains.iter().any(|d| d == domain)
+            Who::Sso { email, role, team } => {
+                let allowed = self.sign_in_config().ok().is_some_and(|(sso, saml)| {
+                    sso.is_some_and(|sso| sso::Access::of_sso(&sso).lets_in(&email))
+                        || saml.is_some_and(|saml| sso::Access::of_saml(&saml).lets_in(&email))
                 });
                 allowed
                     .then(|| self.role(&role, ""))
                     .flatten()
-                    .map(|role| admin_of(email, String::new(), &role, Via::Sso))
+                    .map(|role| admin_of(email, team, &role, Via::Sso))
             }
             Who::Account(account) => match &self.0.accounts {
                 Some(accounts) => accounts(account).await,
@@ -740,12 +787,25 @@ impl Console {
     }
 
     fn sso_config(&self) -> Result<Option<config::Sso>, String> {
+        self.sign_in_config().map(|(sso, _)| sso)
+    }
+
+    /// `console.sso` and `console.saml` from the policy as it is now.
+    fn sign_in_config(&self) -> Result<(Option<config::Sso>, Option<config::Saml>), String> {
         let c = self.config();
         let text = config::policy_text(&c.policy)?;
         let keys = config::read_keys(&c.keys)?.unwrap_or_default();
         config::load_texts(&c.policy, &text, &c.keys, &keys)
-            .map(|loaded| loaded.sso)
+            .map(|loaded| (loaded.sso, loaded.saml))
             .map_err(|errors| errors.join(" "))
+    }
+
+    /// The `teams:` of the policy as it is now, for single sign-on.
+    fn teams(&self) -> Vec<gantry_core::policy::Team> {
+        let c = self.config();
+        config::load(&c.policy, Some(&c.keys))
+            .map(|loaded| loaded.policy.teams().to_vec())
+            .unwrap_or_default()
     }
 
     fn used(&self) -> std::sync::MutexGuard<'_, HashMap<String, Instant>> {
@@ -1082,7 +1142,7 @@ fn set_cookie(response: &mut Response, cookie: &str) {
 impl Console {
     /// Whether the sign-in page offers single sign-on.
     fn sso_on(&self) -> bool {
-        matches!(self.sso_config(), Ok(Some(_)))
+        matches!(self.sign_in_config(), Ok((Some(_), _) | (_, Some(_))))
     }
 
     /// The identity provider's discovery and keys, from the cache while it is fresh.
@@ -1115,6 +1175,16 @@ impl Console {
     /// recorded. Anyone can make a sign-in fail, so past [`FLOOD`] in a minute from one client address the rest are
     /// summed up in one record written when that minute closes, with the true count per refusal code.
     async fn sso_refused(&self, email: Option<&str>, refusal: &sso::Refusal) -> Response {
+        self.sign_in_refused("sso", email, refusal).await
+    }
+
+    /// [`Console::sso_refused`], for the way in named by `via`: `sso` or `saml`.
+    async fn sign_in_refused(
+        &self,
+        via: &'static str,
+        email: Option<&str>,
+        refusal: &sso::Refusal,
+    ) -> Response {
         let key = flood_key(client());
         let seen = self.count_refusal(&key, refusal.code);
         if seen <= FLOOD {
@@ -1122,7 +1192,7 @@ impl Console {
                 action: "console_sign_in",
                 by: email.map(|e| (e, "")),
                 key: None,
-                target: json!({ "via": "sso", "reason": refusal.message }),
+                target: json!({ "via": via, "reason": refusal.message }),
             };
             let _ = record(self, &act, Some(refusal.code), None).await;
         } else if seen == FLOOD + 1 {
@@ -1188,9 +1258,11 @@ async fn sso_start(
         };
         let _ = record(&console, &act, None, None).await;
     }
-    let sso = match console.sso_config() {
-        Ok(Some(sso)) => sso,
-        Ok(None) => {
+    let sso = match console.sign_in_config() {
+        Ok((Some(sso), _)) => sso,
+        // SAML is the only single sign-on set up: the sign-in page's button leads there.
+        Ok((None, Some(_))) if cli.is_none() => return redirect("/console/saml/start"),
+        Ok((None, _)) => {
             let message = "Single sign-on is not set up. Sign in with an admin key, or add a console.sso section to the policy file.".to_string();
             return console
                 .sso_refused(None, &refused("sso_config", message))
@@ -1211,7 +1283,7 @@ async fn sso_start(
             .sso_refused(None, &refused("sso_self_issue", message))
             .await;
     }
-    if std::env::var(&sso.client_secret_env).map_or(true, |v| v.is_empty()) {
+    if gantry_core::secrets::var(&sso.client_secret_env).is_none_or(|v| v.is_empty()) {
         let message = format!(
             "Single sign-on is unavailable: the client secret variable {} is not set where Gantry runs. Set it and restart Gantry.",
             sso.client_secret_env
@@ -1269,6 +1341,217 @@ async fn sso_start(
         }
     };
     set_cookie(&mut response, &cli_cookie);
+    response
+}
+
+const SAML_COOKIE: &str = "gantry_saml";
+
+/// `console.saml` as it is now, or why there is none.
+fn saml_config(console: &Console) -> Result<config::Saml, sso::Refusal> {
+    match console.sign_in_config() {
+        Ok((_, Some(saml))) => Ok(saml),
+        Ok((_, None)) => Err(sso::Refusal {
+            code: "sso_config",
+            message: "SAML sign-in is not set up. Sign in with an admin key, or add a console.saml section to the policy file.".into(),
+        }),
+        Err(errors) => Err(sso::Refusal {
+            code: "sso_config",
+            message: format!(
+                "SAML sign-in is off because the policy file has problems: {errors} Run gantry check, fix them, and try again."
+            ),
+        }),
+    }
+}
+
+/// The service provider metadata, for an identity provider that imports it.
+async fn saml_metadata(State(console): State<Console>) -> Response {
+    match saml_config(&console) {
+        Ok(saml) => guarded(
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/samlmetadata+xml")],
+                saml::metadata(&saml),
+            )
+                .into_response(),
+        ),
+        Err(refusal) => page(
+            StatusCode::NOT_FOUND,
+            pages::sign_in("", &html::esc(&refusal.message), console.sso_on()),
+        ),
+    }
+}
+
+/// Sends the browser to the identity provider with a request whose ID only this browser's sealed cookie holds.
+async fn saml_start(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    uri: Uri,
+    tls: Tls,
+) -> Response {
+    if let Some(starts) = console.count_start() {
+        let act = Act {
+            action: "console_sso_starts",
+            by: None,
+            key: None,
+            target: json!({ "via": "saml", "starts": starts, "within_seconds": 60, "reason": "many SAML sign-in starts within a minute: a flood, or many people signing in at once. Starts are not recorded one by one; each finished or refused sign-in is." }),
+        };
+        let _ = record(&console, &act, None, None).await;
+    }
+    let saml = match saml_config(&console) {
+        Ok(saml) => saml,
+        Err(refusal) => return console.sign_in_refused("saml", None, &refusal).await,
+    };
+    let (Some(id), Some(seal)) = (random_hex(), console.0.seal.as_ref()) else {
+        return page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            pages::sign_in("", NO_RANDOM, true),
+        );
+    };
+    // An ID starts with a letter or underscore (xs:ID).
+    let id = format!("_{id}");
+    let now = unix_now();
+    let expires = now + SSO_PENDING.as_secs();
+    let sealed = format!("{id}.{expires}");
+    let cookie = format!("{sealed}.{}", mac(seal, &sealed));
+    let mut response = redirect(&saml::authn_url(
+        &saml,
+        &id,
+        i64::try_from(now).unwrap_or(i64::MAX),
+        &id,
+    ));
+    // The identity provider posts the answer from its own site: only a SameSite=None cookie comes with a
+    // cross-site POST, and browsers take one only when it is Secure. Over plain http (a provider on this machine,
+    // the same site) Lax comes with it.
+    let site = if secure(&headers, &uri, &tls) {
+        "None; Secure"
+    } else {
+        "Lax"
+    };
+    set_cookie(
+        &mut response,
+        &format!(
+            "{SAML_COOKIE}={cookie}; Path=/console/saml; Max-Age={}; HttpOnly; SameSite={site}",
+            SSO_PENDING.as_secs()
+        ),
+    );
+    response
+}
+
+/// Where the identity provider posts its answer: checks everything, then opens a session.
+async fn saml_acs(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    uri: Uri,
+    tls: Tls,
+    body: String,
+) -> Response {
+    let refused = |code, message: &str| sso::Refusal {
+        code,
+        message: message.to_string(),
+    };
+    if body.len() > saml::MAX_RESPONSE {
+        return console
+            .sign_in_refused("saml", None, &refused("saml_response", "The identity provider's response is larger than Gantry takes. Remove attributes the console does not need from the SAML app."))
+            .await;
+    }
+    let form = Form::parse(&body);
+    let relay = form.get("RelayState");
+    let cookie = cookie_value(&headers, SAML_COOKIE).unwrap_or_default();
+    let now = unix_now();
+    let checked = console
+        .0
+        .seal
+        .as_ref()
+        .map_or(Err(BadState::Foreign), |seal| {
+            state_left(seal, &cookie, relay, now)
+        });
+    let left = match checked {
+        Ok(left) => left,
+        Err(BadState::Expired) => {
+            return console
+                .sign_in_refused("saml", None, &refused("saml_replay", "This sign-in has expired. Start again from the sign-in page and finish within 10 minutes."))
+                .await;
+        }
+        Err(BadState::Foreign) => {
+            return console
+                .sign_in_refused("saml", None, &refused("saml_replay", "The identity provider answered a sign-in this browser did not start, so it was refused: Gantry takes only sign-ins started from its own sign-in page, not from the identity provider's app list. Start again from the console's sign-in page; if it repeats, allow cookies for this address."))
+                .await;
+        }
+    };
+    let saml = match saml_config(&console) {
+        Ok(saml) => saml,
+        Err(refusal) => return console.sign_in_refused("saml", None, &refusal).await,
+    };
+    let now = i64::try_from(now).unwrap_or(i64::MAX);
+    let signed = match saml::verify(form.get("SAMLResponse"), &saml, relay, now) {
+        Ok(signed) => signed,
+        Err(refusal) => return console.sign_in_refused("saml", None, &refusal).await,
+    };
+    // Each request answers once, and each assertion is used once, for as long as it would be taken.
+    let lasts = u64::try_from(signed.until.saturating_sub(now) + 60).unwrap_or(left);
+    if !console.remember(&format!("saml-request:{relay}"), left)
+        || !console.remember(
+            &format!("saml-assertion:{}", signed.id),
+            lasts.min(24 * 3600),
+        )
+    {
+        return console
+            .sign_in_refused(
+                "saml",
+                Some(&signed.email),
+                &refused(
+                    "saml_replay",
+                    "This sign-in was already used. Start again from the sign-in page.",
+                ),
+            )
+            .await;
+    }
+    let groups: Vec<&str> = signed.groups.iter().map(String::as_str).collect();
+    let admitted = sso::admit_person(
+        signed.email,
+        &groups,
+        &sso::Access::of_saml(&saml),
+        &console.roles(),
+        &console.teams(),
+    );
+    let (email, role, team) = match admitted {
+        Ok(admitted) => admitted,
+        Err((email, refusal)) => {
+            return console
+                .sign_in_refused("saml", email.as_deref(), &refusal)
+                .await;
+        }
+    };
+    let act = Act {
+        action: "console_sign_in",
+        by: Some((&email, &team)),
+        key: None,
+        target: json!({ "via": "saml", "role": role }),
+    };
+    if record(&console, &act, None, None).await.is_err() {
+        return page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            pages::sign_in("", NOT_RECORDED, true),
+        );
+    }
+    let session = match console.open_session(Who::Sso { email, role, team }).await {
+        Ok(session) => session,
+        Err(err) => {
+            return page(
+                StatusCode::SERVICE_UNAVAILABLE,
+                pages::sign_in("", &err, true),
+            );
+        }
+    };
+    let mut response = page(StatusCode::OK, pages::signed_in_sso());
+    set_cookie(
+        &mut response,
+        &session_cookie(&session, &headers, &uri, &tls),
+    );
+    set_cookie(
+        &mut response,
+        &format!("{SAML_COOKIE}=; Path=/console/saml; Max-Age=0; HttpOnly; SameSite=Lax"),
+    );
     response
 }
 
@@ -1344,12 +1627,12 @@ async fn sso_callback(
     if let Some(cli) = cli_cookie(&console, &headers, query.get("state")) {
         return cli_finish(&console, &cli, finished).await;
     }
-    let roles = console.roles();
-    match finished.and_then(|(claims, sso)| sso::admit(&claims, &sso, &roles)) {
-        Ok((email, role)) => {
+    let (roles, teams) = (console.roles(), console.teams());
+    match finished.and_then(|(claims, sso)| sso::admit(&claims, &sso, &roles, &teams)) {
+        Ok((email, role, team)) => {
             let act = Act {
                 action: "console_sign_in",
-                by: Some((&email, "")),
+                by: Some((&email, &team)),
                 key: None,
                 target: json!({ "via": "sso", "role": role }),
             };
@@ -1359,7 +1642,7 @@ async fn sso_callback(
                     pages::sign_in("", NOT_RECORDED, true),
                 );
             }
-            let session = match console.open_session(Who::Sso { email, role }).await {
+            let session = match console.open_session(Who::Sso { email, role, team }).await {
                 Ok(session) => session,
                 Err(err) => {
                     return page(
@@ -1395,7 +1678,8 @@ async fn cli_finish(console: &Console, cli: &CliStart, finished: SsoResult) -> R
     } else {
         format!("http://127.0.0.1:{}/callback?state={}", cli.port, cli.state)
     };
-    let to = match finished.and_then(|(claims, sso)| sso::admit_self(&claims, &sso)) {
+    let teams = console.teams();
+    let to = match finished.and_then(|(claims, sso)| sso::admit_self(&claims, &sso, &teams)) {
         Ok((email, team, days)) => {
             let Some(code) = random_hex() else {
                 return page(
@@ -1703,7 +1987,7 @@ async fn sso_finish(console: &Console, headers: &HeaderMap, query: &Form) -> Sso
             ));
         }
     };
-    let secret = std::env::var(&sso.client_secret_env).unwrap_or_default();
+    let secret = gantry_core::secrets::var(&sso.client_secret_env).unwrap_or_default();
     if secret.is_empty() {
         let message = format!(
             "The client secret variable {} is not set where Gantry runs. Set it and restart Gantry.",
@@ -1827,7 +2111,7 @@ fn records_for(admin: &Admin, audit: &std::path::Path) -> Result<Option<String>,
 
 /// The audit log as a person may see it: whole, or only their organization's records.
 fn log_for(admin: &Admin, log: Result<Option<String>, String>) -> Result<Option<String>, String> {
-    if admin.org.is_none() {
+    if !admin.confined() {
         return log;
     }
     log.map(|text| {
@@ -1968,14 +2252,16 @@ fn keys_for(
     path: &std::path::Path,
     text: Result<Option<String>, String>,
 ) -> Result<Option<String>, String> {
-    let Some(org) = &admin.org else {
+    if !admin.confined() {
         return text;
-    };
+    }
     text.map(|text| {
         text.map(|text| {
             let entries = config::key_entries(path, &text).unwrap_or_default();
-            let mine: Vec<config::KeyEntry> =
-                entries.into_iter().filter(|e| e.org == *org).collect();
+            let mine: Vec<config::KeyEntry> = entries
+                .into_iter()
+                .filter(|e| admin.covers_entry(e))
+                .collect();
             keyfile::keys_text(&mine)
         })
     })
@@ -2011,10 +2297,48 @@ async fn issue(State(console): State<Console>, headers: HeaderMap, body: String)
                 gantry_core::policy::Period::Month
             },
         }),
-        // A person kept to one organization issues keys in it.
+        // A person kept to one organization issues keys in it, and one kept to one customer keys for it.
         org: admin.org.clone().unwrap_or_default(),
+        customer: match admin.customers.as_slice() {
+            [one] => Some(one.clone()),
+            _ => None,
+        },
         ..keyfile::Attributes::default()
     };
+    if admin.may(Permission::IssueKeys)
+        && !admin.covers(&attributes.org, &team, attributes.customer.as_deref())
+    {
+        let error = format!(
+            "Your role keeps you to team{} {}{}: issue the key in one of them.",
+            if admin.teams.len() == 1 { "" } else { "s" },
+            admin.teams.join(", "),
+            if admin.customers.len() > 1 {
+                format!(
+                    " and customers {}, and your role cannot pick one here",
+                    admin.customers.join(", ")
+                )
+            } else {
+                String::new()
+            }
+        );
+        read_only(&console, &admin, "issue_key").await;
+        return page(
+            StatusCode::BAD_REQUEST,
+            people_body(
+                &console,
+                &admin,
+                &Form(Vec::new()),
+                pages::Dialog::Issue {
+                    name,
+                    team,
+                    expires,
+                    budget,
+                    per,
+                    error,
+                },
+            ),
+        );
+    }
     if !admin.may(Permission::IssueKeys) {
         read_only(&console, &admin, "issue_key").await;
         return page(
@@ -2112,7 +2436,7 @@ async fn revoke(State(console): State<Console>, headers: HeaderMap, body: String
         .flatten()
         .and_then(|text| config::key_entries(&keys, &text).ok())
         .and_then(|entries| entries.into_iter().find(|e| e.sha256 == sha256));
-    let Some(entry) = entry.filter(|e| admin.org.as_ref().is_none_or(|o| *o == e.org)) else {
+    let Some(entry) = entry.filter(|e| admin.covers_entry(e)) else {
         return redirect("/console/people");
     };
     if !admin.may(Permission::RevokeKeys) {
@@ -2277,7 +2601,7 @@ async fn credential_change(
             credentials_body(&console, &admin, &Form(Vec::new()), dialog),
         )
     };
-    if !admin.may(Permission::Credentials) || admin.org.is_some() {
+    if !admin.may(Permission::Credentials) || admin.confined() {
         read_only(&console, &admin, action).await;
         return back("Your role may not change credentials, which serve the whole install: ask an admin to change them.".into());
     }
@@ -2613,14 +2937,17 @@ mod tests {
             Who::Sso {
                 email: "maya@acme.com".into(),
                 role: "read_only".into(),
+                team: String::new(),
             },
             Who::Sso {
                 email: "lee@acme.com".into(),
                 role: "admin".into(),
+                team: "payments".into(),
             },
             Who::Sso {
                 email: "fin@acme.com".into(),
                 role: "finance".into(),
+                team: String::new(),
             },
             Who::Account("acct 7".into()),
         ] {
@@ -2628,6 +2955,10 @@ mod tests {
             assert_eq!(who_of(&text).map(|w| who_text(&w)), Some(text));
         }
         assert!(who_of("root everything").is_none());
+        // A session opened before teams reads back with no team.
+        assert!(
+            matches!(who_of("sso admin lee@acme.com"), Some(Who::Sso { team, .. }) if team.is_empty())
+        );
     }
 
     #[test]

@@ -1083,6 +1083,10 @@ pub struct Role {
     pub permissions: Vec<Permission>,
     /// Confines its holders to one organization's keys, records and spend.
     pub org: Option<String>,
+    /// Confines its holders to these teams' keys, records and spend. Empty: every team.
+    pub teams: Vec<String>,
+    /// Confines its holders to these end customers' keys, records and spend. Empty: every customer.
+    pub customers: Vec<String>,
     /// Values of the identity provider's role claim that sign a person in with this role.
     pub sso_values: Vec<String>,
     pub line: usize,
@@ -1092,6 +1096,48 @@ impl Role {
     pub fn may(&self, permission: Permission) -> bool {
         self.permissions.contains(&permission)
     }
+
+    /// Whether its holders are kept to part of the install: an organization, teams or customers.
+    pub fn confined(&self) -> bool {
+        self.org.is_some() || !self.teams.is_empty() || !self.customers.is_empty()
+    }
+
+    /// Whether a key of this organization, team and end customer is within the role's reach.
+    pub fn covers(&self, org: &str, team: &str, customer: Option<&str>) -> bool {
+        self.org.as_ref().is_none_or(|o| o == org)
+            && (self.teams.is_empty() || self.teams.iter().any(|t| t == team))
+            && (self.customers.is_empty()
+                || customer.is_some_and(|c| self.customers.iter().any(|x| x == c)))
+    }
+}
+
+/// A team as the policy's `teams:` names it: who owns it, who is in it, and the identity provider groups that put a
+/// person in it when they sign in.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Team {
+    pub name: String,
+    /// Lower case email of the person answerable for it.
+    pub owner: Option<String>,
+    /// Lower case emails.
+    pub members: Vec<String>,
+    /// Values of the identity provider's role claim (or SAML role attribute) that put a person in this team.
+    pub sso_values: Vec<String>,
+    /// The admin's own notes, as a key's `metadata`.
+    pub metadata: BTreeMap<String, String>,
+    pub line: usize,
+}
+
+/// The team a person signing in belongs to: the first that lists their email, else the first whose `sso_values`
+/// holds one of the identity provider's values for them.
+pub fn team_of<'a>(teams: &'a [Team], email: &str, values: &[&str]) -> Option<&'a Team> {
+    teams
+        .iter()
+        .find(|t| t.members.iter().any(|m| m == email))
+        .or_else(|| {
+            teams
+                .iter()
+                .find(|t| t.sso_values.iter().any(|s| values.contains(&s.as_str())))
+        })
 }
 
 /// The roles every install has: `admin` may do everything, `read_only` may look at keys, spend and records.
@@ -1109,6 +1155,8 @@ pub fn builtin_role(name: &str) -> Option<Role> {
         name: name.to_string(),
         permissions,
         org: None,
+        teams: Vec::new(),
+        customers: Vec::new(),
         sso_values: Vec::new(),
         line: 0,
     })
@@ -1143,6 +1191,8 @@ pub struct Policy {
     roles: Vec<Role>,
     /// The organizations `orgs:` lists.
     orgs: Vec<String>,
+    /// The `teams:` list.
+    teams: Vec<Team>,
     /// Identity providers whose JWTs stand in for a Gantry key.
     jwt: Vec<JwtTrust>,
     /// Proxies whose `X-Forwarded-For` names the client. A request from anywhere else is taken by its own address.
@@ -1261,6 +1311,16 @@ impl Policy {
 
     pub fn orgs(&self) -> &[String] {
         &self.orgs
+    }
+
+    pub fn with_teams(mut self, teams: Vec<Team>) -> Self {
+        self.teams = teams;
+        self
+    }
+
+    /// The `teams:` list. Teams named only by keys are not in it.
+    pub fn teams(&self) -> &[Team] {
+        &self.teams
     }
 
     pub fn with_roles(mut self, roles: Vec<Role>) -> Self {
@@ -2393,6 +2453,8 @@ mod tests {
             name: "finance".into(),
             permissions: vec![Permission::SeeSpend],
             org: None,
+            teams: Vec::new(),
+            customers: Vec::new(),
             sso_values: Vec::new(),
             line: 3,
         };

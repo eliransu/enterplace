@@ -563,6 +563,17 @@ Console and `gantry login` sign-ins that fail show a page with the cause and the
 | `sso_email` | The ID token has no email, an email marked unverified, or one not in `allowed_emails` or `allowed_domains` |
 | `sso_role` | The role claim holds no value from `admin_values` or `read_only_values` |
 | `sso_self_issue` | `gantry login` is used and the policy has no `console.sso.self_issue` section |
+| `sso_team` | `gantry login`: the policy's `teams:` place people, place this person in no team, and `self_issue.team` is not written |
+| `saml_response` | The SAML response could not be read: not base64, not XML Gantry takes, or not exactly one assertion |
+| `saml_status` | The identity provider did not sign the person in |
+| `saml_unsigned` | The SAML assertion is not signed |
+| `saml_signature` | The SAML signature does not verify with `idp_certificate`, or uses an algorithm Gantry does not take |
+| `saml_issuer` | The assertion's issuer is not `console.saml.idp_entity_id` |
+| `saml_audience` | The assertion names no audience, or not `console.saml.sp_entity_id` |
+| `saml_recipient` | The response is addressed to another ACS URL |
+| `saml_expired` | The assertion is expired or not valid yet |
+| `saml_replay` | The response answers no request this browser started, or was used already |
+| `saml_encrypted` | The assertion is encrypted |
 | `cli_login` | A `gantry login` link was cut short or changed |
 
 Inside a signed-in console session, `not_admin` is recorded for a key that is not an admin's, and `read_only` for a read-only person who tries to issue or revoke a key.

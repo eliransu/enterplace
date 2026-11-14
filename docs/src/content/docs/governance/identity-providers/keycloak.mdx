@@ -1,0 +1,126 @@
+---
+title: Keycloak
+description: Connect the Gantry admin console to Keycloak with OpenID Connect or SAML 2.0, and give people roles from their Keycloak groups.
+sidebar:
+  order: 5
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Keycloak can sign people in to the admin console with an OpenID Connect client (`console.sso`) or a SAML client (`console.saml`). In both, a group mapper sends the person's groups, and Gantry maps them to a console role and, at `gantry login`, to a team.
+
+The examples use `https://gantry.example.com` for your Gantry address, `https://keycloak.example.com` for Keycloak, the realm `example`, and the groups `gantry-admins` and `gantry-viewers`.
+
+## OpenID Connect
+
+<Steps>
+
+1. In the Keycloak admin console, select the realm, click **Clients** and then **Create client**. Leave **Client type** set to **OpenID Connect**, enter the **Client ID** `gantry-console`, and continue.
+
+2. Under **Capability config**, turn **Client authentication** on and keep **Standard flow** on. Set **PKCE method** to **S256** (Gantry always sends an S256 challenge).
+
+3. Under **Valid redirect URIs**, add `https://gantry.example.com/console/sso/callback` and save. `gantry login` comes back on the same URI.
+
+4. On the **Credentials** tab, keep **Client ID and Secret** as the client authenticator and copy the client secret.
+
+5. Add a group mapper. On the client's **Client scopes** tab, open the dedicated scope (`gantry-console-dedicated`), and on its **Mappers** tab configure a new mapper of type **Group Membership**:
+   - **Name**: `groups`
+   - **Token Claim Name**: `groups`
+   - **Full group path**: off, so the claim holds `gantry-admins` and not `/gantry-admins`
+   - **Add to ID token**: on
+
+6. Put people in the `gantry-admins` or `gantry-viewers` group.
+
+</Steps>
+
+```yaml title="gantry.policy.yaml"
+console:
+  sso:
+    issuer: https://keycloak.example.com/realms/example
+    client_id: gantry-console
+    client_secret_env: GANTRY_SSO_SECRET
+    redirect_url: https://gantry.example.com/console/sso/callback
+    allowed_domains: [example.com]
+    role_claim: groups
+    admin_values: [gantry-admins]
+    read_only_values: [gantry-viewers]
+```
+
+The issuer is `https://<host>/realms/<realm>`, with the host and path Keycloak is reached on from outside. Set the secret where Gantry runs: `GANTRY_SSO_SECRET=...`.
+
+<Aside type="caution">
+Keycloak sends `email_verified` from the user's **Email verified** setting. Gantry refuses `email_verified: false` with `sso_email`, so a user created by hand without that switch on cannot sign in. Turn it on for the user, or let them verify their address.
+</Aside>
+
+With **Full group path** on, the values are paths such as `/engineering/gantry-admins`. That works too, as long as the policy lists the same paths.
+
+## SAML 2.0
+
+<Steps>
+
+1. Click **Clients** and then **Create client**. Set **Client type** to **SAML** and enter the **Client ID** `https://gantry.example.com/console/saml/metadata`. For a SAML client, the client ID is the SP entity ID. Save.
+
+2. On the **Settings** tab:
+   - **Valid Redirect URIs**: `https://gantry.example.com/console/saml/acs`
+   - **IDP-Initiated SSO URL name**: leave empty, which turns IdP-initiated sign-in off
+   - **Name ID Format**: `email`, with **Force Name ID Format** on
+   - **Sign Documents** on, **Sign Assertions** on, **Signature Algorithm** `RSA_SHA256`
+
+3. On the **Keys** tab, turn **Client Signature Required** off (Gantry does not sign its requests) and leave **Encrypt Assertions** off.
+
+4. On the **Advanced** tab, under **Fine Grain SAML Endpoint Configuration**, set **Assertion Consumer Service POST Binding URL** to `https://gantry.example.com/console/saml/acs`.
+
+5. On the client's **Client scopes** tab, open the dedicated scope and add two mappers:
+   - Type **User Property**: property `email`, **SAML Attribute Name** `email`
+   - Type **Group list**: **Group attribute name** `groups`, **Single Group Attribute** on, **Full group path** off
+
+6. Read the IdP values from the realm's descriptor at `https://keycloak.example.com/realms/example/protocol/saml/descriptor`: the `entityID` (the realm URL), the single sign-on location for the HTTP-Redirect binding, and the signing certificate. The certificate is also under **Realm settings** > **Keys** (the **Certificate** of the active RS256 key).
+
+</Steps>
+
+{/* not checked: the certificate is a placeholder */}
+```yaml title="gantry.policy.yaml"
+console:
+  saml:
+    idp_entity_id: https://keycloak.example.com/realms/example
+    idp_sso_url: https://keycloak.example.com/realms/example/protocol/saml
+    idp_certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIICnTCCAYUCBgGQ...
+      -----END CERTIFICATE-----
+    sp_entity_id: https://gantry.example.com/console/saml/metadata
+    acs_url: https://gantry.example.com/console/saml/acs
+    email_attribute: email
+    role_attribute: groups
+    admin_values: [gantry-admins]
+    read_only_values: [gantry-viewers]
+    allowed_domains: [example.com]
+```
+
+Keycloak shows the realm certificate as a bare base64 string. Wrap it in `-----BEGIN CERTIFICATE-----` and `-----END CERTIFICATE-----` lines. When you add a new realm key, put both certificates in `idp_certificate` until the old key is retired.
+
+## Teams and custom roles
+
+The group names feed a custom role's `sso_values` under `roles:` and a team's `sso_values` under `teams:`. At `gantry login`, a person listed in a team's `members` gets that team, otherwise the first team whose `sso_values` match one of their groups, otherwise `self_issue.team`.
+
+## Check it
+
+<Steps>
+
+1. Open `https://gantry.example.com/console` in a private window and click the sign-in button.
+
+2. Sign in as a member of `gantry-admins`. The console opens with the admin role.
+
+3. Sign in as a member of `gantry-viewers` only. The console opens read only.
+
+</Steps>
+
+A refusal with `sso_role` means the groups held no configured value. The usual cause is **Full group path** left on, which sends `/gantry-admins` while the policy says `gantry-admins`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Every console.sso field, check and refusal code." />
+	<LinkCard title="SAML 2.0" href="/governance/saml/" description="Every console.saml field and what Gantry checks." />
+	<LinkCard title="Console roles" href="/governance/policy/#console-roles" description="Custom roles with sso_values." />
+</CardGrid>
