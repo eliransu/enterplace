@@ -1,6 +1,6 @@
 ---
 title: Deploy Gantry Enterprise
-description: What a self-hosted Gantry Enterprise deployment is made of, what stays in your network, how to choose between Docker, Kubernetes, AWS, GCP and Azure, and how to size it.
+description: What a self-hosted Gantry Enterprise deployment is made of, what stays in your network, how to choose between Docker, Kubernetes, AWS, GCP, Azure and Cloudflare, and how to size it.
 sidebar:
   label: Overview
   order: 1
@@ -16,7 +16,7 @@ Gantry Enterprise runs in your own network or cloud account. These guides take y
 |---|---|---|
 | The image | `ghcr.io/ggantry/gantry-enterprise`: one static binary, `/gantry-enterprise`, built `FROM scratch`, running as user `65532`. It serves the gateway, the console, the admin API and the enterprise features | Your registry or ghcr.io, which is private: your license comes with read access |
 | Postgres | The store: keys, kill switches and spend, shared by every replica. The Compose stack and the Terraform modules run Postgres 16 | A managed database (RDS, Cloud SQL, Azure Database for PostgreSQL) or the Compose container |
-| A volume per replica | `/var/lib/gantry`, holding that replica's hash-chained audit log. Two replicas never share one, because each writes its own chain | A Docker volume, a PersistentVolumeClaim, EFS, Filestore or Azure Files |
+| A volume per replica | `/var/lib/gantry`, holding that replica's hash-chained audit log. Two replicas never share one, because each writes its own chain | A Docker volume, a PersistentVolumeClaim, EFS, Filestore or Azure Files. On Cloudflare, the container's own disk, sealed into R2 every minute |
 | The policy | One YAML file at `/etc/gantry/gantry.policy.yaml`: providers, rules, guardrails. It holds no secrets | Version control, then a ConfigMap, a parameter or a secret mount |
 | The license key | One line of text in `GANTRY_LICENSE`. It unlocks the enterprise features and is checked offline | Your secret store |
 | Provider keys | One environment variable per provider, named by the policy's `key_env`. Bedrock and Vertex AI need none on AWS and Google Cloud: they sign in as the gateway's role or service account | Your secret store |
@@ -57,7 +57,7 @@ The image holds one binary, `/gantry-enterprise`, and it runs every `gantry` com
 | Kubernetes | `kubectl exec gantry-0 -c gantry -- /gantry-enterprise audit verify /var/lib/gantry/gantry-audit.jsonl` |
 | Any machine with Docker | `docker run --rm -v "$PWD":/w:ro ghcr.io/ggantry/gantry-enterprise:<version> audit verify /w/gantry-audit.jsonl` |
 
-The image also carries the Helm chart and the Terraform modules for its version, under `/deploy`. Copy them out with `docker create --name gantry-files <image> && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files`.
+The image also carries the Helm chart, the Terraform modules and the Cloudflare template for its version, under `/deploy`. Copy them out with `docker create --name gantry-files <image> && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files`.
 
 ## What stays in your network
 
@@ -81,6 +81,7 @@ Nothing calls home. The gateway connects only to what your policy and environmen
 | AWS | [ECS on Fargate](/deploy/aws/) | 1 or more | RDS with RDS Proxy | EFS, an access point per replica | AWS without a cluster |
 | Google Cloud | [Cloud Run](/deploy/gcp/) | 1 | Cloud SQL | Filestore | GCP without a cluster |
 | Azure | [Container Apps](/deploy/azure/) | 1 | Azure Database for PostgreSQL | Azure Files | Azure without a cluster |
+| Cloudflare | [Containers behind a Worker](/deploy/cloudflare/) | 1 or more | Any Postgres reachable over TLS | None: sealed segments in R2 | Teams already on Cloudflare |
 
 Cloud Run and Container Apps run one replica: neither can give each replica a volume of its own, and two gateways on one audit log would break its chain. For more than one replica on Google Cloud or Azure, use GKE or AKS with the Helm chart.
 
@@ -106,5 +107,6 @@ Cloud Run and Container Apps run one replica: neither can give each replica a vo
 	<LinkCard title="AWS" href="/deploy/aws/" description="ECS on Fargate, RDS and EFS with Terraform." />
 	<LinkCard title="Google Cloud" href="/deploy/gcp/" description="Cloud Run, Cloud SQL and Filestore with Terraform." />
 	<LinkCard title="Azure" href="/deploy/azure/" description="Container Apps, Azure Database for PostgreSQL and Azure Files with Terraform." />
+	<LinkCard title="Cloudflare" href="/deploy/cloudflare/" description="Containers behind a Worker, the audit chain in R2, with wrangler." />
 	<LinkCard title="License key" href="/operations/license/" description="What the license unlocks, expiry and seats." />
 </CardGrid>
