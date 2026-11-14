@@ -274,12 +274,15 @@ impl Members {
             .await
             .ok()??;
         let p = person(&row).ok()?;
+        // A viewer has the open source read_only role's permissions, an owner or admin every one.
         Some(Admin {
-            name: p.email,
-            team: p.team,
-            read_only: p.role == Role::Viewer,
             role: p.role.word().into(),
-            via: Via::Account(p.id),
+            ..Admin::of_role(
+                &p.email,
+                &p.team,
+                p.role == Role::Viewer,
+                Via::Account(p.id),
+            )
         })
     }
 
@@ -1092,11 +1095,13 @@ async fn accept(
     };
     let target = json!({ "email": inv.email, "role": inv.role, "team": inv.team });
     let who = Admin {
-        name: inv.email.clone(),
-        team: inv.team.clone(),
-        read_only: inv.role == "viewer",
         role: inv.role.clone(),
-        via: Via::Account(id.clone()),
+        ..Admin::of_role(
+            &inv.email,
+            &inv.team,
+            inv.role == "viewer",
+            Via::Account(id.clone()),
+        )
     };
     if let Err(err) = console
         .audit(Some(&who), "invite_accepted", target, None)

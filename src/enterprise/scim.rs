@@ -1595,11 +1595,8 @@ async fn api(
         console: &console,
         scim: &scim,
         actor: Admin {
-            name: format!("scim:{name}"),
-            team: String::new(),
-            read_only: false,
             role: "scim".into(),
-            via: Via::Key,
+            ..Admin::of_role(&format!("scim:{name}"), "", false, Via::Key)
         },
         base: format!("{}{PATH}", members::origin(&parts.headers, &tls)),
     };

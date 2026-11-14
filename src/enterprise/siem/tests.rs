@@ -830,7 +830,8 @@ async fn without_the_features_the_page_and_api_say_why_and_nothing_is_made() -> 
         assert!(api.text.contains("license_required"));
         let audit = owner.go(&gw.app, "GET", "/console/audit", &[]).await?;
         assert!(!audit.text.contains("/console/siem"), "no nav entry");
-        assert!(!gw.audit.with_extension("jsonl.replica").exists());
+        // The gateway's own request index names its replica in the same `.replica` file the export uses, so that
+        // file says nothing about the export: its tables, below, do.
         let (client, connection) = gantry_server::store::tokio_postgres::connect(
             &url,
             gantry_server::store::tokio_postgres::NoTls,

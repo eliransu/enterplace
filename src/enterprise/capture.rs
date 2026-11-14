@@ -240,6 +240,7 @@ pub fn redact(text: &Text) -> Option<Text> {
             action: Action::Mask,
             check,
             on: On::REQUEST,
+            shadow_until: None,
         })
         .collect();
     let messages: Vec<Value> = text
