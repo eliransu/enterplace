@@ -3,7 +3,10 @@
 pub mod audit;
 pub mod catalog;
 pub mod chat;
+pub mod cohere;
 pub mod config;
+pub mod converse;
+pub mod embed;
 pub mod eventstream;
 pub mod gemini;
 pub mod guard;
@@ -15,6 +18,7 @@ pub mod litellm;
 pub mod mcp;
 pub mod metrics;
 pub mod policy;
+pub mod responses;
 pub mod sigv4;
 pub mod store;
 pub mod translate;

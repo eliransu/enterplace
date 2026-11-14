@@ -869,18 +869,16 @@ async fn without_accept_chat_a_chat_request_is_still_the_wrong_route() -> TestRe
         text.contains("wrong_route") && text.contains("accept_chat: true"),
         "{text}"
     );
-    // UX11 n7: accept_chat translates chat only, so it is never offered for Responses or embeddings.
-    for path in ["/v1/responses", "/v1/embeddings"] {
-        let body = r#"{"model":"claude-sonnet-5-5","input":"Hi"}"#;
-        let (status, _, text) = post(&gw, path, body, &[]).await?;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
-        assert!(
-            text.contains("wrong_route")
-                && text.contains("kind openai")
-                && !text.contains("accept_chat"),
-            "{path}: {text}"
-        );
-    }
+    // UX11 n7: accept_chat translates chat only, so it is never offered for embeddings, which Claude has none of.
+    let body = r#"{"model":"claude-sonnet-5-5","input":"Hi"}"#;
+    let (status, _, text) = post(&gw, "/v1/embeddings", body, &[]).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(
+        text.contains("wrong_route")
+            && text.contains("no embeddings API")
+            && !text.contains("accept_chat"),
+        "{text}"
+    );
     assert_eq!(anthropic.hits.load(Ordering::SeqCst), 0);
     Ok(())
 }

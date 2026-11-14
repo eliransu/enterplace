@@ -101,6 +101,18 @@ const RERANK: &str = "/v1/rerank";
 const COMPLETIONS: &str = "/v1/completions";
 /// `/passthrough/<provider>/<native path>`: a provider's own API, reached as sent on the paths a rule names.
 const PASSTHROUGH: &str = "/passthrough/";
+/// `/bedrock/<native path>` and `/vertex/<native path>`: Amazon Bedrock's and Vertex AI's own APIs, signed with the
+/// provider's cloud credentials (SigV4, Google OAuth) on the way out, on the paths a rule names.
+const BEDROCK_PASSTHROUGH: &str = "/bedrock/";
+const VERTEX_PASSTHROUGH: &str = "/vertex/";
+use batch::PROVIDER_HEADER;
+
+/// A request for a provider's own API, by any of the passthrough prefixes.
+fn is_passthrough(path: &str) -> bool {
+    [PASSTHROUGH, BEDROCK_PASSTHROUGH, VERTEX_PASSTHROUGH]
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+}
 
 /// The routes forwarded as sent, to providers of kind openai only.
 fn openai_only(path: &str) -> bool {
@@ -221,7 +233,8 @@ pub struct ProviderRoute {
     /// Bedrock's AWS region, and the AWS credentials its requests are signed with, kept current.
     pub region: Option<String>,
     pub aws: Option<cloud::Live<sigv4::Credentials>>,
-    /// Vertex AI's OAuth access token, kept current, when it does not come from `key`.
+    /// A bearer token kept current, when it does not come from `key`: Vertex AI's Google OAuth access token, Azure
+    /// OpenAI's Microsoft Entra ID token, or watsonx.ai's IBM Cloud IAM token. Sent as the `Authorization` header.
     pub google: Option<cloud::Live<HeaderValue>>,
     /// The provider a request goes to when this one fails before the answer starts.
     pub fallback: Option<String>,
@@ -231,6 +244,10 @@ pub struct ProviderRoute {
     pub accept_chat: bool,
     /// Messages requests (Claude Code) for its models are translated to the chat completions API.
     pub accept_messages: bool,
+    /// watsonx.ai's project.
+    pub project_id: Option<String>,
+    /// Chat completions requests for its models are sent to the Responses API, translated both ways.
+    pub chat_as_responses: bool,
 }
 
 /// What the server needs to start.
@@ -474,6 +491,8 @@ struct Upstream {
     retries: u32,
     accept_chat: bool,
     accept_messages: bool,
+    project_id: Option<String>,
+    chat_as_responses: bool,
 }
 
 impl Upstream {
@@ -487,13 +506,17 @@ fn key_header(kind: Kind, key: &Secret) -> Result<(HeaderName, HeaderValue), Con
     let (name, text) = match kind {
         // Vertex AI takes an OAuth access token as a Bearer token. One from key_env lasts about an hour; without
         // key_env, `cloud::google` signs in and renews it.
-        Kind::OpenAi | Kind::Vertex | Kind::VertexAnthropic => {
-            (header::AUTHORIZATION, format!("Bearer {}", key.0))
-        }
+        // watsonx.ai's key here is an IAM token already: `gantry serve` trades the API key for one (cloud::ibm).
+        Kind::OpenAi
+        | Kind::Vertex
+        | Kind::VertexAnthropic
+        | Kind::VertexOpenAi
+        | Kind::Cohere
+        | Kind::Watsonx => (header::AUTHORIZATION, format!("Bearer {}", key.0)),
         Kind::Gemini => (HeaderName::from_static("x-goog-api-key"), key.0.clone()),
         Kind::Anthropic => (HeaderName::from_static("x-api-key"), key.0.clone()),
         Kind::Azure => (HeaderName::from_static("api-key"), key.0.clone()),
-        Kind::Bedrock => {
+        Kind::Bedrock | Kind::BedrockConverse => {
             return Err(ConfigError(
                 "a bedrock provider takes no provider key: its requests are signed with AWS credentials. Remove the key, and run Gantry with an AWS role or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.".into(),
             ));
@@ -504,6 +527,41 @@ fn key_header(kind: Kind, key: &Secret) -> Result<(HeaderName, HeaderValue), Con
     })?;
     value.set_sensitive(true);
     Ok((name, value))
+}
+
+/// The policy with a price for each model a provider knows by another name (a Bedrock model ID, an Azure deployment)
+/// when the model's own name has none and the provider's name does, so budgets reserve and charge it at the price of
+/// what is called. A Bedrock inference profile (`us.anthropic...`) is priced as its model.
+pub(crate) fn mapped_prices(policy: Option<Policy>, providers: &[Upstream]) -> Option<Policy> {
+    let policy = policy?;
+    let mut prices = policy.prices().clone();
+    let mut added = false;
+    for provider in providers {
+        for (model, id) in &provider.upstream_models {
+            if gantry_core::usage::price_for(model, &prices).is_some() {
+                continue;
+            }
+            let bare = id.rsplit('/').next().unwrap_or(id);
+            let bare = [
+                "us.", "eu.", "apac.", "global.", "us-gov.", "jp.", "au.", "ca.",
+            ]
+            .iter()
+            .find_map(|p| bare.strip_prefix(p))
+            .unwrap_or(bare);
+            if let Some(price) = [id.as_str(), bare]
+                .iter()
+                .find_map(|name| gantry_core::usage::price_for(name, &prices))
+            {
+                prices.insert(model.clone(), price);
+                added = true;
+            }
+        }
+    }
+    Some(if added {
+        policy.with_prices(prices)
+    } else {
+        policy
+    })
 }
 
 /// Builds the router. Tests and embedders call this directly.
@@ -518,16 +576,13 @@ type Built = (Router, Option<Arc<Reloader>>, Router);
 /// The upstream a provider route becomes, checked: a Bedrock or Vertex provider needs its credentials, and the key
 /// must fit in a header.
 pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError> {
-    if route.kind == Kind::Bedrock && (route.aws.is_none() || route.region.is_none()) {
+    if route.kind.aws() && (route.aws.is_none() || route.region.is_none()) {
         return Err(ConfigError(format!(
             "provider \"{}\" is of kind bedrock and has no AWS region or credentials. Set its region, and give it credentials from `gantry_server::cloud::aws`.",
             route.name
         )));
     }
-    if matches!(route.kind, Kind::Vertex | Kind::VertexAnthropic)
-        && route.key.is_none()
-        && route.google.is_none()
-    {
+    if route.kind.google_auth() && route.key.is_none() && route.google.is_none() {
         return Err(ConfigError(format!(
             "provider \"{}\" is on Vertex AI and has no access token. Give it a key, or credentials from `gantry_server::cloud::google`.",
             route.name
@@ -552,6 +607,8 @@ pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError
         retries: route.retries,
         accept_chat: route.accept_chat,
         accept_messages: route.accept_messages,
+        project_id: route.project_id.clone(),
+        chat_as_responses: route.chat_as_responses,
     })
 }
 
@@ -600,6 +657,8 @@ fn build(
             retries: 0,
             accept_chat: false,
             accept_messages: false,
+            project_id: None,
+            chat_as_responses: false,
         });
     }
     let console = config.console;
@@ -608,7 +667,7 @@ fn build(
         (a.policy_sha256.clone(), a.keys_sha256.clone())
     });
     let live: Live = Arc::new(RwLock::new(Arc::new(Snapshot {
-        policy: config.policy,
+        policy: mapped_prices(config.policy, &providers),
         providers,
         aliases: config.aliases,
         policy_sha256,
@@ -1465,7 +1524,7 @@ fn caller_paid(rule: Option<&Rule>, kind: Option<Kind>, key: Option<&str>) -> Re
         ));
     }
     match kind {
-        Some(Kind::Bedrock) => Err(Refusal::new(
+        Some(kind) if kind.aws() => Err(Refusal::new(
             StatusCode::BAD_REQUEST,
             "caller_provider_key_unsupported",
             "Refused: this model is served on Amazon Bedrock, whose requests Gantry signs with AWS keys, so a provider key in x-gantry-provider-key cannot be used for it. Send it without that header.",
@@ -1568,7 +1627,7 @@ async fn check<'a>(
             anthropic_client,
         )));
     }
-    if parts.uri.path().starts_with(PASSTHROUGH) {
+    if is_passthrough(parts.uri.path()) {
         let query_carries_key = parts.uri.query().is_some_and(|q| carries(q.as_bytes()));
         return passthrough(
             state,
@@ -1666,7 +1725,7 @@ async fn check<'a>(
                 regions: rule.limits.regions.as_deref(),
                 session: session_of(&parts.headers, person),
             };
-            let found = match targets(state, version, route, parts.uri.path(), model, &want) {
+            let found = match targets(state, version, parts.uri.path(), model, &want) {
                 Err(refusal) if refusal.code == "region_not_allowed" => {
                     let Some(by) = policy.observing(rule.shadow_until.as_deref()) else {
                         return Err(refusal);
@@ -1674,11 +1733,11 @@ async fn check<'a>(
                     // Observed residency: recorded, then routed as if the rule kept requests nowhere in particular.
                     observed(seen, refusal, by);
                     want.regions = None;
-                    targets(state, version, route, parts.uri.path(), model, &want)
+                    targets(state, version, parts.uri.path(), model, &want)
                 }
                 other => other,
             };
-            let (chain, translate, routing) = found?;
+            let (chain, shape, routing) = found?;
             seen.routing = routing;
             let chosen = chain.first().map_or(0, |c| c.0);
             let alias = version.aliases.iter().find(|a| a.name == *model);
@@ -1688,10 +1747,8 @@ async fn check<'a>(
             let fallback = |target: Option<&String>| {
                 target
                     .filter(|t| !stopped(t))
-                    .and_then(|t| targets(state, version, route, parts.uri.path(), t, &want).ok())
-                    .filter(|(chain, t, _)| {
-                        *t == translate && !chain.iter().any(|(_, m)| stopped(m))
-                    })
+                    .and_then(|t| targets(state, version, parts.uri.path(), t, &want).ok())
+                    .filter(|(chain, t, _)| *t == shape && !chain.iter().any(|(_, m)| stopped(m)))
                     .map(|(chain, _, _)| chain)
                     .unwrap_or_default()
             };
@@ -1716,29 +1773,61 @@ async fn check<'a>(
             check_query(&parts.uri)?;
             // Translated here, before the record is written, so a field that cannot be carried across is a
             // recorded refusal and never a request sent with that field missing.
-            let from_messages = translate && route == Kind::Anthropic;
-            let (bytes, translated) = if translate {
-                seen.translated = true;
-                if from_messages {
-                    // Now a chat request. A Google provider translates it once more as it is sent, and its answer
-                    // comes back as chat with usage, then as messages.
-                    (to_chat_request(&bytes)?, Some(true))
-                } else if version.providers[chosen].kind.google() {
-                    // Checked here, and translated as it is sent: the guardrails read and mask the chat body.
-                    let include_usage = to_gemini(&bytes)?.2;
-                    (bytes, Some(include_usage))
-                } else {
-                    let (bytes, include_usage) = to_messages(&bytes)?;
-                    (bytes, Some(include_usage))
+            let path = parts.uri.path();
+            let from_messages = shape == Shape::Chat && route == Kind::Anthropic;
+            let from_responses = path == RESPONSES && shape != Shape::Sent;
+            seen.translated = shape != Shape::Sent;
+            let mut bytes = bytes;
+            if from_responses {
+                bytes = to_chat_from_responses(&bytes)?;
+            }
+            if from_messages {
+                bytes = to_chat_request(&bytes)?;
+            }
+            let chat_like = from_messages || from_responses || path == CHAT;
+            let mut translated = None;
+            let mut as_responses = None;
+            let sent_route = match shape {
+                Shape::Messages => {
+                    let (messages, include_usage) = to_messages(&bytes)?;
+                    bytes = messages;
+                    translated = Some(include_usage);
+                    Some(MESSAGES)
                 }
-            } else {
-                (bytes, None)
+                Shape::Responses => {
+                    let (request, include_usage) = to_responses_request(&bytes)?;
+                    bytes = request;
+                    as_responses = Some(include_usage);
+                    Some(RESPONSES)
+                }
+                Shape::Native => {
+                    // Checked here, and translated as it is sent: the guardrails read and mask the caller's body.
+                    let first = chain.first().map_or(model.as_str(), |(_, m)| m.as_str());
+                    let route = if chat_like { CHAT } else { path };
+                    native_body(&version.providers[chosen], first, &bytes, route)?;
+                    if chat_like {
+                        translated = Some(translate::include_usage(
+                            &serde_json::from_slice(&bytes).unwrap_or_default(),
+                        ));
+                    }
+                    chat_like.then_some(CHAT)
+                }
+                Shape::Chat => {
+                    if from_messages {
+                        translated = Some(true);
+                    }
+                    Some(CHAT)
+                }
+                Shape::Sent => None,
             };
             parts.extensions.insert(Plan {
                 provider: chosen,
                 model,
                 translated,
                 from_messages,
+                from_responses,
+                as_responses,
+                sent_route,
                 chain,
                 cooldown: alias.map(|a| Duration::from_secs(a.cooldown_seconds)),
                 context,
@@ -2105,15 +2194,56 @@ async fn passthrough<'a>(
     provider_key: Option<String>,
     seen: &mut Seen<'a>,
 ) -> Result<Next, Refusal> {
-    let rest = parts
-        .uri
-        .path()
-        .strip_prefix(PASSTHROUGH)
-        .unwrap_or_default();
-    let (name, native) = match rest.split_once('/') {
-        Some((name, path)) => (name.to_string(), format!("/{path}")),
-        None => (rest.to_string(), "/".to_string()),
+    let path = parts.uri.path().to_string();
+    let (name, native) = match path.strip_prefix(PASSTHROUGH) {
+        Some(rest) => match rest.split_once('/') {
+            Some((name, path)) => (name.to_string(), format!("/{path}")),
+            None => (rest.to_string(), "/".to_string()),
+        },
+        None => {
+            let (cloud, rest, of) = match path.strip_prefix(BEDROCK_PASSTHROUGH) {
+                Some(rest) => ("Amazon Bedrock", rest, Kind::aws as fn(Kind) -> bool),
+                None => (
+                    "Vertex AI",
+                    path.strip_prefix(VERTEX_PASSTHROUGH).unwrap_or_default(),
+                    Kind::google_auth as fn(Kind) -> bool,
+                ),
+            };
+            let named = parts
+                .headers
+                .get(PROVIDER_HEADER)
+                .and_then(|v| v.to_str().ok());
+            let all: Vec<&Upstream> = version
+                .providers
+                .iter()
+                .filter(|p| of(p.kind) && named.is_none_or(|n| n == p.name))
+                .collect();
+            let name = match all.as_slice() {
+                [one] => one.name.clone(),
+                [] => {
+                    return Err(Refusal::new(
+                        StatusCode::NOT_FOUND,
+                        "unknown_provider",
+                        format!(
+                            "Refused: this Gantry has no {cloud} provider{} to pass through to. Ask a Gantry admin to add one, or check the {PROVIDER_HEADER} header.",
+                            named.map(|n| format!(" named \"{n}\"")).unwrap_or_default()
+                        ),
+                    ));
+                }
+                _ => {
+                    return Err(Refusal::new(
+                        StatusCode::BAD_REQUEST,
+                        "provider_needed",
+                        format!(
+                            "Refused: more than one {cloud} provider could take this. Name one in the {PROVIDER_HEADER} header."
+                        ),
+                    ));
+                }
+            };
+            (name, format!("/{rest}"))
+        }
     };
+    parts.headers.remove(PROVIDER_HEADER);
     let Some(index) = version.providers.iter().position(|p| p.name == name) else {
         return Err(Refusal::new(
             StatusCode::NOT_FOUND,
@@ -2175,9 +2305,29 @@ async fn passthrough<'a>(
         ));
     }
     let (bytes, permit) = read_body(Some(&person.name), state, &parts.headers, body).await?;
-    let model = serde_json::from_slice::<serde_json::Value>(&bytes)
-        .ok()
-        .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from));
+    // Bedrock and Vertex AI name the model in the path (/model/<id>/..., .../models/<model>:<method>): it is decided on
+    // by the name the policy knows it by.
+    let in_path = version.providers.get(index).and_then(|p| {
+        let id = if p.kind.aws() {
+            native.strip_prefix("/model/")?.split('/').next()?
+        } else if p.kind.google_auth() {
+            native.split("/models/").nth(1)?.split([':', '/']).next()?
+        } else {
+            return None;
+        };
+        Some(
+            p.upstream_models
+                .iter()
+                .find(|(_, upstream)| upstream.as_str() == id)
+                .map_or(id, |(model, _)| model.as_str())
+                .to_string(),
+        )
+    });
+    let model = in_path.or_else(|| {
+        serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from))
+    });
     if let Some(model) = &model {
         seen.model = Some(model.clone());
         if !matches!(policy.decide(person, model), Decision::Allow(_)) {
@@ -2208,6 +2358,9 @@ async fn passthrough<'a>(
         model: model.clone(),
         translated: None,
         from_messages: false,
+        from_responses: false,
+        as_responses: None,
+        sent_route: None,
         chain: vec![(index, model)],
         cooldown: None,
         context: Vec::new(),
@@ -2222,7 +2375,7 @@ fn unknown_route() -> Refusal {
     Refusal::new(
         StatusCode::NOT_FOUND,
         "unknown_route",
-        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/completions, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models, GET /healthz and GET /readyz. Check the method and the path.",
+        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/completions, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models, the passthrough prefixes /passthrough/<provider>/, /bedrock/ and /vertex/, GET /healthz and GET /readyz. Check the method and the path.",
     )
 }
 
@@ -2237,6 +2390,12 @@ struct Plan {
     translated: Option<bool>,
     /// A messages request (Claude Code) translated to chat completions, whose answer goes back as messages.
     from_messages: bool,
+    /// A Responses request translated to chat completions, whose answer goes back as a response.
+    from_responses: bool,
+    /// A chat request sent to the Responses API: whether the client asked for usage in its stream.
+    as_responses: Option<bool>,
+    /// The route the body now is, when it was translated to another API's: sent there.
+    sent_route: Option<&'static str>,
     /// The deployments to try in order: each a provider by position and the model sent there. One entry for a
     /// model that is not an alias.
     chain: Vec<(usize, String)>,
@@ -2295,11 +2454,10 @@ type Chain = Vec<(usize, String)>;
 fn targets(
     state: &AppState,
     version: &Snapshot,
-    route: Kind,
     path: &str,
     model: &str,
     want: &Want<'_>,
-) -> Result<(Chain, bool, Option<serde_json::Value>), Refusal> {
+) -> Result<(Chain, Shape, Option<serde_json::Value>), Refusal> {
     let Some(alias) = version.aliases.iter().find(|a| a.name == model) else {
         if let Some(regions) = want.regions {
             // A model sent to its provider directly has no region label: residency cannot be shown, so it is refused.
@@ -2312,7 +2470,7 @@ fn targets(
                 ),
             ));
         }
-        let (index, translate) = provider_for(version, route, path, model)?;
+        let (index, translate) = provider_for(version, path, model)?;
         return Ok((vec![(index, model.to_string())], translate, None));
     };
     let mut first_refusal = None;
@@ -2326,7 +2484,7 @@ fn targets(
         else {
             continue;
         };
-        match fits(&version.providers[index], route, path, &deployment.model) {
+        match fits(&version.providers[index], path, &deployment.model) {
             // Every deployment tried for one request takes the same body, translated or not.
             Ok(t) if *translate.get_or_insert(t) == t => eligible.push((at, index)),
             Ok(_) => {}
@@ -2427,7 +2585,7 @@ fn targets(
             Some((index, alias.deployments.get(at)?.model.clone()))
         })
         .collect();
-    Ok((chain, translate.unwrap_or(false), Some(routing)))
+    Ok((chain, translate.unwrap_or(Shape::Sent), Some(routing)))
 }
 
 /// A chat completions request as a messages request, and whether its client asked for usage in the stream.
@@ -2472,38 +2630,139 @@ fn to_chat_request(bytes: &[u8]) -> Result<Bytes, Refusal> {
     Ok(Bytes::from(chat.to_string()))
 }
 
-/// A chat completions request as a Gemini generateContent body, whether it streams, and whether its client asked
-/// for usage in the stream.
-fn to_gemini(bytes: &[u8]) -> Result<(Bytes, bool, bool), Refusal> {
-    let request: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| {
+/// A request body as JSON, or the refusal that says it is not.
+fn json_of(bytes: &[u8], what: &str) -> Result<serde_json::Value, Refusal> {
+    serde_json::from_slice(bytes).map_err(|_| {
         Refusal::new(
             StatusCode::BAD_REQUEST,
             "unreadable_request",
-            "Refused: the request body is not JSON. Send a chat completions request as a JSON object.",
+            format!("Refused: the request body is not JSON. Send {what} as a JSON object."),
         )
-    })?;
-    let (body, stream) = gemini::openai_to_gemini_request(&request).map_err(|err| {
-        Refusal::new(
-            StatusCode::BAD_REQUEST,
-            "untranslatable",
-            format!("Refused: {err}"),
-        )
-    })?;
+    })
+}
+
+fn untranslatable(err: impl std::fmt::Display) -> Refusal {
+    Refusal::new(
+        StatusCode::BAD_REQUEST,
+        "untranslatable",
+        format!("Refused: {err}"),
+    )
+}
+
+/// A Responses request as a chat completions request, for a provider that does not speak Responses.
+fn to_chat_from_responses(bytes: &[u8]) -> Result<Bytes, Refusal> {
+    let request = json_of(bytes, "a Responses request")?;
+    let chat =
+        gantry_core::responses::responses_to_chat_request(&request).map_err(untranslatable)?;
+    Ok(Bytes::from(chat.to_string()))
+}
+
+/// A chat completions request as a Responses request, and whether its client asked for usage in the stream.
+fn to_responses_request(bytes: &[u8]) -> Result<(Bytes, bool), Refusal> {
+    let request = json_of(bytes, "a chat completions request")?;
+    let out =
+        gantry_core::responses::chat_to_responses_request(&request).map_err(untranslatable)?;
     Ok((
-        Bytes::from(body.to_string()),
-        stream,
+        Bytes::from(out.to_string()),
         translate::include_usage(&request),
     ))
 }
 
+/// The project of a Vertex AI provider URL (`.../projects/<project>/locations/...`).
+fn vertex_project(url: &str) -> Option<&str> {
+    url.split("/projects/").nth(1)?.split('/').next()
+}
+
+/// The body a provider of a kind that translates (`Shape::Native`) takes for a request in the caller's format on
+/// `route` (chat, embeddings, rerank), and whether its answer streams. `model` is the caller's name for the model.
+fn native_body(
+    provider: &Upstream,
+    model: &str,
+    bytes: &[u8],
+    route: &str,
+) -> Result<(Bytes, bool), Refusal> {
+    let request = json_of(bytes, "the request")?;
+    let id = provider
+        .upstream_models
+        .get(model)
+        .map_or(model, String::as_str);
+    let project = provider.project_id.as_deref();
+    let body = match (route, provider.kind) {
+        (CHAT, Kind::Gemini | Kind::Vertex) => {
+            gemini::openai_to_gemini_request(&request).map_err(untranslatable)?
+        }
+        (CHAT, Kind::BedrockConverse) => {
+            gantry_core::converse::openai_to_converse_request(&request, id)
+                .map_err(untranslatable)?
+        }
+        (CHAT, Kind::Cohere) => {
+            let stream = request["stream"] == true;
+            (
+                gantry_core::cohere::openai_to_cohere_request(&request).map_err(untranslatable)?,
+                stream,
+            )
+        }
+        (CHAT, Kind::Watsonx) => {
+            gantry_core::cohere::openai_to_watsonx_request(&request, project.unwrap_or_default())
+                .map_err(untranslatable)?
+        }
+        (EMBEDDINGS, kind) => {
+            use gantry_core::embed::Target;
+            let target = match kind {
+                Kind::Gemini => Target::Gemini,
+                Kind::Vertex => Target::Vertex,
+                Kind::Cohere => Target::Cohere,
+                Kind::Watsonx => Target::Watsonx,
+                _ => Target::bedrock(id).unwrap_or(Target::Titan),
+            };
+            (
+                gantry_core::embed::request(target, id, &request, project)
+                    .map_err(untranslatable)?,
+                false,
+            )
+        }
+        (RERANK, Kind::Vertex) => {
+            // Vertex AI's Ranking API: each document a record, ranked by score.
+            let documents = request["documents"].as_array().ok_or_else(|| {
+                untranslatable(
+                    "\"documents\" must be a list of strings for Vertex AI's ranking API.",
+                )
+            })?;
+            let mut records = Vec::new();
+            for (i, doc) in documents.iter().enumerate() {
+                let Some(text) = doc.as_str() else {
+                    return Err(untranslatable(
+                        "A document that is not a string has no equivalent in Vertex AI's ranking API. Send each document as text.",
+                    ));
+                };
+                records.push(serde_json::json!({"id": i.to_string(), "content": text}));
+            }
+            let mut out = serde_json::json!({
+                "model": model,
+                "query": request["query"],
+                "records": records,
+                "ignoreRecordDetailsInResponse": true,
+            });
+            if let Some(n) = request["top_n"].as_u64() {
+                out["topN"] = n.into();
+            }
+            for key in request.as_object().map(|o| o.keys()).into_iter().flatten() {
+                if !matches!(key.as_str(), "model" | "query" | "documents" | "top_n") {
+                    return Err(untranslatable(format!(
+                        "The parameter \"{key}\" has no equivalent in Vertex AI's ranking API. Remove it."
+                    )));
+                }
+            }
+            (out, false)
+        }
+        _ => return Ok((Bytes::copy_from_slice(bytes), false)),
+    };
+    Ok((Bytes::from(body.0.to_string()), body.1))
+}
+
 /// The one provider that serves this model, if it speaks the API of the route the request came on, or takes chat
 /// requests translated. Returns its position and whether the request is to be translated.
-fn provider_for(
-    version: &Snapshot,
-    route: Kind,
-    path: &str,
-    model: &str,
-) -> Result<(usize, bool), Refusal> {
+fn provider_for(version: &Snapshot, path: &str, model: &str) -> Result<(usize, Shape), Refusal> {
     let Some(index) = version.providers.iter().position(|p| p.serves(model)) else {
         // 403, as for a model the policy does not allow. Found by running Claude Code through Gantry: it replaces the
         // message of a 404 with its own, so the caller lost the model name and the decision ID, and it sends a 400 up
@@ -2516,90 +2775,109 @@ fn provider_for(
             ),
         ));
     };
-    fits(&version.providers[index], route, path, model).map(|translate| (index, translate))
+    fits(&version.providers[index], path, model).map(|shape| (index, shape))
 }
 
-/// Whether this provider can take a request on `route` and `path`, and if so whether it is translated.
-fn fits(provider: &Upstream, route: Kind, path: &str, model: &str) -> Result<bool, Refusal> {
-    if provider.kind.api() == route {
-        if matches!(provider.kind, Kind::Bedrock | Kind::VertexAnthropic) && path == COUNT_TOKENS {
-            return Err(Refusal::new(
-                StatusCode::BAD_REQUEST,
-                "wrong_route",
-                format!(
-                    "Refused: model \"{model}\" is served by provider \"{}\" of kind {}, and Gantry does not count tokens there. Send the request to {MESSAGES} without counting first.",
-                    provider.name,
-                    provider.kind.word()
-                ),
-            ));
-        }
-        if openai_only(path) && provider.kind != Kind::OpenAi {
-            return Err(Refusal::new(
-                StatusCode::BAD_REQUEST,
-                "wrong_route",
-                format!(
-                    "Refused: model \"{model}\" is served by provider \"{}\" of kind {}, and Gantry forwards {path} to providers of kind openai only. Send this request to {CHAT} instead.",
-                    provider.name,
-                    provider.kind.word()
-                ),
-            ));
-        }
-        // Gemini and Vertex AI take chat requests translated to their own body.
-        return Ok(provider.kind.google());
-    }
-    if route == Kind::OpenAi && provider.accept_chat && path == CHAT {
-        return Ok(true);
-    }
-    if route == Kind::Anthropic && provider.accept_messages {
-        if path == MESSAGES {
-            return Ok(true);
-        }
-        return Err(Refusal::new(
+/// What a request's body becomes on its way to a provider. Every deployment tried for one request takes the same.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shape {
+    /// Forwarded as sent.
+    Sent,
+    /// Kept in the caller's format (chat, embeddings, rerank) here and translated to the provider's own body as it
+    /// is sent: Gemini, Vertex AI, Bedrock Converse, Cohere, watsonx.
+    Native,
+    /// A chat completions body: a messages request (Claude Code) for a chat provider, or a Responses request for a
+    /// provider that takes chat as sent.
+    Chat,
+    /// Translated to the messages API.
+    Messages,
+    /// A chat request translated to the Responses API, for a model served only through it.
+    Responses,
+}
+
+/// Whether this provider can take a request on `route` and `path`, and if so in what shape.
+fn fits(provider: &Upstream, path: &str, model: &str) -> Result<Shape, Refusal> {
+    let kind = provider.kind;
+    let wrong = |what: String| {
+        Err(Refusal::new(
             StatusCode::BAD_REQUEST,
             "wrong_route",
             format!(
-                "Refused: model \"{model}\" is served by provider \"{}\" of kind {}, which takes messages requests translated to chat completions, and Gantry does not count tokens for it. Send the request to {MESSAGES} without counting first.",
+                "Refused: model \"{model}\" is served by provider \"{}\" of kind {}, {what}",
                 provider.name,
-                provider.kind.word()
+                kind.word()
             ),
-        ));
-    }
-    if openai_only(path) {
-        return Err(Refusal::new(
-            StatusCode::BAD_REQUEST,
-            "wrong_route",
-            format!(
-                "Refused: model \"{model}\" is served by provider \"{}\" of kind {}, and Gantry forwards {path} to providers of kind openai only. Use a model on a provider of kind openai, or send this request to the route that provider speaks ({}).",
-                provider.name,
-                provider.kind.word(),
-                if provider.kind.api() == Kind::Anthropic {
-                    MESSAGES
-                } else {
-                    CHAT
-                }
-            ),
-        ));
-    }
-    let (speaks, other, offer) = match provider.kind.api() {
-        Kind::Anthropic => (
-            "the messages API",
-            MESSAGES,
-            " A Gantry admin can let chat requests reach it, translated, with `accept_chat: true` on the provider.",
-        ),
-        _ => (
-            "the chat completions API",
-            CHAT,
-            " A Gantry admin can let messages requests (Claude Code) reach it, translated, with `accept_messages: true` on the provider.",
-        ),
+        ))
     };
-    Err(Refusal::new(
-        StatusCode::BAD_REQUEST,
-        "wrong_route",
-        format!(
-            "Refused: model \"{model}\" is served by provider \"{}\", which speaks {speaks}. Send this request to {other} instead of {path}.{offer}",
-            provider.name
-        ),
-    ))
+    let chat_as_sent = matches!(kind, Kind::OpenAi | Kind::Azure | Kind::VertexOpenAi);
+    match path {
+        COUNT_TOKENS => match kind {
+            Kind::Anthropic | Kind::Bedrock | Kind::VertexAnthropic => Ok(Shape::Sent),
+            _ if provider.accept_messages => wrong(format!(
+                "which takes messages requests translated to chat completions, and Gantry does not count tokens for it. Send the request to {MESSAGES} without counting first."
+            )),
+            _ => wrong(format!(
+                "which speaks the chat completions API. Send this request to {CHAT} instead of {path}."
+            )),
+        },
+        MESSAGES => match kind.api() {
+            Kind::Anthropic => Ok(Shape::Sent),
+            _ if provider.accept_messages => Ok(Shape::Chat),
+            _ => wrong(format!(
+                "which speaks the chat completions API. Send this request to {CHAT} instead of {path}. A Gantry admin can let messages requests (Claude Code) reach it, translated, with `accept_messages: true` on the provider."
+            )),
+        },
+        CHAT => match kind {
+            _ if chat_as_sent && provider.chat_as_responses => Ok(Shape::Responses),
+            _ if chat_as_sent => Ok(Shape::Sent),
+            _ if kind.translates_chat() => Ok(Shape::Native),
+            _ if provider.accept_chat => Ok(Shape::Messages),
+            _ => wrong(format!(
+                "which speaks the messages API. Send this request to {MESSAGES} instead of {path}. A Gantry admin can let chat requests reach it, translated, with `accept_chat: true` on the provider."
+            )),
+        },
+        RESPONSES => match kind {
+            Kind::OpenAi | Kind::Azure => Ok(Shape::Sent),
+            Kind::VertexOpenAi => Ok(Shape::Chat),
+            _ if kind.translates_chat() => Ok(Shape::Native),
+            _ => Ok(Shape::Messages),
+        },
+        EMBEDDINGS => match kind {
+            Kind::OpenAi | Kind::Azure => Ok(Shape::Sent),
+            Kind::Gemini | Kind::Vertex | Kind::Cohere | Kind::Watsonx => Ok(Shape::Native),
+            Kind::BedrockConverse => {
+                let id = provider
+                    .upstream_models
+                    .get(model)
+                    .map_or(model, String::as_str);
+                match gantry_core::embed::Target::bedrock(id) {
+                    Some(_) => Ok(Shape::Native),
+                    None => wrong(format!(
+                        "and its Bedrock model ID \"{id}\" is not an embeddings model Gantry translates to (Amazon Titan Text Embeddings, Cohere Embed). Use one of those for {path}."
+                    )),
+                }
+            }
+            _ => wrong(format!(
+                "which has no embeddings API. Use a model on a provider that embeds for {path}."
+            )),
+        },
+        RERANK => match kind {
+            Kind::OpenAi | Kind::Cohere => Ok(Shape::Sent),
+            Kind::Vertex => Ok(Shape::Native),
+            _ => wrong(format!(
+                "which has no rerank API Gantry reaches. Use a model on an openai, cohere or vertex provider for {path}."
+            )),
+        },
+        _ if openai_only(path) && kind == Kind::OpenAi => Ok(Shape::Sent),
+        _ => wrong(format!(
+            "and Gantry forwards {path} to providers of kind openai only. Use a model on a provider of kind openai, or send this request to the route that provider speaks ({}).",
+            if kind.api() == Kind::Anthropic {
+                MESSAGES
+            } else {
+                CHAT
+            }
+        )),
+    }
 }
 
 /// The models this caller may use. Each person sees what their rule allows, not everything the provider keys could
@@ -2884,7 +3162,7 @@ async fn decide(
                 form_texts(&parts.headers, bytes).is_ok_and(|t| t.is_empty())
             }
             // A passthrough call with no body (a GET of a batch) has nothing to read.
-            Ok(Next::Forward(_, bytes, _)) if path.starts_with(PASSTHROUGH) => bytes.is_empty(),
+            Ok(Next::Forward(_, bytes, _)) if is_passthrough(&path) => bytes.is_empty(),
             _ => path == TRANSCRIPTIONS,
         };
     outcome = match outcome {
@@ -2995,7 +3273,7 @@ async fn decide(
                 serde_json::to_value(found).unwrap_or_default(),
             );
         } else if not_text && outcome.is_ok() {
-            let why = if path.starts_with(PASSTHROUGH) {
+            let why = if is_passthrough(&path) {
                 "not_run: the request has no body"
             } else {
                 "not_run: the body is audio"
@@ -3962,7 +4240,7 @@ fn text_fields(path: &str, body: &serde_json::Value) -> Result<Vec<String>, Stri
     let mut pointers = Vec::new();
     match path {
         // A provider's own API has no shape Gantry knows: every string in the body is text.
-        _ if path.starts_with(PASSTHROUGH) => strings(body, String::new(), &mut pointers),
+        _ if is_passthrough(path) => strings(body, String::new(), &mut pointers),
         IMAGES => match &body["prompt"] {
             Value::String(_) => pointers.push("/prompt".into()),
             Value::Null => {}
@@ -4174,13 +4452,15 @@ async fn send(
     }
     // With a policy every query parameter has been checked against the route's list, so what is left goes on.
     // A translated request goes to the messages route, which it now is.
-    let route = match plan.as_ref().map(|p| (p.from_messages, p.translated)) {
-        _ if plan.as_ref().is_some_and(|p| p.passthrough.is_some()) => plan
-            .as_ref()
-            .and_then(|p| p.passthrough.clone())
-            .unwrap_or_default(),
-        Some((true, _)) => CHAT.to_string(),
-        Some((false, Some(_))) => MESSAGES.to_string(),
+    let route = match plan.as_ref() {
+        Some(Plan {
+            passthrough: Some(native),
+            ..
+        }) => native.clone(),
+        Some(Plan {
+            sent_route: Some(route),
+            ..
+        }) => (*route).to_string(),
         _ => parts
             .uri
             .path_and_query()
@@ -4242,7 +4522,15 @@ async fn send(
         record_attempts(state, decision, &attempts);
     }
     let response = last.unwrap_or_else(|| Err(unknown_route()))?;
-    let response = native(&version.providers[served], response).await?;
+    let response = native(
+        &version.providers[served],
+        plan.as_ref(),
+        &served_model,
+        parts.uri.path(),
+        &bytes,
+        response,
+    )
+    .await?;
     // Usage is read in the provider's format (Bedrock's already decoded) before any translation, and settled with
     // the provider that answered, a fallback included.
     let response = match admitted {
@@ -4463,28 +4751,77 @@ fn outbound(
     };
     let mut headers = parts.headers.clone();
     let passthrough = plan.is_some_and(|p| p.passthrough.is_some());
+    // What the request asks of the provider, whatever path its own API gives that.
+    let op = [EMBEDDINGS, RERANK, COUNT_TOKENS, RESPONSES]
+        .into_iter()
+        .find(|r| route.split('?').next() == Some(*r))
+        .unwrap_or(CHAT);
+    let version = provider.api_version.as_deref().unwrap_or_default();
+    let encoded = |name: &str| sigv4::uri_encode(name, false);
     let (url, body) = match provider.kind {
-        // As sent, to the provider's own path: `gantry check` allows passthrough only to kinds that need no
-        // signing or translation.
+        // A provider's own API, as sent: signed below for Bedrock, with the Google token for Vertex AI, whose
+        // native paths start at the host (/v1/projects/...).
+        _ if passthrough && provider.kind.google_auth() => {
+            let origin = provider
+                .url
+                .split_once("://")
+                .map(|(scheme, rest)| {
+                    format!("{scheme}://{}", rest.split('/').next().unwrap_or_default())
+                })
+                .unwrap_or_default();
+            (format!("{origin}{route}"), bytes.clone())
+        }
+        // Each path segment encoded as the AWS SDKs send it (a model ID's colon as %3A), then signed below.
+        _ if passthrough && provider.kind.aws() => {
+            let (path, query) = route
+                .split_once('?')
+                .map_or((route, None), |(p, q)| (p, Some(q)));
+            let path: Vec<String> = path
+                .split('/')
+                .map(|seg| sigv4::uri_encode(seg, false))
+                .collect();
+            let query = query.map(|q| format!("?{q}")).unwrap_or_default();
+            (
+                format!("{}{}{query}", provider.url, path.join("/")),
+                bytes.clone(),
+            )
+        }
         _ if passthrough => (
             gantry_core::config::join(&provider.url, route),
             bytes.clone(),
         ),
-        Kind::OpenAi | Kind::Anthropic => (
+        Kind::OpenAi | Kind::Anthropic | Kind::VertexOpenAi => (
             gantry_core::config::join(&provider.url, route),
             bytes.clone(),
         ),
-        Kind::Azure => (
-            format!(
-                "{}/openai/deployments/{}/chat/completions?api-version={}",
-                provider.url,
-                sigv4::uri_encode(mapped()?, false),
-                provider.api_version.as_deref().unwrap_or_default()
-            ),
-            bytes.clone(),
-        ),
+        Kind::Azure => {
+            let deployment = mapped()?;
+            match op {
+                EMBEDDINGS => (
+                    format!(
+                        "{}/openai/deployments/{}/embeddings?api-version={version}",
+                        provider.url,
+                        encoded(deployment)
+                    ),
+                    bytes.clone(),
+                ),
+                // The Responses API names the deployment in the body's model.
+                RESPONSES => (
+                    format!("{}/openai/responses?api-version={version}", provider.url),
+                    alias::with_model(Some("application/json"), bytes, deployment),
+                ),
+                _ => (
+                    format!(
+                        "{}/openai/deployments/{}/chat/completions?api-version={version}",
+                        provider.url,
+                        encoded(deployment)
+                    ),
+                    bytes.clone(),
+                ),
+            }
+        }
         Kind::Gemini | Kind::Vertex => {
-            let (body, stream, _) = to_gemini(bytes)?;
+            let (body, stream) = native_body(provider, model, bytes, op)?;
             let has_path = provider
                 .url
                 .split_once("://")
@@ -4495,14 +4832,38 @@ fn outbound(
             } else {
                 format!("{}/v1beta", provider.url)
             };
-            let method = if stream {
-                "streamGenerateContent?alt=sse"
-            } else {
-                "generateContent"
+            let url = match (op, provider.kind) {
+                (EMBEDDINGS, Kind::Gemini) => {
+                    format!("{base}/models/{}:batchEmbedContents", encoded(model))
+                }
+                (EMBEDDINGS, _) => format!("{base}/models/{}:predict", encoded(model)),
+                (RERANK, _) => {
+                    let project = vertex_project(&provider.url).unwrap_or_default();
+                    // The Ranking API is Discovery Engine's, at its own host; a private or test URL keeps its host.
+                    let host = if provider.url.contains("aiplatform.googleapis.com") {
+                        "https://discoveryengine.googleapis.com".to_string()
+                    } else {
+                        base.split("/v1/").next().unwrap_or_default().to_string()
+                    };
+                    format!(
+                        "{host}/v1/projects/{project}/locations/global/rankingConfigs/default_ranking_config:rank"
+                    )
+                }
+                _ if stream => format!(
+                    "{base}/models/{}:streamGenerateContent?alt=sse",
+                    encoded(model)
+                ),
+                _ => format!("{base}/models/{}:generateContent", encoded(model)),
             };
+            (url, body)
+        }
+        Kind::VertexAnthropic if op == COUNT_TOKENS => {
+            // Vertex AI counts Claude's tokens at one endpoint for every model, named in the body.
+            let mut body = json_of(bytes, "a messages request")?;
+            body["anthropic_version"] = "vertex-2023-10-16".into();
             (
-                format!("{base}/models/{}:{method}", sigv4::uri_encode(model, false)),
-                body,
+                format!("{}/models/count-tokens:rawPredict", provider.url),
+                Bytes::from(body.to_string()),
             )
         }
         Kind::VertexAnthropic => {
@@ -4513,12 +4874,16 @@ fn outbound(
                 "rawPredict"
             };
             (
-                format!(
-                    "{}/models/{}:{method}",
-                    provider.url,
-                    sigv4::uri_encode(model, false)
-                ),
+                format!("{}/models/{}:{method}", provider.url, encoded(model)),
                 body,
+            )
+        }
+        Kind::Bedrock if op == COUNT_TOKENS => {
+            let (body, _) = bedrock_body(bytes, &headers)?;
+            let count = serde_json::json!({"input": {"invokeModel": {"body": eventstream::base64_encode(&body)}}});
+            (
+                format!("{}/model/{}/count-tokens", provider.url, encoded(mapped()?)),
+                Bytes::from(count.to_string()),
             )
         }
         Kind::Bedrock => {
@@ -4529,13 +4894,44 @@ fn outbound(
                 "invoke"
             };
             (
-                format!(
-                    "{}/model/{}/{action}",
-                    provider.url,
-                    sigv4::uri_encode(mapped()?, false)
-                ),
+                format!("{}/model/{}/{action}", provider.url, encoded(mapped()?)),
                 body,
             )
+        }
+        Kind::BedrockConverse => {
+            let (body, stream) = native_body(provider, model, bytes, op)?;
+            let action = match (op, stream) {
+                (EMBEDDINGS, _) => "invoke",
+                (_, true) => "converse-stream",
+                _ => "converse",
+            };
+            (
+                format!("{}/model/{}/{action}", provider.url, encoded(mapped()?)),
+                body,
+            )
+        }
+        Kind::Cohere => match op {
+            RERANK => (format!("{}/rerank", provider.url), bytes.clone()),
+            EMBEDDINGS => (
+                format!("{}/embed", provider.url),
+                native_body(provider, model, bytes, op)?.0,
+            ),
+            _ => (
+                format!("{}/chat", provider.url),
+                native_body(provider, model, bytes, op)?.0,
+            ),
+        },
+        Kind::Watsonx => {
+            let version = Some(version)
+                .filter(|v| !v.is_empty())
+                .unwrap_or("2024-05-31");
+            let (body, stream) = native_body(provider, model, bytes, op)?;
+            let action = match (op, stream) {
+                (EMBEDDINGS, _) => "text/embeddings",
+                (_, true) => "text/chat_stream",
+                _ => "text/chat",
+            };
+            (format!("{}/{action}?version={version}", provider.url), body)
         }
     };
     let Ok(uri) = url.parse::<Uri>() else {
@@ -4578,11 +4974,12 @@ fn outbound(
     if let Some((name, value)) = key {
         headers.insert(name, value);
     }
-    if let Some(token) = &provider.google {
+    // The caller's own key, when a rule allows it, goes in place of Gantry's token too.
+    if let (Some(token), None) = (&provider.google, plan.and_then(|p| p.caller_key.as_ref())) {
         headers.insert(header::AUTHORIZATION, token.get());
     }
-    if provider.kind == Kind::Bedrock {
-        sign_for_bedrock(provider, &uri, &body, &mut headers)?;
+    if provider.kind.aws() {
+        sign_for_bedrock(provider, &parts.method, &uri, &body, &mut headers)?;
     }
     let mut request = axum::http::Request::new(Body::from(body));
     *request.method_mut() = parts.method.clone();
@@ -4657,6 +5054,7 @@ fn vertex_body(bytes: &[u8]) -> Result<(Bytes, bool), Refusal> {
 /// Signs a Bedrock request with AWS Signature Version 4, and sets the headers the signature covers.
 fn sign_for_bedrock(
     provider: &Upstream,
+    method: &Method,
     uri: &Uri,
     body: &[u8],
     headers: &mut HeaderMap,
@@ -4682,14 +5080,33 @@ fn sign_for_bedrock(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
+    // ponytail: a passthrough query is signed with its pairs sorted as the caller encoded them; one encoded other
+    // than SigV4 encodes fails at Bedrock with a signature error naming the canonical request.
+    let mut pairs: Vec<&str> = uri
+        .query()
+        .unwrap_or_default()
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .collect();
+    pairs.sort_unstable();
+    let query: Vec<String> = pairs
+        .iter()
+        .map(|p| {
+            if p.contains('=') {
+                (*p).to_string()
+            } else {
+                format!("{p}=")
+            }
+        })
+        .collect();
     let signed = sigv4::sign(
         &credentials,
         region,
         "bedrock",
         &sigv4::Request {
-            method: "POST",
+            method: method.as_str(),
             path: uri.path(),
-            query: "",
+            query: &query.join("&"),
             headers: &[
                 ("host", host.as_str()),
                 ("content-type", "application/json"),
@@ -4810,9 +5227,21 @@ fn json_body(mut response: Response, body: Vec<u8>) -> Response {
     response
 }
 
-/// Bedrock's event stream and errors as Anthropic's, so every messages answer reads the same from here on.
-async fn native(provider: &Upstream, mut response: Response) -> Result<Response, Refusal> {
-    if provider.kind == Kind::Bedrock {
+/// Bedrock's event streams and errors as server-sent events and Anthropic-shaped errors, and the embeddings, rerank
+/// and token count answers of providers that translate them in the caller's format, so that usage is read from one
+/// shape and everything after this reads the same. A passthrough answer is the provider's own and left as it is.
+async fn native(
+    provider: &Upstream,
+    plan: Option<&Plan>,
+    model: &str,
+    path: &str,
+    request: &[u8],
+    mut response: Response,
+) -> Result<Response, Refusal> {
+    if plan.is_some_and(|p| p.passthrough.is_some()) {
+        return Ok(response);
+    }
+    if provider.kind.aws() {
         if !response.status().is_success() {
             let error_type = response
                 .headers()
@@ -4822,24 +5251,105 @@ async fn native(provider: &Upstream, mut response: Response) -> Result<Response,
                 .to_string();
             let body = whole(std::mem::take(response.body_mut())).await?;
             let error = eventstream::anthropic_error(&error_type, &body);
-            response = json_body(response, error.to_string().into_bytes());
-        } else if is_type(&response, "application/vnd.amazon.eventstream") {
+            return Ok(json_body(response, error.to_string().into_bytes()));
+        }
+        if is_type(&response, "application/vnd.amazon.eventstream") {
+            if provider.kind == Kind::BedrockConverse {
+                let mut sse = eventstream::ConverseToSse::default();
+                return Ok(map_body(
+                    response,
+                    "text/event-stream",
+                    move |input| match input {
+                        Some(bytes) => sse.feed(bytes),
+                        None => sse.finish(),
+                    },
+                ));
+            }
             let mut sse = eventstream::BedrockToSse::default();
-            response = map_body(response, "text/event-stream", move |input| match input {
-                Some(bytes) => sse.feed(bytes),
-                None => sse.finish(),
-            });
+            return Ok(map_body(
+                response,
+                "text/event-stream",
+                move |input| match input {
+                    Some(bytes) => sse.feed(bytes),
+                    None => sse.finish(),
+                },
+            ));
         }
     }
-    Ok(response)
+    if !response.status().is_success() {
+        return Ok(response);
+    }
+    use gantry_core::embed::Target;
+    let target = match (path, provider.kind) {
+        (EMBEDDINGS, Kind::Gemini) => Some(Target::Gemini),
+        (EMBEDDINGS, Kind::Vertex) => Some(Target::Vertex),
+        (EMBEDDINGS, Kind::Cohere) => Some(Target::Cohere),
+        (EMBEDDINGS, Kind::Watsonx) => Some(Target::Watsonx),
+        (EMBEDDINGS, Kind::BedrockConverse) => Target::bedrock(
+            provider
+                .upstream_models
+                .get(model)
+                .map_or(model, String::as_str),
+        ),
+        _ => None,
+    };
+    let reshaped = match (path, provider.kind, target) {
+        (EMBEDDINGS, _, Some(target)) => {
+            // Bedrock counts Cohere's tokens in a header; the Gemini API counts none, so its texts' bytes stand in.
+            let tokens = match target {
+                Target::Gemini => Some(gantry_core::embed::bytes_of(
+                    &serde_json::from_slice(request).unwrap_or_default(),
+                )),
+                _ => response
+                    .headers()
+                    .get("x-amzn-bedrock-input-token-count")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse().ok()),
+            };
+            let body = whole(std::mem::take(response.body_mut())).await?;
+            let answer = serde_json::from_slice(&body).unwrap_or_default();
+            gantry_core::embed::answer(target, model, &answer, tokens).map_err(|err| {
+                Refusal::new(
+                    StatusCode::BAD_GATEWAY,
+                    "untranslatable",
+                    format!("The provider's embeddings answer could not be translated: {err}"),
+                )
+            })?
+        }
+        (RERANK, Kind::Vertex, _) => {
+            let body = whole(std::mem::take(response.body_mut())).await?;
+            let answer: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            let results: Vec<serde_json::Value> = answer["records"]
+                .as_array()
+                .map_or(&[][..], Vec::as_slice)
+                .iter()
+                .filter_map(|r| {
+                    Some(serde_json::json!({
+                        "index": r["id"].as_str()?.parse::<u64>().ok()?,
+                        "relevance_score": r["score"],
+                    }))
+                })
+                .collect();
+            serde_json::json!({"object": "list", "model": model, "results": results})
+        }
+        (COUNT_TOKENS, Kind::Bedrock, _) => {
+            let body = whole(std::mem::take(response.body_mut())).await?;
+            let answer: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            serde_json::json!({"input_tokens": answer["inputTokens"]})
+        }
+        _ => return Ok(response),
+    };
+    Ok(json_body(response, reshaped.to_string().into_bytes()))
 }
 
-/// A messages or Gemini answer (by the `kind` of provider that gave it) as a chat completions one, when the request
-/// was translated. `include_usage` is set then: whether the client asked for usage in its stream.
+/// An answer in the provider's own format (by the `kind` of provider that gave it: messages, Gemini, Converse,
+/// Cohere, watsonx) as a chat completions one, when the request was translated. `include_usage` is set then: whether
+/// the client asked for usage in its stream. `model` is the caller's name for the model, for answers that carry none.
 async fn to_chat(
     kind: Kind,
     include_usage: Option<bool>,
     decision: &str,
+    model: &str,
     mut response: Response,
 ) -> Result<Response, Refusal> {
     // Gemini may send no responseId; a strict chat client refuses "id": null, and the decision ID is unique.
@@ -4850,34 +5360,78 @@ async fn to_chat(
     let created = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    if response.status().is_success() && is_type(&response, "text/event-stream") && kind.google() {
-        let mut stream =
-            gemini::GeminiToOpenAiStream::new(include_usage, created).with_id(fallback_id);
-        return Ok(map_body(response, "text/event-stream", move |input| {
-            match input {
-                Some(bytes) => stream.feed(bytes),
-                None => stream.finish(),
-            }
-            .map_err(|err| err.to_string())
-        }));
-    }
     if response.status().is_success() && is_type(&response, "text/event-stream") {
-        let mut stream = translate::AnthropicToOpenAiStream::new(include_usage, created);
-        return Ok(map_body(response, "text/event-stream", move |input| {
-            match input {
-                Some(bytes) => stream.feed(bytes),
-                None => stream.finish(),
+        type Feed =
+            Box<dyn FnMut(Option<&[u8]>) -> Result<Vec<u8>, translate::TranslateError> + Send>;
+        let mut step: Feed = match kind {
+            _ if kind.google() => {
+                let mut s =
+                    gemini::GeminiToOpenAiStream::new(include_usage, created).with_id(fallback_id);
+                Box::new(move |input| match input {
+                    Some(bytes) => s.feed(bytes),
+                    None => s.finish(),
+                })
             }
-            .map_err(|err| err.to_string())
+            Kind::BedrockConverse => {
+                let mut s = gantry_core::converse::ConverseToOpenAiStream::new(
+                    include_usage,
+                    fallback_id,
+                    model.to_string(),
+                    created,
+                );
+                Box::new(move |input| match input {
+                    Some(bytes) => s.feed(bytes),
+                    None => s.finish(),
+                })
+            }
+            Kind::Cohere => {
+                let mut s = gantry_core::cohere::CohereToOpenAiStream::new(
+                    include_usage,
+                    model.to_string(),
+                    created,
+                );
+                Box::new(move |input| match input {
+                    Some(bytes) => s.feed(bytes),
+                    None => s.finish(),
+                })
+            }
+            Kind::Watsonx => {
+                let mut s = gantry_core::cohere::WatsonxToOpenAiStream::new(include_usage);
+                Box::new(move |input| match input {
+                    Some(bytes) => s.feed(bytes),
+                    None => s.finish(),
+                })
+            }
+            _ => {
+                let mut s = translate::AnthropicToOpenAiStream::new(include_usage, created);
+                Box::new(move |input| match input {
+                    Some(bytes) => s.feed(bytes),
+                    None => s.finish(),
+                })
+            }
+        };
+        return Ok(map_body(response, "text/event-stream", move |input| {
+            step(input).map_err(|err| err.to_string())
         }));
     }
     let body = whole(std::mem::take(response.body_mut())).await?;
     let answer: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
     let out = if response.status().is_success() {
-        let translated = if kind.google() {
-            gemini::gemini_to_openai_response(&answer, created)
-        } else {
-            translate::anthropic_to_openai_response(&answer, created)
+        let translated = match kind {
+            _ if kind.google() => gemini::gemini_to_openai_response(&answer, created),
+            Kind::BedrockConverse => gantry_core::converse::converse_to_openai_response(
+                &answer,
+                &fallback_id,
+                model,
+                created,
+            ),
+            Kind::Cohere => gantry_core::cohere::cohere_to_openai_response(&answer, model, created),
+            Kind::Watsonx => {
+                let mut answer = answer.clone();
+                gantry_core::cohere::watsonx_to_openai(&mut answer, false);
+                Ok(answer)
+            }
+            _ => translate::anthropic_to_openai_response(&answer, created),
         };
         let mut translated = translated.map_err(|err| {
             Refusal::new(
@@ -4891,10 +5445,13 @@ async fn to_chat(
         }
         translated
     } else {
-        // An error in the shape OpenAI's clients read, with the provider's own type and message.
+        // An error in the shape OpenAI's clients read, with the provider's own type and message: Anthropic, Bedrock
+        // and Gemini put it in error.message, Cohere in message, watsonx in errors[0].message.
         let error = &answer["error"];
         let message = error["message"]
             .as_str()
+            .or(answer["message"].as_str())
+            .or(answer["errors"][0]["message"].as_str())
             .map_or_else(|| String::from_utf8_lossy(&body).into_owned(), String::from);
         serde_json::json!({
             "error": {
@@ -4908,8 +5465,70 @@ async fn to_chat(
     Ok(json_body(response, out.to_string().into_bytes()))
 }
 
-/// The answer in the format the caller asked in: as sent, as chat completions (`to_chat`), or, for a messages
-/// request translated to chat, as messages.
+/// A chat completions answer as a Responses one, streamed or whole. An error stays in OpenAI's error shape, which
+/// Responses clients read too.
+async fn to_responses(decision: &str, mut response: Response) -> Result<Response, Refusal> {
+    let id = format!("resp_{decision}");
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if !response.status().is_success() {
+        return Ok(response);
+    }
+    if is_type(&response, "text/event-stream") {
+        let mut stream = gantry_core::responses::ChatToResponsesStream::new(id, created);
+        return Ok(map_body(response, "text/event-stream", move |input| {
+            match input {
+                Some(bytes) => stream.feed(bytes),
+                None => stream.finish(),
+            }
+            .map_err(|err| err.to_string())
+        }));
+    }
+    let body = whole(std::mem::take(response.body_mut())).await?;
+    let chat: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let out =
+        gantry_core::responses::chat_to_responses_response(&chat, &id, created).map_err(|err| {
+            Refusal::new(
+                StatusCode::BAD_GATEWAY,
+                "untranslatable",
+                format!(
+                    "The provider's answer could not be translated to the Responses format: {err}"
+                ),
+            )
+        })?;
+    Ok(json_body(response, out.to_string().into_bytes()))
+}
+
+/// A Responses answer as a chat completions one, for a chat request sent to a model served through Responses.
+async fn from_responses(include_usage: bool, mut response: Response) -> Result<Response, Refusal> {
+    if !response.status().is_success() {
+        return Ok(response);
+    }
+    if is_type(&response, "text/event-stream") {
+        let mut stream = gantry_core::responses::ResponsesToChatStream::new(include_usage);
+        return Ok(map_body(response, "text/event-stream", move |input| {
+            match input {
+                Some(bytes) => stream.feed(bytes),
+                None => stream.finish(),
+            }
+            .map_err(|err| err.to_string())
+        }));
+    }
+    let body = whole(std::mem::take(response.body_mut())).await?;
+    let answer: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let out = gantry_core::responses::responses_to_chat_response(&answer).map_err(|err| {
+        Refusal::new(
+            StatusCode::BAD_GATEWAY,
+            "untranslatable",
+            format!("The provider's answer could not be translated to the chat completions format: {err}"),
+        )
+    })?;
+    Ok(json_body(response, out.to_string().into_bytes()))
+}
+
+/// The answer in the format the caller asked in: as sent, as chat completions (`to_chat`), as messages for a
+/// messages request translated to chat, or as a response for a Responses request translated to chat.
 async fn for_caller(
     kind: Kind,
     provider: &str,
@@ -4917,17 +5536,35 @@ async fn for_caller(
     decision: &str,
     response: Response,
 ) -> Result<Response, Refusal> {
+    let model = plan.map_or("", |p| p.model.as_str());
     match plan {
         Some(plan) if plan.from_messages => {
-            // A Google answer becomes chat first, which the step below reads.
-            let response = if kind.google() {
-                to_chat(kind, Some(true), decision, response).await?
+            // An answer in a provider's own format becomes chat first, which the step below reads.
+            let response = if kind.translates_chat() {
+                to_chat(kind, Some(true), decision, model, response).await?
             } else {
                 response
             };
             to_anthropic(provider, decision, response).await
         }
-        _ => to_chat(kind, plan.and_then(|p| p.translated), decision, response).await,
+        Some(plan) if plan.from_responses => {
+            let response = to_chat(kind, plan.translated, decision, model, response).await?;
+            to_responses(decision, response).await
+        }
+        Some(Plan {
+            as_responses: Some(include_usage),
+            ..
+        }) => from_responses(*include_usage, response).await,
+        _ => {
+            to_chat(
+                kind,
+                plan.and_then(|p| p.translated),
+                decision,
+                model,
+                response,
+            )
+            .await
+        }
     }
 }
 

@@ -541,6 +541,12 @@ struct ProviderFile {
     accept_chat: Option<bool>,
     #[serde(default)]
     accept_messages: Option<bool>,
+    // watsonx.ai: the project its requests are made in.
+    #[serde(default)]
+    project_id: Option<String>,
+    // openai or azure: chat completions requests for its models are sent to the Responses API, translated.
+    #[serde(default)]
+    chat_as_responses: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1254,6 +1260,17 @@ pub enum Kind {
     /// Claude on Google Cloud Vertex AI: the messages body sent to rawPredict or streamRawPredict, with an OAuth
     /// access token as a Bearer token.
     VertexAnthropic,
+    /// Amazon Bedrock's Converse and ConverseStream for every model family Bedrock serves through them (Anthropic,
+    /// Meta, Mistral, Cohere, Amazon Nova, AI21, DeepSeek, Qwen, OpenAI gpt-oss), signed with AWS Signature Version 4.
+    /// Callers use the chat completions route, translated both ways; embeddings go to InvokeModel (Titan, Cohere).
+    BedrockConverse,
+    /// Cohere's own API (v2 chat, embed and rerank), keyed by a Bearer token. Chat is translated both ways.
+    Cohere,
+    /// IBM watsonx.ai (text/chat and text/embeddings), with an IAM token Gantry trades the API key for.
+    Watsonx,
+    /// Model Garden models on Vertex AI behind its OpenAI-compatible endpoint (`.../endpoints/openapi`), with an
+    /// OAuth access token as a Bearer token.
+    VertexOpenAi,
 }
 
 impl Kind {
@@ -1266,6 +1283,10 @@ impl Kind {
             Kind::Gemini => "gemini",
             Kind::Vertex => "vertex",
             Kind::VertexAnthropic => "vertex_anthropic",
+            Kind::BedrockConverse => "bedrock_converse",
+            Kind::Cohere => "cohere",
+            Kind::Watsonx => "watsonx",
+            Kind::VertexOpenAi => "vertex_openai",
         }
     }
 
@@ -1279,6 +1300,10 @@ impl Kind {
             Kind::Gemini,
             Kind::Vertex,
             Kind::VertexAnthropic,
+            Kind::BedrockConverse,
+            Kind::Cohere,
+            Kind::Watsonx,
+            Kind::VertexOpenAi,
         ]
         .into_iter()
         .find(|kind| kind.word() == word)
@@ -1292,9 +1317,37 @@ impl Kind {
     /// The API its callers speak, which decides the routes that reach it: `OpenAi` or `Anthropic`.
     pub fn api(self) -> Kind {
         match self {
-            Kind::OpenAi | Kind::Azure | Kind::Gemini | Kind::Vertex => Kind::OpenAi,
+            Kind::OpenAi
+            | Kind::Azure
+            | Kind::Gemini
+            | Kind::Vertex
+            | Kind::BedrockConverse
+            | Kind::Cohere
+            | Kind::Watsonx
+            | Kind::VertexOpenAi => Kind::OpenAi,
             Kind::Anthropic | Kind::Bedrock | Kind::VertexAnthropic => Kind::Anthropic,
         }
+    }
+
+    /// A chat completions request is translated to the provider's own body as it is sent, and its answer back.
+    pub fn translates_chat(self) -> bool {
+        matches!(
+            self,
+            Kind::Gemini | Kind::Vertex | Kind::BedrockConverse | Kind::Cohere | Kind::Watsonx
+        )
+    }
+
+    /// Signed with AWS Signature Version 4, from the provider's region and model IDs.
+    pub fn aws(self) -> bool {
+        matches!(self, Kind::Bedrock | Kind::BedrockConverse)
+    }
+
+    /// Takes a Google OAuth access token: from key_env, or from Application Default Credentials without one.
+    pub fn google_auth(self) -> bool {
+        matches!(
+            self,
+            Kind::Vertex | Kind::VertexAnthropic | Kind::VertexOpenAi
+        )
     }
 }
 
@@ -1389,6 +1442,10 @@ pub struct Provider {
     pub accept_chat: bool,
     /// Whether messages requests (Claude Code) for its models are translated to the chat completions API.
     pub accept_messages: bool,
+    /// watsonx.ai's project.
+    pub project_id: Option<String>,
+    /// Whether chat completions requests for its models are sent to the Responses API, translated both ways.
+    pub chat_as_responses: bool,
 }
 
 /// Everything `gantry serve` needs from the two files.
@@ -2359,17 +2416,11 @@ fn rule_passthrough(
             line_of_key(text, "passthrough", line, until)
         );
         for entry in &rule.passthrough {
-            match providers.iter().find(|p| p.name == entry.provider) {
-                None => errors.push(format!(
+            if !providers.iter().any(|p| p.name == entry.provider) {
+                errors.push(format!(
                     "{at}: passthrough names no provider named \"{}\". Use the name of one under providers:.",
                     entry.provider
-                )),
-                Some(p) if matches!(p.kind, Kind::Bedrock | Kind::Vertex | Kind::VertexAnthropic) => errors.push(format!(
-                    "{at}: provider \"{}\" is {}, whose requests Gantry must sign or translate, so it cannot be reached as sent. Pass through to an openai, anthropic, azure or gemini provider.",
-                    entry.provider,
-                    p.kind.word()
-                )),
-                Some(_) => {}
+                ));
             }
             if entry.paths.is_empty() {
                 errors.push(format!(
@@ -2932,10 +2983,15 @@ fn provider_lines(text: &str) -> Vec<usize> {
 fn map_key(kind: Kind) -> Option<&'static str> {
     match kind {
         Kind::Azure => Some("deployments"),
-        Kind::Bedrock => Some("model_ids"),
-        Kind::OpenAi | Kind::Anthropic | Kind::Gemini | Kind::Vertex | Kind::VertexAnthropic => {
-            None
-        }
+        Kind::Bedrock | Kind::BedrockConverse => Some("model_ids"),
+        Kind::OpenAi
+        | Kind::Anthropic
+        | Kind::Gemini
+        | Kind::Vertex
+        | Kind::VertexAnthropic
+        | Kind::Cohere
+        | Kind::Watsonx
+        | Kind::VertexOpenAi => None,
     }
 }
 
@@ -2956,17 +3012,35 @@ fn provider_options(
     if entry.deployments.is_some() && kind != Some(Kind::Azure) {
         only("deployments", "azure", errors);
     }
-    if entry.api_version.is_some() && kind != Some(Kind::Azure) {
-        only("api_version", "azure", errors);
+    let aws = kind.is_some_and(Kind::aws);
+    if entry.api_version.is_some() && !matches!(kind, Some(Kind::Azure | Kind::Watsonx)) {
+        only("api_version", "azure or watsonx", errors);
     }
-    if entry.model_ids.is_some() && kind != Some(Kind::Bedrock) {
-        only("model_ids", "bedrock", errors);
+    if entry.model_ids.is_some() && !aws {
+        only("model_ids", "bedrock or bedrock_converse", errors);
     }
-    if entry.region.is_some() && kind != Some(Kind::Bedrock) {
-        only("region", "bedrock", errors);
+    if entry.region.is_some() && !aws {
+        only("region", "bedrock or bedrock_converse", errors);
     }
-    if entry.role_arn.is_some() && kind != Some(Kind::Bedrock) {
-        only("role_arn", "bedrock", errors);
+    if entry.role_arn.is_some() && !aws {
+        only("role_arn", "bedrock or bedrock_converse", errors);
+    }
+    if entry.project_id.is_some() && kind != Some(Kind::Watsonx) {
+        only("project_id", "watsonx", errors);
+    }
+    if entry.chat_as_responses.is_some() && !matches!(kind, Some(Kind::OpenAi | Kind::Azure)) {
+        only("chat_as_responses", "openai or azure", errors);
+    }
+    if let Some(project) = &entry.project_id
+        && (project.is_empty()
+            || !project
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+    {
+        errors.push(format!(
+            "{}: project_id is the ID of a watsonx.ai project, letters, digits and dashes, as shown under the project's Manage tab.",
+            at("project_id")
+        ));
     }
     if let Some(role) = &entry.role_arn
         && !(role.starts_with("arn:aws") && role.contains(":role/"))
@@ -2984,7 +3058,7 @@ fn provider_options(
     }
     if entry.accept_messages.is_some() && kind.is_some_and(|k| k.api() != Kind::OpenAi) {
         errors.push(format!(
-            "{}: accept_messages translates messages requests (Claude Code) to the chat completions API, so it is for a provider of kind openai, azure, gemini or vertex. Remove the line.",
+            "{}: accept_messages translates messages requests (Claude Code) to the chat completions API, so it is for a provider of a kind that takes chat completions (openai, azure, gemini, vertex, vertex_openai, bedrock_converse, cohere or watsonx). Remove the line.",
             at("accept_messages")
         ));
     }
@@ -2995,6 +3069,29 @@ fn provider_options(
         ));
     }
     match kind {
+        Some(Kind::Watsonx) => {
+            if entry.project_id.is_none() {
+                errors.push(format!(
+                    "{}: a watsonx provider needs project_id, the watsonx.ai project its requests are made in, for example `project_id: 0f6c1c3e-5d6a-4b4e-9b1e-2a7d1c9f0a11`.",
+                    at("kind")
+                ));
+            }
+            if let Some(version) = entry.api_version.as_deref()
+                && !(version.len() == 10
+                    && version.bytes().enumerate().all(|(i, b)| {
+                        if i == 4 || i == 7 {
+                            b == b'-'
+                        } else {
+                            b.is_ascii_digit()
+                        }
+                    }))
+            {
+                errors.push(format!(
+                    "{}: api_version is the date of the watsonx.ai API version, as IBM writes it: 2024-05-31.",
+                    at("api_version")
+                ));
+            }
+        }
         Some(Kind::Azure) => {
             match entry.api_version.as_deref() {
                 None => errors.push(format!(
@@ -3027,7 +3124,7 @@ fn provider_options(
                 ));
             }
         }
-        Some(Kind::Bedrock) => {
+        Some(Kind::Bedrock | Kind::BedrockConverse) => {
             if entry.region.is_none() {
                 errors.push(format!(
                     "{}: a bedrock provider needs region, the AWS region it runs in, for example `region: us-east-1`.",
@@ -3098,10 +3195,10 @@ fn check_fallback(
     let Some(other_kind) = other.kind.as_deref().and_then(Kind::from_word) else {
         return;
     };
-    // A chat request for gemini or vertex is translated before it is recorded, so its fallback takes the same body.
-    if other_kind.api() != kind.api() || other_kind.google() != kind.google() {
+    // A chat request for a kind that translates chat is translated as it is sent, so its fallback must translate too.
+    if other_kind.api() != kind.api() || other_kind.translates_chat() != kind.translates_chat() {
         errors.push(format!(
-            "{}: fallback \"{name}\" is of kind {}, which speaks another API than this provider ({}). A fallback must take the same requests: anthropic and bedrock take messages, openai and azure take chat completions, gemini and vertex take Google's generateContent, anthropic, bedrock and vertex_anthropic take messages.",
+            "{}: fallback \"{name}\" is of kind {}, which speaks another API than this provider ({}). A fallback must take the same requests: openai, azure and vertex_openai take chat completions as sent; gemini, vertex, bedrock_converse, cohere and watsonx take chat completions translated; anthropic, bedrock and vertex_anthropic take messages.",
             at("fallback"),
             other_kind.word(),
             kind.word()
@@ -3147,6 +3244,16 @@ fn presets(file: &Path, text: &str, entries: &mut [ProviderFile], errors: &mut V
             ));
             continue;
         };
+        if preset.needs_url() && entry.url.is_none() {
+            let line = lines.get(i).copied().unwrap_or(0);
+            let until = lines.get(i + 1).copied().unwrap_or(usize::MAX);
+            errors.push(format!(
+                "{}:{}: preset \"{id}\" holds a placeholder in its URL ({}). Write your own url next to the preset, with your workspace or account in place of the capitals.",
+                file.display(),
+                line_of_key(text, "preset", line, until),
+                preset.url
+            ));
+        }
         entry.url.get_or_insert_with(|| preset.url.to_string());
         entry
             .kind
@@ -3187,7 +3294,7 @@ fn providers(
                 let kind = Kind::from_word(word);
                 if kind.is_none() {
                     errors.push(format!(
-                        "{}: kind is \"{word}\". It must be openai (the chat completions API), anthropic (the messages API), azure (Azure OpenAI), bedrock (Amazon Bedrock, Anthropic models), gemini (Google's Gemini API) vertex (Gemini on Google Cloud Vertex AI) or vertex_anthropic (Claude on Google Cloud Vertex AI).",
+                        "{}: kind is \"{word}\". It must be openai (the chat completions API), anthropic (the messages API), azure (Azure OpenAI), bedrock (Amazon Bedrock InvokeModel, Anthropic models), bedrock_converse (Amazon Bedrock Converse, every model family), gemini (Google's Gemini API), vertex (Gemini on Google Cloud Vertex AI), vertex_anthropic (Claude on Google Cloud Vertex AI), vertex_openai (Model Garden on Vertex AI), cohere (Cohere's own API) or watsonx (IBM watsonx.ai).",
                         at("kind")
                     ));
                 }
@@ -3195,7 +3302,7 @@ fn providers(
             }
             None => None,
         };
-        let bedrock = kind == Some(Kind::Bedrock);
+        let bedrock = kind.is_some_and(Kind::aws);
         let region = entry.region.as_deref();
         if let Some(region) = region {
             let shaped = !region.is_empty()
@@ -3236,6 +3343,12 @@ fn providers(
                 if kind == Some(Kind::VertexAnthropic) && !url.ends_with("/publishers/anthropic") {
                     errors.push(format!(
                         "{}: a vertex_anthropic provider's url ends in /publishers/anthropic, for example https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic.",
+                        at("url")
+                    ));
+                }
+                if kind == Some(Kind::VertexOpenAi) && !url.ends_with("/endpoints/openapi") {
+                    errors.push(format!(
+                        "{}: a vertex_openai provider's url ends in /endpoints/openapi, for example https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/endpoints/openapi.",
                         at("url")
                     ));
                 }
@@ -3316,7 +3429,9 @@ fn providers(
             (None, false) if entry.allow_private && kind == Some(Kind::OpenAi) => {}
             (None, false) if entry.key_file.is_some() || entry.credential.is_some() => {}
             // Vertex AI signs in with Google's Application Default Credentials.
-            (None, false) if matches!(kind, Some(Kind::Vertex | Kind::VertexAnthropic)) => {}
+            (None, false) if kind.is_some_and(Kind::google_auth) => {}
+            // Azure OpenAI signs in with Microsoft Entra ID without a key.
+            (None, false) if kind == Some(Kind::Azure) => {}
             (None, false) => errors.push(format!(
                 "{}:{line}: provider \"{}\" has no key_env. Add the name of the environment variable that holds its key, for example `key_env: OPENAI_API_KEY`, or `key_file:` with the path of a file that holds it, or `credential:` with the name of a provider credential kept in the store. A model server of kind openai on this machine with `allow_private: true` may leave it out.",
                 file.display(),
@@ -3431,6 +3546,8 @@ fn providers(
                 retries: entry.retries.unwrap_or(0),
                 accept_chat: entry.accept_chat.unwrap_or(false),
                 accept_messages: entry.accept_messages.unwrap_or(false),
+                project_id: entry.project_id.clone(),
+                chat_as_responses: entry.chat_as_responses.unwrap_or(false),
             });
         }
     }
@@ -3970,6 +4087,7 @@ pub fn same_connection(a: &Provider, b: &Provider) -> bool {
         && a.region == b.region
         && a.role_arn == b.role_arn
         && a.allow_private == b.allow_private
+        && a.project_id == b.project_id
 }
 
 /// What `gantry check` warns about in a policy that loads: observe mode, and models no provider serves.
@@ -4117,12 +4235,18 @@ rules:
         );
         assert!(!rule.reaches("openai", "/v1/organization/admin_api_keys"));
         assert!(!rule.reaches("anthropic", "/v1/batches"));
+        // Bedrock and Vertex AI are signed on the way out, so a rule may pass through to them too.
+        let signed = check(
+            "pt-bedrock",
+            &with("      - { provider: bedrock, paths: [/model/x/converse] }\n"),
+            None,
+        )?;
+        assert!(signed.is_ok(), "{signed:?}");
         for (entry, expected) in [
             (
                 "      - { provider: nope, paths: [/v1/x] }\n",
                 "no provider named \"nope\"",
             ),
-            ("      - { provider: bedrock, paths: [/x] }\n", "bedrock"),
             (
                 "      - { provider: openai, paths: [v1/x] }\n",
                 "starts with /",
@@ -5769,7 +5893,7 @@ rules:
             (
                 "fallback: vertex",
                 "fallback: ollama",
-                "take Google's generateContent",
+                "take chat completions translated",
             ),
             ("kind: gemini", "kind: palm", "gemini (Google's Gemini API)"),
         ] {

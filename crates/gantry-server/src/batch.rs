@@ -65,7 +65,7 @@ const POLL: Duration = Duration::from_secs(60);
 const MAX_RESULTS: usize = 256 * MIB;
 
 /// Where a caller names the provider a file goes to, when more than one could take it.
-const PROVIDER_HEADER: &str = "x-gantry-provider";
+pub(crate) const PROVIDER_HEADER: &str = "x-gantry-provider";
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 

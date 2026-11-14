@@ -72,8 +72,8 @@ pub const SAFE_TO_DROP: &[(&str, &str)] = &[
         "Lets the model decide how much to reason, which is what OpenAI models do when not told.",
     ),
     (
-        "thinking and redacted_thinking blocks",
-        "The model's private reasoning. A model of the other provider cannot read it (Anthropic drops blocks a model cannot read), and in an answer its tokens stay counted in usage.",
+        "thinking and redacted_thinking blocks (request), redacted_thinking and thinking signatures (answer)",
+        "The model's private reasoning. A model of the other provider cannot read it (Anthropic drops blocks a model cannot read), and in an answer its tokens stay counted in usage. Readable thinking in an answer is carried as reasoning_content.",
     ),
     (
         "tool_result is_error (Anthropic request)",
@@ -143,6 +143,28 @@ pub(crate) fn insert(map: &mut Map<String, Value>, key: &str, value: Value) {
     map.insert(key.to_owned(), value);
 }
 
+/// The thinking budget, in tokens, that OpenAI's `reasoning_effort` stands for on providers that take a budget
+/// (Anthropic's `thinking.budget_tokens`, Gemini 2.5's `thinkingBudget`, Claude on Bedrock). Anthropic's least is
+/// 1024. The mapping is documented on the providers overview page.
+pub fn thinking_budget(effort: &str) -> Option<u64> {
+    match effort {
+        "minimal" | "low" => Some(1024),
+        "medium" => Some(4096),
+        "high" => Some(16384),
+        _ => None,
+    }
+}
+
+/// The `reasoning_effort` a thinking budget stands for: the reverse of [`thinking_budget`], each budget to the
+/// nearest level at or above it.
+pub fn effort_for_budget(budget: u64) -> &'static str {
+    match budget {
+        0..=1024 => "low",
+        1025..=4096 => "medium",
+        _ => "high",
+    }
+}
+
 /// Whether the client asked for a final usage chunk in an OpenAI stream.
 pub fn include_usage(openai_request: &Value) -> bool {
     openai_request["stream_options"]["include_usage"] == true
@@ -160,6 +182,7 @@ pub fn openai_to_anthropic_request(request: &Value) -> Result<Value> {
     let mut tool_choice: Option<Value> = None;
     let mut parallel = true;
     let mut output_config = Map::new();
+    let mut thinking: Option<u64> = None;
     for (key, value) in fields {
         if value.is_null() {
             continue;
@@ -248,9 +271,14 @@ pub fn openai_to_anthropic_request(request: &Value) -> Result<Value> {
                     }
                 }
             }
+            // low, medium and high become a thinking budget (thinking_budget); the levels above high exist only as
+            // Anthropic's effort, with adaptive thinking.
             "reasoning_effort" => match value.as_str() {
-                Some("low" | "medium" | "high" | "xhigh" | "max") => {
+                Some("none") => {}
+                Some(level @ ("low" | "medium" | "high")) => thinking = thinking_budget(level),
+                Some("xhigh" | "max") => {
                     insert(&mut output_config, "effort", value.clone());
+                    insert(&mut out, "thinking", json!({"type": "adaptive"}));
                 }
                 _ => return untranslatable(&describe(key, value), TO_ANTHROPIC),
             },
@@ -265,11 +293,43 @@ pub fn openai_to_anthropic_request(request: &Value) -> Result<Value> {
         insert(&mut out, "system", Value::Array(system));
     }
     insert(&mut out, "messages", Value::Array(messages));
-    insert(
-        &mut out,
-        "max_tokens",
-        max_tokens.cloned().unwrap_or(json!(DEFAULT_MAX_TOKENS)),
-    );
+    let mut max_tokens = max_tokens.cloned().unwrap_or(json!(DEFAULT_MAX_TOKENS));
+    if let Some(budget) = thinking {
+        // Claude reasons only at its default sampling, and its budget is part of max_tokens.
+        if out
+            .get("temperature")
+            .is_some_and(|t| t.as_f64() != Some(1.0))
+        {
+            return fail("\"temperature\" with \"reasoning_effort\": Claude takes no temperature while it reasons. Remove temperature, or remove reasoning_effort.".into());
+        }
+        if out
+            .get("top_p")
+            .is_some_and(|p| p.as_f64().is_some_and(|p| p < 0.95))
+        {
+            return fail("\"top_p\" below 0.95 with \"reasoning_effort\": Claude takes top_p from 0.95 to 1 while it reasons. Raise top_p, or remove it.".into());
+        }
+        match (
+            fields
+                .get("max_tokens")
+                .or(fields.get("max_completion_tokens"))
+                .and_then(Value::as_u64),
+            max_tokens.as_u64(),
+        ) {
+            (Some(max), _) if max <= budget => {
+                return fail(format!(
+                    "\"reasoning_effort\" gives Claude a reasoning budget of {budget} tokens, which must be less than the max_tokens of {max}. Raise max_tokens above {budget}."
+                ));
+            }
+            (None, _) => max_tokens = json!(budget + DEFAULT_MAX_TOKENS),
+            _ => {}
+        }
+        insert(
+            &mut out,
+            "thinking",
+            json!({"type": "enabled", "budget_tokens": budget}),
+        );
+    }
+    insert(&mut out, "max_tokens", max_tokens);
     if !parallel {
         let choice = tool_choice.get_or_insert_with(|| json!({"type": "auto"}));
         if let Some(choice) = choice.as_object_mut().filter(|c| c["type"] != "none") {
@@ -576,19 +636,34 @@ pub fn anthropic_to_openai_request(request: &Value) -> Result<Value> {
                 parallel = value["disable_parallel_tool_use"] != true;
                 tool_choice = Some(anthropic_tool_choice(value)?);
             }
-            "thinking" => {
-                // Adaptive: SAFE_TO_DROP.
-                if value["type"] != "adaptive" {
+            "thinking" => match value["type"].as_str() {
+                // Adaptive: SAFE_TO_DROP. Disabled asks for nothing.
+                Some("adaptive" | "disabled") => {}
+                // A budget becomes the reasoning_effort it stands for (effort_for_budget).
+                Some("enabled") => {
+                    let Some(budget) = value["budget_tokens"].as_u64() else {
+                        return fail("\"thinking.budget_tokens\" must be a whole number.".into());
+                    };
+                    if !out.contains_key("reasoning_effort") {
+                        insert(
+                            &mut out,
+                            "reasoning_effort",
+                            json!(effort_for_budget(budget)),
+                        );
+                    }
+                }
+                _ => {
                     return untranslatable(
                         &format!("Thinking of type {}", value["type"]),
                         TO_OPENAI,
                     );
                 }
-            }
+            },
             "output_config" => {
                 for (field, setting) in object(value, "\"output_config\"")? {
                     match field.as_str() {
                         _ if setting.is_null() => {}
+                        // Effort is the more precise of the two, so it wins over a thinking budget.
                         "effort" => insert(&mut out, "reasoning_effort", setting.clone()),
                         "format" if setting["type"] == "json_schema" => insert(
                             &mut out,
@@ -860,6 +935,7 @@ fn openai_finish_reason(stop_reason: &Value) -> Result<Value> {
 pub fn anthropic_to_openai_response(message: &Value, created: u64) -> Result<Value> {
     object(message, "The provider's answer")?;
     let mut text: Option<String> = None;
+    let mut reasoning = String::new();
     let mut calls = Vec::new();
     for block in message["content"].as_array().map_or(&[][..], Vec::as_slice) {
         match block["type"].as_str() {
@@ -867,13 +943,16 @@ pub fn anthropic_to_openai_response(message: &Value, created: u64) -> Result<Val
             Some("text") => text
                 .get_or_insert_default()
                 .push_str(block["text"].as_str().unwrap_or_default()),
+            // Readable reasoning goes on as reasoning_content, as DeepSeek and vLLM send it; its signature and
+            // redacted reasoning are SAFE_TO_DROP.
+            Some("thinking") => reasoning.push_str(block["thinking"].as_str().unwrap_or_default()),
             Some("tool_use") => calls.push(json!({
                 "id": block["id"],
                 "type": "function",
                 "function": {"name": block["name"], "arguments": block["input"].to_string()},
             })),
             // SAFE_TO_DROP.
-            Some("thinking" | "redacted_thinking") => {}
+            Some("redacted_thinking") => {}
             other => {
                 return untranslatable(
                     &format!("A {} block in the answer", other.unwrap_or("untyped")),
@@ -885,6 +964,9 @@ pub fn anthropic_to_openai_response(message: &Value, created: u64) -> Result<Val
     let mut reply = json!({"role": "assistant", "content": text});
     if let (false, Some(fields)) = (calls.is_empty(), reply.as_object_mut()) {
         insert(fields, "tool_calls", Value::Array(calls));
+    }
+    if let (false, Some(fields)) = (reasoning.is_empty(), reply.as_object_mut()) {
+        insert(fields, "reasoning_content", json!(reasoning));
     }
     let mut usage = Usage::default();
     usage.merge_anthropic(&message["usage"]);
@@ -1334,8 +1416,13 @@ impl AnthropicToOpenAiStream {
                             self.chunk(out, json!({"tool_calls": [call]}), Value::Null);
                         }
                     }
+                    "thinking_delta" => {
+                        if let Some(text) = delta["thinking"].as_str().filter(|t| !t.is_empty()) {
+                            self.chunk(out, json!({"reasoning_content": text}), Value::Null);
+                        }
+                    }
                     // SAFE_TO_DROP.
-                    "thinking_delta" | "signature_delta" | "citations_delta" => {}
+                    "signature_delta" | "citations_delta" => {}
                     other => return untranslatable(&format!("A {other} in the answer"), TO_OPENAI),
                 }
             }
@@ -1432,7 +1519,7 @@ mod tests {
                       {"type": "function", "function": {"name": "time"}}],
             "tool_choice": "required", "parallel_tool_calls": false,
             "response_format": {"type": "json_schema", "json_schema": {"name": "w", "schema": {"type": "object"}, "strict": true}},
-            "reasoning_effort": "low", "frequency_penalty": 0, "max_tokens": null,
+            "reasoning_effort": "xhigh", "frequency_penalty": 0, "max_tokens": null,
         });
         let expected = json!({
             "model": "claude-sonnet-5-5",
@@ -1463,7 +1550,8 @@ mod tests {
                 {"name": "time", "input_schema": {"type": "object", "properties": {}}},
             ],
             "tool_choice": {"type": "any", "disable_parallel_tool_use": true},
-            "output_config": {"format": {"type": "json_schema", "schema": {"type": "object"}}, "effort": "low"},
+            "output_config": {"format": {"type": "json_schema", "schema": {"type": "object"}}, "effort": "xhigh"},
+            "thinking": {"type": "adaptive"},
         });
         assert_eq!(openai_to_anthropic_request(&request)?, expected);
         assert!(include_usage(&request));
@@ -1656,10 +1744,7 @@ mod tests {
         };
         for (extra, named) in [
             (json!({"top_k": 5}), "\"top_k\" set to 5"),
-            (
-                json!({"thinking": {"type": "enabled", "budget_tokens": 2000}}),
-                "\"enabled\"",
-            ),
+            (json!({"thinking": {"type": "sometimes"}}), "\"sometimes\""),
             (
                 json!({"tools": [{"type": "web_search_20260209", "name": "web_search"}]}),
                 "web_search_20260209",
@@ -2140,7 +2225,49 @@ mod tests {
         assert!(chat.get("context_management").is_none() && chat.get("thinking").is_none());
         let mut thinking = request;
         thinking["thinking"] = json!({"type": "enabled", "budget_tokens": 2000});
-        assert!(err_text(anthropic_to_openai_request(&thinking)).contains("Thinking"));
+        assert_eq!(
+            anthropic_to_openai_request(&thinking)?["reasoning_effort"],
+            "medium"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reasoning_effort_becomes_a_thinking_budget_and_thinking_comes_back_as_reasoning()
+    -> TestResult {
+        let ask = |extra: Value| {
+            let mut request =
+                json!({"model": "c", "messages": [{"role": "user", "content": "hi"}]});
+            if let (Some(r), Some(e)) = (request.as_object_mut(), extra.as_object()) {
+                r.extend(e.clone());
+            }
+            openai_to_anthropic_request(&request)
+        };
+        for (level, budget) in [("low", 1024), ("medium", 4096), ("high", 16384)] {
+            let out = ask(json!({"reasoning_effort": level}))?;
+            assert_eq!(
+                out["thinking"],
+                json!({"type": "enabled", "budget_tokens": budget})
+            );
+            assert_eq!(out["max_tokens"], budget + DEFAULT_MAX_TOKENS);
+        }
+        assert!(
+            ask(json!({"reasoning_effort": "none"}))?
+                .get("thinking")
+                .is_none()
+        );
+        let small = err_text(ask(json!({"reasoning_effort": "high", "max_tokens": 1000})));
+        assert!(small.contains("Raise max_tokens"), "{small}");
+        let warm = err_text(ask(json!({"reasoning_effort": "low", "temperature": 0.3})));
+        assert!(warm.contains("temperature"), "{warm}");
+        let answer = json!({"id": "m", "model": "c", "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1},
+            "content": [{"type": "thinking", "thinking": "Let me see.", "signature": "s"}, {"type": "text", "text": "Yes."}]});
+        let chat = anthropic_to_openai_response(&answer, 1)?;
+        assert_eq!(
+            chat["choices"][0]["message"]["reasoning_content"],
+            "Let me see."
+        );
+        assert_eq!(chat["choices"][0]["message"]["content"], "Yes.");
         Ok(())
     }
 

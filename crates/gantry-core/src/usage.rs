@@ -58,6 +58,14 @@ impl Usage {
         if answer["object"] == "response" {
             return Some(Self::from_responses(usage));
         }
+        // Bedrock Converse.
+        if usage.get("inputTokens").is_some() {
+            return Some(crate::converse::usage(usage));
+        }
+        // Cohere v2: what it bills, else what it counted.
+        if let Some(cohere) = Self::from_cohere(usage) {
+            return Some(cohere);
+        }
         if usage.get("prompt_tokens").is_some() || usage.get("completion_tokens").is_some() {
             return Some(Self::from_openai(usage));
         }
@@ -95,6 +103,18 @@ impl Usage {
             cache_write,
             cache_write_1h: 0,
         }
+    }
+
+    /// Reads a Cohere v2 `usage` object: the billed units, else the tokens counted. None for another format.
+    pub fn from_cohere(usage: &Value) -> Option<Self> {
+        let units = [&usage["billed_units"], &usage["tokens"]]
+            .into_iter()
+            .find(|u| u["input_tokens"].is_number() || u["output_tokens"].is_number())?;
+        Some(Self {
+            input: units["input_tokens"].as_u64().unwrap_or_default(),
+            output: units["output_tokens"].as_u64().unwrap_or_default(),
+            ..Self::default()
+        })
     }
 
     /// Reads a Gemini `usageMetadata` object.
@@ -268,7 +288,18 @@ impl UsageScanner {
             self.done |= stopped || !event["promptFeedback"]["blockReason"].is_null();
             return;
         }
+        // Bedrock ConverseStream, as eventstream::ConverseToSse writes it: the metadata event comes last.
+        if event["metadata"]["usage"].is_object() {
+            self.usage = Some(crate::converse::usage(&event["metadata"]["usage"]));
+            self.done = true;
+            return;
+        }
         match event["type"].as_str() {
+            // Cohere v2: message-end carries the counts of the whole answer.
+            Some("message-end") => {
+                self.usage = Usage::from_cohere(&event["delta"]["usage"]);
+                self.done = true;
+            }
             Some(kind) if kind.starts_with("response.") => {
                 // Only the events that end a response (completed, incomplete, failed) carry its usage.
                 if event["response"]["usage"].is_object() {

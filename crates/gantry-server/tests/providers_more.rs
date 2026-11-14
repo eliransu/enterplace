@@ -445,16 +445,14 @@ async fn gemini_refusals_are_recorded_and_never_sent() -> TestResult {
     let (status, _, text) = post(&gw, "/v1/chat/completions", secret).await?;
     assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
     assert!(text.contains("guardrail_blocked"), "{text}");
-    // Gemini takes chat requests only: the Responses and embeddings routes are for openai providers.
-    for path in ["/v1/responses", "/v1/embeddings"] {
-        let body = r#"{"model":"gemini-2.5-flash","input":"Hi"}"#;
-        let (status, _, text) = post(&gw, path, body).await?;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
-        assert!(
-            text.contains("wrong_route") && text.contains("kind openai"),
-            "{text}"
-        );
-    }
+    // Gemini takes chat, Responses and embeddings translated; moderations are for openai providers only.
+    let body = r#"{"model":"gemini-2.5-flash","input":"Hi"}"#;
+    let (status, _, text) = post(&gw, "/v1/moderations", body).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(
+        text.contains("wrong_route") && text.contains("kind openai"),
+        "{text}"
+    );
     assert_eq!(gemini.hits.load(Ordering::SeqCst), 0);
     let codes: Vec<Value> = all_records(&gw)?
         .into_iter()
@@ -462,12 +460,7 @@ async fn gemini_refusals_are_recorded_and_never_sent() -> TestResult {
         .collect();
     assert_eq!(
         codes,
-        [
-            "untranslatable",
-            "guardrail_blocked",
-            "wrong_route",
-            "wrong_route"
-        ]
+        ["untranslatable", "guardrail_blocked", "wrong_route"]
     );
     Ok(())
 }

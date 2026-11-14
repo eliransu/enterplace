@@ -26,10 +26,43 @@ impl Preset {
             Kind::Anthropic => "x-api-key",
             Kind::Gemini => "x-goog-api-key",
             Kind::Azure => "api-key",
-            Kind::OpenAi | Kind::Vertex | Kind::VertexAnthropic | Kind::Bedrock => {
-                "Authorization: Bearer"
-            }
+            Kind::OpenAi
+            | Kind::Vertex
+            | Kind::VertexAnthropic
+            | Kind::VertexOpenAi
+            | Kind::Bedrock
+            | Kind::BedrockConverse
+            | Kind::Cohere
+            | Kind::Watsonx => "Authorization: Bearer",
         }
+    }
+
+    /// A URL with a placeholder host label in capitals (WORKSPACE, ACCOUNT): the provider must write its own url.
+    pub fn needs_url(&self) -> bool {
+        self.url
+            .split_once("://")
+            .and_then(|(_, rest)| rest.split('/').next())
+            .is_some_and(|host| {
+                host.split('.')
+                    .any(|label| !label.is_empty() && label.bytes().all(|b| b.is_ascii_uppercase()))
+            })
+    }
+}
+
+const fn native(
+    id: &'static str,
+    name: &'static str,
+    kind: Kind,
+    url: &'static str,
+    docs: &'static str,
+) -> Preset {
+    Preset {
+        id,
+        name,
+        kind,
+        url,
+        local: false,
+        docs,
     }
 }
 
@@ -183,6 +216,13 @@ pub const PRESETS: &[Preset] = &[
         "https://api.cohere.ai/compatibility/v1",
         "https://docs.cohere.com/docs/compatibility-api",
     ),
+    native(
+        "cohere-native",
+        "Cohere (v2 API: chat, embed, rerank)",
+        Kind::Cohere,
+        "https://api.cohere.com/v2",
+        "https://docs.cohere.com/reference/chat",
+    ),
     hosted(
         "cometapi",
         "CometAPI",
@@ -196,10 +236,22 @@ pub const PRESETS: &[Preset] = &[
         "https://docs.cortecs.ai/serverless-inference/api/chat-completions",
     ),
     hosted(
+        "databricks",
+        "Databricks Model Serving (write your workspace URL)",
+        "https://WORKSPACE.cloud.databricks.com/serving-endpoints",
+        "https://docs.databricks.com/aws/en/machine-learning/model-serving/score-foundation-models",
+    ),
+    hosted(
         "deepinfra",
         "DeepInfra",
         "https://api.deepinfra.com/v1/openai",
         "https://docs.deepinfra.com/chat/overview",
+    ),
+    hosted(
+        "deepseek",
+        "DeepSeek",
+        "https://api.deepseek.com/v1",
+        "https://api-docs.deepseek.com/",
     ),
     hosted(
         "digitalocean",
@@ -654,6 +706,12 @@ pub const PRESETS: &[Preset] = &[
         "https://docs.siliconflow.cn/cn/api-reference/chat-completions/chat-completions",
     ),
     hosted(
+        "snowflake",
+        "Snowflake Cortex REST API (write your account URL)",
+        "https://ACCOUNT.snowflakecomputing.com/api/v2/cortex/v1",
+        "https://docs.snowflake.com/en/user-guide/snowflake-cortex/open_ai_sdk",
+    ),
+    hosted(
         "spark",
         "iFlytek Spark",
         "https://spark-api-open.xf-yun.com/v1",
@@ -748,6 +806,13 @@ pub const PRESETS: &[Preset] = &[
         "Weights & Biases Inference",
         "https://api.inference.wandb.ai/v1",
         "https://docs.coreweave.com/inference/api-reference/chat-completions",
+    ),
+    native(
+        "watsonx",
+        "IBM watsonx.ai (us-south; write your region's URL for another)",
+        Kind::Watsonx,
+        "https://us-south.ml.cloud.ibm.com/ml/v1",
+        "https://cloud.ibm.com/apidocs/watsonx-ai#text-chat",
     ),
     hosted(
         "xai",

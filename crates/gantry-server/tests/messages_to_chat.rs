@@ -330,7 +330,7 @@ async fn untranslatable_fields_wrong_routes_and_errors_are_named() -> TestResult
         ],
     )?;
     let mut thinking = message("gpt-4o", false);
-    thinking["thinking"] = json!({"type": "enabled", "budget_tokens": 2048});
+    thinking["thinking"] = json!({"type": "sometimes"});
     let (status, _, text) = claude_code(&gw, "/v1/messages", &thinking).await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
@@ -437,14 +437,29 @@ async fn claude_on_vertex_gets_raw_predict_with_the_vertex_body() -> TestResult 
         serde_json::from_slice::<Value>(&streamed.2)?["stream"],
         true
     );
+    // Vertex AI counts Claude's tokens at its count-tokens endpoint, with the model in the body.
     let (status, _, text) = claude_code(
         &gw,
         "/v1/messages/count_tokens",
         &message("claude-sonnet-4-6", false),
     )
     .await?;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(text.contains("vertex_anthropic"), "{text}");
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let counted = seen
+        .lock()
+        .map_err(|_| "poisoned")?
+        .get(2)
+        .cloned()
+        .ok_or("third")?;
+    assert!(
+        counted.0.ends_with("/models/count-tokens:rawPredict"),
+        "{}",
+        counted.0
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&counted.2)?["model"],
+        "claude-sonnet-4-6"
+    );
     Ok(())
 }
 

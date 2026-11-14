@@ -258,6 +258,71 @@ impl BedrockToSse {
     }
 }
 
+/// Turns Bedrock's ConverseStream event stream into server-sent events, one `data: {"<event type>": payload}` line
+/// per event, as the bytes arrive. An exception becomes `data: {"error": {...}}` in OpenAI's error shape.
+#[derive(Debug, Default)]
+pub struct ConverseToSse {
+    decoder: Decoder,
+}
+
+impl ConverseToSse {
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        let mut out = Vec::new();
+        for message in self.decoder.feed(bytes)? {
+            let event = match (
+                message.header(":message-type"),
+                message.header(":event-type"),
+            ) {
+                (Some("event"), Some(name)) => {
+                    let payload: Value = serde_json::from_slice(&message.payload)
+                        .map_err(|_| "the provider sent an event that is not JSON.".to_string())?;
+                    json!({ name: payload })
+                }
+                (Some("event"), None) => continue,
+                (Some("exception"), _) => {
+                    let error = anthropic_error(
+                        message.header(":exception-type").unwrap_or_default(),
+                        &message.payload,
+                    );
+                    json!({"error": {"message": error["error"]["message"], "type": error["error"]["type"], "code": null}})
+                }
+                _ => {
+                    let error = anthropic_error(
+                        message.header(":error-code").unwrap_or_default(),
+                        message
+                            .header(":error-message")
+                            .unwrap_or_default()
+                            .as_bytes(),
+                    );
+                    json!({"error": {"message": error["error"]["message"], "type": error["error"]["type"], "code": null}})
+                }
+            };
+            out.extend_from_slice(format!("data: {event}\n\n").as_bytes());
+        }
+        Ok(out)
+    }
+
+    pub fn finish(&mut self) -> Result<Vec<u8>, String> {
+        if self.decoder.is_clean() {
+            Ok(Vec::new())
+        } else {
+            Err("the provider's event stream ended in the middle of a message.".into())
+        }
+    }
+}
+
+/// One ConverseStream event of type `name`, for tests and mock providers.
+pub fn converse_event(name: &str, payload: &Value) -> Vec<u8> {
+    encode(
+        &[
+            (":message-type", "event"),
+            (":event-type", name),
+            (":content-type", "application/json"),
+        ],
+        payload.to_string().as_bytes(),
+    )
+}
+
 /// Encodes one message, for tests and mock providers.
 pub fn encode(headers: &[(&str, &str)], payload: &[u8]) -> Vec<u8> {
     let mut head = Vec::new();
@@ -294,7 +359,8 @@ pub fn chunk(event: &Value) -> Vec<u8> {
     )
 }
 
-fn base64_encode(bytes: &[u8]) -> String {
+/// Standard base64 with padding, as Bedrock reads a blob in JSON.
+pub fn base64_encode(bytes: &[u8]) -> String {
     const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for group in bytes.chunks(3) {

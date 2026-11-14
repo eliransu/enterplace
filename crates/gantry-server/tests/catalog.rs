@@ -73,6 +73,10 @@ fn dir(id: &str) -> std::io::Result<PathBuf> {
 
 /// One governed request through the preset. Returns what went wrong, if anything.
 async fn smoke(preset: &Preset, port: u16, seen: &Seen) -> Result<(), Error> {
+    // watsonx.ai trades its key for an IAM token first; providers_cloud.rs runs it with a mock IAM endpoint.
+    if preset.kind == Kind::Watsonx {
+        return Ok(());
+    }
     let path = path_of(preset.url);
     let dir = dir(preset.id)?;
     let policy = dir.join("gantry.policy.yaml");
@@ -118,6 +122,11 @@ rules:
             "/v1/chat/completions",
             r#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#,
             format!("{path}/models/m:generateContent"),
+        ),
+        Kind::Cohere => (
+            "/v1/chat/completions",
+            r#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#,
+            format!("{path}/chat"),
         ),
         _ => (
             "/v1/chat/completions",
