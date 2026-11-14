@@ -401,12 +401,30 @@ fn is_mine(lock: &Path, instance: &str) -> bool {
         .is_ok_and(|text| text.starts_with(&format!("holder {instance}\n")))
 }
 
+/// The lock's text written whole beside it, for a rename or link into place: a Gantry elsewhere reading the lock
+/// while it is written in place can read it cut short, and then names a wrong holder.
+fn staged(lock: &Path, text: &str) -> io::Result<PathBuf> {
+    let mut name = lock.as_os_str().to_owned();
+    name.push(format!(".{}.tmp", crate::id::random_hex(4)));
+    let staged = PathBuf::from(name);
+    std::fs::write(&staged, text)?;
+    Ok(staged)
+}
+
+/// Creates the lock, whole, unless it exists: a hard link fails on an existing name, as create_new does.
 fn create_lock(lock: &Path, text: &str) -> io::Result<()> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(lock)?
-        .write_all(text.as_bytes())
+    let staged = staged(lock, text)?;
+    let linked = std::fs::hard_link(&staged, lock);
+    let _ = std::fs::remove_file(&staged);
+    linked
+}
+
+/// Replaces the lock, whole.
+fn write_lock(lock: &Path, text: &str) -> io::Result<()> {
+    let staged = staged(lock, text)?;
+    std::fs::rename(&staged, lock).inspect_err(|_| {
+        let _ = std::fs::remove_file(&staged);
+    })
 }
 
 /// Rewrites the lock every beat, and stops once it names another Gantry.
@@ -423,7 +441,7 @@ fn keep_lock(
         n += 1;
         let text = lock_text(me, instance, n);
         let wrote = match std::fs::read_to_string(lock) {
-            Ok(_) if is_mine(lock, instance) => std::fs::write(lock, text),
+            Ok(_) if is_mine(lock, instance) => write_lock(lock, &text),
             // Removed by hand while this log holds it: nobody else holds it either.
             Err(err) if err.kind() == io::ErrorKind::NotFound => create_lock(lock, &text),
             Ok(_) => {
@@ -2370,7 +2388,7 @@ mod tests {
                 let mut n = 0;
                 while !stop.load(Ordering::Relaxed) {
                     n += 1;
-                    let _ = std::fs::write(&lock, lock_text(&remote, "abc", n));
+                    let _ = write_lock(&lock, &lock_text(&remote, "abc", n));
                     std::thread::sleep(TEST_BEAT / 4);
                 }
             }

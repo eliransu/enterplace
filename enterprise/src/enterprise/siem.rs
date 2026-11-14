@@ -725,11 +725,12 @@ impl Exporter {
             let cursor = {
                 let client = self.db.client().await?;
                 // A new destination starts with the records written after it was added; backfill sends older ones.
+                // One stamped in the very millisecond it was added was written before (the record of adding it).
                 client
                     .execute(
                         "INSERT INTO enterprise_export_cursors (destination, replica, n, hash) \
                          SELECT $1, $2, coalesce(max(n), 0), '' FROM enterprise_audit \
-                         WHERE replica = $2 AND time < CAST($3::text AS timestamptz) ON CONFLICT DO NOTHING",
+                         WHERE replica = $2 AND time <= CAST($3::text AS timestamptz) ON CONFLICT DO NOTHING",
                         &[&dest.id, &self.replica, &created],
                     )
                     .await
@@ -1152,7 +1153,7 @@ async fn destinations_section(export: &Export, edit: bool) -> Result<String, Str
              coalesce(to_char(d.last_success_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS \"UTC\"'), 'never'), \
              coalesce(d.last_error, ''), coalesce(to_char(d.last_error_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS \"UTC\"'), ''), \
              (SELECT count(*) FROM enterprise_audit a LEFT JOIN enterprise_export_cursors c ON c.destination = d.id AND c.replica = a.replica \
-              WHERE a.n > coalesce(c.n, 0) AND a.time >= d.created_at), d.options \
+              WHERE a.n > coalesce(c.n, 0) AND a.time > d.created_at), d.options \
              FROM enterprise_export_destinations d ORDER BY d.id",
             &[],
         )
@@ -1676,11 +1677,14 @@ async fn change(
                 json!({ "kind": kind.word(), "url": url, "text": text, "text_teams": text_teams }),
             )
             .await?;
+            // Added as of now on this process's clock, the one records are stamped with: Postgres's now() runs on
+            // another machine's clock, and a few milliseconds behind would ship the record above as a new one.
+            let created = gantry_core::audit::timestamp();
             let client = ex.db.client().await?;
             let row = client
                 .query_one(
-                    "INSERT INTO enterprise_export_destinations (kind, url, secret, options, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-                    &[&kind.word(), &url, &sealed, &Value::Object(options).to_string(), &admin.name],
+                    "INSERT INTO enterprise_export_destinations (kind, url, secret, options, created_by, created_at) VALUES ($1, $2, $3, $4, $5, CAST($6::text AS timestamptz)) RETURNING id",
+                    &[&kind.word(), &url, &sealed, &Value::Object(options).to_string(), &admin.name, &created],
                 )
                 .await
                 .map_err(db_error)?;
