@@ -869,3 +869,105 @@ async fn google_tokens_are_renewed_before_they_expire() -> TestResult {
     );
     Ok(())
 }
+
+/// A forward proxy that takes HTTP CONNECT, as a corporate egress proxy does. It records each request head, and
+/// sends a host under `.test` (a name only it knows) to 127.0.0.1, so a call that reaches the mock went through it.
+async fn connect_proxy() -> Result<(SocketAddr, Arc<Mutex<Vec<String>>>), std::io::Error> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        while let Ok((mut client, _)) = listener.accept().await {
+            let log = log.clone();
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if client.read_exact(&mut byte).await.is_err() {
+                        return;
+                    }
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8_lossy(&head).to_string();
+                if let Ok(mut log) = log.lock() {
+                    log.push(head.clone());
+                }
+                let Some((host, port)) = head
+                    .lines()
+                    .next()
+                    .and_then(|l| l.strip_prefix("CONNECT "))
+                    .and_then(|l| l.split(' ').next())
+                    .and_then(|t| t.rsplit_once(':'))
+                else {
+                    return;
+                };
+                let host = if host.ends_with(".test") {
+                    "127.0.0.1"
+                } else {
+                    host
+                };
+                let Ok(mut upstream) =
+                    tokio::net::TcpStream::connect((host, port.parse().unwrap_or(0))).await
+                else {
+                    return;
+                };
+                if client.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.is_ok() {
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                }
+            });
+        }
+    });
+    Ok((addr, seen))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sts_is_reached_through_the_provider_s_proxy() -> TestResult {
+    let expires = later(3600);
+    let answer = sts_answer("AssumeRoleWithWebIdentity", "ASIAPROXY", &expires);
+    let (addr, sts) = mock(Box::new(move |_, _| (StatusCode::OK, answer.clone()))).await?;
+    let (proxy, through) = connect_proxy().await?;
+    let dir = temp_dir("proxied")?;
+    let token_file = dir.join("token");
+    std::fs::write(&token_file, "eyJ.projected.token\n")?;
+    let vars = env(&[
+        (
+            "AWS_WEB_IDENTITY_TOKEN_FILE",
+            token_file.display().to_string(),
+        ),
+        (
+            "AWS_ROLE_ARN",
+            "arn:aws:iam::123456789012:role/gantry".into(),
+        ),
+        // A name only the proxy resolves: STS answers only through it.
+        (
+            "AWS_ENDPOINT_URL_STS",
+            format!("http://sts.test:{}", addr.port()),
+        ),
+        ("AWS_EC2_METADATA_DISABLED", "true".into()),
+    ]);
+    let url = format!("http://gw:s3cret@{proxy}");
+    let live = tokio::task::spawn_blocking(move || {
+        cloud::aws_via(
+            "bedrock",
+            "us-east-1",
+            None,
+            &|name| vars.get(name).cloned(),
+            Some(&url),
+        )
+    })
+    .await??;
+    assert_eq!(live.get().access_key_id, "ASIAPROXY");
+    assert_eq!(seen(&sts).len(), 1);
+    let heads = through.lock().map_err(|_| "poisoned")?.clone();
+    let head = heads.first().ok_or("nothing went through the proxy")?;
+    assert!(
+        head.starts_with(&format!("CONNECT sts.test:{} ", addr.port())),
+        "{head}"
+    );
+    // gw:s3cret, as Basic credentials.
+    assert!(head.contains("Basic Z3c6czNjcmV0"), "{head}");
+    let _ = std::fs::remove_dir_all(dir);
+    Ok(())
+}

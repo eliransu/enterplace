@@ -38,11 +38,14 @@ use std::sync::{Arc, RwLock, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
-use axum::http::{HeaderValue, Method, Request, Uri};
+use axum::http::{HeaderValue, Method, Request, StatusCode, Uri};
 use gantry_core::sigv4;
 use http_body_util::{BodyExt, Full};
 use hyper_rustls::HttpsConnector;
-use hyper_util::client::legacy::{Client, connect::HttpConnector};
+use hyper_util::client::legacy::{
+    Client,
+    connect::{HttpConnector, proxy::Tunnel},
+};
 use hyper_util::rt::TokioExecutor;
 use serde_json::Value;
 
@@ -58,7 +61,38 @@ const FORM: &str = "application/x-www-form-urlencoded";
 const GOOGLE_TOKEN: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
-type Http = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
+/// The client credential calls go out on: directly, or through the provider's proxy (`proxy_env`) for every endpoint
+/// but the platform's own metadata services, which only answer on the machine's link-local network.
+struct Http {
+    direct: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
+    proxied: Option<Client<HttpsConnector<Tunnel<HttpConnector>>, Full<Bytes>>>,
+}
+
+impl Http {
+    async fn send(&self, request: Request<Full<Bytes>>) -> Result<(StatusCode, Bytes), String> {
+        let local = request.uri().host().is_some_and(|host| {
+            host.starts_with("169.254.")
+                || host == "metadata.google.internal"
+                || host == "localhost"
+                || host.starts_with("127.")
+                || host == "[::1]"
+                || host == "[fd00:ec2::254]"
+        });
+        let response = match &self.proxied {
+            Some(proxied) if !local => proxied.request(request).await,
+            _ => self.direct.request(request).await,
+        }
+        .map_err(|err| err.to_string())?;
+        let status = response.status();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|err| format!("the answer broke off: {err}"))?
+            .to_bytes();
+        Ok((status, bytes))
+    }
+}
 
 /// Looks up an environment variable. `governed` passes the process environment; tests pass a map.
 pub type Env<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -123,6 +157,18 @@ pub fn aws(
     role_arn: Option<&str>,
     env: Env<'_>,
 ) -> Result<Live<sigv4::Credentials>, String> {
+    aws_via(provider, region, role_arn, env, None)
+}
+
+/// [`aws`], with STS reached through the HTTP proxy at `proxy` (the provider's `proxy_env`). The container and
+/// instance metadata endpoints are always reached directly.
+pub fn aws_via(
+    provider: &str,
+    region: &str,
+    role_arn: Option<&str>,
+    env: Env<'_>,
+    proxy: Option<&str>,
+) -> Result<Live<sigv4::Credentials>, String> {
     let var = |name: &str| {
         env(name)
             .map(|v| v.trim().to_string())
@@ -181,7 +227,7 @@ pub fn aws(
             region: sts_region.clone(),
         })
         .collect();
-    start(provider, chain).map_err(|tried| {
+    start(provider, chain, proxied(provider, proxy)?).map_err(|tried| {
         format!(
             "provider \"{provider}\" is on Amazon Bedrock, and Gantry found no AWS credentials. It tried, in order: {tried}. Run Gantry with a role (IRSA or Pod Identity on EKS, a task role on ECS, an instance profile on EC2), or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, and start again."
         )
@@ -191,6 +237,16 @@ pub fn aws(
 /// The OAuth access token for a Vertex AI provider, as the `Authorization` header it is sent in: the first source
 /// of Application Default Credentials that answers, renewed in the background. Blocks until that first answer.
 pub fn google(provider: &str, env: Env<'_>) -> Result<Live<HeaderValue>, String> {
+    google_via(provider, env, None)
+}
+
+/// [`google`], with Google's token endpoint reached through the HTTP proxy at `proxy`. The metadata server is
+/// always reached directly.
+pub fn google_via(
+    provider: &str,
+    env: Env<'_>,
+    proxy: Option<&str>,
+) -> Result<Live<HeaderValue>, String> {
     let var = |name: &str| {
         env(name)
             .map(|v| v.trim().to_string())
@@ -216,7 +272,7 @@ pub fn google(provider: &str, env: Env<'_>) -> Result<Live<HeaderValue>, String>
     chain.push(Google::Metadata {
         host: var("GCE_METADATA_HOST").unwrap_or_else(|| "169.254.169.254".into()),
     });
-    start(provider, chain).map_err(|tried| {
+    start(provider, chain, proxied(provider, proxy)?).map_err(|tried| {
         format!(
             "provider \"{provider}\" is on Vertex AI, and Gantry found no Google credentials. It tried, in order: {tried}. Run Gantry with a service account (attached to the VM or Cloud Run service, or through GKE Workload Identity), set GOOGLE_APPLICATION_CREDENTIALS to a service account key file, or set key_env to a variable holding an access token, and start again."
         )
@@ -230,6 +286,16 @@ const AZURE_RESOURCE: &str = "https://cognitiveservices.azure.com";
 /// The Microsoft Entra ID token for an Azure OpenAI provider that has no key, as the `Authorization` header: the
 /// first source of the Azure Identity default chain that answers, renewed in the background.
 pub fn entra(provider: &str, env: Env<'_>) -> Result<Live<HeaderValue>, String> {
+    entra_via(provider, env, None)
+}
+
+/// [`entra`], with Microsoft Entra ID reached through the HTTP proxy at `proxy`. The managed identity endpoints are
+/// always reached directly.
+pub fn entra_via(
+    provider: &str,
+    env: Env<'_>,
+    proxy: Option<&str>,
+) -> Result<Live<HeaderValue>, String> {
     let var = |name: &str| {
         env(name)
             .map(|v| v.trim().to_string())
@@ -277,7 +343,7 @@ pub fn entra(provider: &str, env: Env<'_>) -> Result<Live<HeaderValue>, String> 
             .to_string(),
         client,
     });
-    start(provider, chain).map_err(|tried| {
+    start(provider, chain, proxied(provider, proxy)?).map_err(|tried| {
         format!(
             "provider \"{provider}\" is on Azure OpenAI with no key, so Gantry signs in with Microsoft Entra ID, and it found no credentials. It tried, in order: {tried}. Run Gantry with a managed identity or AKS workload identity that holds the Cognitive Services OpenAI User role, set AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET, or give the provider key_env with its API key, and start again."
         )
@@ -286,6 +352,16 @@ pub fn entra(provider: &str, env: Env<'_>) -> Result<Live<HeaderValue>, String> 
 
 /// The IBM Cloud IAM token for a watsonx.ai provider, traded for its API key and renewed in the background.
 pub fn ibm(provider: &str, api_key: &str, env: Env<'_>) -> Result<Live<HeaderValue>, String> {
+    ibm_via(provider, api_key, env, None)
+}
+
+/// [`ibm`], with IBM Cloud IAM reached through the HTTP proxy at `proxy`.
+pub fn ibm_via(
+    provider: &str,
+    api_key: &str,
+    env: Env<'_>,
+    proxy: Option<&str>,
+) -> Result<Live<HeaderValue>, String> {
     let url = env("IBM_CLOUD_IAM_URL")
         .map(|v| v.trim().trim_end_matches('/').to_string())
         .filter(|v| !v.is_empty())
@@ -296,12 +372,20 @@ pub fn ibm(provider: &str, api_key: &str, env: Env<'_>) -> Result<Live<HeaderVal
             url: format!("{url}/identity/token"),
             key: api_key.to_string(),
         }],
+        proxied(provider, proxy)?,
     )
     .map_err(|tried| {
         format!(
             "provider \"{provider}\" is on watsonx.ai, and IBM Cloud IAM did not trade its API key for a token: {tried}. Check that key_env holds an IBM Cloud API key with access to the project, and start again."
         )
     })
+}
+
+/// The provider's proxy, checked as its requests' proxy is.
+fn proxied(provider: &str, proxy: Option<&str>) -> Result<Option<crate::Proxy>, String> {
+    proxy
+        .map(|url| crate::proxy_of(provider, url).map_err(|err| err.to_string()))
+        .transpose()
 }
 
 /// A bearer token from an OAuth token answer: `access_token`, with `expires_in` in seconds, a number or a string.
@@ -469,7 +553,11 @@ impl Source for Ibm {
 /// Finds the first source that answers, on a thread with a runtime of its own so that it works from any caller,
 /// and keeps renewing from that source on the same thread until the credentials are no longer used.
 /// ponytail: one thread per cloud provider in the policy; share one when policies list many such providers.
-fn start<S>(provider: &str, chain: Vec<S>) -> Result<Live<S::Out>, String>
+fn start<S>(
+    provider: &str,
+    chain: Vec<S>,
+    proxy: Option<crate::Proxy>,
+) -> Result<Live<S::Out>, String>
 where
     S: Source + Send + 'static,
     S::Out: Clone + Send + Sync + 'static,
@@ -483,7 +571,7 @@ where
                 .enable_all()
                 .build()
             {
-                Ok(runtime) => runtime.block_on(keep(name, chain, tell)),
+                Ok(runtime) => runtime.block_on(keep(name, chain, tell, client(proxy.as_ref()))),
                 Err(err) => {
                     let _ = tell.send(Err(format!("no runtime could be started ({err})")));
                 }
@@ -498,10 +586,10 @@ async fn keep<S: Source>(
     provider: String,
     chain: Vec<S>,
     tell: mpsc::Sender<Result<Live<S::Out>, String>>,
+    http: Http,
 ) where
     S::Out: Clone,
 {
-    let http = client();
     let mut failures = Vec::new();
     let mut chosen = None;
     for source in chain {
@@ -574,16 +662,31 @@ fn renew_in(expires: SystemTime) -> Duration {
         .max(Duration::from_secs(1))
 }
 
-fn client() -> Http {
+fn client(proxy: Option<&crate::Proxy>) -> Http {
     let mut connector = HttpConnector::new();
     connector.set_connect_timeout(Some(CONNECT));
     connector.enforce_http(false);
+    let proxied = proxy.map(|proxy| {
+        let mut tunnel = Tunnel::new(proxy.uri.clone(), connector.clone());
+        if let Some(auth) = &proxy.auth {
+            tunnel = tunnel.with_auth(auth.clone());
+        }
+        let tunnel = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_webpki_roots()
+            .https_or_http()
+            .enable_http1()
+            .wrap_connector(tunnel);
+        Client::builder(TokioExecutor::new()).build(tunnel)
+    });
     let connector = hyper_rustls::HttpsConnectorBuilder::new()
         .with_webpki_roots()
         .https_or_http()
         .enable_http1()
         .wrap_connector(connector);
-    Client::builder(TokioExecutor::new()).build(connector)
+    Http {
+        direct: Client::builder(TokioExecutor::new()).build(connector),
+        proxied,
+    }
 }
 
 /// One call. A non-2xx answer is an error that carries the status and the start of the body, which from these
@@ -603,17 +706,10 @@ async fn call(
         .body(Full::new(Bytes::from(body)))
         .map_err(|err| format!("{url} cannot be called ({err})"))?;
     let answer = tokio::time::timeout(CALL, async {
-        let response = http
-            .request(request)
+        let (status, bytes) = http
+            .send(request)
             .await
             .map_err(|err| format!("{url} could not be reached: {err}"))?;
-        let status = response.status();
-        let bytes = response
-            .into_body()
-            .collect()
-            .await
-            .map_err(|err| format!("{url} broke off its answer: {err}"))?
-            .to_bytes();
         Ok::<_, String>((status, String::from_utf8_lossy(&bytes).into_owned()))
     })
     .await

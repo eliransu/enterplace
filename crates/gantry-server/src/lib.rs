@@ -670,15 +670,15 @@ struct Upstream {
 
 /// A provider's HTTP proxy: where requests are tunnelled through (CONNECT), and its Basic credentials.
 #[derive(Clone, Debug)]
-struct Proxy {
-    uri: axum::http::Uri,
-    auth: Option<HeaderValue>,
+pub(crate) struct Proxy {
+    pub(crate) uri: axum::http::Uri,
+    pub(crate) auth: Option<HeaderValue>,
     /// Names its pooled clients: the URL as given, credentials included, so two proxies never share one.
     id: String,
 }
 
 /// A proxy URL checked: http(s), a host, no path; user and password, if any, become a Basic header.
-fn proxy_of(provider: &str, url: &str) -> Result<Proxy, ConfigError> {
+pub(crate) fn proxy_of(provider: &str, url: &str) -> Result<Proxy, ConfigError> {
     let bad = || {
         ConfigError(format!(
             "the proxy of provider \"{provider}\" is not a URL of the form http://[user:password@]host:port. Check the variable its proxy_env names."
@@ -6270,6 +6270,63 @@ impl AppState {
             .or_insert_with(|| client_with(connect))
             .clone()
     }
+}
+
+/// A connection to `host:port` through `proxy` with HTTP CONNECT, as provider requests take it, for what is not an
+/// HTTP request: a realtime WebSocket.
+pub(crate) async fn tunnel(
+    proxy: &Proxy,
+    host: &str,
+    port: u16,
+) -> Result<tokio::net::TcpStream, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let at = proxy.uri.host().ok_or("the proxy URL has no host")?;
+    let at = at.trim_start_matches('[').trim_end_matches(']');
+    let at_port = proxy.uri.port_u16().unwrap_or(80);
+    let mut tcp = tokio::net::TcpStream::connect((at, at_port))
+        .await
+        .map_err(|err| format!("the proxy could not be reached: {err}"))?;
+    let target = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    let mut ask = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n");
+    if let Some(auth) = proxy.auth.as_ref().and_then(|a| a.to_str().ok()) {
+        ask.push_str(&format!("Proxy-Authorization: {auth}\r\n"));
+    }
+    ask.push_str("\r\n");
+    tcp.write_all(ask.as_bytes())
+        .await
+        .map_err(|err| format!("the proxy broke off: {err}"))?;
+    // The proxy's answer head, byte by byte: what follows it is the provider's.
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        if head.len() > 8192 {
+            return Err("the proxy's answer to CONNECT has no end".into());
+        }
+        if tcp
+            .read(&mut byte)
+            .await
+            .map_err(|err| format!("the proxy broke off: {err}"))?
+            == 0
+        {
+            return Err("the proxy closed the connection before answering CONNECT".into());
+        }
+        head.push(byte[0]);
+    }
+    let status = String::from_utf8_lossy(&head)
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_string();
+    if status != "200" {
+        return Err(format!(
+            "the proxy answered CONNECT with {status}: check proxy_env's address and credentials"
+        ));
+    }
+    Ok(tcp)
 }
 
 /// A client whose connections go through `proxy` (HTTP CONNECT), giving up after `connect`.

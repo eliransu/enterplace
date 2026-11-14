@@ -1029,18 +1029,26 @@ async fn dial(
         .ok_or("the provider URL has no host")?
         .to_string();
     let port = uri.port_u16().unwrap_or(if tls { 443 } else { 80 });
-    let tcp = tokio::time::timeout(
-        state.timeouts.connect,
-        tokio::net::TcpStream::connect((host.as_str(), port)),
-    )
-    .await
-    .map_err(|_| {
-        format!(
-            "no connection within {} seconds",
-            state.timeouts.connect.as_secs()
-        )
-    })?
-    .map_err(|e| e.to_string())?;
+    // The provider's own headers (headers_env), and its proxy (proxy_env), as its HTTP requests take them.
+    for (name, value) in &provider.headers {
+        request.headers_mut().insert(name.clone(), value.clone());
+    }
+    let connected = async {
+        match &provider.proxy {
+            Some(proxy) => crate::tunnel(proxy, &host, port).await,
+            None => tokio::net::TcpStream::connect((host.as_str(), port))
+                .await
+                .map_err(|e| e.to_string()),
+        }
+    };
+    let tcp = tokio::time::timeout(state.timeouts.connect, connected)
+        .await
+        .map_err(|_| {
+            format!(
+                "no connection within {} seconds",
+                state.timeouts.connect.as_secs()
+            )
+        })??;
     let stream: Box<dyn Io> = if tls {
         let mut roots = rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());

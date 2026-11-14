@@ -456,3 +456,112 @@ async fn guardrails_drop_a_blocked_text_event_and_end_the_session_on_a_blocked_t
     );
     Ok(())
 }
+
+/// A forward proxy that takes HTTP CONNECT and records each request head, then joins the two ends.
+async fn connect_proxy() -> Result<(u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>), Error> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        while let Ok((mut client, _)) = listener.accept().await {
+            let log = log.clone();
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if client.read_exact(&mut byte).await.is_err() {
+                        return;
+                    }
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8_lossy(&head).to_string();
+                if let Ok(mut log) = log.lock() {
+                    log.push(head.clone());
+                }
+                let Some(target) = head
+                    .lines()
+                    .next()
+                    .and_then(|l| l.strip_prefix("CONNECT "))
+                    .and_then(|l| l.split(' ').next())
+                else {
+                    return;
+                };
+                let Ok(mut upstream) = tokio::net::TcpStream::connect(target).await else {
+                    return;
+                };
+                if client.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.is_ok() {
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                }
+            });
+        }
+    });
+    Ok((port, seen))
+}
+
+/// A realtime session to a provider with `proxy_env` is opened through that proxy, with its `headers_env`.
+#[tokio::test]
+async fn a_realtime_session_goes_through_the_provider_s_proxy() -> Result<(), Error> {
+    let upstream = provider().await?;
+    let (proxy, through) = connect_proxy().await?;
+    let dir = std::env::temp_dir().join(format!("gantry-realtime-{}-proxy", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let policy = dir.join("gantry.policy.yaml");
+    std::fs::write(
+        &policy,
+        format!(
+            "version: 1
+providers:
+  - name: mock
+    kind: openai
+    url: http://127.0.0.1:{upstream}
+    allow_private: true
+    key_env: MOCK_KEY
+    proxy_env: EGRESS_PROXY
+    headers_env: {{ x-team-id: TEAM_HEADER }}
+    models: [rt-model]
+rules:
+  - name: data
+    principals: {{ team: data }}
+    models: [rt-model]
+"
+        ),
+    )?;
+    std::fs::write(
+        dir.join("gantry.keys.yaml"),
+        format!(
+            "keys:\n  - name: dana\n    team: data\n    sha256: {}\n",
+            sha256_hex(DANA.as_bytes())
+        ),
+    )?;
+    let gw = gantry_server::governed(&policy, None, &|name| match name {
+        "EGRESS_PROXY" => Some(format!("http://gw:s3cret@127.0.0.1:{proxy}")),
+        "TEAM_HEADER" => Some("data-7".into()),
+        _ => Some("provider-secret".into()),
+    })
+    .map_err(|e| -> Error { e.into() })?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let served = gw.router.clone();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, served).await;
+    });
+    let mut socket = connect(port, "/v1/realtime?model=rt-model", DANA).await?;
+    socket
+        .send(Message::Text(r#"{"type":"response.create"}"#.into()))
+        .await?;
+    let delta = next_text(&mut socket).await?.ok_or("no delta")?;
+    assert!(delta.contains("response.output_audio.delta"), "{delta}");
+    let heads = through.lock().map_err(|_| "poisoned")?.clone();
+    let head = heads
+        .first()
+        .ok_or("the session did not go through the proxy")?;
+    assert!(
+        head.starts_with(&format!("CONNECT 127.0.0.1:{upstream} ")),
+        "{head}"
+    );
+    assert!(head.contains("Basic Z3c6czNjcmV0"), "{head}");
+    Ok(())
+}

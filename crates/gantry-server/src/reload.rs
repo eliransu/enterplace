@@ -373,14 +373,26 @@ fn route(
     policy_text: &str,
 ) -> Result<ProviderRoute, String> {
     let set = |variable: &str| provider_key(variable).filter(|value| !value.trim().is_empty());
+    let proxy = match &provider.proxy_env {
+        Some(variable) => Some(Secret::new(set(variable).ok_or_else(|| {
+            format!(
+                "provider \"{}\" goes through the proxy in the environment variable {variable}, which is not set. Set it (`export {variable}=http://proxy.internal:3128`) and start again.",
+                provider.name
+            )
+        })?)),
+        None => None,
+    };
+    // Cloud sign-in goes through the provider's proxy too: an egress proxy is often the only way out.
+    let via = proxy.as_ref().map(|p| p.0.as_str());
     let (key, aws, google) = if provider.kind.aws() {
         // The AWS default chain, as the SDKs read it, and never through the aws command.
         let region = provider.region.as_deref().unwrap_or_default();
-        let aws = crate::cloud::aws(
+        let aws = crate::cloud::aws_via(
             &provider.name,
             region,
             provider.role_arn.as_deref(),
             provider_key,
+            via,
         )?;
         println!(
             "gantry: provider \"{}\" signs with AWS credentials from {}.",
@@ -412,7 +424,7 @@ fn route(
             })?;
         (Some(Secret::new(value)), None, None)
     } else if provider.key_env.is_empty() && provider.kind == Kind::Azure {
-        let entra = crate::cloud::entra(&provider.name, provider_key)?;
+        let entra = crate::cloud::entra_via(&provider.name, provider_key, via)?;
         println!(
             "gantry: provider \"{}\" signs in to Microsoft Entra ID with {}.",
             provider.name,
@@ -420,7 +432,7 @@ fn route(
         );
         (None, None, Some(entra))
     } else if provider.key_env.is_empty() && provider.kind.google_auth() {
-        let google = crate::cloud::google(&provider.name, provider_key)?;
+        let google = crate::cloud::google_via(&provider.name, provider_key, via)?;
         println!(
             "gantry: provider \"{}\" signs in to Google Cloud with {}.",
             provider.name,
@@ -467,19 +479,10 @@ fn route(
         })?;
         headers.push((header.clone(), Secret::new(value.trim())));
     }
-    let proxy = match &provider.proxy_env {
-        Some(variable) => Some(Secret::new(set(variable).ok_or_else(|| {
-            format!(
-                "provider \"{}\" goes through the proxy in the environment variable {variable}, which is not set. Set it (`export {variable}=http://proxy.internal:3128`) and start again.",
-                provider.name
-            )
-        })?)),
-        None => None,
-    };
     // watsonx.ai takes an IAM token, which IBM Cloud trades for the API key the policy points at.
     let (key, google) = match (provider.kind, key) {
         (Kind::Watsonx, Some(api_key)) => {
-            let token = crate::cloud::ibm(&provider.name, &api_key.0, provider_key)?;
+            let token = crate::cloud::ibm_via(&provider.name, &api_key.0, provider_key, via)?;
             (None, Some(token))
         }
         (_, key) => (key, google),

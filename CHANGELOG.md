@@ -7,6 +7,12 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Provider proxies everywhere
+
+- A provider's `proxy_env` now carries its realtime sessions (OpenAI Realtime, Gemini Live; `headers_env` too) and
+  its cloud sign-in: AWS STS, Google's token endpoint, Microsoft Entra ID and IBM Cloud IAM. The metadata services
+  are always reached directly.
+
 ### Deployment limits: actual tokens, every replica
 
 - A deployment's `tpm` counts each request at its estimate while it runs and at the tokens its answer used once it
