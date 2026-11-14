@@ -104,6 +104,8 @@ const BACKFILL_MAX: i64 = 5000;
 const PULL_MAX: i64 = 1000;
 const BACKOFF_MAX: Duration = Duration::from_secs(300);
 const RETENTION_EVERY: Duration = Duration::from_secs(3600);
+/// How often each replica reads legal hold for the gateway's kept bodies, which it may delete every 2 seconds.
+const HOLD_EVERY: Duration = Duration::from_secs(2);
 /// The environment variable with the key that encrypts destination secrets in the database.
 const KEY_ENV: &str = "GANTRY_EXPORT_KEY";
 const NO_KEY: &str = "Destination secrets are kept encrypted in the database, and GANTRY_EXPORT_KEY is not set. Set it on every replica to the same 64 hex characters (openssl rand -hex 32) and restart.";
@@ -912,7 +914,17 @@ impl Exporter {
 
     async fn run(self: Arc<Self>, tick: Duration) {
         let mut retained: Option<Instant> = None;
+        let mut held: Option<Instant> = None;
         loop {
+            // Legal hold covers the request log's kept bodies too: the gateway deletes none while it is on. Read
+            // before the first wait, so a replica that just started never deletes one before it knows.
+            if self.retention && held.is_none_or(|at| at.elapsed() >= HOLD_EVERY) {
+                held = Some(Instant::now());
+                match self.settings().await {
+                    Ok(settings) => gantry_core::insights::hold(&self.path, settings.hold),
+                    Err(err) => self.say(&format!("legal hold: {err}")),
+                }
+            }
             tokio::time::sleep(tick).await;
             if self.siem || self.alerts_on {
                 let read = async {
@@ -1849,6 +1861,8 @@ async fn change(
                 )
                 .await
                 .map_err(db_error)?;
+            // At once on this replica; the others read it within HOLD_EVERY.
+            gantry_core::insights::hold(&ex.path, on);
             Ok((
                 if on {
                     "Legal hold is on. Retention deletes nothing until it is turned off.".into()
