@@ -54,20 +54,45 @@ The `kind` decides which routes reach a provider and how its key is sent.
 
 | `kind` | API | Routes that reach it | Provider key sent as |
 |---|---|---|---|
-| `openai` | OpenAI and any OpenAI-compatible server | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank` | `Authorization: Bearer <key>`, or none for a local server without `key_env` |
-| `anthropic` | Anthropic messages | `POST /v1/messages`, `POST /v1/messages/count_tokens` | `x-api-key: <key>` |
-| `azure` | Azure OpenAI chat completions | `POST /v1/chat/completions` | `api-key: <key>` |
-| `bedrock` | Claude on Amazon Bedrock (InvokeModel) | `POST /v1/messages` | AWS Signature Version 4 |
-| `gemini` | Google Gemini API (generateContent) | `POST /v1/chat/completions`, translated | `x-goog-api-key: <key>` |
-| `vertex` | Gemini on Vertex AI | `POST /v1/chat/completions`, translated | `Authorization: Bearer <access token>` |
-| `vertex_anthropic` | Claude on Vertex AI (rawPredict) | `POST /v1/messages` | `Authorization: Bearer <access token>` |
+| `openai` | OpenAI and any OpenAI-compatible server | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank`, `/v1/completions`, `/v1/videos`, `/v1/containers` | `Authorization: Bearer <key>`, or none for a local server without `key_env` |
+| `anthropic` | Anthropic messages | `POST /v1/messages`, `/v1/messages/count_tokens`; `/v1/responses` translated | `x-api-key: <key>` |
+| `azure` | Azure OpenAI | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings` | `api-key: <key>`, or a Microsoft Entra ID token without `key_env` |
+| `bedrock` | Claude on Amazon Bedrock (InvokeModel) | `POST /v1/messages`, `/v1/messages/count_tokens`; `/v1/responses` translated | AWS Signature Version 4 |
+| `bedrock_converse` | Every model family on Amazon Bedrock (Converse) | `POST /v1/chat/completions`, `/v1/responses` translated; `/v1/embeddings` (Titan, Cohere) | AWS Signature Version 4 |
+| `gemini` | Google Gemini API | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, translated | `x-goog-api-key: <key>` |
+| `vertex` | Gemini on Vertex AI | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/rerank`, translated; `/v1/videos` (Veo) | `Authorization: Bearer <access token>` |
+| `vertex_anthropic` | Claude on Vertex AI (rawPredict) | `POST /v1/messages`, `/v1/messages/count_tokens`; `/v1/responses` translated | `Authorization: Bearer <access token>` |
+| `vertex_openai` | Model Garden on Vertex AI (OpenAI-compatible endpoint) | `POST /v1/chat/completions`; `/v1/responses` translated | `Authorization: Bearer <access token>` |
+| `cohere` | Cohere's v2 API | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, translated; `/v1/rerank` | `Authorization: Bearer <key>` |
+| `watsonx` | IBM watsonx.ai | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, translated | `Authorization: Bearer <IAM token>`, traded for the API key |
 
-A request on a route its model's provider does not serve is refused with `wrong_route`, naming the route to use. Two opt-ins widen this:
+A request on a route its model's provider does not serve is refused with `wrong_route`, naming the route to use. Three opt-ins widen this:
 
 - `accept_chat: true` on `anthropic`, `bedrock` or `vertex_anthropic` also takes chat completions requests, translated to messages.
-- `accept_messages: true` on `openai`, `azure`, `gemini` or `vertex` also takes messages requests (Claude Code), translated to chat completions.
+- `accept_messages: true` on a kind that takes chat (`openai`, `azure`, `gemini`, `vertex`, `vertex_openai`, `bedrock_converse`, `cohere`, `watsonx`) also takes messages requests (Claude Code), translated to chat completions.
+- `chat_as_responses: true` on `openai` or `azure` sends chat completions requests to the Responses API, translated both ways, for models served only through Responses (such as `o3-pro` and `codex-mini`).
+
+A Responses request (Codex, newer SDKs) for a model on a provider that does not speak Responses is translated to chat completions, and to the provider's own format from there; its answer, streamed or whole, comes back as a response with Responses events. What needs state the provider does not keep (`previous_response_id`, `conversation`, stored prompts, background runs) and tools that run at OpenAI (web search, file search, code interpreter) are refused by name.
 
 See [Translation](/routing/translation/).
+
+## Reasoning across providers
+
+`reasoning_effort` on a chat request, and `reasoning.effort` on a Responses request, are mapped to each provider's own setting. A setting a provider has no equivalent for is refused by name, never dropped.
+
+| Effort | Anthropic, Claude on Bedrock and Vertex AI | Gemini 2.5 | Gemini 3 | Amazon Nova (Converse) | OpenAI gpt-oss (Converse) | Cohere |
+|---|---|---|---|---|---|---|
+| `none` | no thinking | `thinkingBudget: 0` | refused | no reasoning | no reasoning | `thinking: disabled` |
+| `minimal` | refused | `thinkingBudget: 1024` | `thinkingLevel: minimal` | refused | refused | `token_budget: 1024` |
+| `low` | `thinking.budget_tokens: 1024` | `thinkingBudget: 1024` | `thinkingLevel: low` | `maxReasoningEffort: low` | `reasoning_effort: low` | `token_budget: 1024` |
+| `medium` | `thinking.budget_tokens: 4096` | `thinkingBudget: 4096` | `thinkingLevel: medium` | `maxReasoningEffort: medium` | `reasoning_effort: medium` | `token_budget: 4096` |
+| `high` | `thinking.budget_tokens: 16384` | `thinkingBudget: 16384` | `thinkingLevel: high` | `maxReasoningEffort: high` | `reasoning_effort: high` | `token_budget: 16384` |
+| `xhigh`, `max` | `output_config.effort` with adaptive thinking (Anthropic only) | refused | refused | refused | refused | refused |
+
+- Claude reasons inside `max_tokens`: without one, Gantry sends the budget plus 8192; with one at or below the budget, the request is refused naming the budget. Claude takes no `temperature` other than 1, and no `top_p` below 0.95, while it reasons: those are refused too.
+- Meta, Mistral, Cohere, AI21, DeepSeek and Qwen on Bedrock Converse take no reasoning setting, so `reasoning_effort` is refused for them.
+- The other way, Claude Code's `thinking.budget_tokens` on a request translated to chat becomes the `reasoning_effort` at or above it (up to 1024 `low`, up to 4096 `medium`, above `high`); `output_config.effort` wins when both are set.
+- Reasoning a provider returns in readable form (Claude's thinking blocks, Converse's `reasoningContent`, Cohere's thinking) reaches a chat client as `reasoning_content`, and a Responses client as a `reasoning` item. Its tokens are counted in usage either way.
 
 ## Fields
 
@@ -84,11 +109,14 @@ See [Translation](/routing/translation/).
 | `retries` | integer | `0` | 0 to 5. See [Retries and fallbacks](/routing/retries-and-fallbacks/). |
 | `fallback` | string | none | Another provider of the same API to try after this one fails. |
 | `accept_chat` | bool | `false` | `anthropic`, `bedrock`, `vertex_anthropic`: also take chat completions requests. |
-| `accept_messages` | bool | `false` | `openai`, `azure`, `gemini`, `vertex`: also take messages requests. |
+| `accept_messages` | bool | `false` | A kind that takes chat: also take messages requests. |
+| `chat_as_responses` | bool | `false` | `openai`, `azure`: send chat completions requests to the Responses API. |
 | `deployments` | map | none | `azure` only: model name to deployment name. |
-| `api_version` | string | none | `azure` only: the Azure OpenAI `api-version`. |
-| `region` | string | none | `bedrock` only: the AWS region. |
-| `model_ids` | map | none | `bedrock` only: model name to Bedrock model ID. |
+| `api_version` | string | none | `azure`: the Azure OpenAI `api-version`. `watsonx`: the API version date, `2024-05-31` when left out. |
+| `region` | string | none | `bedrock`, `bedrock_converse`: the AWS region. |
+| `model_ids` | map | none | `bedrock`, `bedrock_converse`: model name to Bedrock model ID. |
+| `role_arn` | string | none | `bedrock`, `bedrock_converse`: an IAM role to sign as. |
+| `project_id` | string | none | `watsonx` only, required: the watsonx.ai project. |
 
 Any field Gantry does not know is an error in `gantry check`, never ignored. See [Policy file](/governance/policy/).
 
@@ -96,7 +124,9 @@ Any field Gantry does not know is an error in `gantry check`, never ignored. See
 
 Each provider lists the exact model names it serves, and a model may be listed by one provider only. A request goes to the one provider that lists its `model`. To spread one name over several providers, use an [alias](/routing/aliases/).
 
-On `openai` and `anthropic` providers the name the client sends is the name the provider receives, because Gantry forwards the body as it came. On `azure` and `bedrock` the name picks a deployment or model ID from the provider's map.
+On `openai` and `anthropic` providers the name the client sends is the name the provider receives, because Gantry forwards the body as it came. On `azure`, `bedrock` and `bedrock_converse` the name picks a deployment or model ID from the provider's map.
+
+A model priced under neither its own name nor in the policy is priced as the Bedrock model ID or Azure deployment it is called by, when the price table knows that name (a Bedrock inference profile such as `us.anthropic...` is priced as its model). Budgets reserve and charge at that price.
 
 Write model names exactly as the vendor documents them, including any prefix such as `MiniMaxAI/MiniMax-M3` or tag such as `gpt-oss:20b`. A YAML list written as `[a, b]` holds names with `/`, `:` and `.` without quotes.
 
@@ -134,7 +164,7 @@ To manage keys in the console and rotate them on every gateway at once, keep the
 
 A rule may also let callers send their own provider key in `x-gantry-provider-key`, with `caller_provider_key: allowed`. See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key).
 
-A `bedrock` provider takes no `key_env`: Gantry signs with the role it runs as on EKS, ECS or EC2, or with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from its environment. A `vertex` or `vertex_anthropic` provider without `key_env` signs in as the service account it runs as on Google Cloud, or with `GOOGLE_APPLICATION_CREDENTIALS`.
+A `bedrock` or `bedrock_converse` provider takes no `key_env`: Gantry signs with the role it runs as on EKS, ECS or EC2, or with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from its environment. A `vertex`, `vertex_anthropic` or `vertex_openai` provider without `key_env` signs in as the service account it runs as on Google Cloud, or with `GOOGLE_APPLICATION_CREDENTIALS`. An `azure` provider without `key_env` signs in with Microsoft Entra ID (see [Azure OpenAI](/providers/azure/)). A `watsonx` provider's `key_env` holds an IBM Cloud API key, which Gantry trades for an IAM token and renews before it expires.
 
 ## Private addresses
 
@@ -147,7 +177,7 @@ An `openai` provider with `allow_private: true` may leave out `key_env`. It is t
 `GET /v1/models` answers in the shape the caller expects, listing only the models its rule allows. Both are recorded.
 
 - A caller that sends `x-api-key` or `anthropic-version` (Anthropic's SDKs, Claude Code) gets Anthropic's list of the models the messages route reaches: `anthropic`, `bedrock`, `vertex_anthropic`, and any provider with `accept_messages: true`.
-- Any other caller (OpenAI's SDKs, Codex) gets OpenAI's list of the models on the chat route (`openai`, `azure`, `gemini`, `vertex`): `{"object":"list","data":[{"id":...,"object":"model","created":0,"owned_by":<provider>}]}`.
+- Any other caller (OpenAI's SDKs, Codex) gets OpenAI's list of the models on the chat route (every kind that takes chat): `{"object":"list","data":[{"id":...,"object":"model","created":0,"owned_by":<provider>}]}`.
 
 The `limit` query parameter takes 1 to 1000.
 
@@ -156,13 +186,13 @@ The `limit` query parameter takes 1 to 1000.
 - **Body.** Byte for byte, except a translated request, a request to Bedrock or Vertex AI's Claude, a masked request, and a request for an alias, whose `model` is replaced with the deployment's.
 - **Path and query.** The route, and only the query parameters it allows: `beta=true` or `beta=false` on the messages routes, none on chat, Responses and embeddings. Any other is refused by name with `unknown_query`.
 - **Headers.** The caller's, except hop-by-hop headers, `Host`, `Cookie`, any header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), any `x-amz*` header, proxy and CDN headers (`x-forwarded-*`, `forwarded`, `via`, `x-real-ip`, `true-client-ip`, `cf-*`, `cdn-loop`), and any header that carries the caller's Gantry key.
-- **Credentials.** The provider key in the header its kind expects, the AWS signature for Bedrock, or nothing for a local `openai` provider without `key_env`.
+- **Credentials.** The provider key in the header its kind expects, the AWS signature for Bedrock, the token kept current for Vertex AI, Entra ID and watsonx.ai, or nothing for a local `openai` provider without `key_env`.
 
 The provider's answer, errors and streamed events included, returns unchanged except for hop-by-hop headers, with `X-Gantry-Decision` and `Server-Timing: gantry;dur=<ms>` added. Bedrock and translated answers are converted.
 
 ## Changes without a restart
 
-Gantry reloads the policy within 2 seconds of a save. A provider's `models`, `deployments`, `model_ids`, `retries`, `fallback`, `accept_chat` and `accept_messages` change without a restart.
+Gantry reloads the policy within 2 seconds of a save. A provider's `models`, `deployments`, `model_ids`, `retries`, `fallback`, `accept_chat`, `accept_messages` and `chat_as_responses` change without a restart.
 
 Adding or removing a provider, or changing its `kind`, `url`, `key_env`, `key_file`, `credential`, `allow_private`, `region` or `api_version`, also needs no restart: the reload builds a new route for that provider and reads its key then. A reload whose new provider has no readable key is rejected, and the version in use is kept. Rotating a provider key in an unchanged `key_env` variable needs a restart; use `key_file` or a credential instead.
 
@@ -173,8 +203,12 @@ Most provider kinds are built from the vendor's API documentation and tested aga
 ## Providers
 
 <CardGrid>
-	<LinkCard title="OpenAI and compatible vendors" href="/providers/openai/" description="OpenAI, Groq, Mistral, Together, Fireworks, DeepSeek, OpenRouter." />
+	<LinkCard title="OpenAI and compatible vendors" href="/providers/openai/" description="OpenAI, DeepSeek, xAI, Together, Fireworks, Perplexity, Cerebras, OpenRouter, Hugging Face, Databricks, Snowflake." />
 	<LinkCard title="Anthropic" href="/providers/anthropic/" description="Claude through Anthropic's messages API." />
-	<LinkCard title="Amazon Bedrock" href="/providers/bedrock/" description="Claude on Bedrock, signed with SigV4." />
+	<LinkCard title="Amazon Bedrock" href="/providers/bedrock/" description="Claude on InvokeModel, every family on Converse, embeddings, signed with SigV4." />
+	<LinkCard title="Azure OpenAI" href="/providers/azure/" description="API keys or Entra ID; chat, Responses and embeddings." />
+	<LinkCard title="Vertex AI" href="/providers/vertex/" description="Gemini, Claude, Model Garden, embeddings, rerank, Veo." />
+	<LinkCard title="Cohere and watsonx.ai" href="/providers/cohere-and-watsonx/" description="Native chat, embeddings and rerank." />
+	<LinkCard title="Videos and containers" href="/providers/videos-and-containers/" description="Sora and Veo videos, code interpreter containers." />
 	<LinkCard title="Local models" href="/providers/local-models/" description="Ollama, vLLM and LM Studio." />
 </CardGrid>

@@ -1,6 +1,6 @@
 ---
 title: Translation
-description: Let chat completions clients use Claude with accept_chat, and Claude Code use GPT, Gemini or a local model with accept_messages.
+description: Let chat completions clients use Claude with accept_chat, Claude Code use any chat model with accept_messages, Codex use any provider through the Responses API, and chat clients reach Responses-only models.
 sidebar:
   order: 3
 ---
@@ -12,9 +12,11 @@ By default a request reaches only providers that speak its API. Translation is a
 | Field | Set on | Takes | Sends |
 |---|---|---|---|
 | `accept_chat: true` | `anthropic`, `bedrock`, `vertex_anthropic` | `POST /v1/chat/completions` | Messages |
-| `accept_messages: true` | `openai`, `azure`, `gemini`, `vertex` | `POST /v1/messages` | Chat completions (and on to generateContent for Gemini and Vertex AI) |
+| `accept_messages: true` | a kind that takes chat: `openai`, `azure`, `gemini`, `vertex`, `vertex_openai`, `bedrock_converse`, `cohere`, `watsonx` | `POST /v1/messages` | Chat completions (and on to the provider's own format for the kinds that translate chat) |
+| `chat_as_responses: true` | `openai`, `azure` | `POST /v1/chat/completions` | The Responses API |
+| none: always on | every kind but `openai` and `azure` | `POST /v1/responses` | Chat completions, and on to messages or the provider's own format |
 
-Without the field, a request on the other route is refused with `wrong_route`. Both change without a restart.
+Without the field, a request on the other route is refused with `wrong_route`. Each changes without a restart. Gemini, Vertex AI, Bedrock Converse, Cohere and watsonx.ai always take chat translated to their own format; how reasoning settings map is on the [providers overview](/providers/overview/#reasoning-across-providers).
 
 ## Example
 
@@ -67,7 +69,8 @@ The translation is decided before the record is written, so an untranslatable re
 - A stream comes back as `chat.completion.chunk` events ending in `data: [DONE]`, with a final usage chunk when the request asked for `stream_options.include_usage`.
 - Errors come back in OpenAI's error shape.
 - A translated request to an `anthropic` provider carries `anthropic-version: 2023-06-01`.
-- Dropped on purpose: `seed`, thinking blocks and a few others in `SAFE_TO_DROP`.
+- `reasoning_effort` `low`, `medium` and `high` become a thinking budget of 1024, 4096 and 16384 tokens; `xhigh` and `max` become `output_config.effort` with adaptive thinking. Claude's readable thinking comes back as `reasoning_content`.
+- Dropped on purpose: `seed`, thinking signatures and a few others in `SAFE_TO_DROP`.
 
 ## Messages to chat (accept_messages)
 
@@ -86,21 +89,41 @@ The translation is decided before the record is written, so an untranslatable re
 
 **Errors** come back in Anthropic's error shape, typed by status (429 is `rate_limit_error`), with the message `Provider "<name>" answered <status>: <the provider's message> Decision <id>.`, the decision ID in `decision`, the provider's own `Retry-After`, and `x-should-retry: true` for 408, 409, 429 and 5xx (`false` otherwise).
 
-**Refused with `untranslatable`:** thinking of type `enabled` (adaptive thinking is let through), server tools (web search, code execution), `context_management` edits other than clearing thinking, document and other non-text tool result blocks, and any field Gantry does not know.
+**Mapped:** thinking of type `enabled` becomes the `reasoning_effort` its budget stands for (up to 1024 `low`, up to 4096 `medium`, above that `high`); adaptive thinking is let through.
+
+**Refused with `untranslatable`:** thinking of another type, server tools (web search, code execution), `context_management` edits other than clearing thinking, document and other non-text tool result blocks, and any field Gantry does not know.
 
 **Dropped on purpose:** `cache_control`, thinking blocks, `defer_loading` on tools, `context_management` that only clears thinking, and the `anthropic-*` headers.
 
-`POST /v1/messages/count_tokens` for these models is refused with `wrong_route`.
+`POST /v1/messages/count_tokens` for these models is refused with `wrong_route`. It is served for `anthropic`, `bedrock` (Bedrock's CountTokens) and `vertex_anthropic` (Vertex AI's count-tokens endpoint).
 
 <Aside type="caution">
 Claude Code sends `output_config.effort` on every request, which Gantry sends as `reasoning_effort`. A model that is not a reasoning model may refuse that field, and its 400 reaches Claude Code as the provider gave it.
 </Aside>
 
+## Responses to chat (Codex on any provider)
+
+A `POST /v1/responses` request for a model on a provider that does not speak Responses is translated to chat completions, then on to messages (`anthropic`, `bedrock`, `vertex_anthropic`) or to the provider's own format (Gemini, Vertex AI, Bedrock Converse, Cohere, watsonx.ai). No opt-in is needed.
+
+**Carried over:** `instructions` (as the system prompt), `input` as a string or as message, `function_call` and `function_call_output` items, text, image and inline file parts, function tools and `tool_choice`, `parallel_tool_calls`, `max_output_tokens`, `temperature`, `top_p`, `reasoning.effort` (mapped as on the overview), `text.format` (`json_schema`, `json_object`), `text.verbosity`, `user`, `safety_identifier`, `metadata`.
+
+**Whole answers** become a `response` object with `output` items: a `reasoning` item for readable reasoning, a `message` item with `output_text`, and a `function_call` item per tool call; `status` is `incomplete` with `incomplete_details.reason: max_output_tokens` when the answer ran out of tokens.
+
+**Streams** become Responses events: `response.created`, `response.in_progress`, then per item `response.output_item.added`, `response.content_part.added`, `response.output_text.delta` (or `response.function_call_arguments.delta`, `response.reasoning_summary_text.delta`), their `.done` events and `response.output_item.done`, and last `response.completed` with the usage. Each event carries its `sequence_number`.
+
+**Refused by name:** `previous_response_id`, `conversation` and `prompt` (state the provider does not keep: send the whole conversation in `input`), `background: true`, tools other than functions (web search, file search, code interpreter, computer use, custom tools), `include` values other than `reasoning.encrypted_content`, file inputs by OpenAI file ID, and any field Gantry does not know.
+
+**Dropped on purpose:** `store`, `include: reasoning.encrypted_content`, reasoning items handed back in `input`, and the defaults `truncation: disabled` and `service_tier: auto`, listed in `gantry_core::responses::SAFE_TO_DROP`.
+
+## Chat to Responses (chat_as_responses)
+
+On an `openai` or `azure` provider with `chat_as_responses: true`, a chat completions request is sent to the Responses API (`/v1/responses`, or Azure's `/openai/responses`) and its answer comes back as chat, streamed or whole, usage included. Use it for models served only through Responses. Messages become `input` items, tool calls `function_call` items, tool results `function_call_output` items, `max_tokens` `max_output_tokens`, `reasoning_effort` `reasoning.effort`, and `response_format` `text.format`. The request is sent with `store: false` unless the client set `store`.
+
 ## Order on the request path
 
 Guardrails, cache, rate limits and budgets see the request in the form actually sent: translated when it was translated, masked when a guardrail masked it. A cached answer is the provider's own; a translated caller gets the hit translated, as the first answer was. Usage is read from the provider's answer before it is translated, so a translated chat stream sent without `stream_options.include_usage` still has its tokens and cost recorded.
 
-For Gemini and Vertex AI, chat requests are always translated to generateContent. See [Gemini](/providers/gemini/).
+For Gemini and Vertex AI, chat requests are always translated to generateContent; for Bedrock Converse to Converse; for Cohere to its v2 chat; for watsonx.ai to its text/chat. See the provider pages.
 
 ## Related
 

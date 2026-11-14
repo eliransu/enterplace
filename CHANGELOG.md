@@ -7,6 +7,33 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Cloud providers and translation
+
+- `kind: bedrock_converse`: every model family Bedrock serves through Converse and ConverseStream (Anthropic, Meta
+  Llama, Mistral, Cohere, Amazon Nova, AI21, DeepSeek, Qwen, OpenAI gpt-oss) on the chat completions and Responses
+  routes, translated both ways with tool use, images and documents, and Claude Code through `accept_messages`.
+  Amazon Titan and Cohere embeddings on Bedrock. Bedrock token counts (CountTokens) for `kind: bedrock`.
+- Azure OpenAI signs in with Microsoft Entra ID when it has no key: client credentials, AKS workload identity and
+  managed identity, renewed in process. The Responses API and embeddings reach Azure deployments.
+- Vertex AI: embeddings (`:predict`), rerank (the Ranking API), Claude token counts (count-tokens), Veo videos, and
+  `kind: vertex_openai` for Model Garden models behind the OpenAI-compatible endpoint.
+- Embeddings on every provider that offers them: OpenAI, Azure, Bedrock, Vertex AI, Gemini, Cohere, watsonx.ai.
+- `POST /v1/responses` reaches Anthropic, Bedrock, Vertex AI, Gemini, Cohere and watsonx.ai, translated through chat,
+  with Responses streaming events and function calls; state the provider does not keep is refused by name.
+  `chat_as_responses: true` sends chat requests to Responses-only models.
+- Reasoning maps across providers: `reasoning_effort` becomes Claude's thinking budget (1024, 4096, 16384), Gemini's
+  thinking budget or level, Nova's and gpt-oss's settings on Converse, and Cohere's thinking; Claude Code's thinking
+  budget becomes `reasoning_effort`; readable reasoning comes back as `reasoning_content`. The table is on the
+  providers overview. **Changed:** `reasoning_effort` `low`, `medium` and `high` to Claude now sends a thinking budget
+  instead of `output_config.effort`; `xhigh` and `max` still send effort.
+- Signed passthrough: `/bedrock/<path>` and `/vertex/<path>` (and `/passthrough/<provider>/` for those kinds, which
+  `gantry check` no longer refuses) are signed with SigV4 or the Google token, with the model in the path decided.
+- `/v1/videos` (Sora, and Veo through the same route) and `/v1/containers`, owned by their creator, guarded,
+  budgeted and priced with the new `per_second` and `per_call` price fields.
+- Native kinds `cohere` (v2 chat, embed, rerank) and `watsonx` (IBM watsonx.ai, IAM token traded for the API key).
+  Presets `cohere-native`, `watsonx`, `deepseek`, `databricks` and `snowflake` (the last two need your own URL).
+- A model priced under no name of its own is priced as the Bedrock model ID or Azure deployment it is called by.
+
 ### Browser access
 
 - `cors:` in the policy: `allowed_origins` lists the browser origins (or `"*"`) that may call Gantry's routes. Off by

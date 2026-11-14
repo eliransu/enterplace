@@ -1,0 +1,58 @@
+---
+title: Videos and containers
+description: Generate videos with Sora and Veo through OpenAI's videos API, and run code interpreter containers, each owned by its creator, guarded, budgeted and priced per second or per container.
+sidebar:
+  order: 9
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Videos and containers are objects that outlive the request that made them. Gantry serves them as it serves files and batches: each belongs to the person who created it through Gantry, anyone else is answered as if it did not exist (an admin key sees all), lists show only your own, and who owns what is written to the audit log (and kept in the store, namespace `batches`, when there is one).
+
+## Videos
+
+| Route | Sora (`openai`) | Veo (`vertex`) |
+|---|---|---|
+| `POST /v1/videos` | `POST /v1/videos` | `POST <url>/models/<model>:predictLongRunning` |
+| `GET /v1/videos/<id>` | `GET /v1/videos/<id>` | `POST <url>/models/<model>:fetchPredictOperation` |
+| `GET /v1/videos/<id>/content` | `GET /v1/videos/<id>/content` (`variant` passed on) | the operation's video, decoded; or `{"gcs_uri": ...}` when Veo wrote it to Cloud Storage |
+| `POST /v1/videos/<id>/remix` | `POST /v1/videos/<id>/remix` | refused: a remix is Sora's |
+| `DELETE /v1/videos/<id>` | `DELETE /v1/videos/<id>` | refused: Veo keeps nothing to delete |
+| `GET /v1/videos` | your own videos | |
+
+A video request is a JSON object: `model`, `prompt`, `seconds` and `size`. For Veo, `seconds` becomes `durationSeconds`, `size` the `aspectRatio` (wider than tall is `16:9`, else `9:16`), and any other field is refused by name. A request with an `input_reference` image goes through the provider's own API with [passthrough](/governance/policy/#passthrough).
+
+1. The model is decided by the caller's rule, and a kill switch on it stops the request.
+2. The prompt is read by the rule's guardrails, which block or mask it before the provider sees it.
+3. The seconds asked for (default 4 for Sora, 8 for Veo) are reserved against the budgets at the model's `per_second` price.
+4. When the video is done (read by its owner, or found by the poll Gantry runs every minute), its seconds are charged and the reservation given back; a failed video is charged nothing. The usage record says `price: per_second`.
+
+Built-in prices, in US dollars per second: `sora-2` 0.10, `sora-2-pro` 0.30, `veo-3.0-generate-001` 0.40, `veo-3.0-fast-generate-001` 0.15, `veo-2.0-generate-001` 0.50. Set another under `prices:` in the policy:
+
+```yaml
+prices:
+  sora-2-pro: { input: 0, output: 0, per_second: 0.50 }
+```
+
+## Containers
+
+| Route | Sent to |
+|---|---|
+| `POST /v1/containers` | `POST /v1/containers` |
+| `GET /v1/containers` | your own containers |
+| `GET`, `DELETE /v1/containers/<id>` and `GET`, `POST`, `DELETE` under `/v1/containers/<id>/files` | as sent, to your own container only |
+
+A container has no model, so the rule decides it by the name of its size: `container-1g` (the default), `container-4g`, `container-16g` or `container-64g`, from its `memory_limit`. List the sizes people may use among the rule's models. Each `file_ids` entry must be a file you uploaded through Gantry.
+
+A container is charged once, when it is created, at its size's `per_call` price: 0.03, 0.12, 0.48 and 1.92 US dollars, reserved against the budgets first.
+
+<Aside type="caution">
+Files written into a container through `/v1/containers/<id>/files` go to the provider as sent and are not read by the guardrails. To have them read, upload them to `/v1/files` and name them in `file_ids`.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Files, batches and realtime" href="/providers/batches-and-realtime/" description="The other objects Gantry owns for their creator." />
+	<LinkCard title="Pricing" href="/routing/pricing/" description="per_second, per_call and the other price fields." />
+</CardGrid>

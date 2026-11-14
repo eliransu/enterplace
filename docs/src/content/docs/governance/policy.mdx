@@ -355,7 +355,7 @@ curl https://gantry.example.com/passthrough/openai/v1/batches/batch_123 \
 - A body with a `model` field is checked against the rule's models, as on every other route. A body without one is allowed by the path alone.
 - Each call is recorded, counts against the rule's budget and rate, and is charged from the `usage` the provider returns, priced by the body's model. A call with no model is recorded with no cost.
 - Guardrails read every string in the body, whatever its shape. A call with no body (a `GET`) is recorded with `guardrails: not_run: the request has no body`.
-- Only providers of kind `openai`, `anthropic`, `azure` and `gemini`. Bedrock and Vertex requests must be signed or translated, so `gantry check` refuses them here.
+- Every kind. Bedrock requests are signed with the provider's AWS credentials (SigV4) and Vertex AI requests carry its Google token. `/bedrock/<path>` and `/vertex/<path>` reach the one provider of that cloud without naming it (with several, name one in `x-gantry-provider`); a Vertex AI path starts at the host (`/v1/projects/...`). For these two the model in the path (`/model/<id>/...`, `.../models/<model>:<method>`) is the one decided on, by the name the policy knows it by. A streamed Bedrock answer goes back as Bedrock's event stream, unread, and is charged its reservation.
 - The provider key can reach any path you list. List the endpoints people need, never an account's admin API.
 
 ## Order of checks

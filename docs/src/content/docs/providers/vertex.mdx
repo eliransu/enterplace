@@ -128,7 +128,8 @@ Claude Code or any messages client reaches these models through `POST /v1/messag
 - `"anthropic_version": "vertex-2023-10-16"` is added.
 - The answer is Anthropic's own format, streamed or whole, and goes back unchanged.
 - `anthropic-beta` headers are passed on as sent. Whether Vertex AI honours a beta is up to Vertex AI.
-- `POST /v1/messages/count_tokens` is refused with `wrong_route` for these models.
+- `POST /v1/messages/count_tokens` goes to `<url>/models/count-tokens:rawPredict`, the model named in the body, and Vertex AI's count comes back as Anthropic's `{"input_tokens": n}`.
+- `POST /v1/responses` reaches these models translated, as for Anthropic. See [Translation](/routing/translation/#responses-to-chat-codex-on-any-provider).
 - `accept_chat: true` lets chat completions clients reach them too, translated. See [Translation](/routing/translation/).
 
 ### Model names
@@ -148,12 +149,47 @@ See [Aliases](/routing/aliases/).
 
 Callers use `POST /v1/chat/completions`. Gantry applies the same translation as the [`gemini` kind](/providers/gemini/) and sends it to `<url>/models/<model>:generateContent`, or `:streamGenerateContent?alt=sse` for a stream, with `Authorization: Bearer <token>`.
 
-A `vertex` provider can fall back to a `gemini` or another `vertex` provider. With `accept_messages: true`, Claude Code can use these Gemini models too.
+A `vertex` provider can fall back to a `gemini` or another `vertex` provider. With `accept_messages: true`, Claude Code can use these Gemini models too. `POST /v1/responses` reaches them translated.
+
+### Embeddings
+
+`POST /v1/embeddings` for a Vertex AI text embedding model (`text-embedding-005`, `gemini-embedding-001`, `text-multilingual-embedding-002`) goes to `<url>/models/<model>:predict` with one instance per text. `input_type` becomes the instance's `task_type`, and `dimensions` `parameters.outputDimensionality`. Each prediction's `statistics.token_count` is what is recorded and charged.
+
+```yaml
+  - name: vertex
+    kind: vertex
+    url: https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google
+    models: [gemini-2.5-flash, text-embedding-005, semantic-ranker-default-004, veo-3.0-generate-001]
+```
+
+### Rerank
+
+`POST /v1/rerank` (Cohere's shape: `model`, `query`, `documents` as strings, `top_n`) for a Vertex AI ranking model (`semantic-ranker-default-004`, `semantic-ranker-fast-004`) goes to the Ranking API of Vertex AI Search, `https://discoveryengine.googleapis.com/v1/projects/<project>/locations/global/rankingConfigs/default_ranking_config:rank`, the project taken from `url`. The answer comes back as `{"results": [{"index": ..., "relevance_score": ...}]}`. The service account also needs the Discovery Engine User role (`roles/discoveryengine.user`).
+
+### Veo
+
+`POST /v1/videos` for a Veo model goes to `predictLongRunning`. See [Videos and containers](/providers/videos-and-containers/).
+
+## Model Garden on Vertex AI
+
+A provider of `kind: vertex_openai` reaches the models Model Garden serves behind Vertex AI's OpenAI-compatible endpoint (Llama, Mistral, DeepSeek, Qwen and the other partner and open models offered as a service). Its `url` ends in `/endpoints/openapi`; chat requests go to `<url>/chat/completions` as sent, with the Google token, and Responses requests are translated to chat.
+
+```yaml
+  - name: garden
+    kind: vertex_openai
+    url: https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/endpoints/openapi
+    models: [meta/llama-3.3-70b-instruct-maas, deepseek-ai/deepseek-r1-0528-maas]
+```
+
+## Passthrough
+
+`/vertex/<path>` reaches Vertex AI's own API with the provider's Google token, on paths a rule lists under `passthrough:` for the provider: for example `/vertex/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-2.5-flash:countTokens`. The path starts at the host. The model in the path is decided by the rule, and the call is recorded and metered like any other. With several Google Cloud providers, name one in `x-gantry-provider`. See [Passthrough](/governance/policy/#passthrough).
 
 ## Errors from gantry check
 
 ```text
 gantry.policy.yaml:5: a vertex provider's url ends in /publishers/google, for example https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google.
+gantry.policy.yaml:9: a vertex_openai provider's url ends in /endpoints/openapi, for example https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/endpoints/openapi.
 ```
 
 ## Related

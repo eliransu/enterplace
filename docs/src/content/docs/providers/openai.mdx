@@ -1,6 +1,6 @@
 ---
 title: OpenAI and compatible vendors
-description: Configure OpenAI and OpenAI-compatible vendors such as Groq, Mistral, Together, Fireworks, DeepSeek and OpenRouter as kind openai providers.
+description: Configure OpenAI and OpenAI-compatible vendors such as DeepSeek, xAI, Together, Fireworks, Perplexity, Cerebras, OpenRouter, Hugging Face, Databricks and Snowflake as kind openai providers.
 sidebar:
   order: 2
 ---
@@ -199,6 +199,38 @@ Guardrails never read the audio of a transcription. Do not give transcription mo
 </Aside>
 
 Image and speech models priced by the token need `max_output` in their price under a budget or a tokens-per-minute limit; image models priced by the image need `per_image`. See [Pricing](/routing/pricing/).
+
+## Presets
+
+Each of these has a `preset:` in the [provider catalog](/reference/providers/), with the URL from its own documentation:
+
+| Provider | `preset` | Notes |
+|---|---|---|
+| DeepSeek | `deepseek` | Chat. `deepseek-reasoner` returns `reasoning_content`, which Gantry passes on. |
+| xAI | `xai` | Chat, Responses. |
+| Together AI | `together` | Chat, embeddings, rerank. |
+| Fireworks AI | `fireworks` | Chat, embeddings. |
+| Perplexity | `perplexity` | Chat; citations come back in the answer as Perplexity sends them. |
+| Cerebras | `cerebras` | Chat. |
+| OpenRouter | `openrouter` | Chat, Responses. |
+| Hugging Face Inference Providers | `huggingface` | Chat. |
+| Databricks Model Serving | `databricks` | Write your workspace URL, `https://<workspace>.cloud.databricks.com/serving-endpoints`, next to the preset; the key is a Databricks token. Model names are serving endpoint names. |
+| Snowflake Cortex | `snowflake` | Write your account URL, `https://<account>.snowflakecomputing.com/api/v2/cortex/v1`, next to the preset; the key is a programmatic access token. |
+| Ollama, vLLM, LM Studio | `ollama`, `vllm`, `lmstudio` | Local: `allow_private: true`. See [Local models](/providers/local-models/). |
+
+A preset whose URL holds a placeholder in capitals fails `gantry check` until the provider writes its own `url`:
+
+```yaml
+  - name: databricks
+    preset: databricks
+    url: https://acme.cloud.databricks.com/serving-endpoints
+    key_env: DATABRICKS_TOKEN
+    models: [databricks-claude-sonnet-5-5, databricks-gpt-5]
+```
+
+Databricks model names in the price table carry the `databricks-` prefix Databricks gives its foundation model endpoints, so budgets price them without a `prices:` entry.
+
+Cohere and IBM watsonx.ai have native kinds: see [Cohere and watsonx.ai](/providers/cohere-and-watsonx/).
 
 ## Related
 

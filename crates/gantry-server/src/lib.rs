@@ -4791,10 +4791,15 @@ fn outbound(
                 .map(|seg| sigv4::uri_encode(seg, false))
                 .collect();
             let query = query.map(|q| format!("?{q}")).unwrap_or_default();
-            (
-                format!("{}{}{query}", provider.url, path.join("/")),
-                bytes.clone(),
-            )
+            // Batch inference jobs are Bedrock's control plane, at bedrock.<region> rather than bedrock-runtime.
+            let base = if route.starts_with("/model-invocation-job") {
+                provider
+                    .url
+                    .replacen("://bedrock-runtime.", "://bedrock.", 1)
+            } else {
+                provider.url.clone()
+            };
+            (format!("{base}{}{query}", path.join("/")), bytes.clone())
         }
         _ if passthrough => (
             gantry_core::config::join(&provider.url, route),

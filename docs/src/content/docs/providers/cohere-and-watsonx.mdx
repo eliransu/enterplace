@@ -1,0 +1,60 @@
+---
+title: Cohere and watsonx.ai
+description: Reach Cohere's v2 API (chat, embed, rerank) and IBM watsonx.ai (chat, embeddings) natively, translated from the OpenAI routes, with usage and prices recorded.
+sidebar:
+  order: 8
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Both are native kinds: callers use the OpenAI routes, and Gantry translates to the provider's own API and back. Every request is decided, guarded, budgeted and recorded as on any other route.
+
+## Cohere
+
+```yaml title="gantry.policy.yaml"
+providers:
+  - name: cohere
+    preset: cohere-native            # kind: cohere, url: https://api.cohere.com/v2
+    key_env: COHERE_API_KEY
+    models: [command-a-03-2025, embed-english-v3.0, rerank-v3.5]
+```
+
+| Route | Sent to | What changes |
+|---|---|---|
+| `POST /v1/chat/completions` | `<url>/chat` | `top_p` becomes `p`, `stop` `stop_sequences`, `tool_choice` `required` and `none` become `REQUIRED` and `NONE`, the `developer` role `system`, `response_format` Cohere's `json_object` with its schema, `reasoning_effort` a `thinking.token_budget`. Messages, tools and tool calls are OpenAI's shape already. |
+| `POST /v1/responses` | `<url>/chat` | Translated to chat first. |
+| `POST /v1/embeddings` | `<url>/embed` | `input` becomes `texts`, `input_type` (default `search_document`) and `dimensions` (as `output_dimension`) carried over; floats come back as OpenAI's embeddings list. |
+| `POST /v1/rerank` | `<url>/rerank` | As sent: Gantry's rerank route takes Cohere's shape. |
+
+Answers come back as chat completions, streamed (`message-start`, `content-delta`, `tool-call-start`, `tool-call-delta` and `message-end` become chunks) or whole; Cohere's thinking comes back as `reasoning_content`. Usage is what Cohere bills (`billed_units`), else what it counted (`tokens`). A named `tool_choice`, `logprobs` and fields Gantry does not know are refused by name.
+
+The `cohere` preset reaches Cohere's OpenAI-compatible endpoint instead, as `kind: openai`, for chat without translation.
+
+## IBM watsonx.ai
+
+```yaml title="gantry.policy.yaml"
+providers:
+  - name: watsonx
+    preset: watsonx                  # kind: watsonx, url: https://us-south.ml.cloud.ibm.com/ml/v1
+    key_env: WATSONX_API_KEY         # an IBM Cloud API key
+    project_id: 0f6c1c3e-5d6a-4b4e-9b1e-2a7d1c9f0a11
+    api_version: 2024-05-31          # the default when left out
+    models: [ibm/granite-3-8b-instruct, meta-llama/llama-3-3-70b-instruct, ibm/slate-125m-english-rtrvr]
+```
+
+Gantry trades the API key for an IBM Cloud IAM token at `https://iam.cloud.ibm.com/identity/token` when it starts and renews it before it expires (an hour); `IBM_CLOUD_IAM_URL` names another IAM endpoint. Requests carry `Authorization: Bearer <token>`. For another region, write its URL, such as `https://eu-de.ml.cloud.ibm.com/ml/v1`.
+
+| Route | Sent to | What changes |
+|---|---|---|
+| `POST /v1/chat/completions` | `<url>/text/chat?version=<api_version>`, or `/text/chat_stream` for a stream | `model` becomes `model_id`, `project_id` is added, `tool_choice` `auto`, `none` and `required` become `tool_choice_option`. Answers are OpenAI's shape with `model_id`, renamed back to `model`; a stream gets OpenAI's `[DONE]`. |
+| `POST /v1/responses` | the same | Translated to chat first. |
+| `POST /v1/embeddings` | `<url>/text/embeddings?version=<api_version>` | `input` becomes `inputs`; `input_token_count` is what is charged. |
+
+`project_id` is required; `gantry check` names the line when it is missing.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Translation" href="/routing/translation/" description="What is carried across and what is refused." />
+	<LinkCard title="Pricing" href="/routing/pricing/" description="Where prices come from." />
+</CardGrid>
