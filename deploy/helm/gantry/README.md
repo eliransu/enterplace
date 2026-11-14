@@ -85,7 +85,7 @@ helm upgrade --install gantry ./gantry-deploy/helm/gantry --reuse-values \
 | `postgres.*` | off | The trial Postgres |
 
 Pods run as user 65532 with a read-only root filesystem, no privilege escalation, every capability dropped, the
-default seccomp profile and no service account token. Probes call `/healthz`.
+default seccomp profile and no service account token. Readiness calls `/readyz` (every 5 seconds, out after 2 failures) and liveness `/healthz` (every 10 seconds, restarted after 6); the pod gets 45 seconds to drain after SIGTERM.
 
 ## Tests
 

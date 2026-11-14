@@ -36,8 +36,10 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
-      # Requests in flight get 30 seconds after SIGTERM; this leaves room for the final audit sync.
-      terminationGracePeriodSeconds: 40
+      # On SIGTERM Gantry answers /readyz with 503 at once and finishes requests in flight, for up to 30 seconds.
+      # Readiness fails within two 5 second probes, so the endpoint drops the pod before that ends; 45 seconds leaves
+      # room for both and the final audit sync. No preStop hook: the drain is Gantry's own.
+      terminationGracePeriodSeconds: 45
       initContainers:
         # `serve --keys` needs the keys file to exist. On a new volume this writes the seed keys file, or an empty
         # list. An existing file is never touched: keys issued since then live there.
@@ -126,12 +128,14 @@ spec:
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
             {{- end }}
-          # /healthz is 503 when the audit log cannot be written: every request is refused until a restart.
+          # /readyz is 503 while a request would be refused (the store unreachable, no keys, draining after SIGTERM);
+          # /healthz only when the audit log cannot be written, which a restart fixes.
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: http
             periodSeconds: 5
+            failureThreshold: 2
           livenessProbe:
             httpGet:
               path: /healthz
