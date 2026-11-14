@@ -79,8 +79,10 @@ export class GantryGateway extends Container<Env> {
   pingEndpoint = "localhost/healthz";
   // An idle gateway stops (a graceful stop: it seals and writes its last records first) and starts on the next request.
   sleepAfter = "30m";
-  static outboundByHost = { [AUDIT_HOST]: segments };
 }
+// Assigned, not declared as a static field: a class field would define its own property and skip the setter that
+// registers the handler, and the container's requests to AUDIT_HOST would then be refused.
+GantryGateway.outboundByHost = { [AUDIT_HOST]: segments };
 
 const PASSED = /^(GANTRY_[A-Z0-9_]+|DATABASE_URL|AWS_[A-Z0-9_]+|[A-Z0-9_]+_PROVIDER_KEY)$/;
 

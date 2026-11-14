@@ -3,4 +3,4 @@
 # you run wrangler: docker login ghcr.io.
 ARG GANTRY_IMAGE=ghcr.io/ggantry/gantry-enterprise:0.1.0
 FROM ${GANTRY_IMAGE}
-COPY gantry.policy.yaml /etc/gantry/gantry.policy.yaml
+COPY --chmod=0644 gantry.policy.yaml /etc/gantry/gantry.policy.yaml
