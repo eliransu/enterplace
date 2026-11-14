@@ -1958,34 +1958,43 @@ mod tests {
         }
     }
 
+    /// The beat of the test below. Off Linux, telling whether a process runs means starting `ps`, which a loaded
+    /// machine can take more than a second to do. "At once" means without watching the lock, which takes at least
+    /// six beats; a beat long enough that `ps` cannot cross five of them keeps that distinction and lets a slow `ps`
+    /// pass. A Live or Take verdict never sleeps, so the test takes only as long as `ps` does.
+    const LIVE_BEAT: Duration = Duration::from_secs(2);
+
     #[test]
     fn a_lock_from_this_host_names_a_live_process_and_is_refused_at_once() -> TestResult {
         let path = temp("live-here");
-        let other = std::process::Command::new("sleep").arg("30").spawn()?;
+        let other = std::process::Command::new("sleep").arg("60").spawn()?;
         let here = Me {
             pid: other.id(),
             ..Me::this_process()
         };
         std::fs::write(lock_path(&path), lock_text(&here, "abc", 0))?;
         let started = Instant::now();
-        let err = AuditLog::open_as(&path, TEST_BEAT, &Me::this_process())
+        let err = AuditLog::open_as(&path, LIVE_BEAT, &Me::this_process())
             .err()
             .ok_or("opened a log held by a live process on this host")?;
+        let refused_after = started.elapsed();
         let mut other = other;
         other.kill()?;
         other.wait()?;
-        // Well under the six beats a lock it cannot judge is watched for; `ps` alone can take a beat.
+        // Refused as a live holder, not after watching its lock go quiet: that refusal says how long it waited.
+        assert!(err.contains("it wrote") && !err.contains("waited"), "{err}");
         assert!(
-            started.elapsed() < TEST_BEAT * 5,
-            "waited for a holder it can see"
+            refused_after < LIVE_BEAT * 5,
+            "waited for a holder it can see: {refused_after:?}"
         );
         assert!(err.contains(&format!("process {}", other.id())), "{err}");
         // Once that process is gone, its lock is taken over at once.
         let started = Instant::now();
-        drop(AuditLog::open_as(&path, TEST_BEAT, &Me::this_process())?);
+        drop(AuditLog::open_as(&path, LIVE_BEAT, &Me::this_process())?);
+        let taken_after = started.elapsed();
         assert!(
-            started.elapsed() < TEST_BEAT * 5,
-            "waited for a dead holder"
+            taken_after < LIVE_BEAT * 5,
+            "waited for a dead holder: {taken_after:?}"
         );
         assert!(!lock_path(&path).exists());
         Ok(())
