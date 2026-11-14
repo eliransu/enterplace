@@ -45,6 +45,7 @@ mod realtime;
 mod reload;
 mod spend;
 pub mod store;
+mod teams_api;
 mod traces;
 pub use mcp::{McpRoute, McpSetup};
 pub use traces::TraceExport;
@@ -724,7 +725,9 @@ fn build(
             .route("/admin/credentials/{name}", any(admin::handle))
             .route("/admin/guardrails/test", any(admin::handle))
             .route("/admin/policy", any(policy_api::handle))
-            .route("/admin/policy/{*rest}", any(policy_api::handle));
+            .route("/admin/policy/{*rest}", any(policy_api::handle))
+            .route("/admin/teams", any(teams_api::handle))
+            .route("/admin/teams/{name}", any(teams_api::handle));
     }
     let mcp = mcp::router(&state, config.mcp, config.mcp_setup)?;
     let cors_state = state.clone();

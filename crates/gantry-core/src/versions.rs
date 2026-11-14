@@ -382,6 +382,37 @@ pub fn add_model(
     Ok(to_yaml(&Value::Object(map)))
 }
 
+/// Puts team `name` in the policy's `teams:` as `team` (a mapping with its fields), replacing the one of that name,
+/// or takes it out when `team` is None. Returns the new text. `Err` when there is nothing to remove.
+pub fn set_team(text: &str, name: &str, team: Option<Value>) -> Result<String, String> {
+    let mut map = tree(text)?;
+    let list = map
+        .entry("teams")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Value::Array(list) = list else {
+        return Err("the policy's teams are not a list. Fix them in the editor.".into());
+    };
+    let at = list
+        .iter()
+        .position(|t| t.get("name").and_then(Value::as_str) == Some(name));
+    match (at, team) {
+        (Some(i), Some(team)) => list[i] = team,
+        (None, Some(team)) => list.push(team),
+        (Some(i), None) => {
+            list.remove(i);
+        }
+        (None, None) => {
+            return Err(format!(
+                "there is no team \"{name}\" under teams in the policy. GET /admin/teams lists them."
+            ));
+        }
+    }
+    if list.is_empty() {
+        map.remove("teams");
+    }
+    Ok(to_yaml(&Value::Object(map)))
+}
+
 /// Sets the price of `model` in US dollars per million tokens (input, output). Returns the new text.
 pub fn set_price(text: &str, model: &str, price: (f64, f64)) -> Result<String, String> {
     let mut map = tree(text)?;

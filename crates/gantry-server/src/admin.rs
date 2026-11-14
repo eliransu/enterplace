@@ -32,7 +32,7 @@ const NEED_STORE: &str = "Refused: provider credentials are kept in the store, s
 /// What an admin call asks for, once it is allowed.
 enum Plan {
     /// The keys, of one organization when the caller's role is confined to one.
-    List(Option<String>),
+    List(Role),
     /// Why a request would be allowed or refused, and every limit it would count against with what it has spent.
     Explain(Box<Value>),
     Issue {
@@ -630,14 +630,15 @@ async fn allow(
             ),
         ));
     }
-    // Kill switches and provider credentials act on the whole install: a role kept to one organization has neither.
-    if let (Some(org), Permission::Kill | Permission::Credentials) = (&role.org, needs(action)) {
+    // Kill switches, provider credentials and teams act on the whole install: a role kept to part of it has none.
+    if role.confined() && matches!(needs(action), Permission::Kill | Permission::Credentials) {
         return Err(refused(
             StatusCode::FORBIDDEN,
             "not_permitted",
             format!(
-                "Refused: {action} acts on the whole install, and role \"{}\" is kept to organization \"{org}\". Ask an admin of the whole install.",
-                role.name
+                "Refused: {action} acts on the whole install, and role \"{}\" is kept to {}. Ask an admin of the whole install.",
+                role.name,
+                reach(&role)
             ),
         ));
     }
@@ -657,7 +658,7 @@ async fn allow(
                 .entries()
                 .map(|(_, p)| p)
                 .filter(|p| key.len() >= 8 && p.key.starts_with(&key[..8]) || p.name == key)
-                .find(|p| role.org.as_ref().is_none_or(|o| *o == p.org))
+                .find(|p| role.covers(&p.org, &p.team, p.customer.as_deref()))
                 .ok_or_else(|| {
                     refused(
                         StatusCode::NOT_FOUND,
@@ -795,7 +796,7 @@ async fn allow(
                 by,
             })
         }
-        "list_keys" => Ok(Plan::List(role.org.clone())),
+        "list_keys" => Ok(Plan::List(role.clone())),
         "list_kills" => Ok(Plan::Kills),
         "test_guardrail" => {
             let (bytes, _held) = read_body(Some(&person.name), state, &parts.headers, body).await?;
@@ -923,7 +924,7 @@ async fn allow(
         }
         "issue_key" => {
             let (bytes, _held) = read_body(Some(&person.name), state, &parts.headers, body).await?;
-            let new: NewKey = serde_json::from_slice(&bytes).map_err(|err| {
+            let mut new: NewKey = serde_json::from_slice(&bytes).map_err(|err| {
                 refused(StatusCode::BAD_REQUEST, "invalid_request", format!("Refused: send a JSON object with \"name\" and \"team\", and optionally \"expires\", \"budget\", \"models\", \"tpm\", \"org\", \"customer\", \"tags\", \"parallel\", \"role\", \"rpm\", \"metadata\", \"routes\" and \"from\" ({err})."))
             })?;
             let mut extra = config::KeyEntry::default();
@@ -997,6 +998,27 @@ async fn allow(
                 (Some(own), _) => own.clone(),
                 (None, asked) => asked.unwrap_or_default(),
             };
+            // A role kept to teams or customers issues keys in them only; one kept to a single customer issues
+            // its keys for that customer.
+            if let ([only], None) = (role.customers.as_slice(), &new.customer) {
+                new.customer = Some(only.clone());
+            }
+            if !role.covers(&org, &new.team, new.customer.as_deref()) {
+                return Err(refused(
+                    StatusCode::FORBIDDEN,
+                    "not_permitted",
+                    format!(
+                        "Refused: role \"{}\" is kept to {}, and this key is for team \"{}\"{}. Issue it within your reach, or ask an admin of the whole install.",
+                        role.name,
+                        reach(&role),
+                        new.team,
+                        new.customer
+                            .as_deref()
+                            .map(|c| format!(" and customer \"{c}\""))
+                            .unwrap_or_default()
+                    ),
+                ));
+            }
             // A key may not be given more than its issuer holds: a role with a permission the issuer lacks, or one
             // not kept to the issuer's organization.
             if let Some(name) = &new.role {
@@ -1010,8 +1032,14 @@ async fn allow(
                         ),
                     ));
                 };
+                let within = |mine: &[String], theirs: &[String]| {
+                    mine.is_empty()
+                        || (!theirs.is_empty() && theirs.iter().all(|t| mine.contains(t)))
+                };
                 let wider = granted.permissions.iter().any(|p| !role.may(*p))
-                    || (role.org.is_some() && org.is_empty());
+                    || (role.org.is_some() && org.is_empty())
+                    || !within(&role.teams, &granted.teams)
+                    || !within(&role.customers, &granted.customers);
                 if wider {
                     return Err(refused(
                         StatusCode::FORBIDDEN,
@@ -1091,14 +1119,15 @@ async fn allow(
             let raw = prefix.unwrap_or_default();
             let prefix = raw.trim_end_matches("/rotate").to_ascii_lowercase();
             let found = one_key(state, &prefix)?;
-            // A role kept to one organization sees and changes that organization's keys only.
-            if let Some(org) = role.org.as_ref().filter(|o| **o != found.org) {
+            // A role kept to part of the install sees and changes the keys within it only.
+            if !role.covers(&found.org, &found.team, found.customer.as_deref()) {
                 return Err(refused(
                     StatusCode::FORBIDDEN,
                     "not_permitted",
                     format!(
-                        "Refused: the key {} is not in organization \"{org}\", the one role \"{}\" is kept to.",
+                        "Refused: the key {} is not within {}, which role \"{}\" is kept to.",
                         &found.sha256[..8],
+                        reach(&role),
                         role.name
                     ),
                 ));
@@ -1222,6 +1251,18 @@ async fn allow(
                     )
                 })?;
             }
+            if !role.covers(&after.org, &after.team, after.customer.as_deref()) {
+                return Err(refused(
+                    StatusCode::FORBIDDEN,
+                    "not_permitted",
+                    format!(
+                        "Refused: the change would take the key {} out of {}, which role \"{}\" is kept to. Nothing was changed.",
+                        &found.sha256[..8],
+                        reach(&role),
+                        role.name
+                    ),
+                ));
+            }
             // The record says what each field was and what it becomes.
             let (was, now) = (key_json(&found), key_json(&after));
             let changes: Map<String, Value> = sent
@@ -1277,15 +1318,17 @@ async fn allow(
                         "Refused: no key in the keys file has a hash that starts with {prefix}. GET /admin/keys lists them."
                     ),
                 )),
-                [found] if role.org.as_ref().is_some_and(|o| *o != found.org) => Err(refused(
-                    StatusCode::FORBIDDEN,
-                    "not_permitted",
-                    format!(
-                        "Refused: the key {prefix} is not in organization \"{}\", the one role \"{}\" is kept to.",
-                        role.org.as_deref().unwrap_or_default(),
-                        role.name
-                    ),
-                )),
+                [found] if !role.covers(&found.org, &found.team, found.customer.as_deref()) => {
+                    Err(refused(
+                        StatusCode::FORBIDDEN,
+                        "not_permitted",
+                        format!(
+                            "Refused: the key {prefix} is not within {}, which role \"{}\" is kept to.",
+                            reach(&role),
+                            role.name
+                        ),
+                    ))
+                }
                 [found] => {
                     call.target = Some(
                         json!({ "name": found.name, "team": found.team, "sha256_prefix": &found.sha256[..8] }),
@@ -1553,12 +1596,12 @@ async fn act(state: &AppState, version: &Snapshot, plan: Plan) -> Result<Respons
             }
         }
         Plan::Explain(explained) => Ok(json_response(StatusCode::OK, &explained)),
-        Plan::List(org) => {
+        Plan::List(role) => {
             let mut keys: Vec<Value> = version
                 .policy
                 .iter()
                 .flat_map(|policy| policy.entries())
-                .filter(|(_, who)| org.as_ref().is_none_or(|o| *o == who.org))
+                .filter(|(_, who)| role.covers(&who.org, &who.team, who.customer.as_deref()))
                 .map(|(hash, who)| {
                     json!({
                         "name": who.name,
@@ -1771,5 +1814,32 @@ async fn act(state: &AppState, version: &Snapshot, plan: Plan) -> Result<Respons
                 }),
             ))
         }
+    }
+}
+
+/// What a confined role is kept to, for messages: "organization \"acme\", teams payments, web".
+fn reach(role: &Role) -> String {
+    let mut parts = Vec::new();
+    if let Some(org) = &role.org {
+        parts.push(format!("organization \"{org}\""));
+    }
+    if !role.teams.is_empty() {
+        parts.push(format!(
+            "team{} {}",
+            if role.teams.len() == 1 { "" } else { "s" },
+            role.teams.join(", ")
+        ));
+    }
+    if !role.customers.is_empty() {
+        parts.push(format!(
+            "customer{} {}",
+            if role.customers.len() == 1 { "" } else { "s" },
+            role.customers.join(", ")
+        ));
+    }
+    if parts.is_empty() {
+        "the whole install".into()
+    } else {
+        parts.join(" and ")
     }
 }

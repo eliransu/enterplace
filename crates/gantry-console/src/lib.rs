@@ -70,9 +70,13 @@ const FLOOD: u64 = 100;
 enum Who {
     /// Signed in with an admin key, by its hash.
     Key(String),
-    /// Signed in through single sign-on, with the role the identity provider's claim gave: `admin`, `read_only`
-    /// or a role from the policy's `roles:`.
-    Sso { email: String, role: String },
+    /// Signed in through single sign-on (OpenID Connect or SAML), with the role the identity provider's claim gave:
+    /// `admin`, `read_only` or a role from the policy's `roles:`; and the team `teams:` put them in, or "".
+    Sso {
+        email: String,
+        role: String,
+        team: String,
+    },
     /// Signed in to an account an [`Extension`] keeps, by its ID. The extension says who it is on every request.
     Account(String),
 }
@@ -118,11 +122,13 @@ fn who_text(who: &Who) -> String {
     match who {
         Who::Key(sha) => format!("key {sha}"),
         // `read` is how sessions opened before custom roles name the read-only role.
-        Who::Sso { email, role } => {
-            format!(
-                "sso {} {email}",
-                if role == "read_only" { "read" } else { role }
-            )
+        Who::Sso { email, role, team } => {
+            let role = if role == "read_only" { "read" } else { role };
+            if team.is_empty() {
+                format!("sso {role} {email}")
+            } else {
+                format!("sso {role} {email} {team}")
+            }
         }
         Who::Account(account) => format!("account {account}"),
     }
@@ -133,10 +139,13 @@ fn who_of(text: &str) -> Option<Who> {
     Some(match kind {
         "key" => Who::Key(rest.to_string()),
         "sso" => {
-            let (role, email) = rest.split_once(' ')?;
+            let (role, rest) = rest.split_once(' ')?;
+            // Sessions opened before teams have no team after the email.
+            let (email, team) = rest.split_once(' ').unwrap_or((rest, ""));
             Who::Sso {
                 email: email.to_string(),
                 role: if role == "read" { "read_only" } else { role }.to_string(),
+                team: team.to_string(),
             }
         }
         "account" => Who::Account(rest.to_string()),
@@ -262,6 +271,10 @@ pub struct Admin {
     pub permissions: Vec<Permission>,
     /// The organization whose keys, records and spend alone the person sees, when the role keeps them to one.
     pub org: Option<String>,
+    /// The teams whose keys, records and spend alone the person sees, when the role keeps them to some.
+    pub teams: Vec<String>,
+    /// The end customers whose keys, records and spend alone the person sees, when the role keeps them to some.
+    pub customers: Vec<String>,
 }
 
 /// How a person signed in to the console.
@@ -287,7 +300,27 @@ impl Admin {
             via,
             permissions: role.map(|r| r.permissions).unwrap_or_default(),
             org: None,
+            teams: Vec::new(),
+            customers: Vec::new(),
         }
+    }
+
+    /// Whether the person is kept to part of the install: an organization, teams or customers.
+    pub fn confined(&self) -> bool {
+        self.org.is_some() || !self.teams.is_empty() || !self.customers.is_empty()
+    }
+
+    /// Whether a key of this organization, team and end customer is one the person may see and act on.
+    pub fn covers(&self, org: &str, team: &str, customer: Option<&str>) -> bool {
+        self.org.as_ref().is_none_or(|o| o == org)
+            && (self.teams.is_empty() || self.teams.iter().any(|t| t == team))
+            && (self.customers.is_empty()
+                || customer.is_some_and(|c| self.customers.iter().any(|x| x == c)))
+    }
+
+    /// Whether a key file entry is within the person's reach.
+    pub fn covers_entry(&self, entry: &config::KeyEntry) -> bool {
+        self.covers(&entry.org, &entry.team, entry.customer.as_deref())
     }
 
     /// Whether the person holds `permission`.
@@ -295,12 +328,21 @@ impl Admin {
         self.permissions.contains(&permission)
     }
 
-    /// Whether a record (an audit log line) is one this person may see: every record for someone not kept to an
-    /// organization, else only those of theirs.
+    /// Whether a record (an audit log line) is one this person may see: every record for someone not kept to part
+    /// of the install, else only those of their organization, teams and customers.
     pub fn sees(&self, line: &str) -> bool {
-        self.org
-            .as_ref()
-            .is_none_or(|org| line.contains(&format!("\"org\":\"{org}\"")))
+        if !self.confined() {
+            return true;
+        }
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            return false;
+        };
+        let field = |name: &str| record.get(name).and_then(Value::as_str);
+        self.covers(
+            field("org").unwrap_or_default(),
+            field("team").unwrap_or_default(),
+            field("customer"),
+        )
     }
 
     /// How the pages show who is signed in.
@@ -327,6 +369,8 @@ fn admin_of(name: String, team: String, role: &Role, via: Via) -> Admin {
         via,
         permissions: role.permissions.clone(),
         org: role.org.clone(),
+        teams: role.teams.clone(),
+        customers: role.customers.clone(),
     }
 }
 
@@ -679,16 +723,15 @@ impl Console {
                 Some(admin_of(e.name, e.team, &role, Via::Key))
             }),
             // The policy file is read every time, so removing console.sso or a person's email ends their session at once.
-            Who::Sso { email, role } => {
-                let domain = email.rsplit_once('@').map_or("", |(_, d)| d);
-                let allowed = self.sso_config().ok().flatten().is_some_and(|sso| {
-                    sso.allowed_emails.contains(&email)
-                        || sso.allowed_domains.iter().any(|d| d == domain)
+            Who::Sso { email, role, team } => {
+                let allowed = self.sign_in_config().ok().is_some_and(|(sso, saml)| {
+                    sso.is_some_and(|sso| sso::Access::of_sso(&sso).lets_in(&email))
+                        || saml.is_some_and(|saml| sso::Access::of_saml(&saml).lets_in(&email))
                 });
                 allowed
                     .then(|| self.role(&role, ""))
                     .flatten()
-                    .map(|role| admin_of(email, String::new(), &role, Via::Sso))
+                    .map(|role| admin_of(email, team, &role, Via::Sso))
             }
             Who::Account(account) => match &self.0.accounts {
                 Some(accounts) => accounts(account).await,
@@ -739,12 +782,25 @@ impl Console {
     }
 
     fn sso_config(&self) -> Result<Option<config::Sso>, String> {
+        self.sign_in_config().map(|(sso, _)| sso)
+    }
+
+    /// `console.sso` and `console.saml` from the policy as it is now.
+    fn sign_in_config(&self) -> Result<(Option<config::Sso>, Option<config::Saml>), String> {
         let c = self.config();
         let text = config::policy_text(&c.policy)?;
         let keys = config::read_keys(&c.keys)?.unwrap_or_default();
         config::load_texts(&c.policy, &text, &c.keys, &keys)
-            .map(|loaded| loaded.sso)
+            .map(|loaded| (loaded.sso, loaded.saml))
             .map_err(|errors| errors.join(" "))
+    }
+
+    /// The `teams:` of the policy as it is now, for single sign-on.
+    fn teams(&self) -> Vec<gantry_core::policy::Team> {
+        let c = self.config();
+        config::load(&c.policy, Some(&c.keys))
+            .map(|loaded| loaded.policy.teams().to_vec())
+            .unwrap_or_default()
     }
 
     fn used(&self) -> std::sync::MutexGuard<'_, HashMap<String, Instant>> {
@@ -1342,12 +1398,12 @@ async fn sso_callback(
     if let Some(cli) = cli_cookie(&console, &headers, query.get("state")) {
         return cli_finish(&console, &cli, finished).await;
     }
-    let roles = console.roles();
-    match finished.and_then(|(claims, sso)| sso::admit(&claims, &sso, &roles)) {
-        Ok((email, role)) => {
+    let (roles, teams) = (console.roles(), console.teams());
+    match finished.and_then(|(claims, sso)| sso::admit(&claims, &sso, &roles, &teams)) {
+        Ok((email, role, team)) => {
             let act = Act {
                 action: "console_sign_in",
-                by: Some((&email, "")),
+                by: Some((&email, &team)),
                 key: None,
                 target: json!({ "via": "sso", "role": role }),
             };
@@ -1357,7 +1413,7 @@ async fn sso_callback(
                     pages::sign_in("", NOT_RECORDED, true),
                 );
             }
-            let session = match console.open_session(Who::Sso { email, role }).await {
+            let session = match console.open_session(Who::Sso { email, role, team }).await {
                 Ok(session) => session,
                 Err(err) => {
                     return page(
@@ -1393,7 +1449,8 @@ async fn cli_finish(console: &Console, cli: &CliStart, finished: SsoResult) -> R
     } else {
         format!("http://127.0.0.1:{}/callback?state={}", cli.port, cli.state)
     };
-    let to = match finished.and_then(|(claims, sso)| sso::admit_self(&claims, &sso)) {
+    let teams = console.teams();
+    let to = match finished.and_then(|(claims, sso)| sso::admit_self(&claims, &sso, &teams)) {
         Ok((email, team, days)) => {
             let Some(code) = random_hex() else {
                 return page(
@@ -1790,7 +1847,7 @@ pub(crate) fn not_permitted(admin: &Admin, permission: Permission) -> Response {
 
 /// The audit log as a person may see it: whole, or only their organization's records.
 fn log_for(admin: &Admin, log: Result<Option<String>, String>) -> Result<Option<String>, String> {
-    if admin.org.is_none() {
+    if !admin.confined() {
         return log;
     }
     log.map(|text| {
@@ -1898,14 +1955,16 @@ fn keys_for(
     path: &std::path::Path,
     text: Result<Option<String>, String>,
 ) -> Result<Option<String>, String> {
-    let Some(org) = &admin.org else {
+    if !admin.confined() {
         return text;
-    };
+    }
     text.map(|text| {
         text.map(|text| {
             let entries = config::key_entries(path, &text).unwrap_or_default();
-            let mine: Vec<config::KeyEntry> =
-                entries.into_iter().filter(|e| e.org == *org).collect();
+            let mine: Vec<config::KeyEntry> = entries
+                .into_iter()
+                .filter(|e| admin.covers_entry(e))
+                .collect();
             keyfile::keys_text(&mine)
         })
     })
@@ -1941,10 +2000,48 @@ async fn issue(State(console): State<Console>, headers: HeaderMap, body: String)
                 gantry_core::policy::Period::Month
             },
         }),
-        // A person kept to one organization issues keys in it.
+        // A person kept to one organization issues keys in it, and one kept to one customer keys for it.
         org: admin.org.clone().unwrap_or_default(),
+        customer: match admin.customers.as_slice() {
+            [one] => Some(one.clone()),
+            _ => None,
+        },
         ..keyfile::Attributes::default()
     };
+    if admin.may(Permission::IssueKeys)
+        && !admin.covers(&attributes.org, &team, attributes.customer.as_deref())
+    {
+        let error = format!(
+            "Your role keeps you to team{} {}{}: issue the key in one of them.",
+            if admin.teams.len() == 1 { "" } else { "s" },
+            admin.teams.join(", "),
+            if admin.customers.len() > 1 {
+                format!(
+                    " and customers {}, and your role cannot pick one here",
+                    admin.customers.join(", ")
+                )
+            } else {
+                String::new()
+            }
+        );
+        read_only(&console, &admin, "issue_key").await;
+        return page(
+            StatusCode::BAD_REQUEST,
+            people_body(
+                &console,
+                &admin,
+                &Form(Vec::new()),
+                pages::Dialog::Issue {
+                    name,
+                    team,
+                    expires,
+                    budget,
+                    per,
+                    error,
+                },
+            ),
+        );
+    }
     if !admin.may(Permission::IssueKeys) {
         read_only(&console, &admin, "issue_key").await;
         return page(
@@ -2042,7 +2139,7 @@ async fn revoke(State(console): State<Console>, headers: HeaderMap, body: String
         .flatten()
         .and_then(|text| config::key_entries(&keys, &text).ok())
         .and_then(|entries| entries.into_iter().find(|e| e.sha256 == sha256));
-    let Some(entry) = entry.filter(|e| admin.org.as_ref().is_none_or(|o| *o == e.org)) else {
+    let Some(entry) = entry.filter(|e| admin.covers_entry(e)) else {
         return redirect("/console/people");
     };
     if !admin.may(Permission::RevokeKeys) {
@@ -2207,7 +2304,7 @@ async fn credential_change(
             credentials_body(&console, &admin, &Form(Vec::new()), dialog),
         )
     };
-    if !admin.may(Permission::Credentials) || admin.org.is_some() {
+    if !admin.may(Permission::Credentials) || admin.confined() {
         read_only(&console, &admin, action).await;
         return back("Your role may not change credentials, which serve the whole install: ask an admin to change them.".into());
     }

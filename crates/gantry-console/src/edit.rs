@@ -654,17 +654,17 @@ async fn teams_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
 /// Whether the person may change the policy: `edit_policy`, and not kept to one organization, since the policy
 /// governs every one.
 fn edits_policy(admin: &Admin) -> bool {
-    admin.may(Permission::EditPolicy) && admin.org.is_none()
+    admin.may(Permission::EditPolicy) && !admin.confined()
 }
 
 /// Whether the person may change this key: `issue_keys`, in the key's organization when kept to one.
 fn edits_key(admin: &Admin, entry: &config::KeyEntry) -> bool {
-    admin.may(Permission::IssueKeys) && admin.org.as_ref().is_none_or(|o| *o == entry.org)
+    admin.may(Permission::IssueKeys) && admin.covers_entry(entry)
 }
 
 /// Whether the person holds every right an admin key gives, so may make one or change one.
 fn full_admin(admin: &Admin) -> bool {
-    admin.org.is_none() && Permission::ALL.iter().all(|p| admin.may(*p))
+    !admin.confined() && Permission::ALL.iter().all(|p| admin.may(*p))
 }
 
 // ---------------------------------------------------------------- key fields

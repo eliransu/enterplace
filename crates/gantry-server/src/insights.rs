@@ -288,6 +288,22 @@ fn clause(query: &Query) -> (String, Vec<Box<dyn ToSql + Sync + Send>>) {
         let wanted = serde_json::json!({ dimension: [value] }).to_string();
         add("labels @> CAST(? AS text)::jsonb", Box::new(wanted));
     }
+    for (dimension, any) in &query.within {
+        // The name goes in the SQL itself, so only a dimension Gantry defines is accepted; anything else matches
+        // nothing rather than everything.
+        if gantry_core::insights::DIMENSIONS
+            .iter()
+            .any(|d| d.name == dimension)
+        {
+            let term = format!("jsonb_exists_any(labels -> '{dimension}', CAST(? AS text[]))");
+            add(&term, Box::new(any.clone()));
+        } else {
+            add(
+                "false AND CAST(? AS text[]) IS NOT NULL",
+                Box::new(any.clone()),
+            );
+        }
+    }
     if !query.code.is_empty() {
         add("code = ?", Box::new(query.code.clone()));
     }

@@ -396,6 +396,9 @@ pub fn fold_chain(path: &Path) -> Result<Vec<Row>, String> {
 pub struct Query {
     /// Dimension name and the value it must have.
     pub labels: Vec<(String, String)>,
+    /// Dimension name and the values one of which it must have: the reach of a person kept to some teams or
+    /// customers. Never from a form, so a viewer cannot widen it.
+    pub within: Vec<(String, Vec<String>)>,
     /// `allowed`, `refused` or `error`.
     pub outcome: String,
     pub code: String,
@@ -542,6 +545,11 @@ impl Query {
                 .labels
                 .iter()
                 .all(|(d, v)| row.labels.get(d).is_some_and(|vs| vs.contains(v)))
+            && self.within.iter().all(|(d, any)| {
+                row.labels
+                    .get(d)
+                    .is_some_and(|vs| vs.iter().any(|v| any.contains(v)))
+            })
             && (self.code.is_empty() || row.code == self.code)
             && (self.finding.is_empty() || row.findings.contains(&self.finding))
             && (self.id.is_empty() || row.id == self.id)

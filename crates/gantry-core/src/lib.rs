@@ -15,12 +15,14 @@ pub mod litellm;
 pub mod mcp;
 pub mod metrics;
 pub mod policy;
+pub mod secrets;
 pub mod sigv4;
 pub mod store;
 pub mod translate;
 pub mod usage;
 pub mod vendors;
 pub mod versions;
+pub mod x509;
 
 /// Version of the gateway, shared by the server and the CLI.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -521,11 +521,63 @@ fn listed(email: &str, emails: &[String], domains: &[String]) -> bool {
     emails.iter().any(|e| e == email) || domains.iter().any(|d| d == domain)
 }
 
-/// Whose personal key `gantry login` may issue, under `console.sso.self_issue`. No role is needed: the key is for
-/// the person's own requests, which the policy's rules decide.
+/// Who may sign in and with which role, as `console.sso` and `console.saml` both say it.
+pub(crate) struct Access<'a> {
+    /// Where it is set, for messages: `console.sso` or `console.saml`.
+    pub section: &'static str,
+    /// The claim or attribute whose values give the role, for messages.
+    pub attribute: &'a str,
+    pub allowed_domains: &'a [String],
+    pub allowed_emails: &'a [String],
+    pub admin_values: &'a [String],
+    pub read_only_values: &'a [String],
+}
+
+impl<'a> Access<'a> {
+    pub(crate) fn of_sso(sso: &'a Sso) -> Self {
+        Access {
+            section: "console.sso",
+            attribute: &sso.role_claim,
+            allowed_domains: &sso.allowed_domains,
+            allowed_emails: &sso.allowed_emails,
+            admin_values: &sso.admin_values,
+            read_only_values: &sso.read_only_values,
+        }
+    }
+
+    pub(crate) fn of_saml(saml: &'a gantry_core::config::Saml) -> Self {
+        Access {
+            section: "console.saml",
+            attribute: &saml.role_attribute,
+            allowed_domains: &saml.allowed_domains,
+            allowed_emails: &saml.allowed_emails,
+            admin_values: &saml.admin_values,
+            read_only_values: &saml.read_only_values,
+        }
+    }
+
+    pub(crate) fn lets_in(&self, email: &str) -> bool {
+        listed(email, self.allowed_emails, self.allowed_domains)
+    }
+}
+
+/// The values of a claim that is a string or a list of strings.
+pub(crate) fn values<'v>(claims: &'v Value, claim: &str) -> Vec<&'v str> {
+    match claims.get(claim) {
+        Some(Value::String(v)) => vec![v.as_str()],
+        Some(Value::Array(vs)) => vs.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Whose personal key `gantry login` may issue, under `console.sso.self_issue`, and in which team: the team of the
+/// policy's `teams:` that lists the email or holds one of the person's group values, else `self_issue.team`. When
+/// the teams place people and place this one nowhere, the key is refused unless `self_issue.team` is written. No
+/// role is needed: the key is for the person's own requests, which the policy's rules decide.
 pub(crate) fn admit_self(
     claims: &Value,
     sso: &Sso,
+    teams: &[gantry_core::policy::Team],
 ) -> Result<(String, String, u32), (Option<String>, Refusal)> {
     let email = verified_email(claims)?;
     let Some(si) = &sso.self_issue else {
@@ -543,40 +595,75 @@ pub(crate) fn admit_self(
         );
         return Err((Some(email), refuse("sso_self_issue", message)));
     }
-    Ok((email, si.team.clone(), si.expires_days))
+    let groups = values(claims, &sso.role_claim);
+    let team = match gantry_core::policy::team_of(teams, &email, &groups) {
+        Some(team) => team.name.clone(),
+        None if si.team_set
+            || teams
+                .iter()
+                .all(|t| t.members.is_empty() && t.sso_values.is_empty()) =>
+        {
+            si.team.clone()
+        }
+        None => {
+            let message = format!(
+                "{email} is in no team: the policy's teams list neither the email nor any of its \"{}\" values ({}). Ask an admin to add you to a team's members, or your group to a team's sso_values, in the policy file.",
+                sso.role_claim,
+                if groups.is_empty() {
+                    "it has none".to_string()
+                } else {
+                    groups.join(", ")
+                }
+            );
+            return Err((Some(email), refuse("sso_team", message)));
+        }
+    };
+    Ok((email, team, si.expires_days))
 }
 
-/// Who the claims are and what role they get, or why they are not let in.
-/// The role is `admin` for an admin value, else the first policy role whose `sso_values` the claim holds, else
-/// `read_only` for a read-only value.
+/// Who the claims are, what role they get and their team, or why they are not let in.
 pub(crate) fn admit(
     claims: &Value,
     sso: &Sso,
     roles: &[gantry_core::policy::Role],
-) -> Result<(String, String), (Option<String>, Refusal)> {
+    teams: &[gantry_core::policy::Team],
+) -> Result<(String, String, String), (Option<String>, Refusal)> {
     let email = verified_email(claims)?;
-    if !listed(&email, &sso.allowed_emails, &sso.allowed_domains) {
+    let groups = values(claims, &sso.role_claim);
+    admit_person(email, &groups, &Access::of_sso(sso), roles, teams)
+}
+
+/// A person the identity provider vouched for, with its values of the role claim or attribute: their role and team,
+/// or why they are not let in. The role is `admin` for an admin value, else the first policy role whose `sso_values`
+/// holds one, else `read_only` for a read-only value. The team is the one `teams:` puts them in, else none.
+pub(crate) fn admit_person(
+    email: String,
+    groups: &[&str],
+    access: &Access<'_>,
+    roles: &[gantry_core::policy::Role],
+    teams: &[gantry_core::policy::Team],
+) -> Result<(String, String, String), (Option<String>, Refusal)> {
+    if !access.lets_in(&email) {
         let message = format!(
-            "{email} may not sign in to this console. Ask an admin to add it, or its domain, to console.sso in the policy file."
+            "{email} may not sign in to this console. Ask an admin to add it, or its domain, to {} in the policy file.",
+            access.section
         );
         return Err((Some(email), refuse("sso_email", message)));
     }
-    let values: Vec<&str> = match claims.get(&sso.role_claim) {
-        Some(Value::String(v)) => vec![v.as_str()],
-        Some(Value::Array(vs)) => vs.iter().filter_map(Value::as_str).collect(),
-        _ => Vec::new(),
-    };
-    let has = |list: &[String]| values.iter().any(|v| list.iter().any(|l| l == v));
-    if has(&sso.admin_values) {
-        Ok((email, "admin".into()))
+    let has = |list: &[String]| groups.iter().any(|v| list.iter().any(|l| l == v));
+    let team = gantry_core::policy::team_of(teams, &email, groups)
+        .map(|t| t.name.clone())
+        .unwrap_or_default();
+    if has(access.admin_values) {
+        Ok((email, "admin".into(), team))
     } else if let Some(role) = roles.iter().find(|r| has(&r.sso_values)) {
-        Ok((email, role.name.clone()))
-    } else if has(&sso.read_only_values) {
-        Ok((email, "read_only".into()))
+        Ok((email, role.name.clone(), team))
+    } else if has(access.read_only_values) {
+        Ok((email, "read_only".into(), team))
     } else {
         let message = format!(
-            "{email} has no console role: its \"{}\" claim holds none of the values in admin_values, read_only_values or a role's sso_values. Ask an admin to add you to the right group at the identity provider.",
-            sso.role_claim
+            "{email} has no console role: its \"{}\" values hold none of the values in admin_values, read_only_values or a role's sso_values. Ask an admin to add you to the right group at the identity provider.",
+            access.attribute
         );
         Err((Some(email), refuse("sso_role", message)))
     }

@@ -15,7 +15,7 @@ use crate::{
     policy::{
         Budget, CacheScope, CallerKey, Cap, Capture, Cidr, JwtTrust, KeyOptions, Limits, Mode,
         Models, Period, Permission, Policy, Principal, Role, Rule, ScopeKind, ScopeLimit, Semantic,
-        Who,
+        Team, Who,
     },
     usage::{PriceOverrides, price_for},
 };
@@ -98,6 +98,16 @@ const KNOWN: &[&str] = &[
     "read_only_values",
     "self_issue",
     "expires_days",
+    "saml",
+    "idp_entity_id",
+    "idp_sso_url",
+    "idp_certificate",
+    "sp_entity_id",
+    "acs_url",
+    "email_attribute",
+    "role_attribute",
+    "owner",
+    "members",
     "expires",
     "headers_env",
     "model",
@@ -225,6 +235,8 @@ struct PolicyFile {
     #[serde(default)]
     roles: Vec<RoleFile>,
     #[serde(default)]
+    teams: Vec<TeamFile>,
+    #[serde(default)]
     jwt: Vec<JwtFile>,
     #[serde(default)]
     trusted_proxies: Vec<String>,
@@ -326,7 +338,26 @@ struct RoleFile {
     #[serde(default)]
     org: Option<String>,
     #[serde(default)]
+    teams: Vec<String>,
+    #[serde(default)]
+    customers: Vec<String>,
+    #[serde(default)]
     sso_values: Vec<String>,
+}
+
+/// A team: its owner, its members by email, and the identity provider groups that put people in it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TeamFile {
+    name: String,
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    members: Vec<String>,
+    #[serde(default)]
+    sso_values: Vec<String>,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
 }
 
 /// One budget, or a list of them (a daily and a monthly one).
@@ -685,6 +716,156 @@ struct AuditFile {
 struct ConsoleFile {
     #[serde(default)]
     sso: Option<SsoFile>,
+    #[serde(default)]
+    saml: Option<SamlFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SamlFile {
+    idp_entity_id: String,
+    idp_sso_url: String,
+    idp_certificate: String,
+    sp_entity_id: String,
+    acs_url: String,
+    #[serde(default)]
+    email_attribute: Option<String>,
+    role_attribute: String,
+    #[serde(default)]
+    admin_values: Vec<String>,
+    #[serde(default)]
+    read_only_values: Vec<String>,
+    #[serde(default)]
+    allowed_domains: Vec<String>,
+    #[serde(default)]
+    allowed_emails: Vec<String>,
+}
+
+/// Console sign-in through a SAML 2.0 identity provider, as checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Saml {
+    /// The `Issuer` of the identity provider's responses, exactly as written.
+    pub idp_entity_id: String,
+    /// Where the browser is sent with the request to sign in (HTTP-Redirect binding).
+    pub idp_sso_url: String,
+    /// The identity provider's signing certificates, DER, from the PEM blocks of `idp_certificate`. An assertion
+    /// signed by any of them is accepted, so a certificate can be rotated without a gap.
+    pub idp_certificates: Vec<Vec<u8>>,
+    /// Gantry's entity ID: the audience every assertion must name.
+    pub sp_entity_id: String,
+    /// The console's `/console/saml/acs` at its public address: where assertions are posted, and their recipient.
+    pub acs_url: String,
+    /// The attribute that holds the email. None: the subject's NameID, which must then be an email.
+    pub email_attribute: Option<String>,
+    pub role_attribute: String,
+    pub admin_values: Vec<String>,
+    pub read_only_values: Vec<String>,
+    pub allowed_domains: Vec<String>,
+    pub allowed_emails: Vec<String>,
+}
+
+/// The DER of each `CERTIFICATE` PEM block in `text`.
+pub fn pem_certificates(text: &str) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("-----BEGIN CERTIFICATE-----") {
+        let body = &rest[start + "-----BEGIN CERTIFICATE-----".len()..];
+        let Some(end) = body.find("-----END CERTIFICATE-----") else {
+            break;
+        };
+        let b64: String = body[..end].split_whitespace().collect();
+        if let Some(der) = crate::x509::base64_decode(&b64) {
+            out.push(der);
+        }
+        rest = &body[end..];
+    }
+    out
+}
+
+fn console_saml(
+    file: &Path,
+    text: &str,
+    parsed: &PolicyFile,
+    errors: &mut Vec<String>,
+) -> Option<Saml> {
+    let saml = parsed.console.as_ref()?.saml.as_ref()?;
+    let before = errors.len();
+    let start = line_of_key(text, "saml", 1, usize::MAX);
+    let at = |key: &str| {
+        format!(
+            "{}:{}",
+            file.display(),
+            line_of_key(text, key, start, usize::MAX)
+        )
+    };
+    if saml.idp_entity_id.trim().is_empty() {
+        errors.push(format!(
+            "{}: idp_entity_id is empty. Copy the identity provider's entity ID (its Issuer) exactly as its SAML setup page shows it.",
+            at("idp_entity_id")
+        ));
+    }
+    if !secure_url(&saml.idp_sso_url) {
+        errors.push(format!(
+            "{}: idp_sso_url must be the identity provider's https single sign-on URL for the HTTP-Redirect binding. Plain http is accepted only for a provider on this machine.",
+            at("idp_sso_url")
+        ));
+    }
+    let idp_certificates = pem_certificates(&saml.idp_certificate);
+    if idp_certificates.is_empty()
+        || idp_certificates
+            .iter()
+            .any(|der| crate::x509::public_key(der).is_err())
+    {
+        errors.push(format!(
+            "{}: idp_certificate must be the identity provider's signing certificate in PEM, from -----BEGIN CERTIFICATE----- to -----END CERTIFICATE-----, with an RSA or P-256 key. Download it from the provider's SAML setup page and paste it under idp_certificate: |",
+            at("idp_certificate")
+        ));
+    }
+    if saml.sp_entity_id.trim().is_empty() {
+        errors.push(format!(
+            "{}: sp_entity_id is empty. Use the console's metadata address, for example https://gantry.example.com/console/saml/metadata, and enter the same value as the audience (SP entity ID) at the identity provider.",
+            at("sp_entity_id")
+        ));
+    }
+    if !secure_url(&saml.acs_url) || !saml.acs_url.ends_with("/console/saml/acs") {
+        errors.push(format!(
+            "{}: acs_url must be the console's assertion consumer service at its public https address, for example https://gantry.example.com/console/saml/acs, and be entered as the ACS (reply) URL at the identity provider.",
+            at("acs_url")
+        ));
+    }
+    if saml.allowed_domains.is_empty() && saml.allowed_emails.is_empty() {
+        errors.push(format!(
+            "{}:{start}: saml lets nobody in. Add allowed_domains (for example [example.com]) or allowed_emails, so only your people can sign in.",
+            file.display()
+        ));
+    }
+    if saml.role_attribute.trim().is_empty()
+        || (saml.admin_values.is_empty() && saml.read_only_values.is_empty())
+    {
+        errors.push(format!(
+            "{}: saml gives nobody a role. Set role_attribute to the assertion attribute that holds groups (for example groups), and list the values that make a console admin in admin_values and read-only viewers in read_only_values.",
+            at("role_attribute")
+        ));
+    }
+    let lower = |list: &[String]| -> Vec<String> {
+        list.iter().map(|v| v.trim().to_ascii_lowercase()).collect()
+    };
+    (errors.len() == before).then(|| Saml {
+        idp_entity_id: saml.idp_entity_id.clone(),
+        idp_sso_url: saml.idp_sso_url.clone(),
+        idp_certificates,
+        sp_entity_id: saml.sp_entity_id.clone(),
+        acs_url: saml.acs_url.clone(),
+        email_attribute: saml
+            .email_attribute
+            .clone()
+            .filter(|a| !a.trim().is_empty()),
+        role_attribute: saml.role_attribute.clone(),
+        admin_values: saml.admin_values.clone(),
+        read_only_values: saml.read_only_values.clone(),
+        allowed_domains: lower(&saml.allowed_domains),
+        allowed_emails: lower(&saml.allowed_emails),
+    })
 }
 
 #[derive(Deserialize)]
@@ -726,8 +907,11 @@ pub struct SelfIssue {
     /// Lower case, as `Sso::allowed_domains`.
     pub allowed_domains: Vec<String>,
     pub allowed_emails: Vec<String>,
-    /// The team the keys are in. `developers` unless set.
+    /// The team the keys are in when `teams:` puts the person in none. `developers` unless set.
     pub team: String,
+    /// Whether `team` was written. When the policy's `teams:` place people by email or group, a person they place
+    /// nowhere gets a key only in a team written here.
+    pub team_set: bool,
     /// Days a key works. 30 unless set.
     pub expires_days: u32,
 }
@@ -849,6 +1033,7 @@ fn console_sso(
         SelfIssue {
             allowed_domains: lower(&si.allowed_domains),
             allowed_emails: lower(&si.allowed_emails),
+            team_set: si.team.is_some(),
             team,
             expires_days,
         }
@@ -1406,6 +1591,8 @@ pub struct Loaded {
     pub keys_file_found: bool,
     /// Console sign-in through an identity provider, when the policy file sets `console.sso`.
     pub sso: Option<Sso>,
+    /// Console sign-in through a SAML 2.0 identity provider, when the policy file sets `console.saml`.
+    pub saml: Option<Saml>,
     /// Model names callers send that Gantry serves from one or more deployments.
     pub aliases: Vec<Alias>,
     /// Upstream MCP servers whose tools Gantry serves at `/mcp`.
@@ -2310,11 +2497,81 @@ fn roles(file: &Path, text: &str, parsed: &PolicyFile, errors: &mut Vec<String>)
         if let Some(org) = &role.org {
             check_org(&parsed.orgs, org, &at, errors);
         }
+        for name in role.teams.iter().chain(&role.customers) {
+            if !valid_name(name) || name == "*" {
+                errors.push(format!(
+                    "{at}: \"{name}\" in role \"{}\" is not a team or customer name: letters, digits, dots, dashes, underscores and @ only, at most 100 characters.",
+                    role.name
+                ));
+            }
+        }
         out.push(Role {
             name: role.name.clone(),
             permissions,
             org: role.org.clone(),
+            teams: role.teams.clone(),
+            customers: role.customers.clone(),
             sso_values: role.sso_values.clone(),
+            line,
+        });
+    }
+    out
+}
+
+/// The `teams:` list, checked: valid names, each once, members and owners that are emails.
+fn teams(file: &Path, text: &str, parsed: &PolicyFile, errors: &mut Vec<String>) -> Vec<Team> {
+    let lines = list_lines(text, "teams");
+    let mut out: Vec<Team> = Vec::new();
+    for (i, team) in parsed.teams.iter().enumerate() {
+        let line = lines.get(i).copied().unwrap_or(0);
+        let at = format!("{}:{line}", file.display());
+        if !valid_name(&team.name) {
+            errors.push(format!(
+                "{at}: a team name uses letters, digits, dots, dashes, underscores and @ only, at most 100 characters."
+            ));
+        }
+        if out.iter().any(|t| t.name == team.name) {
+            errors.push(format!(
+                "{at}: team \"{}\" is listed twice under teams. List it once, with all its members.",
+                team.name
+            ));
+        }
+        let email = |e: &String| e.trim().to_ascii_lowercase();
+        for person in team.members.iter().chain(&team.owner) {
+            let e = email(person);
+            if !e.contains('@') || e.contains(char::is_whitespace) {
+                errors.push(format!(
+                    "{at}: \"{person}\" in team \"{}\" is not an email. Members and the owner are named by the email they sign in with.",
+                    team.name
+                ));
+            }
+        }
+        if let Some(owner) = out
+            .iter()
+            .flat_map(|t| t.members.iter().map(move |m| (m, &t.name)))
+            .find(|(m, _)| team.members.iter().any(|x| email(x) == **m))
+        {
+            errors.push(format!(
+                "{at}: {} is a member of team \"{}\" and of team \"{}\". A person is in one team, so gantry login knows which team their key is in.",
+                owner.0, owner.1, team.name
+            ));
+        }
+        if team.metadata.len() > MAX_LIST
+            || team
+                .metadata
+                .iter()
+                .any(|(k, v)| !valid_name(k) || v.len() > MAX_METADATA_VALUE || v.contains('\n'))
+        {
+            errors.push(format!(
+                "{at}: metadata holds at most {MAX_LIST} entries, each name in letters, digits, '.', '-', '_' and '@' and each value at most {MAX_METADATA_VALUE} characters on one line."
+            ));
+        }
+        out.push(Team {
+            name: team.name.clone(),
+            owner: team.owner.as_ref().map(email),
+            members: team.members.iter().map(email).collect(),
+            sso_values: team.sso_values.clone(),
+            metadata: team.metadata.clone(),
             line,
         });
     }
@@ -3851,6 +4108,8 @@ pub fn load_texts(
     check_profiles(policy_path, policy_text, &parsed, &mut errors);
     let scope_limits = scope_limits(policy_path, policy_text, &parsed, &mut errors);
     let roles = roles(policy_path, policy_text, &parsed, &mut errors);
+    let teams = teams(policy_path, policy_text, &parsed, &mut errors);
+    let saml = console_saml(policy_path, policy_text, &parsed, &mut errors);
     // A key's org and role must be ones the policy has: a misspelled org would be a tenant with no rules, and a
     // misspelled role a key that cannot sign in.
     for entry in &keys {
@@ -3905,6 +4164,7 @@ pub fn load_texts(
                 .with_mcp_bundles(bundles)
                 .with_scope_limits(scope_limits)
                 .with_roles(roles)
+                .with_teams(teams)
                 .with_orgs(parsed.orgs.clone())
                 .with_jwt(jwt)
                 .with_trusted_proxies(trusted_proxies)
@@ -3918,6 +4178,7 @@ pub fn load_texts(
             policy_text: policy_text.to_string(),
             keys_file_found: true,
             sso,
+            saml,
             aliases,
             mcp,
             store,

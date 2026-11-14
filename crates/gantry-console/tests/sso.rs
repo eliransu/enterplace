@@ -1038,6 +1038,17 @@ async fn browse(
     opened: &str,
     email: &str,
 ) -> Result<(String, String), Error> {
+    browse_in(s, rsa, opened, email, json!([])).await
+}
+
+/// `browse`, with the groups the identity provider says the person is in.
+async fn browse_in(
+    s: &Setup,
+    rsa: &Rsa,
+    opened: &str,
+    email: &str,
+    groups: Value,
+) -> Result<(String, String), Error> {
     let path = &opened[opened.find("/console/").ok_or("not a console address")?..];
     let (status, headers, body) = send(&s.app, "GET", path, "", "").await?;
     assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
@@ -1054,7 +1065,7 @@ async fn browse(
     let mut claims = claims(s, &param(&to, "nonce"));
     claims["email"] = email.into();
     // No console role: a personal key needs none.
-    claims["groups"] = json!([]);
+    claims["groups"] = groups;
     let token = jwt(&Signer::Rsa(rsa), "r1", &claims)?;
     lock(&s.mock).grant = Some(("code-1".into(), token, param(&to, "code_challenge")));
     let (status, headers, body) = send(
@@ -1392,5 +1403,183 @@ async fn a_changed_or_forged_gantry_login_cookie_never_ends_in_a_code() -> TestR
             "{location}"
         );
     }
+    Ok(())
+}
+
+/// Adds `teams:` (and anything else) to the test policy, before its console section.
+fn with_policy(s: &Setup, before_console: &str, self_issue_team: bool) -> TestResult {
+    let path = s.dir.join("gantry.policy.yaml");
+    let mut text = std::fs::read_to_string(&path)?
+        .replace("console:\n", &format!("{before_console}console:\n"));
+    if !self_issue_team {
+        text = text.replace("      team: developers\n", "");
+    }
+    std::fs::write(&path, text)?;
+    Ok(())
+}
+
+const TEAMS: &str = "teams:
+  - name: payments
+    owner: maya@example.com
+    members: [maya@example.com]
+    sso_values: [payments-eng]
+  - name: web
+    sso_values: [web-eng]
+";
+
+/// Runs `gantry login` for `email` in `groups`: the key's team, or the refusal.
+async fn login_team(s: &Setup, rsa: &Rsa, email: &str, groups: Value) -> Result<String, Error> {
+    let (url, server) = serve(s).await?;
+    let (tell, opened) = tokio::sync::oneshot::channel();
+    let login = gantry_console::cli::login(&url, move |address| {
+        let _ = tell.send(address.to_string());
+    });
+    let browser = async {
+        let opened = opened.await?;
+        browse_in(s, rsa, &opened, email, groups).await
+    };
+    let (got, _) = tokio::join!(login, browser);
+    server.abort();
+    Ok(match got {
+        Ok(got) => got.team,
+        Err(err) => format!("refused: {err}"),
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn gantry_login_puts_the_key_in_the_team_the_email_or_the_groups_name() -> TestResult {
+    let s = setup().await?;
+    let rsa = Rsa::new()?;
+    lock(&s.mock).jwks = vec![rsa.jwk("r1")];
+    with_policy(&s, TEAMS, false)?;
+    // Listed by email; the email comes first even when a group names another team.
+    assert_eq!(
+        login_team(&s, &rsa, "maya@example.com", json!(["web-eng"])).await?,
+        "payments"
+    );
+    // Placed by a group of the identity provider.
+    assert_eq!(
+        login_team(&s, &rsa, "dana@example.com", json!(["staff", "web-eng"])).await?,
+        "web"
+    );
+    // In no team, and self_issue names no team to fall back on: refused, with the fix.
+    let refused = login_team(&s, &rsa, "eve@example.com", json!(["staff"])).await?;
+    assert!(
+        refused.starts_with("refused") && refused.contains("is in no team"),
+        "{refused}"
+    );
+    let last = admin_records(&s)?.pop().ok_or("no record")?;
+    assert_eq!(last["code"], "sso_team");
+    // With self_issue.team written, it is where such a person's key goes.
+    let path = s.dir.join("gantry.policy.yaml");
+    let text = std::fs::read_to_string(&path)?;
+    std::fs::write(
+        &path,
+        text.replace(
+            "      expires_days: 30",
+            "      team: developers\n      expires_days: 30",
+        ),
+    )?;
+    assert_eq!(
+        login_team(&s, &rsa, "eve@example.com", json!(["staff"])).await?,
+        "developers"
+    );
+    let keys = std::fs::read_to_string(s.dir.join("gantry.keys.yaml"))?;
+    for (name, team) in [
+        ("maya@example.com", "payments"),
+        ("dana@example.com", "web"),
+        ("eve@example.com", "developers"),
+    ] {
+        assert!(
+            keys.contains(&format!("  - name: {name}\n    team: {team}\n")),
+            "{keys}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_role_kept_to_a_team_signs_in_by_group_and_sees_only_that_team() -> TestResult {
+    let s = setup().await?;
+    let rsa = Rsa::new()?;
+    lock(&s.mock).jwks = vec![rsa.jwk("r1")];
+    with_policy(
+        &s,
+        &format!(
+            "{TEAMS}roles:
+  - name: payments-lead
+    permissions: [see_keys, issue_keys, see_records, see_spend]
+    teams: [payments]
+    sso_values: [payments-leads]
+"
+        ),
+        true,
+    )?;
+    let keys = s.dir.join("gantry.keys.yaml");
+    gantry_core::keyfile::add_entry(
+        "maya.ci",
+        "payments",
+        "gantry_maya_ci_key_0123456789",
+        false,
+        &keys,
+    )?;
+    gantry_core::keyfile::add_entry(
+        "omer.ci",
+        "web",
+        "gantry_omer_ci_key_0123456789",
+        false,
+        &keys,
+    )?;
+    // The admin key signs in first: a record of team platform, which the lead must not see.
+    let (status, _, _) = send(
+        &s.app,
+        "POST",
+        "/console/sign-in",
+        "",
+        &format!("key={ADMIN_KEY}"),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let started = start(&s).await?;
+    let mut c = claims(&s, &started.nonce);
+    c["groups"] = json!(["payments-leads", "payments-eng"]);
+    let (status, headers, body) = finish(&s, &started, jwt(&Signer::Rsa(&rsa), "r1", &c)?).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let cookie = format!("gantry_console={}", set_cookie(&headers, "gantry_console"));
+    let signed_in = admin_records(&s)?.pop().ok_or("no record")?;
+    assert_eq!(signed_in["team"], "payments");
+    assert_eq!(signed_in["target"]["role"], "payments-lead");
+
+    let (_, _, page) = send(&s.app, "GET", "/console/people", &cookie, "").await?;
+    assert!(
+        page.contains("maya.ci") && !page.contains("omer.ci"),
+        "{page}"
+    );
+    let (_, _, page) = send(&s.app, "GET", "/console/audit", &cookie, "").await?;
+    assert!(page.contains("dana@example.com"), "{page}");
+    assert!(!page.contains("noa.bar"), "{page}");
+    // A key for another team is refused before it is made.
+    let before = std::fs::read_to_string(&keys)?;
+    let (status, _, page) = send(
+        &s.app,
+        "POST",
+        "/console/people/issue",
+        &cookie,
+        "name=x.y&team=web",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(page.contains("keeps you to team payments"), "{page}");
+    assert_eq!(std::fs::read_to_string(&keys)?, before);
+    let (status, _, page) = send(
+        &s.app,
+        "POST",
+        "/console/people/issue",
+        &cookie,
+        "name=x.y&team=payments",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
     Ok(())
 }
