@@ -190,6 +190,7 @@
         <li>Edit providers, models, prices, rules and keys in the console. Each save is a new policy version, checked like <code>gantry check</code> checks a file.</li>
         <li>A second admin approves a version after reading its diff and a dry run against this gateway's recent requests. Any earlier version is one click away.</li>
         <li>Or keep git as the source: the console stays read only for policy and CI runs <code>gantry check</code>.</li>
+        <li class="doc-link"><a href="https://gantry-docs.eliran.me/operations/console-editing/">Console editing in the docs</a></li>
       </ul>
     </div>
 
@@ -199,6 +200,7 @@
         <li>Search every request by person, team, key, model, provider, outcome, cost and latency. Each row is checked against the audit chain.</li>
         <li>Analytics with p50, p95 and p99 latency, and a forecast for each budget: whether it lasts the period, or when it runs out.</li>
         <li>A rule can keep redacted request and answer bodies, sealed apart from the log, readable only by the people it names. Every read is recorded first.</li>
+        <li class="doc-link"><a href="https://gantry-docs.eliran.me/operations/request-log/">Request log in the docs</a></li>
       </ul>
     </div>
 
@@ -208,6 +210,7 @@
         <li>Keys per person and workload, updated or rotated with a grace period for the old key. Allowed networks per key and per rule.</li>
         <li>JWTs from your identity provider in place of Gantry keys, single sign-on for the console, SCIM, and console roles you define.</li>
         <li>Provider keys sealed in the store under your master key. A caller may send their own provider key only on rules that allow it.</li>
+        <li class="doc-link"><a href="https://gantry-docs.eliran.me/governance/access-control/">Access control in the docs</a></li>
       </ul>
     </div>
 
@@ -216,6 +219,7 @@
       <ul class="doc-list">
         <li>Chat completions, Responses, messages, embeddings and completions, plus OpenAI files, batches and fine-tuning, Anthropic message batches, OpenAI Realtime and Gemini Live. Each file, batch and job belongs to the person who made it, and every batch line is checked.</li>
         <li>Lowest latency or lowest cost across deployments, requests kept in the regions a rule allows, and a coding agent's session kept on one deployment.</li>
+        <li class="doc-link"><a href="https://gantry-docs.eliran.me/providers/batches-and-realtime/">Batches and realtime in the docs</a></li>
       </ul>
     </div>
 
@@ -225,6 +229,7 @@
         <li>Alerts to Slack, Teams, PagerDuty, email or a signed webhook, on spend, unusual spend, rate limits, refusals, provider errors, latency, guardrail blocks, kill switches, a key on a new address, and use after hours.</li>
         <li>Audit export to Splunk, Datadog, Elastic, Sentinel, S3, Google Cloud Storage and Azure Blob. Every batch carries the hash range it holds, so the SIEM can check its copy.</li>
         <li>Traces over OTLP, Langfuse, or an HTTP callback, with prompt text only when you turn it on, redacted.</li>
+        <li class="doc-link"><a href="https://gantry-docs.eliran.me/operations/alerting/">Alerting in the docs</a></li>
       </ul>
     </div>
 
