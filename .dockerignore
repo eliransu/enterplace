@@ -1,2 +1,12 @@
-target
-.git
+**/target
+**/.git
+**/node_modules
+**/dist
+docs
+site
+dist
+**/.terraform
+**/*.tfstate*
+**/.terraform.lock.hcl
+**/.env
+**/.env.*

@@ -5,11 +5,20 @@ sidebar:
   order: 7
 ---
 
-The open source gateway needs no license. The commercial product, `gantry-enterprise`, reads a license key to unlock its enterprise features. Without one it runs the open source features only.
+The open source gateway needs no license. The `gantry` binary in the image `ghcr.io/ggantry/gantry` is the enterprise build: without a license key it runs the open source features only, and a valid key unlocks the enterprise features it names.
+
+## Two licenses in one repository
+
+Gantry is one repository with two licenses, the way LiteLLM is:
+
+- Everything outside `enterprise/` (the gateway, the console, the command line, the deploy files and the docs) is under the Apache License 2.0. You can build it with `cargo install --path crates/gantry-cli` and run it without a key.
+- `enterprise/` holds the enterprise features under the Gantry Commercial License (`enterprise/LICENSE`). Its source is there to read and audit. Running it in production needs a valid Gantry license key, and it may not be redistributed or changed to get around the license check.
+
+The open source crates never import `enterprise/`. The enterprise crate plugs into them through their extension hooks.
 
 ## Set it
 
-The license is one line of text. Give it to `gantry-enterprise` in one of two ways:
+The license is one line of text. Give it to `gantry` in one of two ways:
 
 ```sh
 export GANTRY_LICENSE='eyJjdXN0b21lciI6...'          # the token itself
@@ -27,7 +36,7 @@ License lic_8f2 for Acme: scim, siem, 50 seats, until 2027-11-13.
 To see it at any time, without the token:
 
 ```sh
-gantry-enterprise license show --keys gantry.keys.yaml
+gantry license show --keys gantry.keys.yaml
 ```
 
 It prints the customer, the features, seats used of allowed, the expiry date and whether the license is in its grace period.

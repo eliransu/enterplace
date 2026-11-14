@@ -1,6 +1,6 @@
 # Conventions for agents working in this repository
 
-This is the open source edition of Gantry, an AI gateway. The commercial product lives in a separate private repository and depends on these crates. The full plan is kept outside this repository.
+This is Gantry, an AI gateway: the open source crates (Apache 2.0) and, in `enterprise/`, the commercial features under their own license. The full plan is kept outside this repository.
 
 ## Rules
 
@@ -9,9 +9,10 @@ This is the open source edition of Gantry, an AI gateway. The commercial product
 3. Clean room: do not read or copy source code from Bifrost or LiteLLM. Use provider API documentation and the public documentation of those projects only. The LiteLLM price map is the one exception (MIT data, attributed).
 4. No new dependency without a one-line justification in the pull request. Standard library first. `cargo deny check` must pass.
 5. Never weaken a fail-closed test, a policy test or the bench gate to make a package pass. Stop and report instead.
-6. This repository holds no enterprise code and no license checks. Product features plug in through traits defined here.
+6. License checks live only inside `enterprise/`. Nothing outside `enterprise/` imports it: `gantry-core`, `gantry-server`, `gantry-console` and `gantry-cli` build and test alone (`cargo test -p gantry-core`) and hold no license code. Enterprise features plug in through the extension hooks the open crates define (`enterprise/docs/porting.md`). `enterprise/` is under its own commercial license (`enterprise/LICENSE`); everything else is Apache 2.0. Never move enterprise code out of `enterprise/`.
 7. Unknown provider parameters pass through or return a 400. They are never dropped or rewritten silently.
 8. Error messages name the cause and the fix.
+9. Product work packages (marked P in the plan) go in `enterprise/`.
 
 ## UI
 
@@ -35,4 +36,10 @@ Each session works as one team: product, design, engineering or DevOps. A packag
 
 - `crates/gantry-core`: types, routing, policy, hooks. Embeddable as a library. No HTTP server code.
 - `crates/gantry-server`: the HTTP server, as a library.
-- `crates/gantry-cli`: the `gantry` binary. Server and command line in one.
+- `crates/gantry-console`: the admin console.
+- `crates/gantry-cli`: the open source `gantry` binary. Server and command line in one. `cargo install` builds it.
+- `crates/gantry-bench`: the overhead benchmark and the CI bench gate.
+- `enterprise/`: the `gantry-enterprise` crate (commercial license). Its binary is the `gantry` shipped in the image: every open source command plus `license`, `node` and `device`; with no license key it behaves as the open source edition, a valid key unlocks the paid features (30-day grace after expiry). Test it with `cargo test -p gantry-enterprise` and `--all-features` (`issuer`, staff only).
+- `deploy/`: Helm chart, Terraform modules (aws-ecs, gcp-cloud-run, azure-container-apps), Cloudflare template, Compose test, MDM files. The image carries helm, terraform and cloudflare under `/deploy`.
+- `Dockerfile`: the one image, `ghcr.io/ggantry/gantry`. Releases: `RELEASING.md`.
+- `docs/`, `site/`, `scripts/`: the docs site, the landing page, CI and release scripts.

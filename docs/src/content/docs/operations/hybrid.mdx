@@ -9,17 +9,17 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 A hybrid gateway runs in your network, as a container or a binary, and takes its policy and keys from the Gantry control plane. Prompts, answers and provider keys never leave your network. The control plane receives the audit metadata listed below, so the Gantry app shows every gateway's decisions in one place.
 
-Hybrid gateways are part of the commercial product. They run `gantry-enterprise node`, which runs the open source gateway and manages it.
+Hybrid gateways are part of the commercial product. They run `gantry node`, which runs the open source gateway and manages it.
 
 ## Set one up
 
 <Steps>
 
 1. In the Gantry app, open **Gateways**, type a name and select **Register gateway**. Copy the node token: it is shown once.
-2. Build the image (there is no public registry yet) from the folder that holds the `gantry` and `gantry-enterprise` repositories:
+2. Pull the image with the registry token Gantry gave you with your license:
 
    ```bash
-   docker buildx build --platform linux/amd64 -f gantry-enterprise/Dockerfile -t gantry-enterprise:0.0.1 --load .
+   docker pull ghcr.io/ggantry/gantry:<version>
    ```
 
 3. Run it where your provider keys are:
@@ -29,7 +29,7 @@ Hybrid gateways are part of the commercial product. They run `gantry-enterprise 
      -v gantry-data:/var/lib/gantry \
      -e GANTRY_NODE_TOKEN=gnode_... \
      -e OPENAI_PROVIDER_KEY=sk-... \
-     gantry-enterprise:0.0.1 \
+     ghcr.io/ggantry/gantry:<version> \
      node --control-plane https://gantry-control.eliran.me --dir /var/lib/gantry --listen 0.0.0.0:8080
    ```
 

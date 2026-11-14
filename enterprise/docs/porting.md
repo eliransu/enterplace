@@ -1,6 +1,7 @@
 # Porting a feature from the Cloudflare app
 
-Step S.4 moves the enterprise features of the Cloudflare app (`cloud/control-plane`, TypeScript on D1) into this
+Step S.4 moves the enterprise features of the Cloudflare app (`cloud/control-plane` in the retired gantry-enterprise
+repository, TypeScript on D1) into this
 binary, behind the license, on the store's Postgres. Members was the first; this is how it was done, for the next one.
 
 ## Where a feature plugs in
@@ -47,15 +48,15 @@ left as it was, so an older replica still starts during a rolling upgrade. Teste
 
 ## Adding the next feature
 
-1. Read the feature in `cloud/control-plane/src/app/*.ts`, its tables in `migrations/*.sql`, and its tests in
-   `cloud/tests/test_*.py`.
+1. Read the feature in `cloud/control-plane/src/app/*.ts` of the retired gantry-enterprise repository, its tables in
+   `migrations/*.sql`, and its tests in `cloud/tests/test_*.py`.
 2. Write its tests first, in `src/enterprise/<feature>/tests.rs`, with `enterprise::testing` (a gateway on a fresh
    database, a browser that keeps the console cookie).
 3. Give its tables their own list in `src/enterprise/mod.rs` and run it with `pg.migrate("enterprise.<feature>", ..)`
    in `extend`, only when the feature is unlocked (after the lists of any feature whose tables it alters, as SCIM
    runs after members). A later change to its tables is a new entry in that list. Never edit one that has shipped.
 4. Add `src/enterprise/<feature>.rs` with `FEATURE`, `register` and `locked`, and call them from `extend`.
-5. Write its page in the open source docs site (`docs/src/content/docs/operations/`), as `members.mdx`.
+5. Write its page in the docs site (`docs/src/content/docs/operations/`), as `members.mdx`.
 
 ## Checklist
 
@@ -73,10 +74,8 @@ left as it was, so an older replica still starts during a rolling upgrade. Teste
 
 ```sh
 docker run -d --name gantry-pg -e POSTGRES_PASSWORD=test -p 55433:5432 postgres:16
-GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55433/postgres cargo test
+GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55433/postgres cargo test -p gantry-enterprise
 ```
-
-The open source checkout must sit beside this one as `../gantry`, since the crates are path dependencies.
 
 ## Ported
 

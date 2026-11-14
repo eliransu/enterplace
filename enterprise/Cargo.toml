@@ -1,18 +1,23 @@
 [package]
 name = "gantry-enterprise"
 description = "Commercial edition of the Gantry AI gateway."
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.88"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 license-file = "LICENSE"
 publish = false
 
+# The image ships this binary as /gantry. The cargo target keeps the package's name so a workspace build does not
+# collide with the open source `gantry` binary of gantry-cli, which `cargo install gantry-cli` still installs.
+[[bin]]
+name = "gantry-enterprise"
+path = "src/main.rs"
+
 [dependencies]
-# Path dependencies while both repositories are developed side by side.
-gantry-core = { path = "../gantry/crates/gantry-core" }
-gantry-server = { path = "../gantry/crates/gantry-server" }
+gantry-core.workspace = true
+gantry-server.workspace = true
 # Every open source command (key new, audit verify, check...) runs from this binary too, so the image needs no other.
-gantry-cli = { path = "../gantry/crates/gantry-cli" }
+gantry-cli.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
 # The node talks to the control plane from plain threads; a blocking client keeps that code short.
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
@@ -25,7 +30,7 @@ serde = { version = "1", features = ["derive"] }
 # The enterprise console pages are axum handlers on the console's router; already in the build through gantry-server.
 axum = { version = "0.8", default-features = false }
 # Members and every later feature write audit records and hash tokens with the open source helpers.
-gantry-console = { path = "../gantry/crates/gantry-console" }
+gantry-console.workspace = true
 # The audit archive streams pages of rows as the response body; already in the build through axum.
 futures-util = { version = "0.3", default-features = false }
 
@@ -42,9 +47,5 @@ http-body-util = "0.1"
 # Gantry staff only: `license keygen` and `license issue`. Customer builds cannot sign licenses.
 issuer = []
 
-[lints.rust]
-unsafe_code = "forbid"
-
-[lints.clippy]
-unwrap_used = "deny"
-expect_used = "deny"
+[lints]
+workspace = true

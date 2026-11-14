@@ -18,6 +18,15 @@ app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{- define "gantry.scheme" -}}
-{{- if .Values.tls.secretName }}HTTPS{{ else }}HTTP{{ end -}}
+{{- define "gantry.containerSecurity" -}}
+allowPrivilegeEscalation: false
+readOnlyRootFilesystem: true
+privileged: false
+capabilities:
+  drop: [ALL]
+{{- end -}}
+
+{{- define "gantry.postgresSelector" -}}
+app.kubernetes.io/name: {{ .Chart.Name }}-postgres
+app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}

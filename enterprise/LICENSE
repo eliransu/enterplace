@@ -1,4 +1,30 @@
-Copyright (c) 2026. All rights reserved.
+Gantry Commercial License
 
-This software is proprietary. No license is granted to use, copy, modify or
-distribute it without a written agreement with the copyright holder.
+Copyright (c) 2026 Gantry. All rights reserved.
+
+This license covers every file in the enterprise/ directory of the Gantry repository ("the Software"). Files outside
+enterprise/ are under the Apache License 2.0 in the LICENSE file at the root of the repository.
+
+1. Source available. You may read, copy and modify the Software for development, testing and evaluation, and to
+   audit it, without a license key.
+
+2. Production use. Using the Software in production, or to serve anyone other than yourself for development or
+   testing, requires a valid Gantry license key from Gantry, used within the features, seats and term that key
+   allows. Without a valid key the Software runs only the features of the Apache 2.0 edition.
+
+3. No circumvention. You may not remove, disable, bypass or weaken the license check, change the Software or build
+   it differently to unlock features your license key does not grant, or help anyone else do so.
+
+4. No redistribution. You may not distribute, sublicense, sell, rent or host the Software or a modified version of
+   it for others, except as a written agreement with Gantry allows. Patches you contribute back to Gantry are
+   welcome.
+
+5. Third-party code. The Apache 2.0 parts of Gantry and third-party components keep their own licenses.
+
+6. No warranty. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+   LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+   SHALL GANTRY OR THE COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF OR
+   IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+7. Termination. This license ends automatically if you break any of its terms. A written agreement with Gantry
+   (such as an order form or subscription terms) takes precedence over this file where they differ.

@@ -8,7 +8,7 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The wrangler template `cloudflare`, which ships inside the `gantry-enterprise` image, runs gateways in Cloudflare Containers behind a Worker, keeps each gateway's audit chain in R2, and keeps keys, kill switches and budgets in Postgres.
+The wrangler template `cloudflare`, which ships inside the `gantry` image, runs gateways in Cloudflare Containers behind a Worker, keeps each gateway's audit chain in R2, and keeps keys, kill switches and budgets in Postgres.
 
 ## What it creates
 
@@ -32,7 +32,7 @@ The wrangler template `cloudflare`, which ships inside the `gantry-enterprise` i
 - A Cloudflare account on the Workers Paid plan, which Containers need, with R2 enabled and a zone for the gateway's hostname.
 - Node.js 20 or later, and Docker running: wrangler builds the image locally for `linux/amd64`.
 - A Postgres database reachable over TLS from the internet, and its connection string with `sslmode=require`.
-- The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry-enterprise`, and the user name that goes with it.
+- The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry`, and the user name that goes with it.
 - Your license key, a provider key, and the image version you were given.
 
 ## Deploy
@@ -43,7 +43,7 @@ The wrangler template `cloudflare`, which ships inside the `gantry-enterprise` i
 
    ```bash
    docker login ghcr.io -u <your user name>
-   docker create --name gantry-files ghcr.io/ggantry/gantry-enterprise:<version>
+   docker create --name gantry-files ghcr.io/ggantry/gantry:<version>
    docker cp gantry-files:/deploy/cloudflare ./gantry-cloudflare && docker rm gantry-files
    cd gantry-cloudflare
    npm ci
@@ -120,7 +120,7 @@ The wrangler template `cloudflare`, which ships inside the `gantry-enterprise` i
 
    ```bash
    curl -s -H "Authorization: Bearer $(cat audit-read-token.txt)" $GATEWAY/_gantry/audit/gateway-0 > chain.jsonl
-   docker run --rm -v "$PWD":/w:ro ghcr.io/ggantry/gantry-enterprise:<version> audit verify /w/chain.jsonl
+   docker run --rm -v "$PWD":/w:ro ghcr.io/ggantry/gantry:<version> audit verify /w/chain.jsonl
    ```
 
    ```text

@@ -2,7 +2,7 @@ name: release
 # Package 7.2: a release is built twice and must be the same bytes, rolls back onto its own data, and is signed.
 # On a v* tag the signed files go to a GitHub Release of this private repository, with the CHANGELOG section as its
 # notes. Run by hand (gh workflow run release.yml --ref <branch>) it is a dry run: every step but the GitHub Release.
-# How to release: RELEASING.md in gantry-enterprise.
+# How to release: RELEASING.md. image.yml adds the image digest to the same release.
 on:
   push:
     tags: ["v*"]
@@ -124,5 +124,10 @@ jobs:
             cat release-notes.md
             exit 0
           fi
-          gh release create "$TAG" dist/* --repo "${{ github.repository }}" --verify-tag \
-            --title "Gantry ${TAG#v}" --notes-file release-notes.md
+          # image.yml may have made the release first, with the image digest: then the files are added to it.
+          if gh release view "$TAG" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$TAG" dist/* --repo "${{ github.repository }}" --verify-tag \
+              --title "Gantry ${TAG#v}" --notes-file release-notes.md
+          fi

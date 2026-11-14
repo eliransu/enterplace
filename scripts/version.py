@@ -6,7 +6,7 @@ Usage:
   python3 scripts/version.py [--root DIR] --bump X.Y.Z    set Cargo.toml to X.Y.Z and date its CHANGELOG section today
   python3 scripts/version.py --selftest
 
-DIR is a repository root (default: this one): gantry or gantry-enterprise, which share one version.
+DIR is a repository root (default: this one). The open source crates and enterprise/ share the workspace version.
 Without a tag, CHANGELOG.md needs a section for the Cargo.toml version, dated or "Unreleased". With a tag, the tag is
 v<Cargo.toml version> and the section is dated (YYYY-MM-DD) and not empty.
 """

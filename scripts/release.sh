@@ -9,8 +9,10 @@
 #   scripts/release.sh reproduce builds the linux tarballs twice from scratch and fails unless both are the same bytes
 #   scripts/release.sh sign      writes SHA256SUMS and provenance.json in dist/ and signs both (scripts/signing.py)
 #   scripts/release.sh verify    checks dist/ against the signatures and the public key in release/allowed_signers
-#   scripts/release.sh bump X.Y.Z [repo]  sets the version in Cargo.toml and Cargo.lock and dates its CHANGELOG section
-#                                today, in this repository or in [repo] (../gantry-enterprise); see RELEASING.md there
+#   scripts/release.sh bump X.Y.Z sets the version in Cargo.toml, Cargo.lock and the Helm chart and dates its CHANGELOG
+#                                section today; see RELEASING.md
+# The binary in every tarball and image is the enterprise build (enterprise/): without a license key it is the open
+# source gateway. Each tarball carries both licenses: LICENSE (Apache 2.0) and LICENSE-enterprise.
 # Builds use the last commit's time as SOURCE_DATE_EPOCH unless it is set, so a rebuild of a commit is identical.
 # <src> is the source hash `gantry version` prints. Each tarball gets a .sha256 and a .BUILD file (the version line),
 # and the tarballs of the targets a run builds are deleted first, so a stale one cannot survive a partial run.
@@ -35,7 +37,8 @@ tarball() {
   rm -rf "dist/$name" && mkdir -p "dist/$name"
   cp "$binary" "dist/$name/gantry"
   cp LICENSE README.md "dist/$name/"
-  python3 scripts/pack.py "dist/$name.tar.gz" "$name" "dist/$name/gantry" "dist/$name/LICENSE" "dist/$name/README.md"
+  cp enterprise/LICENSE "dist/$name/LICENSE-enterprise"
+  python3 scripts/pack.py "dist/$name.tar.gz" "$name" "dist/$name/gantry" "dist/$name/LICENSE" "dist/$name/LICENSE-enterprise" "dist/$name/README.md"
   rm -rf "dist/$name"
   (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
   echo "$line" > "dist/gantry-$version-$src-$target.BUILD"
@@ -46,8 +49,8 @@ case "${1:-}" in
   tarball)
     host=$(rustc -vV | sed -n 's/^host: //p')
     clear_target "$host"
-    cargo build --release --locked -p gantry-cli
-    tarball "$host" target/release/gantry "$(target/release/gantry version)"
+    cargo build --release --locked -p gantry-enterprise
+    tarball "$host" target/release/gantry-enterprise "$(target/release/gantry-enterprise version)"
     ;;
   image)
     docker build -t "gantry:$version" -t gantry:local .
@@ -99,15 +102,15 @@ case "${1:-}" in
     exec python3 scripts/signing.py verify dist
     ;;
   bump)
-    [ -n "${2:-}" ] || { echo "usage: scripts/release.sh bump X.Y.Z [repository]" >&2; exit 2; }
-    repo=${3:-.}
+    [ -n "${2:-}" ] || { echo "usage: scripts/release.sh bump X.Y.Z" >&2; exit 2; }
+    repo=.
     python3 scripts/version.py --root "$repo" --bump "$2"
     # Only the workspace's own entries change in Cargo.lock; no dependency moves.
     (cd "$repo" && { cargo update --workspace --offline -q 2>/dev/null || cargo update --workspace -q; })
     python3 scripts/version.py --root "$repo"
     ;;
   *)
-    sed -n '2,18p' "$0"
+    sed -n '2,20p' "$0"
     exit 2
     ;;
 esac

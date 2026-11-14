@@ -7,7 +7,7 @@ sidebar:
 
 import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The Terraform module `azure-container-apps`, which ships inside the `gantry-enterprise` image, runs one gateway as a Container App with HTTPS ingress, with Azure Database for PostgreSQL Flexible Server 16 for the store, the audit log on Azure Files, and secrets as Key Vault references.
+The Terraform module `azure-container-apps`, which ships inside the `gantry` image, runs one gateway as a Container App with HTTPS ingress, with Azure Database for PostgreSQL Flexible Server 16 for the store, the audit log on Azure Files, and secrets as Key Vault references.
 
 ## What it creates
 
@@ -28,7 +28,7 @@ The Terraform module `azure-container-apps`, which ships inside the `gantry-ente
 - Terraform 1.6 or later, Docker, and the Azure CLI signed in (`az login`). Terraform uses its sign-in.
 - A subscription where you can create resource groups, networks, Container Apps, PostgreSQL Flexible Servers, storage accounts, managed identities and role assignments (Owner, or Contributor with User Access Administrator).
 - A Key Vault with RBAC authorization, outside the resource group the module creates, where you hold Key Vault Secrets Officer: the module adds `DATABASE_URL`, and the master and export keys unless you bring them, to it.
-- The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry-enterprise`, and the user name that goes with it.
+- The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry`, and the user name that goes with it.
 - Your license key, a provider key, and the image version you were given.
 
 The app's address comes with a managed certificate, so the first deploy needs no certificate of your own.
@@ -58,7 +58,7 @@ The app's address comes with a managed certificate, so the first deploy needs no
    ```bash
    mkdir gantry-azure && cd gantry-azure
    docker login ghcr.io -u <your user name>
-   docker create --name gantry-files ghcr.io/ggantry/gantry-enterprise:<version>
+   docker create --name gantry-files ghcr.io/ggantry/gantry:<version>
    docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
    ```
 
@@ -97,7 +97,7 @@ The app's address comes with a managed certificate, so the first deploy needs no
 
      location            = "westeurope"
      resource_group_name = "gantry"
-     image               = "ghcr.io/ggantry/gantry-enterprise:<version>"
+     image               = "ghcr.io/ggantry/gantry:<version>"
      policy              = file("gantry.policy.yaml")
 
      key_vault_id         = "/subscriptions/.../resourceGroups/gantry-secrets/providers/Microsoft.KeyVault/vaults/acme-gantry-kv"
@@ -209,7 +209,7 @@ The app's address comes with a managed certificate, so the first deploy needs no
    az storage file download --account-name $ACCOUNT --share-name gantry-audit \
      --path "$(terraform output -raw revision_suffix)/gantry-audit.jsonl" --dest gantry-audit.jsonl \
      --account-key "$(az storage account keys list --account-name $ACCOUNT --query '[0].value' -o tsv)"
-   docker run --rm -v "$PWD":/audit:ro ghcr.io/ggantry/gantry-enterprise:<version> audit verify /audit/gantry-audit.jsonl
+   docker run --rm -v "$PWD":/audit:ro ghcr.io/ggantry/gantry:<version> audit verify /audit/gantry-audit.jsonl
    ```
 
 </Steps>

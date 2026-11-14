@@ -14,6 +14,15 @@ step "format"
 cargo fmt --all --check
 step "lint"
 cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+step "the open source crates do not depend on enterprise/"
+# License code lives only in enterprise/ (AGENTS.md rule 6): no open crate may pull it in, in any dependency kind.
+for crate in gantry-core gantry-server gantry-console gantry-cli gantry-bench; do
+  if cargo tree --locked -q -p "$crate" -e normal,build,dev --prefix none | grep -q '^gantry-enterprise '; then
+    echo "$crate depends on gantry-enterprise"; exit 1
+  fi
+done
+echo "none does"
 step "tests"
 # The store tests (crates/gantry-server/tests/store.rs, crates/gantry-cli/tests/store.rs) run against the Postgres
 # that GANTRY_TEST_DATABASE_URL names, and say they were skipped without it. CI must run them.
@@ -28,9 +37,14 @@ else
   echo "  export GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres"
 fi
 cargo test --workspace --locked
+# The enterprise crate once more with every feature (`issuer`, the license signing commands of staff builds).
+cargo test -p gantry-enterprise --all-features --locked
 step "release build"
 cargo build --release --locked
 ./target/release/gantry version
+step "the enterprise binary without a license key is the open source edition"
+./target/release/gantry-enterprise version
+env -u GANTRY_LICENSE -u GANTRY_LICENSE_FILE ./target/release/gantry-enterprise license show | tee /dev/stderr | grep -qi "no license"
 step "the binary refuses to forward unchecked unless asked by name"
 if ./target/release/gantry serve 2>/dev/null; then echo "serve started without --unchecked"; exit 1; fi
 step "first run: init, serve, the setup link and a governed call, in under 60 seconds"
@@ -40,6 +54,8 @@ python3 scripts/live_matrix.py --selftest --gantry target/release/gantry > /dev/
 step "Cargo.toml, CHANGELOG.md and the Helm chart name one version"
 python3 scripts/version.py --selftest
 python3 scripts/version.py
+step "the Helm chart: lint, render, security settings, its policy passes gantry check"
+python3 scripts/check_deploy.py target/release/gantry
 step "every policy example in README and the docs passes gantry check"
 python3 scripts/check_examples.py target/release/gantry
 if [ "$bench" = 1 ]; then

@@ -11,7 +11,7 @@ Gantry is one static binary with no database. You run it the same way everywhere
 
 ## Build what you ship
 
-`scripts/release.sh` builds every release artifact on the machine you run it on. Nothing is published to a registry: you build and push to your own.
+`scripts/release.sh` builds every release artifact on the machine you run it on. Releases also publish the image as `ghcr.io/ggantry/gantry` (see [Deploy](/deploy/overview/)); these commands build the same artifacts yourself. Tarballs and images carry the enterprise binary, which runs as the open source edition without a license key.
 
 | Command | Output |
 |---|---|
@@ -23,7 +23,7 @@ Gantry is one static binary with no database. You run it the same way everywhere
 | `scripts/release.sh reproduce` | Builds the linux tarballs twice with no cache and fails unless both are the same bytes |
 | `scripts/release.sh sign` | Writes `dist/SHA256SUMS` and `dist/provenance.json` and signs both with the release key |
 | `scripts/release.sh verify` | Checks `dist/` against the signatures and the public key in `release/allowed_signers` |
-| `scripts/release.sh smoke` | Runs the image against a local mock. Passes when the image is under 50 MB, runs as non-root, prints the same `gantry version` line as `target/release/gantry` and answers a governed request within 60 seconds |
+| `scripts/release.sh smoke` | Runs the image against a local mock. Passes when the image is under 50 MB, runs as non-root, prints the same `gantry version` line as `target/release/gantry-enterprise`, answers a governed request within 60 seconds and `/healthz` and `/readyz`, and says it runs the open source edition without a license key |
 
 ### Reproducible and signed
 
@@ -242,7 +242,7 @@ Without a store, Gantry runs as one process per audit log: keys and kill switche
 ## Next
 
 <CardGrid>
-	<LinkCard title="Kubernetes" href="/operations/kubernetes/" description="The Helm chart and plain manifests." />
+	<LinkCard title="Kubernetes" href="/deploy/kubernetes/" description="The Helm chart, as a StatefulSet." />
 	<LinkCard title="Running in production" href="/operations/operations/" description="Reload, signals, backups, a full disk and upgrades." />
 	<LinkCard title="Security model" href="/operations/security/" description="What Gantry protects and where it stops." />
 	<LinkCard title="CLI reference" href="/reference/cli/" description="Every flag of gantry serve." />

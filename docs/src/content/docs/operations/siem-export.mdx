@@ -5,7 +5,7 @@ sidebar:
   order: 9
 ---
 
-With a license that includes `siem` (see [License key](/operations/license/)), `gantry-enterprise` adds an **Audit export** page to the console. Every replica reads its own [audit log](/governance/audit-log/) as it is written and sends the records on. Nothing about it is on the request path: a destination that is down never slows or refuses a request.
+With a license that includes `siem` (see [License key](/operations/license/)), Gantry adds an **Audit export** page to the console. Every replica reads its own [audit log](/governance/audit-log/) as it is written and sends the records on. Nothing about it is on the request path: a destination that is down never slows or refuses a request.
 
 The audit log holds no prompt or answer text, no keys and no text a guardrail matched, so none of that is ever exported. For Langfuse, Arize Phoenix, Datadog traces and an HTTP callback, with prompt text only on opt-in, see [Observability integrations](/operations/observability-integrations/).
 

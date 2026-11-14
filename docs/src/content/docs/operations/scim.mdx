@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, Steps, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-With a license that includes `scim` and `members` (see [License key](/operations/license/)), `gantry-enterprise` serves a SCIM 2.0 API. Your identity provider creates [members](/operations/members/), keeps their names and teams current, pushes its groups as teams, and removes people when they leave. Removing someone revokes every key named with their email at once.
+With a license that includes `scim` and `members` (see [License key](/operations/license/)), Gantry serves a SCIM 2.0 API. Your identity provider creates [members](/operations/members/), keeps their names and teams current, pushes its groups as teams, and removes people when they leave. Removing someone revokes every key named with their email at once.
 
 SCIM writes the members tables in Postgres, so the policy needs a `store:` section (see [Shared store](/operations/store/)).
 

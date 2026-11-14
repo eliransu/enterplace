@@ -18,7 +18,7 @@ One Compose file runs the gateway and Postgres 16 on one machine, each with a na
   docker login ghcr.io -u <your GitHub user or the user name Gantry gave you>
   ```
 
-  Paste the token as the password. It reads `ghcr.io/ggantry/gantry-enterprise` and nothing else.
+  Paste the token as the password. It reads `ghcr.io/ggantry/gantry` and nothing else.
 - Your license key, and a key for at least one provider (OpenAI in this guide).
 
 ## From nothing to a governed call
@@ -57,7 +57,7 @@ One Compose file runs the gateway and Postgres 16 on one machine, each with a na
        restart: unless-stopped
 
      gantry:
-       image: ${GANTRY_IMAGE:-ghcr.io/ggantry/gantry-enterprise:latest}
+       image: ${GANTRY_IMAGE:-ghcr.io/ggantry/gantry:latest}
        command: ["serve", "/etc/gantry/gantry.policy.yaml", "--keys", "/var/lib/gantry/gantry.keys.yaml", "--listen", "0.0.0.0:8080"]
        # Sharing Postgres's network keeps the database off every other network, so the connection is plain.
        network_mode: service:postgres
@@ -127,7 +127,7 @@ One Compose file runs the gateway and Postgres 16 on one machine, each with a na
    # `openssl rand -hex 32`. Empty: only destinations that need no secret can be saved.
    GANTRY_EXPORT_KEY=
    # The image. Pin the version you were given, or a commit SHA, in production.
-   GANTRY_IMAGE=ghcr.io/ggantry/gantry-enterprise:latest
+   GANTRY_IMAGE=ghcr.io/ggantry/gantry:latest
    # Where Gantry listens on this machine.
    GANTRY_BIND=127.0.0.1
    GANTRY_PORT=8080
@@ -272,7 +272,7 @@ Then run steps 3 to 6. The governed call answers `pong`. To switch to OpenAI, de
 1. **Pin the image.** Set `GANTRY_IMAGE` in `.env` to the version you were given, or a commit SHA, never `latest`, so an upgrade happens only when you choose it.
 
    ```bash title=".env"
-   GANTRY_IMAGE=ghcr.io/ggantry/gantry-enterprise:<version>
+   GANTRY_IMAGE=ghcr.io/ggantry/gantry:<version>
    ```
 
 2. **TLS.** Keep `GANTRY_BIND=127.0.0.1`, so Gantry listens on this machine only, and put Caddy on the VM in front of it. Caddy gets and renews the certificate.

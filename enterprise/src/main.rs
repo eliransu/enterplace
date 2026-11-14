@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 const USAGE: &str = "usage:
-  gantry-enterprise node --control-plane <url> [--dir <folder>] [--listen <host:port>] [--interval <seconds>]
+  gantry node --control-plane <url> [--dir <folder>] [--listen <host:port>] [--interval <seconds>]
       [--secrets NAME=<source>]... [--secrets-interval <seconds>]
       Run a gateway managed by the control plane. The node token goes in GANTRY_NODE_TOKEN.
       --secrets gives the provider key the policy names NAME (key_env) from a source polled every
@@ -24,20 +24,20 @@ const USAGE: &str = "usage:
       --max-offline <seconds> stops serving when the control plane has not answered for that long (fail closed).
       --metrics <host:port> serves Prometheus metrics at GET /metrics on that address.
       HTTPS_PROXY is used to reach the control plane and secret sources.
-  gantry-enterprise device --control-plane <url> [--interval <seconds>] [--dry-run] [--once] [--home <folder>]
+  gantry device --control-plane <url> [--interval <seconds>] [--dry-run] [--once] [--home <folder>]
       Point the signed-in user's coding tools at the org's gateway every --interval seconds (default 300) and
       report coverage. The enrolment token goes in GANTRY_DEVICE_TOKEN, or in the file GANTRY_DEVICE_TOKEN_FILE
       names (default /Library/Application Support/Gantry/device-token, which the MDM profile installs).
-  gantry-enterprise serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
+  gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
       Run the gateway on local files, as `gantry serve` does.
-  gantry-enterprise serve --unchecked
-  gantry-enterprise license show [--keys <file>]
+  gantry serve --unchecked
+  gantry license show [--keys <file>]
       Show the license in GANTRY_LICENSE (or the file GANTRY_LICENSE_FILE names): customer, features, seats used
       (people in the keys file, default gantry.keys.yaml) of allowed, expiry and grace state. Checked offline.
-  gantry-enterprise license keygen --out <file>                         (Gantry staff builds only)
-  gantry-enterprise license issue --signing-key <file> --customer <name> --id <id> --features <a,b|all>
+  gantry license keygen --out <file>                         (Gantry staff builds only)
+  gantry license issue --signing-key <file> --customer <name> --id <id> --features <a,b|all>
       --seats <n> --issued <YYYY-MM-DD> --expires <YYYY-MM-DD>              (Gantry staff builds only)
-  gantry-enterprise <gantry command>
+  gantry <gantry command>
       Every other command runs as the open source `gantry` runs it: check, init, key new|list|revoke|prune,
       store import, import litellm, audit verify|repair, prices, providers, kill, unkill, login, logout, version.";
 

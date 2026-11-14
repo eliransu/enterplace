@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/gantry-core", "crates/gantry-server", "crates/gantry-cli", "crates/gantry-bench", "crates/gantry-console"]
+members = ["crates/gantry-core", "crates/gantry-server", "crates/gantry-cli", "crates/gantry-bench", "crates/gantry-console", "enterprise"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ license = "Apache-2.0"
 gantry-core = { path = "crates/gantry-core", version = "0.1.0" }
 gantry-server = { path = "crates/gantry-server", version = "0.1.0" }
 gantry-console = { path = "crates/gantry-console", version = "0.1.0" }
+gantry-cli = { path = "crates/gantry-cli", version = "0.1.0" }
 # `ws`: realtime sessions (OpenAI Realtime, Gemini Live) are WebSocket connections callers open to Gantry.
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "tokio", "ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }

@@ -44,6 +44,12 @@ fn main() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut list = vec![root.join("Cargo.toml"), root.join("Cargo.lock")];
     files(&root.join("crates"), &mut list)?;
+    // The enterprise binary prints this same line, so its sources count too. A published gantry-cli has no enterprise/.
+    let enterprise = root.join("enterprise");
+    if enterprise.is_dir() {
+        list.push(enterprise.join("Cargo.toml"));
+        files(&enterprise.join("src"), &mut list)?;
+    }
     list.sort();
     let mut hash = Sha256::new();
     for path in &list {
@@ -73,6 +79,9 @@ fn main() -> Result<()> {
         date(seconds.div_euclid(86_400))
     );
     println!("cargo:rerun-if-changed={}", root.join("crates").display());
+    if enterprise.is_dir() {
+        println!("cargo:rerun-if-changed={}", enterprise.display());
+    }
     println!(
         "cargo:rerun-if-changed={}",
         root.join("Cargo.lock").display()

@@ -200,7 +200,7 @@ service:
 - `file_storage` keeps the receiver's place across Collector restarts, so records are neither skipped nor sent twice. Its folder must exist and be writable by the Collector.
 - `otlphttp` sends to `<endpoint>/v1/logs`. Replace the endpoint with your backend's and drop `debug` once it works. Recent Collector releases name this exporter `otlp_http` and accept `otlphttp` as a deprecated alias.
 
-On Kubernetes, run the shipper as a second container in the Gantry pod. See [Kubernetes](/operations/kubernetes/#ship-the-audit-log-from-the-pod).
+On Kubernetes, run the shipper as a second container in the Gantry pod. See [Kubernetes](/deploy/kubernetes/).
 
 ## Verify what was shipped
 

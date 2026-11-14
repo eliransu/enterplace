@@ -2,10 +2,24 @@
 
 Every change to Gantry that a user or operator can see, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
-Gantry and Gantry Enterprise share one version number: the enterprise image of a version carries this repository at the
-same version. How a release is made: RELEASING.md in the gantry-enterprise repository.
+The open source crates and the enterprise features in `enterprise/` (commercial license) share one version number and
+one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
+
+### One repository, one image
+
+- The enterprise features moved into this repository as `enterprise/`, under their own commercial license
+  (`enterprise/LICENSE`); everything outside it stays Apache 2.0. The open source crates still build, test and install
+  (`cargo install --path crates/gantry-cli`) on their own and never import `enterprise/`.
+- One image: **`ghcr.io/ggantry/gantry-enterprise` is renamed `ghcr.io/ggantry/gantry`**. Change the image in your
+  Compose file, Helm values (`image.repository`), Terraform `image` variable and Cloudflare `wrangler.jsonc`. Its
+  binary is `/gantry` (was `/gantry-enterprise`): update `kubectl exec ... -- /gantry-enterprise` commands. Without a
+  license key it runs as the open source edition; a valid key unlocks the enterprise features, as before.
+- The Helm chart, Terraform modules, Cloudflare template and MDM files are at `deploy/` in this repository, and still
+  ship inside the image under `/deploy`. The old single-replica chart and the plain manifests in
+  `deploy/kubernetes/` are gone: the StatefulSet chart replaces both.
+- Release tarballs carry the same binary as the image, with `LICENSE` and `LICENSE-enterprise`.
 
 ### Guardrails
 
@@ -170,3 +184,61 @@ identity, passes a policy decision and lands in a hash-chained audit log before 
 
 - YAML is read by serde-saphyr in place of serde_yaml_ng, which dropped the unmaintained unsafe-libyaml
   (RUSTSEC-2024-0449). Duplicate keys are refused and YAML 1.1 words such as `yes` stay text.
+
+The commercial features (`enterprise/`, licensed by key), in the same image:
+
+### Enterprise: One image
+
+- `ghcr.io/ggantry/gantry` (first published as `ghcr.io/ggantry/gantry-enterprise`) for amd64 and arm64, under 50 MB, running as a non-root user. It serves
+  `/etc/gantry/gantry.policy.yaml` by default and runs every open source command too (`key new`, `audit verify`,
+  `check`), so no separate binary is needed.
+- The image carries the Helm chart and the Terraform modules under `/deploy`.
+
+### Enterprise: License
+
+- A signed license key (`GANTRY_LICENSE` or `GANTRY_LICENSE_FILE`), checked offline, unlocks the enterprise features.
+  An expired license keeps them on for 30 days, then turns them off; model traffic is never stopped. `/healthz` shows
+  the license without its token.
+
+### Enterprise: Members and access
+
+- Members with owner, admin and viewer roles, invites by one-time link and password sign-in, on the gateway's own
+  console. Removing a person revokes every key named with their email and ends their session at once.
+- In the Gantry app: single sign-on per organization through its own OpenID Connect provider (Okta, Entra ID, Google
+  Workspace), two-step sign-in with recovery codes, and SCIM 2.0 provisioning.
+- Scoped, expiring admin API tokens for staff, each write recorded with the caller's name.
+
+### Enterprise: Governance
+
+- Policy versions with diffs, a dry run against recorded traffic, and approval by a second admin before a change goes
+  live.
+- Audit export to a signed webhook, Splunk HEC or Datadog, a backfill of up to 90 days, a pull API for a SIEM that
+  cannot receive a POST, retention, legal hold and an NDJSON archive.
+- Compliance evidence reports for SOC 2, ISO 27001, the EU AI Act and the NIST AI RMF.
+- Workload identity: OIDC token exchange for short-lived keys.
+- Provider keys from files, HashiCorp Vault or AWS Secrets Manager, rotated without a restart.
+
+### Enterprise: Hosted service and hybrid nodes
+
+- A control plane and web app: sign up, keys, gateways, audit log, spend by team, person and model, and a back office
+  for staff.
+- A hosted gateway per organization, and hybrid nodes that pull their configuration, ship an allowlist of audit fields
+  and guardrail findings, and keep serving when the control plane is down.
+- Watch mode for Claude Team and Enterprise subscriptions: Claude Code's own telemetry, usage by person and model,
+  with no prompt, answer or tool content stored.
+- A device agent with enrolment tokens, a profile per organization, coverage and drift reporting, and MDM templates.
+- A page that gives a coding agent the prompt to connect a project to the gateway.
+
+### Enterprise: Deployment
+
+- Docker Compose with Postgres, written from the Docker guide and tested end to end on every change.
+- A Helm chart run as a StatefulSet, each replica with its own audit log, several replicas sharing a Postgres store,
+  tested on kind.
+- Terraform modules for AWS (ECS, RDS, EFS), Google Cloud (Cloud Run, Cloud SQL, Filestore) and Azure (Container Apps,
+  Azure Database for PostgreSQL, Azure Files).
+
+### Enterprise: Security
+
+- Fixes from the cloud security review: a credential per hosted gateway, SCIM and password links limited to people of
+  one organization, outbound fetches over HTTPS only with no redirects or private addresses, read-only staff, and rate
+  limits on public forms.

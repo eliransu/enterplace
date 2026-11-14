@@ -1,3 +1,4 @@
+{{- if not .Values.existingPolicyConfigMap }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -7,3 +8,4 @@ metadata:
 data:
   gantry.policy.yaml: |
     {{- .Values.policy | nindent 4 }}
+{{- end }}

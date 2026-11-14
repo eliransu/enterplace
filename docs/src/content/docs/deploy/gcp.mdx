@@ -8,7 +8,7 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The Terraform module `gcp-cloud-run`, which ships inside the `gantry-enterprise` image, runs one gateway on Cloud Run, with Cloud SQL Postgres 16 for the store, the audit log on Filestore over NFS, and the policy and secrets in Secret Manager.
+The Terraform module `gcp-cloud-run`, which ships inside the `gantry` image, runs one gateway on Cloud Run, with Cloud SQL Postgres 16 for the store, the audit log on Filestore over NFS, and the policy and secrets in Secret Manager.
 
 ## What it creates
 
@@ -32,7 +32,7 @@ The Terraform module `gcp-cloud-run`, which ships inside the `gantry-enterprise`
 - Terraform 1.6 or later, Docker, and the `gcloud` command line signed in to the project with Application Default Credentials for Terraform: `gcloud auth application-default login`.
 - A Google Cloud project with billing on, and a role that can enable APIs and create Cloud Run, Cloud SQL, Filestore, Secret Manager secrets, service accounts and project IAM bindings (Owner, or Editor with Project IAM Admin and Secret Manager Admin).
 - A VPC network with a subnetwork in your region. The project's `default` network has one.
-- The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry-enterprise`, and the user name that goes with it.
+- The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry`, and the user name that goes with it.
 - Your license key, a provider key, and the image version you were given.
 
 The service URL comes with a Google-managed certificate, so the first deploy needs no certificate of your own.
@@ -50,8 +50,8 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
    gcloud auth configure-docker europe-docker.pkg.dev
    docker login ghcr.io -u <your user name>
    docker buildx imagetools create \
-     --tag europe-docker.pkg.dev/my-project/gantry/gantry-enterprise:<version> \
-     ghcr.io/ggantry/gantry-enterprise:<version>
+     --tag europe-docker.pkg.dev/my-project/gantry/gantry:<version> \
+     ghcr.io/ggantry/gantry:<version>
    ```
 
 2. Put the provider key and the license in Secret Manager. The module only references them by ID, so their values never enter Terraform state.
@@ -68,7 +68,7 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
    ```bash
    mkdir gantry-gcp && cd gantry-gcp
    docker login ghcr.io -u <your user name>
-   docker create --name gantry-files ghcr.io/ggantry/gantry-enterprise:<version>
+   docker create --name gantry-files ghcr.io/ggantry/gantry:<version>
    docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
    ```
 
@@ -108,7 +108,7 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
      project = "my-project"
      region  = "europe-west1"
      zone    = "europe-west1-b"
-     image   = "europe-docker.pkg.dev/my-project/gantry/gantry-enterprise:<version>"
+     image   = "europe-docker.pkg.dev/my-project/gantry/gantry:<version>"
      policy  = file("gantry.policy.yaml")
 
      license_secret       = "gantry-license"
@@ -231,7 +231,7 @@ The role is granted on the module's project. For Vertex AI in another project, g
    ```bash
    sudo mkdir -p /mnt/gantry
    sudo mount -o ro <filestore_ip>:/gantry /mnt/gantry
-   docker run --rm -v /mnt/gantry:/mnt/gantry:ro ghcr.io/ggantry/gantry-enterprise:<version> \
+   docker run --rm -v /mnt/gantry:/mnt/gantry:ro ghcr.io/ggantry/gantry:<version> \
      audit verify /mnt/gantry/<revision>/gantry-audit.jsonl
    ```
 

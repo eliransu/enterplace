@@ -5,6 +5,11 @@ yanked = "deny"
 [licenses]
 allow = ["Apache-2.0", "MIT", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "CDLA-Permissive-2.0"]
 
+# The enterprise crate (publish = false) is under its own commercial license, enterprise/LICENSE: the allow list is for
+# what we depend on, not for our own unpublished crate.
+[licenses.private]
+ignore = true
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

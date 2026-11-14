@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The Terraform module `aws-ecs`, which ships inside the `gantry-enterprise` image, runs the gateways on ECS Fargate behind an HTTPS Application Load Balancer, with RDS Postgres 16 for the store and EFS for each gateway's audit log. Everything here is done with Terraform and the AWS console.
+The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the gateways on ECS Fargate behind an HTTPS Application Load Balancer, with RDS Postgres 16 for the store and EFS for each gateway's audit log. Everything here is done with Terraform and the AWS console.
 
 ## What it creates
 
@@ -30,7 +30,7 @@ The Terraform module `aws-ecs`, which ships inside the `gantry-enterprise` image
 - An AWS account and credentials for Terraform, given as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the environment. They need to create ECS, Elastic Load Balancing, EFS, RDS and RDS Proxy, Secrets Manager, SSM, IAM roles and policies, CloudWatch Logs and EC2 security groups.
 - A VPC with at least two private subnets and two public subnets, in two availability zones. The private subnets need outbound HTTPS through a NAT gateway: the tasks pull the image from ghcr.io and busybox from `public.ecr.aws`, and call the model providers.
 - A domain name you control, and an ACM certificate for it in the same region. Request it in the console under **Certificate Manager**, **Request**, with DNS validation, and wait until its status is **Issued**.
-- The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry-enterprise`, and the user name that goes with it.
+- The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry`, and the user name that goes with it.
 - Your license key, a provider key, and the image version you were given.
 
 ## Deploy
@@ -54,7 +54,7 @@ The Terraform module `aws-ecs`, which ships inside the `gantry-enterprise` image
    ```bash
    mkdir gantry-aws && cd gantry-aws
    docker login ghcr.io -u <your user name>
-   docker create --name gantry-files ghcr.io/ggantry/gantry-enterprise:<version>
+   docker create --name gantry-files ghcr.io/ggantry/gantry:<version>
    docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
    ```
 
@@ -90,7 +90,7 @@ The Terraform module `aws-ecs`, which ships inside the `gantry-enterprise` image
    module "gantry" {
      source = "./gantry-deploy/terraform/aws-ecs"
 
-     image              = "ghcr.io/ggantry/gantry-enterprise:<version>"
+     image              = "ghcr.io/ggantry/gantry:<version>"
      policy             = file("gantry.policy.yaml")
      replicas           = 1
      vpc_id             = "vpc-0123456789abcdef0"
@@ -246,7 +246,7 @@ A cross-region inference profile (`us.`, `eu.`) also needs the foundation model'
 - **Deploys have a gap.** A new image or policy stops each gateway before its replacement starts, because two tasks must never write one chain. Every service deploys at once, so even with two replicas there is a short time with no gateway.
 - **The policy holds at most 8 KB.** It lives in an SSM parameter.
 - **The connection to the database is encrypted, not checked.** The module connects to RDS Proxy with `sslmode=require`: TLS on, the certificate not verified. Only the gateways' security group reaches the proxy.
-- **No machine can read EFS but the tasks.** Its security group lets in the tasks only. Use **Verify chain now** in the console. For the command line, allow an EC2 instance with Docker in the `<name>-efs` security group on port 2049, mount the file system there read-only, and run the image's own `audit verify` on it: `docker run --rm -v /mnt/efs:/mnt/efs:ro ghcr.io/ggantry/gantry-enterprise:<version> audit verify /mnt/efs/gantry-0/gantry-audit.jsonl`.
+- **No machine can read EFS but the tasks.** Its security group lets in the tasks only. Use **Verify chain now** in the console. For the command line, allow an EC2 instance with Docker in the `<name>-efs` security group on port 2049, mount the file system there read-only, and run the image's own `audit verify` on it: `docker run --rm -v /mnt/efs:/mnt/efs:ro ghcr.io/ggantry/gantry:<version> audit verify /mnt/efs/gantry-0/gantry-audit.jsonl`.
 - **The task role reaches Bedrock only.** With `bedrock_resource_arns` empty the tasks have no AWS permissions at all.
 - **Deletion is protected.** Set `deletion_protection = false` and apply before `terraform destroy`. RDS takes a final snapshot named `<name>-final`.
 

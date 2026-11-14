@@ -132,7 +132,7 @@ The answer cache stays per replica, on purpose. A shared cache would keep answer
 
 ## Several replicas
 
-Run every replica with the same policy and the same `DATABASE_URL`, each with its own volume for its audit log. On Kubernetes that is a StatefulSet (a volume per pod) rather than the single-replica chart: see [Kubernetes](/operations/kubernetes/). Put a load balancer in front, with its health check on `GET /healthz`.
+Run every replica with the same policy and the same `DATABASE_URL`, each with its own volume for its audit log. On Kubernetes that is a StatefulSet with a volume per pod, as the Helm chart runs it: see [Kubernetes](/deploy/kubernetes/). Put a load balancer in front, with its health check on `GET /healthz`.
 
 - Each replica's audit log is a chain of its own. Verify each with `gantry audit verify`, and ship each to your SIEM.
 - A replica that restarts reads the keys and switches from the store, and spend is in the store: nothing is lost.
@@ -160,5 +160,5 @@ A replica that dies with requests in flight leaves their reservations held until
 
 <CardGrid>
 	<LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" description="How a request is admitted under a budget." />
-	<LinkCard title="Kubernetes" href="/operations/kubernetes/" description="The Helm chart and plain manifests." />
+	<LinkCard title="Kubernetes" href="/deploy/kubernetes/" description="The Helm chart, as a StatefulSet." />
 </CardGrid>

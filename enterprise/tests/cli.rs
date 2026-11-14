@@ -1,4 +1,4 @@
-//! One binary does everything: `gantry-enterprise` runs every open source `gantry` command as `gantry` does, and keeps
+//! One binary does everything: the enterprise `gantry` runs every open source `gantry` command as `gantry` does, and keeps
 //! its own commands. The self-hosted image holds this binary alone, so admin tasks run with it.
 
 use std::process::{Command, Output};
@@ -72,7 +72,7 @@ fn the_enterprise_commands_keep_precedence() -> TestResult {
         let out = run(args)?;
         assert_eq!(out.status.code(), Some(2), "{args:?}");
         assert!(
-            String::from_utf8(out.stderr)?.contains("gantry-enterprise node --control-plane"),
+            String::from_utf8(out.stderr)?.contains("gantry node --control-plane"),
             "{args:?}"
         );
     }

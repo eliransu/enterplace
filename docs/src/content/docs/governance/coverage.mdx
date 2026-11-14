@@ -57,7 +57,7 @@ The audit log shows what reached Gantry. It cannot show a tool that calls a prov
 
 ## What the report does not cover yet
 
-The report is built from audit data alone. The device agent in Gantry Enterprise (`gantry-enterprise device`) inspects each machine's tool settings and could tell "configured for Gantry" from "configured for a provider directly", but it reports only to the hosted Gantry app. The self-hosted gateway lacks:
+The report is built from audit data alone. The device agent in Gantry Enterprise (`gantry device`) inspects each machine's tool settings and could tell "configured for Gantry" from "configured for a provider directly", but it reports only to the hosted Gantry app. The self-hosted gateway lacks:
 
 - The `GET /device/profile` and `POST /device/report` endpoints the agent calls.
 - Enrolment tokens and storage for device reports.

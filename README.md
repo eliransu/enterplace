@@ -25,6 +25,8 @@ Gantry sits between your people, agents and workloads and the model providers th
 
 A request that cannot be recorded is refused. Gantry is one static binary with no database: policy, keys and audit log are plain files.
 
+Everything outside `enterprise/` is Apache 2.0. The enterprise features in `enterprise/` are under a commercial license and need a license key; see [License](#license).
+
 ## Quickstart
 
 ```bash
@@ -101,7 +103,7 @@ Full walkthrough, including Docker: [Quickstart](https://gantry-docs.eliran.me/g
 
 - **[Admin console](https://gantry-docs.eliran.me/operations/console/)** at `/console`: audit log, people and keys, policy and spend, with OIDC sign-in and admin and read-only roles.
 - **[Prometheus metrics](https://gantry-docs.eliran.me/operations/observability/)** and audit log shipping with Vector, Fluent Bit or the OpenTelemetry Collector.
-- **[Container image and Kubernetes](https://gantry-docs.eliran.me/operations/kubernetes/)**: a non-root image built `FROM scratch`, a Helm chart and plain manifests.
+- **[Container image and Kubernetes](https://gantry-docs.eliran.me/deploy/overview/)**: one non-root image built `FROM scratch` (`ghcr.io/ggantry/gantry`), a Helm chart, Terraform for AWS, Google Cloud and Azure, Docker Compose and Cloudflare.
 - **[HTTPS](https://gantry-docs.eliran.me/operations/deployment/)** with `--tls-cert` and `--tls-key`.
 - **[Migrate from LiteLLM](https://gantry-docs.eliran.me/migrate/from-litellm/)**: `gantry import litellm` turns a LiteLLM proxy config into a Gantry policy.
 
@@ -123,7 +125,8 @@ crates/
   gantry-console   the admin console assets
   gantry-cli       the gantry binary: serve, check, key, audit, kill, login, import, prices
   gantry-bench     overhead benchmark and CI gate
-deploy/            Helm chart and Kubernetes manifests
+enterprise/        enterprise features (commercial license, see enterprise/LICENSE)
+deploy/            Helm chart, Terraform (AWS ECS, GCP Cloud Run, Azure Container Apps), Compose, Cloudflare, MDM
 docs/              documentation site (Astro Starlight)
 scripts/           CI, release and example checks
 ```
@@ -142,4 +145,12 @@ Runs the same checks as CI: format, clippy with warnings as errors, every test, 
 
 ## License
 
-[Apache 2.0](LICENSE)
+Gantry is one repository with two licenses, as LiteLLM is:
+
+- Everything outside `enterprise/` is under the [Apache License 2.0](LICENSE).
+- `enterprise/` is under the [Gantry Commercial License](enterprise/LICENSE): the source is there to read, and
+  running it in production needs a valid Gantry license key.
+
+The open source crates build, test and run without `enterprise/` and never import it. The `gantry` binary in the
+image is the enterprise build: with no license key it is the open source gateway, and a key unlocks the enterprise
+features. See [License key](https://gantry-docs.eliran.me/operations/license/).

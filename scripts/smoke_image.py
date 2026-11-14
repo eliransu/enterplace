@@ -2,8 +2,9 @@
 
 Usage: python3 scripts/smoke_image.py gantry:<version>
 Passes when the image runs as a user other than root, is under 50 MB, prints the same version and source hash as
-target/release/gantry (when that exists), and answers a governed request
-within 60 seconds of `docker run`, leaving one request record in an unbroken chain.
+target/release/gantry-enterprise (when that exists), answers a governed request within 60 seconds of `docker run`,
+leaving one request record in an unbroken chain, answers /healthz and /readyz, and without a license key says it runs
+the open source edition (`license show` and the license in /healthz).
 SMOKE_MOCK_PORT and SMOKE_PORT pick the mock's port and the port the container is published on (both on
 127.0.0.1); unset, the system picks free ones."""
 import http.server, json, os, shutil, subprocess, sys, tempfile, threading, time, urllib.request
@@ -14,7 +15,7 @@ user = subprocess.check_output(["docker", "image", "inspect", image, "--format",
 assert size < 50 * 1024 * 1024, f"the image is {size} bytes, over 50 MB"
 assert user and not user.startswith("0") and user != "root", f"the image runs as {user!r}"
 # The image must be this tree's build: the same source hash as the local binary, when there is one.
-local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "target", "release", "gantry")
+local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "target", "release", "gantry-enterprise")
 if os.path.exists(local):
     mine = subprocess.check_output([local, "version"]).decode().split(", built")[0]
     theirs = subprocess.check_output(["docker", "run", "--rm", image, "version"]).decode().split(", built")[0]
@@ -78,7 +79,16 @@ try:
     records = subprocess.check_output(["docker", "exec", container, "/gantry", "audit", "verify", "/var/lib/gantry/gantry-audit.jsonl"]).decode()
     # One request record, besides the configuration record of the start and the request's usage record.
     assert "1 request," in records, records
-    print(f"pass: {size / 1e6:.1f} MB, user {user}, first governed request {took:.1f} s after docker run, {records.splitlines()[0]}")
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as answer:
+        health = json.loads(answer.read())
+        assert answer.status == 200, health
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/readyz", timeout=5) as answer:
+        assert answer.status == 200
+    # No license key in the container: the open source edition, said both ways.
+    assert health.get("license", {}).get("state") == "missing", health
+    shown = subprocess.check_output(["docker", "run", "--rm", image, "license", "show"]).decode()
+    assert "No license: running the open source features only" in shown, shown
+    print(f"pass: {size / 1e6:.1f} MB, user {user}, first governed request {took:.1f} s after docker run, {records.splitlines()[0]}; /healthz and /readyz 200, license {health['license']['state']} (open source edition)")
 finally:
     subprocess.run(["docker", "rm", "-f", container], capture_output=True)
     subprocess.run(["docker", "volume", "rm", volume], capture_output=True)

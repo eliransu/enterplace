@@ -1,17 +1,18 @@
-"""Checks deploy/ without a cluster: YAML parses, the security settings are there, and the policy passes `gantry check`.
+"""Checks the Helm chart in deploy/ without a cluster: YAML parses, the security settings are there, and the policy passes
+`gantry check`.
 Also checks the OpenTelemetry Collector recipe in the observability docs page against audit records a real Gantry writes
 (it starts `gantry serve` on 127.0.0.1:20953 for a moment).
 
 Usage: python3 scripts/check_deploy.py [path/to/gantry]
-helm is not required: when it is on PATH, `helm lint` and `helm template` run too. Without it the chart's templates
-are only checked for balanced blocks, and the plain manifests (the chart's defaults written out) are checked in full.
+helm is not required: when it is on PATH, `helm lint` and `helm template` run too, and the rendered StatefulSet's pod is
+checked in full. Without it the chart's templates are only checked for balanced blocks. The Terraform modules, the
+Cloudflare template and the Compose guide are checked by .github/workflows/deploy-targets.yml.
 YAML is parsed with Ruby's bundled Psych, because Python's standard library has no YAML parser. Never contacts a cluster.
 """
 import json, pathlib, re, shutil, subprocess, sys, tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CHART = ROOT / "deploy" / "helm" / "gantry"
-PLAIN = ROOT / "deploy" / "kubernetes" / "gantry.yaml"
 OBSERVABILITY = ROOT / "docs" / "src" / "content" / "docs" / "operations" / "observability.mdx"
 GANTRY = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "target" / "debug" / "gantry"
 
@@ -32,7 +33,7 @@ def check_pod(spec: dict, where: str) -> None:
         assert c["resources"]["requests"]["cpu"] and c["resources"]["requests"]["memory"], where
         if c in spec.get("initContainers", []):
             continue
-        assert c["readinessProbe"]["httpGet"]["path"] == "/healthz" and c["livenessProbe"]["httpGet"]["path"] == "/healthz", where
+        assert c["readinessProbe"]["httpGet"]["path"] == "/readyz" and c["livenessProbe"]["httpGet"]["path"] == "/healthz", where
         mounts = {m["mountPath"] for m in c["volumeMounts"]}
         assert "/var/lib/gantry" in mounts, f"{where}: the audit log needs its writable volume"
 
@@ -66,7 +67,7 @@ def check_otel() -> None:
     # A real audit log: start Gantry, send one refused request, stop it.
     with tempfile.TemporaryDirectory() as tmp:
         d = pathlib.Path(tmp)
-        (d / "p.yaml").write_text(load_all(PLAIN)[0]["data"]["gantry.policy.yaml"].replace("/var/lib/gantry/", f"{d}/"))
+        (d / "p.yaml").write_text(load_all(CHART / "values.yaml")[0]["policy"].replace("/var/lib/gantry/", f"{d}/"))
         (d / "k.yaml").write_text("keys: []\n")
         server = subprocess.Popen([str(GANTRY), "serve", str(d / "p.yaml"), "--keys", str(d / "k.yaml"), "--listen", "127.0.0.1:20953"], env={"OPENAI_PROVIDER_KEY": "not-a-real-key"}, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         try:
@@ -91,19 +92,11 @@ def check_otel() -> None:
 
 
 def main() -> None:
-    docs = load_all(PLAIN)
-    kinds = {d["kind"]: d for d in docs}
-    assert set(kinds) == {"ConfigMap", "PersistentVolumeClaim", "Deployment", "Service"}, kinds.keys()
-    deployment = kinds["Deployment"]["spec"]
-    assert deployment["replicas"] == 1 and deployment["strategy"]["type"] == "Recreate"
-    check_pod(deployment["template"]["spec"], str(PLAIN))
-    plain_policy = kinds["ConfigMap"]["data"]["gantry.policy.yaml"]
-    assert "/var/lib/gantry/" in plain_policy, "the audit log must be on the writable volume"
-    gantry_check(plain_policy, str(PLAIN))
-
     values = load_all(CHART / "values.yaml")[0]
     load_all(CHART / "Chart.yaml")
-    assert values["policy"] == plain_policy, "values.yaml policy and deploy/kubernetes/gantry.yaml policy differ"
+    policy = values["policy"]
+    assert "/var/lib/gantry/" in policy, "the audit log must be on the writable volume"
+    gantry_check(policy, str(CHART / "values.yaml"))
     for template in (CHART / "templates").glob("*.yaml"):
         text = template.read_text()
         opened = len(re.findall(r"\{\{-?\s*(if|with|range|define)\b", text))
@@ -111,9 +104,18 @@ def main() -> None:
         assert opened == closed, f"{template}: {opened} blocks opened, {closed} closed"
 
     if shutil.which("helm"):
-        for args in (["lint", str(CHART)], ["template", "gantry", str(CHART), "--set", "metrics.enabled=true,metrics.serviceMonitor.enabled=true,ingress.enabled=true"]):
-            subprocess.run(["helm", *args], check=True, capture_output=True)
-        print("helm lint and helm template passed")
+        subprocess.run(["helm", "lint", "--strict", str(CHART)], check=True, capture_output=True)
+        for extra in [[], *(["-f", str(f)] for f in sorted((CHART / "ci").glob("*.yaml")))]:
+            subprocess.run(["helm", "lint", "--strict", str(CHART), *extra], check=True, capture_output=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            rendered = pathlib.Path(tmp) / "chart.yaml"
+            rendered.write_text(subprocess.run(["helm", "template", "gantry", str(CHART), "--set", "metrics.enabled=true,metrics.serviceMonitor.enabled=true,ingress.enabled=true"], check=True, capture_output=True, text=True).stdout)
+            kinds = {d["kind"]: d for d in load_all(rendered)}
+        statefulset = kinds["StatefulSet"]["spec"]
+        assert statefulset["replicas"] == 1, "one replica without a store"
+        check_pod(statefulset["template"]["spec"], "the rendered StatefulSet")
+        assert kinds["ConfigMap"]["data"]["gantry.policy.yaml"] == policy, "the rendered policy is not values.yaml's"
+        print("helm lint (with each ci/ values file) and helm template passed; the pod's security settings hold")
     else:
         print("helm is not installed: the chart's templates were checked for balanced blocks only, not rendered")
     check_otel()

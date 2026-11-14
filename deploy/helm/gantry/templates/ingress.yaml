@@ -6,9 +6,6 @@ metadata:
   labels:
     {{- include "gantry.labels" . | nindent 4 }}
   annotations:
-    {{- if .Values.tls.secretName }}
-    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
-    {{- end }}
     {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

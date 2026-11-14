@@ -26,7 +26,7 @@ cd gantry
 cargo build --release
 ```
 
-The binary is `target/release/gantry`. Put it on your `PATH`:
+The binary is `target/release/gantry`, the open source edition (Apache 2.0). Put it on your `PATH`:
 
 ```bash
 export PATH="$PWD/target/release:$PATH"
@@ -42,7 +42,7 @@ cd gantry
 scripts/release.sh image
 ```
 
-This builds a static musl binary into an image tagged `gantry:local`. The image holds the binary and nothing else and runs as user `65532`.
+This builds a static musl binary into an image tagged `gantry:local`. The image holds the binary and nothing else and runs as user `65532`. Its binary is the enterprise build (`enterprise/`, commercial license): with no license key it is the open source gateway this guide uses.
 
 </TabItem>
 </Tabs>
