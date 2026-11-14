@@ -193,10 +193,14 @@ async fn handle(State(cloud): State<Shared>, request: Request) -> Response {
             // One object a page, so a reader that ignores nextPageToken misses the rest.
             let prefix = format!("{bucket}/{}", param("prefix").unwrap_or_default());
             let after = param("pageToken").unwrap_or_default();
-            let mut keys = cloud
+            // In name order, as Cloud Storage lists, so a page token is a place in the listing.
+            let mut names: Vec<&String> = cloud
                 .objects
                 .keys()
-                .filter(|k| k.starts_with(&prefix) && k.as_str() > after.as_str());
+                .filter(|k| k.starts_with(&prefix) && k.as_str() > after.as_str())
+                .collect();
+            names.sort();
+            let mut keys = names.into_iter();
             let Some(key) = keys.next() else {
                 return reply(StatusCode::OK, json!({}));
             };
