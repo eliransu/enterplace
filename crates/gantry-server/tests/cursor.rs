@@ -74,10 +74,9 @@ async fn cursors_documented_requests_pass_and_an_unlisted_model_is_refused() -> 
     assert_eq!(status, StatusCode::OK, "{models}");
     assert!(models.contains("gpt-4o-mini"), "{models}");
     // Chat and agent: streamed chat completions for the exact model name.
-    let chat = |model: &str| {
-        json!({"model": model, "stream": true, "messages": [{"role": "system", "content": "You are a coding assistant."}, {"role": "user", "content": "hi"}]})
-    };
-    let (status, streamed) = send("POST", "/v1/chat/completions", Some(chat("gpt-4o-mini"))).await?;
+    let chat = |model: &str| json!({"model": model, "stream": true, "messages": [{"role": "system", "content": "You are a coding assistant."}, {"role": "user", "content": "hi"}]});
+    let (status, streamed) =
+        send("POST", "/v1/chat/completions", Some(chat("gpt-4o-mini"))).await?;
     assert_eq!(status, StatusCode::OK, "{streamed}");
     assert!(streamed.contains("\"hi\""), "{streamed}");
     // A model from Cursor's own list goes to Gantry too, and the rule refuses it by name.
