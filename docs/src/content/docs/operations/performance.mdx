@@ -10,8 +10,34 @@ import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/com
 `gantry-bench` measures what Gantry adds to a request. This page states two methods: Bifrost's published setup, so the figures can be compared, and Gantry's own, which counts everything Gantry does on a request.
 
 <Aside type="caution">
-Numbers pending. The runs on this page wait for a quiet machine and for the cloud instances below. No figure is published until then.
+The figures below are from one Mac laptop, with the load generator, the mock provider and the gateway in one process on that machine. They are not from a cloud instance and not from the instance types Bifrost used, so they do not compare hardware for hardware. The cloud run is still to do.
 </Aside>
+
+## Results (2026-11-14)
+
+Three runs of each command, at commit `58f6917`. Each cell is the median of the three, with the lowest and highest in brackets, in microseconds.
+
+| Run | Added at p50 | Added at p99 | Gateway self-time, p50 | Gateway self-time, p99 |
+|---|---|---|---|---|
+| 1,000 a second, 10 s, mock answers at once | 209 (207 to 211) | 444 (435 to 490) | 97 (96 to 98) | 240 (232 to 259) |
+| 5,000 a second, 10 s, mock answers at once | 369 (366 to 378) | 808 (770 to 822) | 171 (162 to 174) | 501 (496 to 505) |
+| 5,000 a second, 120 s, mock answers after 1.5 s (Bifrost's setup) | 671 (667 to 695) | 7,099 (7,049 to 7,185) | 298 (292 to 299) | 2,880 (2,830 to 2,965) |
+
+Every run sent every request and got every answer (10,000, 50,000 and 600,000 a run), and the audit chain held one decision record and one usage record per request and verified. The 1,000 a second run passed the CI gate (under 1,000 us added at p99) three times in three.
+
+One slow-provider run was thrown out and run again. It started right after the one before it, and its leg against the mock alone, without Gantry, got 35,852 answers for 600,000 requests: the machine had no free ports left for the load generator. `gantry-bench` marked the run as not a valid measurement. The leg through Gantry in that run answered all 600,000 with the same figures as the others. The three runs in the table are the valid ones.
+
+**The machine.** A MacBook Pro (Mac17,9), Apple M5 Pro, 15 cores (5 and 10 of macOS's two core types), 48 GB of memory, macOS 26.6.2. Nothing else was building or under test. Before each run the 1-minute load average was under 3; across all of them `uptime` gave 1.9 to 3.4, which is the idle desktop (Spotlight, the window server, a container runtime) plus the run itself.
+
+**The commands**, each three times, from a release build (`cargo build --release -p gantry-bench`):
+
+```bash
+gantry-bench --rps 1000 --secs 10 --max-p99-overhead-us 1000
+gantry-bench --rps 5000 --secs 10
+gantry-bench --rps 5000 --secs 120 --upstream-ms 1500
+```
+
+**Against Bifrost's published figures.** Bifrost's documentation states a mean overhead of 59 us on an AWS t3.medium and 11 us on a t3.xlarge at 5,000 requests a second, measured inside the gateway and leaving out JSON marshalling and the HTTP calls. Gantry's closest figure in the same setup is its self-time: 298 us at p50, on different hardware, with the load generator and mock on the same machine, and counting a guardrail scan and a synced audit write that Bifrost's figure does not have. That is a larger number, not a smaller one, and the two do not measure the same work. Nothing here shows Gantry faster than Bifrost. `gantry-bench` prints percentiles and no mean, so there is no mean to set beside Bifrost's.
 
 ## The two methods
 
@@ -68,7 +94,7 @@ To publish figures on the instance types Bifrost used, the owner provides:
 - An AWS access key pair for an account where Gantry may start two on-demand EC2 instances (t3.medium and t3.xlarge) in one region, with unlimited CPU credits turned on so a t3 does not throttle mid-run.
 - The region, and approval for about an hour of instance time.
 
-Each instance builds Gantry from the tagged release and runs both methods three times. The numbers, `uptime` before each run, the instance type and the commit are published here.
+Each instance builds Gantry from the tagged release and runs both methods three times. The numbers, `uptime` before each run, the instance type and the commit are published here, beside the laptop figures above. Until then no figure on this page is from a cloud instance.
 
 ## Related
 

@@ -413,14 +413,16 @@ A batch is one session, and each line is a turn of it, named by the line's `cust
 
 A rule with no events guardrail pays nothing. An observing guardrail parses the request and the answer into events and puts two envelopes on its queue; delivery is in the background. An enforcing one adds its service's answer time at each point it is asked, and nothing else: ended sessions are read from memory, with or without a [store](/operations/store/#sessions-an-events-plugin-ended).
 
-`gantry-bench --events` measures the observing case: the [bench](/operations/operations/#bench) policy (1,000 keys, a `secrets` guardrail on every rule) with an events guardrail in observe mode added to every rule, delivering batches to a plugin service in the same process. The CI gate's load, 1,000 chat requests a second for 5 seconds, three runs of each on one machine (2026-11-14, an Apple laptop that was also running other builds, load average 9 to 22):
+`gantry-bench --events` measures the observing case: the [bench](/operations/operations/#bench) policy (1,000 keys, a `secrets` guardrail on every rule) with an events guardrail in observe mode added to every rule, delivering batches to a plugin service in the same process. 1,000 chat requests a second for 5 seconds, three runs of each, median with the lowest and highest in brackets, in microseconds (2026-11-14, commit `58f6917`):
 
-| Policy | Added at p50 | Added at p99 | Gateway self-time, p50 | Gate (1,000 us at p99) |
+| Policy | Added at p50 | Added at p99 | Gateway self-time, p50 | Gateway self-time, p99 |
 |---|---|---|---|---|
-| Bench policy | 216 to 226 us | 441 to 481 us | 109 to 113 us | 3 of 3 runs pass |
-| Bench policy and an observing events guardrail | 132 to 302 us | 363 to 751 us, and 3,727 us in one run | 53 to 156 us | 2 of 3 runs pass |
+| Bench policy | 208 (206 to 210) | 376 (343 to 497) | 96 (95 to 98) | 201 (191 to 269) |
+| Bench policy and an observing events guardrail | 273 (269 to 277) | 462 (443 to 529) | 127 (126 to 129) | 258 (247 to 297) |
 
-Every envelope was delivered in each run (12,000 for 6,000 requests, the warm-up included) and none was dropped. The gate takes one pass in three as a pass, so it holds with the guardrail on. The run that missed it had its tail in the gateway's own time while the machine was busiest, and the plugin service and the batch sender share the bench's process and CPU, so read the difference between the two rows as an upper bound: about 80 us at p50 in the slower runs. Measure your own with:
+An observing events guardrail added 65 us at p50 as the client saw it and 31 us of gateway self-time at p50; at p99 the medians are 86 us and 57 us apart, with ranges that overlap. Every envelope was delivered in each run (12,000 for 6,000 requests, the warm-up included) and none was dropped. All six runs stayed under the CI gate's 1,000 us at p99.
+
+This is one Mac laptop, not a cloud instance: a MacBook Pro (Mac17,9), Apple M5 Pro, 15 cores, 48 GB of memory, macOS 26.6.2, with the load generator, the mock provider, the plugin service and the gateway in one process on that machine. Nothing else was building; the 1-minute load average was 2.0 to 2.7 across the runs. The plugin service and the batch sender share the bench's CPU, so read the difference as an upper bound. The commands were `gantry-bench --rps 1000 --secs 5` and `gantry-bench --rps 1000 --secs 5 --events` from a release build ([Performance](/operations/performance/) has the other runs of that day). Measure your own with:
 
 ```sh
 cargo run --release -p gantry-bench -- --rps 1000 --secs 5 --events --max-p99-overhead-us 1000
