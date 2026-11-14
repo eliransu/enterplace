@@ -714,30 +714,6 @@ pub fn unix_secs(time: &str) -> Option<u64> {
     u64::try_from(days * 86_400 + clock).ok()
 }
 
-/// The start and end, in seconds since 1970, of the UTC day or month that holds `now`.
-pub fn period(now: u64, per_day: bool) -> (u64, u64) {
-    let today = crate::audit::rfc3339(UNIX_EPOCH + Duration::from_secs(now));
-    let part = |range: std::ops::Range<usize>| {
-        today
-            .get(range)
-            .and_then(|p| p.parse::<i64>().ok())
-            .unwrap_or(1)
-    };
-    let (year, month, day) = (part(0..4), part(5..7), part(8..10));
-    let secs = |days: i64| u64::try_from(days * 86_400).unwrap_or_default();
-    if per_day {
-        let start = days_from_civil(year, month, day);
-        (secs(start), secs(start + 1))
-    } else {
-        let next = if month == 12 {
-            days_from_civil(year + 1, 1, 1)
-        } else {
-            days_from_civil(year, month + 1, 1)
-        };
-        (secs(days_from_civil(year, month, 1)), secs(next))
-    }
-}
-
 /// Where a budget is heading at the pace it has been spent at since its period started.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pace {
@@ -865,6 +841,23 @@ pub trait Index: Send + Sync + std::fmt::Debug {
     /// The analytics of every request the query matches, summed where the rows are kept, so no window is cut
     /// at [`MAX_ROWS`]. `dimension` is one of [`DIMENSIONS`].
     fn analytics(&self, query: &Query, hourly: bool, dimension: &str) -> Pending<Analytics>;
+    /// What the requests the query matches were charged against budgets (`charged_usd`), by each value of
+    /// `dimension` (a request counts under each value it has), summed where the rows are kept. What a budget
+    /// forecast reads for its own window.
+    fn spent(&self, query: &Query, dimension: &str) -> Pending<Vec<(String, f64)>>;
+}
+
+/// [`Index::spent`] over rows folded here, from the local chain.
+pub fn spent(rows: &[Row], dimension: &str, from_secs: u64) -> Vec<(String, f64)> {
+    let mut by: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+    for row in rows {
+        if unix_secs(&row.time).is_some_and(|t| t >= from_secs) {
+            for value in row.labels.get(dimension).into_iter().flatten() {
+                *by.entry(value.clone()).or_default() += row.charged_usd;
+            }
+        }
+    }
+    by.into_iter().collect()
 }
 
 /// What the gateway serves for an audit log: the index of every gateway on its store, when it has one, and where
@@ -1286,7 +1279,8 @@ mod tests {
 
     #[test]
     fn a_budget_runs_out_at_its_pace() {
-        let (start, end) = period(unix_secs("2026-11-14T12:00:00Z").unwrap_or_default(), false);
+        let (start, end) = crate::policy::Period::Month.window(1_794_657_600); // 2026-11-14T12:00:00Z
+        let (start, end) = (start as u64, end as u64);
         assert_eq!(start, unix_secs("2026-11-01").unwrap_or_default());
         assert_eq!(end, unix_secs("2026-12-01").unwrap_or_default());
         let now = start + 10 * 86_400;
@@ -1298,9 +1292,6 @@ mod tests {
         assert_eq!(pace(10.0, 200.0, start, now, end), Pace::Lasts);
         assert_eq!(pace(200.0, 200.0, start, now, end), Pace::Spent);
         assert_eq!(pace(0.0, 200.0, start, now, end), Pace::Idle);
-        let (day_start, day_end) =
-            period(unix_secs("2026-12-31T23:00:00Z").unwrap_or_default(), true);
-        assert_eq!(day_end - day_start, 86_400);
     }
 
     #[test]

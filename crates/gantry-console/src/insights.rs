@@ -15,7 +15,7 @@ use axum::{
 use gantry_core::{
     config,
     insights::{self, DIMENSIONS, Outcome, Pace, Query, Row, Stats},
-    policy::{Period, Who},
+    policy::Who,
 };
 use serde_json::json;
 
@@ -907,49 +907,67 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> String {
             )
         );
     }
-    let (month_start, _) = insights::period(now, false);
-    let query = Query {
-        from: gantry_core::audit::rfc3339(
-            std::time::UNIX_EPOCH + std::time::Duration::from_secs(month_start),
-        ),
-        limit: insights::MAX_ROWS,
-        ..Query::default()
+    // Each budget over its own window (`per:` and `tz:`), as the gateway counts it. With a store the sums come from
+    // SQL over every request of the window; the local chain is folded once, from the earliest window's start.
+    let now_i = i64::try_from(now).unwrap_or(i64::MAX);
+    let windows: Vec<(u64, u64)> = budgets
+        .iter()
+        .map(|(_, b)| {
+            let (start, end) = b.per.window(now_i);
+            (
+                u64::try_from(start).unwrap_or_default(),
+                u64::try_from(end).unwrap_or_default(),
+            )
+        })
+        .collect();
+    let since = |start: u64| {
+        let mut query = Query {
+            from: gantry_core::audit::rfc3339(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(start),
+            ),
+            ..Query::default()
+        };
+        scoped(admin, &mut query);
+        query
     };
-    let mut query = query;
-    scoped(admin, &mut query);
-    let found = rows(console, &query).await.unwrap_or_default();
+    let index = insights::attached(&console.config().audit).index;
+    let local = match &index {
+        Some(_) => Vec::new(),
+        None => {
+            let earliest = windows.iter().map(|w| w.0).min().unwrap_or(now);
+            let mut query = since(earliest);
+            query.limit = insights::MAX_ROWS;
+            rows(console, &query).await.unwrap_or_default()
+        }
+    };
     let mut out = String::new();
-    for (rule, budget) in budgets {
-        // ponytail: a forecast window is a UTC day or month; a budget per week, per 6h or in a time zone is
-        // forecast over the month. Use Period::label and resets here if those budgets need their own window.
-        let per_day = budget.per == Period::Day;
-        let (start, end) = insights::period(now, per_day);
-        let spent_by = |dimension: &str| {
-            let mut by: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
-            for r in &found {
-                if insights::unix_secs(&r.time).is_some_and(|t| t >= start) {
-                    *by.entry(r.label(dimension).to_string()).or_default() += r.charged_usd;
-                }
-            }
-            by
+    for ((rule, budget), (start, end)) in budgets.into_iter().zip(windows) {
+        let dimension = match &rule.who {
+            Who::Team(_) => "team",
+            Who::Name(_) | Who::Any | Who::Tag(_) => "person",
+        };
+        let by: std::collections::BTreeMap<String, f64> = match &index {
+            Some(index) => index
+                .spent(&since(start), dimension)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
+            None => insights::spent(&local, dimension, start)
+                .into_iter()
+                .collect(),
         };
         let (label, spent) = match &rule.who {
             Who::Team(team) => (
                 format!("team {team}"),
-                spent_by("team")
-                    .get(team.as_str())
-                    .copied()
-                    .unwrap_or_default(),
+                by.get(team.as_str()).copied().unwrap_or_default(),
             ),
             Who::Name(name) => (
                 name.clone(),
-                spent_by("person")
-                    .get(name.as_str())
-                    .copied()
-                    .unwrap_or_default(),
+                by.get(name.as_str()).copied().unwrap_or_default(),
             ),
             // A budget for each person (of every key, or of the keys with a tag): the one heading out first.
-            Who::Any | Who::Tag(_) => spent_by("person")
+            Who::Any | Who::Tag(_) => by
                 .into_iter()
                 .max_by(|a, b| a.1.total_cmp(&b.1))
                 .map_or(("each person".into(), 0.0), |(p, s)| {
@@ -985,11 +1003,11 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> String {
         };
         let _ = write!(
             out,
-            r#"<div class="g-meter"{state} style="--g-meter-value: {pct}%"><div class="g-meter__row"><span class="t-mono-lg">{}</span><span class="t-mono-sm">${} of ${} a {}</span></div><div class="g-meter__track" role="meter" aria-valuenow="{pct}" aria-valuemin="0" aria-valuemax="100" aria-label="{} budget used"><div class="g-meter__fill"></div></div><span class="t-small g-muted">Rule {}. {note}</span></div>"#,
+            r#"<div class="g-meter"{state} style="--g-meter-value: {pct}%"><div class="g-meter__row"><span class="t-mono-lg">{}</span><span class="t-mono-sm">${} of ${} per {}</span></div><div class="g-meter__track" role="meter" aria-valuenow="{pct}" aria-valuemin="0" aria-valuemax="100" aria-label="{} budget used"><div class="g-meter__fill"></div></div><span class="t-small g-muted">Rule {}. {note}</span></div>"#,
             esc(&label),
             money(spent),
             money(budget.usd),
-            if per_day { "day" } else { "month" },
+            esc(&budget.per.describe()),
             esc(&label),
             esc(&rule.name),
         );

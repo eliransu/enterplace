@@ -28,6 +28,8 @@ one repository. How a release is made: RELEASING.md.
   alerting. Before, a segment could be retired between two copies and its requests never appeared in the request log.
 - The guardrail backtest admin API (`POST /admin/guardrails/test`) needs `edit_policy`, not `credentials`.
 - A Gemini Live session's decision record, written when its setup names the model, carries the caller's `user_agent`.
+- Analytics budget forecasts measure each budget over its own period and time zone (`per: week`, `6h`, `tz:`), not
+  over the UTC month, and with a store sum the period's spend in Postgres instead of folding up to 200,000 rows.
 
 ### Guardrails
 

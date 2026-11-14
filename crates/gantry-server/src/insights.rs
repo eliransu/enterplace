@@ -621,6 +621,35 @@ impl Index for PgIndex {
         })
     }
 
+    fn spent(&self, query: &Query, dimension: &str) -> Pending<Vec<(String, f64)>> {
+        let pg = self.pg.clone();
+        let query = query.clone();
+        let dimension = dimension.to_string();
+        Box::pin(async move {
+            let client = pg.connect().await?;
+            let (clause, mut params) = clause(&query);
+            params.push(Box::new(dimension));
+            // One sum per value of the dimension, over the index's own rows: nothing is folded here.
+            let sql = format!(
+                "SELECT v.k, COALESCE(sum(charged_usd), 0) FROM gantry_requests CROSS JOIN LATERAL jsonb_array_elements_text( \
+                   CASE WHEN jsonb_typeof(labels -> ${n}) = 'array' THEN labels -> ${n} ELSE '[]'::jsonb END) AS v(k) \
+                   {clause} GROUP BY 1",
+                n = params.len()
+            );
+            let refs: Vec<&(dyn ToSql + Sync)> = params
+                .iter()
+                .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+                .collect();
+            client
+                .query(&sql, &refs)
+                .await
+                .map_err(db)?
+                .iter()
+                .map(|r| Ok((r.try_get(0).map_err(db)?, r.try_get(1).map_err(db)?)))
+                .collect()
+        })
+    }
+
     fn rows(&self, query: &Query) -> Pending<Vec<Row>> {
         let pg = self.pg.clone();
         let query = query.clone();

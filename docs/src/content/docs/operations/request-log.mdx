@@ -45,7 +45,7 @@ Open `/console/analytics`. Pick a window (24 hours by the hour, 7 or 30 days by 
 
 The page shows totals (requests, refusals, errors, tokens, cost, and latency at p50, p95 and p99 by nearest rank), charts of each over time, and a ranking by the chosen dimension, most costly first. Each ranked value links to its requests.
 
-**Budget forecasts** take each budget in the policy and what it has been charged since its period started. At that pace, each says whether it lasts the period or the date and time it runs out. A budget for each person shows the person heading out first.
+**Budget forecasts** take each budget in the policy and what it has been charged since its own period started, in its own time zone: a `per: week, tz: America/New_York` budget is measured from Monday 00:00 in New York, a `per: 6h` one from the last 00:00, 06:00, 12:00 or 18:00. With a store the sums are computed by Postgres over every request of the period; without one, from the local audit log. At that pace, each says whether it lasts the period or the date and time it runs out. A budget for each person shows the person heading out first.
 
 ## Bodies
 

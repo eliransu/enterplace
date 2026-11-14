@@ -516,6 +516,36 @@ impl Period {
         }
     }
 
+    /// The window the instant `unix` (seconds since the epoch) falls in, as UTC seconds: when it started and when
+    /// it resets. What a forecast measures a budget's spend and pace over.
+    pub fn window(self, unix: i64) -> (i64, i64) {
+        let time = crate::audit::rfc3339(
+            std::time::UNIX_EPOCH
+                + std::time::Duration::from_secs(u64::try_from(unix).unwrap_or(0)),
+        );
+        let label = self.label(&time);
+        let clock = |text: &str| {
+            let num = |r: std::ops::Range<usize>, default: i64| {
+                text.get(r)
+                    .and_then(|t| t.parse::<i64>().ok())
+                    .unwrap_or(default)
+            };
+            days_from_civil(num(0..4, 1970), num(5..7, 1), num(8..10, 1)) * 86_400
+                + num(11..13, 0) * 3600
+                + num(14..16, 0) * 60
+        };
+        (
+            self.utc(clock(&label)),
+            self.utc(clock(&self.resets(&label))),
+        )
+    }
+
+    /// The UTC instant a time on the zone's clock names. The offset is the one in force there; at a clock change it
+    /// is taken from the instant just before.
+    fn utc(self, local: i64) -> i64 {
+        local - self.offset(local - self.offset(local))
+    }
+
     /// When the window named `label` ends, on the zone's clock: `2026-12-01 00:00 UTC`.
     pub fn resets(self, label: &str) -> String {
         let num = |r: std::ops::Range<usize>| label.get(r).and_then(|t| t.parse::<i64>().ok());
@@ -1872,6 +1902,38 @@ mod tests {
             assert!(utc(bad).is_err(), "{bad}");
         }
         assert!(Period::parse("day", Some("Mars/Olympus")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_window_is_the_period_the_instant_falls_in_in_utc_seconds() -> Result<(), String> {
+        let at = |time: &str| unix_seconds(time).ok_or(format!("no time in {time}"));
+        let now = at("2026-11-12T15:30:00Z")?; // a Thursday
+        let window = |per: &str, tz: Option<&str>| Period::parse(per, tz).map(|p| p.window(now));
+        assert_eq!(
+            window("month", None)?,
+            (at("2026-11-01T00:00:00Z")?, at("2026-12-01T00:00:00Z")?)
+        );
+        assert_eq!(
+            window("week", None)?,
+            (at("2026-11-09T00:00:00Z")?, at("2026-11-16T00:00:00Z")?),
+            "weeks start on Monday"
+        );
+        assert_eq!(
+            window("6h", None)?,
+            (at("2026-11-12T12:00:00Z")?, at("2026-11-12T18:00:00Z")?)
+        );
+        // New York is UTC-5 in November: its day began at 05:00 UTC.
+        assert_eq!(
+            window("day", Some("America/New_York"))?,
+            (at("2026-11-12T05:00:00Z")?, at("2026-11-13T05:00:00Z")?)
+        );
+        // A month in a zone that changed its clocks during it: Berlin's November began at UTC+1 and its October at
+        // UTC+2 (summer time ended on 2026-10-25).
+        assert_eq!(
+            Period::parse("month", Some("Europe/Berlin"))?.window(at("2026-10-30T12:00:00Z")?),
+            (at("2026-09-30T22:00:00Z")?, at("2026-10-31T23:00:00Z")?)
+        );
         Ok(())
     }
 

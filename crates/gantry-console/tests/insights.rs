@@ -309,6 +309,28 @@ async fn a_kept_body_is_shown_only_to_its_viewers_and_every_view_is_recorded() -
 }
 
 #[tokio::test]
+async fn a_budget_is_forecast_over_its_own_period_and_time_zone() -> TestResult {
+    let s = setup("forecast-window")?;
+    let policy = s.audit.with_file_name("gantry.policy.yaml");
+    std::fs::write(
+        &policy,
+        POLICY.replace(
+            "budget: { usd: 10, per: month }",
+            "budget: { usd: 10, per: week, tz: America/New_York }",
+        ),
+    )?;
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (status, _, page) = send(&s.app, get("/console/analytics", &cookie)?).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        page.contains("team payments")
+            && page.contains("$4.00 of $10.00 per week (America/New_York)"),
+        "{page}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn analytics_show_totals_percentiles_rankings_and_forecasts() -> TestResult {
     let s = setup("analytics")?;
     let cookie = sign_in(&s.app, NOA).await?;
@@ -326,7 +348,7 @@ async fn analytics_show_totals_percentiles_rankings_and_forecasts() -> TestResul
     assert!(
         page.contains("Budget forecasts")
             && page.contains("team payments")
-            && page.contains("$4.00 of $10.00")
+            && page.contains("$4.00 of $10.00 per month")
     );
     let (_, _, page) = send(
         &s.app,

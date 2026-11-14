@@ -361,6 +361,26 @@ async fn the_index_holds_every_replica_and_answers_as_the_local_chain_does() -> 
     }
     assert_ne!(replicas[0].0.replica(), replicas[1].0.replica());
 
+    // What a budget forecast reads: the charged spend of a window, summed in SQL by team over every replica.
+    let since = |from: &str| Query {
+        from: from.to_string(),
+        ..Query::default()
+    };
+    let mut spent = replicas[0].0.spent(&since("2000-01-01"), "team").await?;
+    spent.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        spent,
+        vec![("payments".to_string(), 0.5), ("search".to_string(), 0.5)]
+    );
+    assert!(
+        replicas[0]
+            .0
+            .spent(&since("2999-01-01"), "team")
+            .await?
+            .is_empty(),
+        "nothing after the window starts"
+    );
+
     // Every replica's rows, folded locally, in the index's order.
     let mut local = Vec::new();
     for (index, path) in &replicas {
