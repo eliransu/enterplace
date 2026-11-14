@@ -702,6 +702,23 @@ async fn trouble_with_the_audit_log_or_store_alerts_the_system_rules() -> Result
     )?;
     run(&ex).await?;
     assert_eq!(sink.deliveries().len(), 2);
+
+    // So does a secret a refresh could not read from its manager.
+    write(
+        &gw,
+        json!({ "event": "secret_refresh_failed", "variable": "OPENAI_KEY", "reference": "vault://secret/data/gantry#openai", "source": "vault", "code": "secret_refresh_failed", "reason": "Vault answered 403" }),
+    )?;
+    run(&ex).await?;
+    let hits = sink.deliveries();
+    assert_eq!(hits.len(), 3);
+    let summary = hits[2].json()["summary"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        summary.contains("OPENAI_KEY") && summary.contains("Vault answered 403"),
+        "{summary}"
+    );
     Ok(())
 }
 

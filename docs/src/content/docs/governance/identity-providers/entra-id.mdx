@@ -18,6 +18,8 @@ Entra identifies a group in a token by its **object ID** by default, for example
 - Put the object IDs in `admin_values` and `read_only_values`. They work for every group and never change when a group is renamed.
 - Emit group display names instead. Entra does this for cloud-only groups only when the group claim is limited to **Groups assigned to the application**, and the groups are assigned to the app under **Users and groups**.
 
+With **Groups assigned to the application**, Entra leaves out nested groups: a person must be a direct member of an assigned group.
+
 <Aside type="caution">
 Entra puts at most 200 groups in an ID token and 150 in a SAML assertion, nested groups included. A person in more groups gets no group claim at all, only a pointer to Microsoft Graph, which Gantry does not call, so the sign-in is refused with `sso_role`. Limit the claim to **Groups assigned to the application** and assign only the console groups.
 </Aside>
@@ -26,7 +28,7 @@ Entra puts at most 200 groups in an ID token and 150 in a SAML assertion, nested
 
 <Steps>
 
-1. In the Microsoft Entra admin center, go to **Entra ID** > **App registrations** and select **New registration**. Under **Supported account types**, choose the single tenant option, then **Register**.
+1. In the Microsoft Entra admin center, go to **Entra ID** > **App registrations** and select **New registration**. Under **Supported account types**, choose **Single tenant only** (your tenant), then **Register**.
 
 2. On the **Overview** page, copy the **Application (client) ID** and the **Directory (tenant) ID**.
 

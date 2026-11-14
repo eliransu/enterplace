@@ -760,6 +760,7 @@ mod tests {
             read_only_values: Vec::new(),
             allowed_domains: Vec::new(),
             allowed_emails: Vec::new(),
+            self_issue: None,
         };
         let refused = verify(&x509::base64_encode(xml.as_bytes()), &saml, "_r", 0);
         assert!(refused.is_err_and(|r| r.code == "saml_response"));
@@ -785,6 +786,7 @@ mod tests {
             read_only_values: Vec::new(),
             allowed_domains: vec!["example.com".into()],
             allowed_emails: Vec::new(),
+            self_issue: None,
         }
     }
 

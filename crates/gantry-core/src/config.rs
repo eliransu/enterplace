@@ -110,6 +110,7 @@ const KNOWN: &[&str] = &[
     "admin_values",
     "read_only_values",
     "self_issue",
+    "scopes",
     "expires_days",
     "saml",
     "idp_entity_id",
@@ -1054,6 +1055,8 @@ struct SamlFile {
     allowed_domains: Vec<String>,
     #[serde(default)]
     allowed_emails: Vec<String>,
+    #[serde(default)]
+    self_issue: Option<SelfIssueFile>,
 }
 
 /// Console sign-in through a SAML 2.0 identity provider, as checked.
@@ -1077,6 +1080,8 @@ pub struct Saml {
     pub read_only_values: Vec<String>,
     pub allowed_domains: Vec<String>,
     pub allowed_emails: Vec<String>,
+    /// `gantry login` issues keys over SAML only when this is set.
+    pub self_issue: Option<SelfIssue>,
 }
 
 /// The DER of each `CERTIFICATE` PEM block in `text`.
@@ -1165,6 +1170,10 @@ fn console_saml(
     let lower = |list: &[String]| -> Vec<String> {
         list.iter().map(|v| v.trim().to_ascii_lowercase()).collect()
     };
+    let self_issue = saml
+        .self_issue
+        .as_ref()
+        .map(|si| self_issue(si, &at, errors));
     (errors.len() == before).then(|| Saml {
         idp_entity_id: saml.idp_entity_id.clone(),
         idp_sso_url: saml.idp_sso_url.clone(),
@@ -1180,6 +1189,7 @@ fn console_saml(
         read_only_values: saml.read_only_values.clone(),
         allowed_domains: lower(&saml.allowed_domains),
         allowed_emails: lower(&saml.allowed_emails),
+        self_issue,
     })
 }
 
@@ -1201,6 +1211,9 @@ struct SsoFile {
     read_only_values: Vec<String>,
     #[serde(default)]
     self_issue: Option<SelfIssueFile>,
+    /// Space separated, as OpenID Connect writes it.
+    #[serde(default)]
+    scopes: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1250,6 +1263,9 @@ pub struct Sso {
     pub read_only_values: Vec<String>,
     /// `gantry login` issues keys only when this is set.
     pub self_issue: Option<SelfIssue>,
+    /// The scopes asked for at the authorization endpoint. `openid email profile` unless set; some providers send
+    /// a groups claim only when `groups` is asked for too.
+    pub scopes: Vec<String>,
 }
 
 /// An address Gantry may send a secret or trust a key from: https, or http to this machine for a provider run beside it.
@@ -1324,35 +1340,29 @@ fn console_sso(
     let lower = |list: &[String]| -> Vec<String> {
         list.iter().map(|v| v.trim().to_ascii_lowercase()).collect()
     };
-    let self_issue = sso.self_issue.as_ref().map(|si| {
-        if si.allowed_domains.is_empty() && si.allowed_emails.is_empty() {
-            errors.push(format!(
-                "{}: self_issue lets nobody get a key. Add allowed_domains (for example [example.com]) or allowed_emails.",
-                at("self_issue")
-            ));
-        }
-        let team = si.team.clone().unwrap_or_else(|| "developers".into());
-        if !valid_name(&team) {
-            errors.push(format!(
-                "{}: self_issue team \"{team}\" uses letters, digits, dots, dashes, underscores and @ only.",
-                at("self_issue")
-            ));
-        }
-        let expires_days = si.expires_days.unwrap_or(30);
-        if !(1..=365).contains(&expires_days) {
-            errors.push(format!(
-                "{}: expires_days is {expires_days}. A key from gantry login works 1 to 365 days; 30 is usual.",
-                at("expires_days")
-            ));
-        }
-        SelfIssue {
-            allowed_domains: lower(&si.allowed_domains),
-            allowed_emails: lower(&si.allowed_emails),
-            team_set: si.team.is_some(),
-            team,
-            expires_days,
-        }
-    });
+    let self_issue = sso
+        .self_issue
+        .as_ref()
+        .map(|si| self_issue(si, &at, errors));
+    let scopes: Vec<String> = sso
+        .scopes
+        .as_deref()
+        .unwrap_or("openid email profile")
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    // RFC 6749 section 3.3: a scope token is printable ASCII without space, double quote or backslash.
+    if !scopes.iter().any(|s| s == "openid")
+        || scopes.iter().any(|s| {
+            !s.bytes()
+                .all(|b| (0x21..=0x7e).contains(&b) && b != b'"' && b != b'\\')
+        })
+    {
+        errors.push(format!(
+            "{}: scopes must be space separated scope names that include openid, for example \"openid email profile groups\".",
+            at("scopes")
+        ));
+    }
     (errors.len() == before).then(|| Sso {
         issuer: sso.issuer.clone(),
         client_id: sso.client_id.clone(),
@@ -1364,7 +1374,46 @@ fn console_sso(
         admin_values: sso.admin_values.clone(),
         read_only_values: sso.read_only_values.clone(),
         self_issue,
+        scopes,
     })
+}
+
+/// `self_issue` under `console.sso` or `console.saml`, as checked.
+fn self_issue(
+    si: &SelfIssueFile,
+    at: &dyn Fn(&str) -> String,
+    errors: &mut Vec<String>,
+) -> SelfIssue {
+    let lower = |list: &[String]| -> Vec<String> {
+        list.iter().map(|v| v.trim().to_ascii_lowercase()).collect()
+    };
+    if si.allowed_domains.is_empty() && si.allowed_emails.is_empty() {
+        errors.push(format!(
+            "{}: self_issue lets nobody get a key. Add allowed_domains (for example [example.com]) or allowed_emails.",
+            at("self_issue")
+        ));
+    }
+    let team = si.team.clone().unwrap_or_else(|| "developers".into());
+    if !valid_name(&team) {
+        errors.push(format!(
+            "{}: self_issue team \"{team}\" uses letters, digits, dots, dashes, underscores and @ only.",
+            at("self_issue")
+        ));
+    }
+    let expires_days = si.expires_days.unwrap_or(30);
+    if !(1..=365).contains(&expires_days) {
+        errors.push(format!(
+            "{}: expires_days is {expires_days}. A key from gantry login works 1 to 365 days; 30 is usual.",
+            at("expires_days")
+        ));
+    }
+    SelfIssue {
+        allowed_domains: lower(&si.allowed_domains),
+        allowed_emails: lower(&si.allowed_emails),
+        team_set: si.team.is_some(),
+        team,
+        expires_days,
+    }
 }
 
 #[derive(Deserialize)]

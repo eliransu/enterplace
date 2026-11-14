@@ -6,9 +6,9 @@
 //! schedule. A fetch that fails at start stops the start; one that fails later keeps the value in hand.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{
-        Arc, OnceLock, RwLock,
+        Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -35,6 +35,68 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 fn cache() -> &'static RwLock<HashMap<String, String>> {
     CACHE.get_or_init(RwLock::default)
+}
+
+/// What a refresh did to one variable: its secret rotated, or could not be read (`error`). Never holds a value.
+pub struct Change<'a> {
+    pub variable: &'a str,
+    pub reference: &'a str,
+    /// The manager, as the scheme names it: `vault`, `aws-sm`, `gcp-sm` or `azure-kv`.
+    pub source: &'static str,
+    pub error: Option<&'a str>,
+}
+
+type Observer = Arc<dyn Fn(&Change<'_>) + Send + Sync>;
+
+/// Told of each change a refresh makes: the server writes it to the audit log.
+static OBSERVER: RwLock<Option<Observer>> = RwLock::new(None);
+/// By manager: (secrets rotated, refreshes that failed), since start.
+static COUNTS: Mutex<BTreeMap<&'static str, (u64, u64)>> = Mutex::new(BTreeMap::new());
+
+/// Tells `observer` of every rotation and failed refresh from now on, in place of the one before.
+pub fn observe(observer: Observer) {
+    match OBSERVER.write() {
+        Ok(mut o) => *o = Some(observer),
+        Err(poisoned) => *poisoned.into_inner() = Some(observer),
+    }
+}
+
+/// By manager, in name order: (manager, secrets rotated, refreshes that failed) since start.
+pub fn counts() -> Vec<(&'static str, u64, u64)> {
+    COUNTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .map(|(source, (rotated, failed))| (*source, *rotated, *failed))
+        .collect()
+}
+
+fn source_of(reference: &str) -> &'static str {
+    SCHEMES
+        .iter()
+        .find(|s| reference.starts_with(**s))
+        .map_or("unknown", |s| s.trim_end_matches("://"))
+}
+
+fn changed(change: &Change<'_>) {
+    {
+        let mut counts = COUNTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = counts.entry(change.source).or_default();
+        if change.error.is_some() {
+            entry.1 += 1;
+        } else {
+            entry.0 += 1;
+        }
+    }
+    let observer = match OBSERVER.read() {
+        Ok(o) => o.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    if let Some(observer) = observer {
+        observer(change);
+    }
 }
 
 /// Lets references be read. Once per process; false if a source was installed already.
@@ -133,25 +195,44 @@ pub fn refresh_from(vars: impl Iterator<Item = (String, String)>) -> Vec<String>
     let mut fresh = Vec::new();
     for (name, reference) in references(vars) {
         match source.fetch(&reference) {
-            Ok(value) => fresh.push((name, value)),
-            Err(err) => failed.push(format!(
-                "{name} ({reference}): {err}. Gantry keeps the value it read before."
-            )),
+            Ok(value) => fresh.push((name, reference, value)),
+            Err(err) => {
+                changed(&Change {
+                    variable: &name,
+                    reference: &reference,
+                    source: source_of(&reference),
+                    error: Some(&err),
+                });
+                failed.push(format!(
+                    "{name} ({reference}): {err}. Gantry keeps the value it read before."
+                ));
+            }
         }
     }
-    let mut cache = match cache().write() {
-        Ok(cache) => cache,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let mut changed = false;
-    for (name, value) in fresh {
-        if cache.get(&name) != Some(&value) {
-            cache.insert(name, value);
-            changed = true;
+    let mut rotated = Vec::new();
+    {
+        let mut cache = match cache().write() {
+            Ok(cache) => cache,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        for (name, reference, value) in fresh {
+            if cache.get(&name) != Some(&value) {
+                cache.insert(name.clone(), value);
+                rotated.push((name, reference));
+            }
         }
     }
-    if changed {
+    if !rotated.is_empty() {
         GENERATION.fetch_add(1, Ordering::SeqCst);
+    }
+    // Told after the cache lock is let go: the observer may read variables.
+    for (name, reference) in &rotated {
+        changed(&Change {
+            variable: name,
+            reference,
+            source: source_of(reference),
+            error: None,
+        });
     }
     failed
 }

@@ -52,18 +52,18 @@ The issuer for the US region is `https://oauth.id.jumpcloud.com/`, trailing slas
 1. Go to **Access** > **SSO Applications** and click **Add New Application**. Choose **Custom Application** (or search for `Custom SAML App`), then **Manage Single Sign-On (SSO)** and **Configure SSO with SAML**. Enter a display label, save, and choose **Configure Application**.
 
 2. On the **SSO** tab:
-   - **IdP Entity ID**: a unique value of your choice, for example `https://gantry.example.com/jumpcloud`. This becomes `idp_entity_id`.
+   - **IdP Entity ID** {/* label not confirmed in JumpCloud's public articles, 2026-11 */}: a unique value of your choice, for example `https://gantry.example.com/jumpcloud`. This becomes `idp_entity_id`.
    - **SP Entity ID**: `https://gantry.example.com/console/saml/metadata`
    - **ACS URLs**: `https://gantry.example.com/console/saml/acs`
    - **SAMLSubject NameID**: `email`, with **SAMLSubject NameID Format** set to the emailAddress format
    - **Signature Algorithm**: RSA-SHA256 (the default; Gantry refuses RSA-SHA1)
-   - Signing: sign the assertion, or both the response and the assertion
+   - Signing: JumpCloud signs only the response by default. Turn on assertion signing (the assertion, or the response and the assertion): Gantry needs a signed assertion
    - **Login URL**: `https://gantry.example.com/console/saml/start`, so the User Portal tile starts an SP-initiated sign-in
    - **Declare Redirect Endpoint**: on, so the IdP metadata lists the HTTP-Redirect binding Gantry uses
 
 3. Add a user attribute named `email` mapped to the user's email. Turn on the group attribute and set **Groups Attribute Name** to `groups`. JumpCloud refuses to activate the app if the name is empty.
 
-4. Save. JumpCloud generates the signing certificate. Copy the **IDP URL** (`idp_sso_url`) and download the IdP certificate, or use **Export Metadata** to get all three IdP values in one file.
+4. Save. JumpCloud generates the signing certificate. Copy the **SSO IdP URL** (`idp_sso_url`, by default `https://sso.jumpcloud.com/saml2/<application name>`; set a custom name under **Advanced Settings** before the first save, because it cannot be changed later) and download the IdP certificate, or use **Export Metadata** to get all three IdP values in one file.
 
 5. On the app's **User Groups** tab, select `gantry-admins` and `gantry-viewers` and save.
 

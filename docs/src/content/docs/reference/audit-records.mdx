@@ -19,6 +19,8 @@ The audit log is a file of JSON lines, one record per line, in one hash chain. E
 | `config_loaded` | [Configuration loaded](#config_loaded) | At start, and when a change to the policy or keys file is used |
 | `config_rejected` | [Configuration rejected](#config_rejected) | When a change fails the check |
 | `admin` | [Admin](#admin) | For each admin API call and console action |
+| `secret_rotated` | [Secret rotated](#secret_rotated) | Gantry Enterprise: when a refresh finds a secret manager's value changed |
+| `secret_refresh_failed` | [Secret refresh failed](#secret_rotated) | Gantry Enterprise: when a refresh cannot read a secret manager |
 | `audit_repaired` | [Repair](#audit_repaired) | When `gantry audit repair --yes` removes a cut last line |
 | `audit_retired` | [Retirement](#audit_retired) | Before sealed segments at the start of the chain are deleted |
 | `alert` | Alert | Gantry Enterprise: when an alert rule fires. Names the rule, the subject and the records behind it: see [Alerting](/operations/alerting/#what-is-recorded) |
@@ -246,6 +248,24 @@ Written once per distinct pair of files that fails the check. Gantry keeps the v
 | `policy_sha256`, `keys_sha256` | string | The rejected files on disk |
 | `problem_count` | integer | How many problems |
 | `problems` | array of strings | Each problem with its file, line and fix |
+
+## secret_rotated
+
+With the `secrets` feature, each refresh of the [secret managers](/operations/secret-managers/) writes one record per variable whose value changed (`secret_rotated`) and one per variable it could not read (`secret_refresh_failed`). The value is never written, in either record.
+
+```json
+{"n":12,"event":"secret_refresh_failed","time":"2026-11-14T09:05:00.112Z","variable":"OPENAI_PROVIDER_KEY","reference":"vault://secret/data/gantry#openai","source":"vault","code":"secret_refresh_failed","reason":"Vault answered 403. Check the address and that the credentials may read the secret.","prev":"...","hash":"..."}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `event` | string | `secret_rotated` or `secret_refresh_failed` |
+| `time` | string | When the refresh read it |
+| `variable` | string | The `*_env` variable that holds the reference |
+| `reference` | string | The reference, as written in the variable |
+| `source` | string | The manager: `vault`, `aws-sm`, `gcp-sm` or `azure-kv` |
+| `code` | string | `secret_refresh_failed` only |
+| `reason` | string | `secret_refresh_failed` only: why the manager could not be read, and the fix. The value in hand stays in use |
 
 ## admin
 

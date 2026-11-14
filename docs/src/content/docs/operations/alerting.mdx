@@ -57,7 +57,7 @@ Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and
 | `new_ip` | A key is used from an address it has not used before. A key's first addresses are learned, not alerted on | none | key and address: once each |
 | `after_hours` | A key is used outside working hours or on a weekend | hours, such as `08-19` or `08-19+0200` | key and day: once a day |
 | `unusual_spend` | A person's spend today is `factor` times their daily average of the last 14 days, and at least the amount | factor (3), amount in USD (5) | person and day: once a day |
-| `system` | The audit log cannot be written, this replica's records cannot be read into Postgres, the alert tables cannot be read, or requests are refused with `store_unavailable` or `kills_unreadable` | none | replica and problem |
+| `system` | The audit log cannot be written, this replica's records cannot be read into Postgres, the alert tables cannot be read, or requests are refused with `store_unavailable` or `kills_unreadable`, or a refresh cannot read a [secret manager](/operations/secret-managers/) (`secret_refresh_failed`) | none | replica and problem (for a secret, the variable) |
 
 Group by is `all` (default), `person`, `team` or `key`.
 

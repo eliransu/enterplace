@@ -1260,8 +1260,13 @@ async fn sso_start(
     }
     let sso = match console.sign_in_config() {
         Ok((Some(sso), _)) => sso,
-        // SAML is the only single sign-on set up: the sign-in page's button leads there.
-        Ok((None, Some(_))) if cli.is_none() => return redirect("/console/saml/start"),
+        // SAML is the only single sign-on set up: the sign-in page's button, and gantry login, lead there.
+        Ok((None, Some(_))) => {
+            return redirect(&match uri.query().filter(|_| cli.is_some()) {
+                Some(query) => format!("/console/saml/start?{query}"),
+                None => "/console/saml/start".to_string(),
+            });
+        }
         Ok((None, _)) => {
             let message = "Single sign-on is not set up. Sign in with an admin key, or add a console.sso section to the policy file.".to_string();
             return console
@@ -1397,10 +1402,28 @@ async fn saml_start(
         };
         let _ = record(&console, &act, None, None).await;
     }
+    let cli = match cli_start(&Form::of(&uri)) {
+        Ok(cli) => cli,
+        Err(message) => {
+            let refusal = sso::Refusal {
+                code: "cli_login",
+                message: message.into(),
+            };
+            let _ = console.sign_in_refused("saml", None, &refusal).await;
+            return page(StatusCode::UNAUTHORIZED, pages::cli_bad_link(message));
+        }
+    };
     let saml = match saml_config(&console) {
         Ok(saml) => saml,
         Err(refusal) => return console.sign_in_refused("saml", None, &refusal).await,
     };
+    if cli.is_some() && saml.self_issue.is_none() {
+        let refusal = sso::Refusal {
+            code: "sso_self_issue",
+            message: "gantry login is off: the policy file has no console.saml.self_issue section. Ask an admin to add one, or for a key.".into(),
+        };
+        return console.sign_in_refused("saml", None, &refusal).await;
+    }
     let (Some(id), Some(seal)) = (random_hex(), console.0.seal.as_ref()) else {
         return page(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1434,6 +1457,20 @@ async fn saml_start(
             SSO_PENDING.as_secs()
         ),
     );
+    // As for OpenID Connect: sealed over this request's ID, so it fits this sign-in only, and a console sign-in
+    // clears what an abandoned `gantry login` left.
+    let cli_cookie = match cli {
+        Some(c) => format!(
+            "{CLI_COOKIE}={}.{}.{}.{}; Path=/console/saml; Max-Age={}; HttpOnly; SameSite={site}",
+            c.port,
+            c.state,
+            c.challenge,
+            mac(seal, &cli_seal(&id, &c)),
+            SSO_PENDING.as_secs()
+        ),
+        None => format!("{CLI_COOKIE}=; Path=/console/saml; Max-Age=0; HttpOnly; SameSite={site}"),
+    };
+    set_cookie(&mut response, &cli_cookie);
     response
 }
 
@@ -1507,6 +1544,16 @@ async fn saml_acs(
             .await;
     }
     let groups: Vec<&str> = signed.groups.iter().map(String::as_str).collect();
+    if let Some(cli) = cli_cookie(&console, &headers, relay) {
+        let admitted = sso::admit_self_person(
+            signed.email,
+            &groups,
+            &sso::Access::of_saml(&saml),
+            saml.self_issue.as_ref(),
+            &console.teams(),
+        );
+        return cli_finish(&console, "saml", &cli, admitted).await;
+    }
     let admitted = sso::admit_person(
         signed.email,
         &groups,
@@ -1625,7 +1672,9 @@ async fn sso_callback(
     let query = Form::of(&uri);
     let finished = sso_finish(&console, &headers, &query).await;
     if let Some(cli) = cli_cookie(&console, &headers, query.get("state")) {
-        return cli_finish(&console, &cli, finished).await;
+        let teams = console.teams();
+        let admitted = finished.and_then(|(claims, sso)| sso::admit_self(&claims, &sso, &teams));
+        return cli_finish(&console, "sso", &cli, admitted).await;
     }
     let (roles, teams) = (console.roles(), console.teams());
     match finished.and_then(|(claims, sso)| sso::admit(&claims, &sso, &roles, &teams)) {
@@ -1672,14 +1721,18 @@ type SsoResult = Result<(Value, config::Sso), (Option<String>, sso::Refusal)>;
 
 /// Ends a sign-in `gantry login` started: the browser goes back to the CLI on 127.0.0.1 with a one-use code, or with
 /// why it was refused. The key itself is only ever handed to the CLI, in exchange for the code and its PKCE verifier.
-async fn cli_finish(console: &Console, cli: &CliStart, finished: SsoResult) -> Response {
+async fn cli_finish(
+    console: &Console,
+    via: &'static str,
+    cli: &CliStart,
+    admitted: Result<(String, String, u32), (Option<String>, sso::Refusal)>,
+) -> Response {
     let back = if cli.port == 0 {
         format!("/console/mcp/sso-return?state={}", cli.state)
     } else {
         format!("http://127.0.0.1:{}/callback?state={}", cli.port, cli.state)
     };
-    let teams = console.teams();
-    let to = match finished.and_then(|(claims, sso)| sso::admit_self(&claims, &sso, &teams)) {
+    let to = match admitted {
         Ok((email, team, days)) => {
             let Some(code) = random_hex() else {
                 return page(
@@ -1713,7 +1766,9 @@ async fn cli_finish(console: &Console, cli: &CliStart, finished: SsoResult) -> R
         Err((email, refusal)) => {
             // Recorded, and counted against floods, as any refused sign-in is. The page it renders is not shown:
             // the CLI shows the reason in the terminal.
-            let _ = console.sso_refused(email.as_deref(), &refusal).await;
+            let _ = console
+                .sign_in_refused(via, email.as_deref(), &refusal)
+                .await;
             format!(
                 "{back}&error={}&message={}",
                 refusal.code,
@@ -1722,10 +1777,20 @@ async fn cli_finish(console: &Console, cli: &CliStart, finished: SsoResult) -> R
         }
     };
     let mut response = redirect(&to);
-    for name in [SSO_COOKIE, CLI_COOKIE] {
+    let path = if via == "saml" {
+        "/console/saml"
+    } else {
+        "/console/sso"
+    };
+    let pending = if via == "saml" {
+        SAML_COOKIE
+    } else {
+        SSO_COOKIE
+    };
+    for name in [pending, CLI_COOKIE] {
         set_cookie(
             &mut response,
-            &format!("{name}=; Path=/console/sso; Max-Age=0; HttpOnly; SameSite=Lax"),
+            &format!("{name}=; Path={path}; Max-Age=0; HttpOnly; SameSite=Lax"),
         );
     }
     response
