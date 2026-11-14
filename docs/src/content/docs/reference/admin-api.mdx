@@ -25,7 +25,7 @@ gantry key new noa.bar --team platform --admin
 | Key whose [role](/governance/policy/#console-roles) lacks the route's permission | 403 `not_permitted` |
 | Admin key, or a key whose role has the permission | Allowed |
 
-Each route needs one permission: `see_keys` to list keys, `issue_keys`, `revoke_keys`, `kill` for kill switches, `credentials` for provider credentials and `see_spend` for the explanation. A role kept to an organization lists, issues, revokes and explains only that organization's keys, and has no kill switches or credentials.
+Each route needs one permission: `see_keys` to list keys, `issue_keys`, `revoke_keys`, `kill` for kill switches, `credentials` for provider credentials, `edit_policy` for a guardrail backtest and `see_spend` for the explanation. A role kept to an organization lists, issues, revokes and explains only that organization's keys, and has no kill switches or credentials.
 
 `DELETE /admin/keys/self` is the one exception: any valid key may revoke itself.
 
@@ -52,6 +52,7 @@ The admin API exists only when Gantry serves from a keys file. Under `gantry ser
 | `POST` | `/admin/credentials` | `add_credential` | Adds a provider credential |
 | `PUT` | `/admin/credentials/<name>` | `rotate_credential` | Gives a credential a new value |
 | `DELETE` | `/admin/credentials/<name>` | `remove_credential` | Removes a credential |
+| `POST` | `/admin/guardrails/test` | `test_guardrail` | Backtests a guardrail over a corpus. See [Guardrails](/governance/guardrails/) |
 
 Any other method or path under `/admin` is refused with 404 `unknown_route` and recorded.
 

@@ -450,6 +450,8 @@ fn needs(action: &str) -> Permission {
         "explain" => Permission::SeeSpend,
         "key_info" => Permission::SeeKeys,
         "update_key" | "rotate_key" => Permission::IssueKeys,
+        // A backtest tries a guardrail before it goes into the policy: the policy author's job, not the credential keeper's.
+        "test_guardrail" => Permission::EditPolicy,
         _ => Permission::Credentials,
     }
 }

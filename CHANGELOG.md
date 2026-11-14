@@ -29,6 +29,7 @@ one repository. How a release is made: RELEASING.md.
 - `shadow_until` on any guardrail: until that UTC date it records `action: shadow` and enforces nothing.
 - `gantry guardrail test <name> --corpus <file>` and `POST /admin/guardrails/test`: a backtest of a guardrail over
   examples before it goes live, with hits, kinds, masked sample spans, and precision and recall on labelled examples.
+  The admin API call needs the `edit_policy` permission (it asked for `credentials` at first).
 - Nine more secrets kinds: `gcp_service_account_key`, `gcp_api_key`, `azure_connection_string`, `stripe_key`,
   `twilio_api_key`, `sendgrid_key`, `openai_project_key`, `anthropic_key` and `database_url`, measured on the new
   `gantry-detectors-v2` corpus. A URL's login part is no longer reported as an email address.

@@ -921,19 +921,28 @@ async fn buffer_stream_checks_a_streamed_answer_then_replays_it() -> TestResult 
 async fn custom_detectors_block_or_shadow_and_the_admin_api_backtests_them() -> TestResult {
     let port = provider().await?;
     let guards = "  - name: tickets\n    type: regex\n    action: block\n    patterns:\n      ticket_id: 'TKT-[0-9]{6}'\n  - name: words\n    type: keywords\n    action: block\n    shadow_until: 2999-01-01\n    keywords:\n      codename: [Project Falcon]\n";
-    // Maya, and an admin key for the backtest call.
+    // Maya, an admin key for the backtest call, and two roles: a backtest is a policy author's tool, so edit_policy
+    // runs it and credentials alone does not.
     let admin = "gantry_admin_0123456789abcdef0123456789";
+    let author = "gantry_author_0123456789abcdef012345678";
+    let keeper = "gantry_keeper_0123456789abcdef012345678";
     let dir = std::env::temp_dir().join(format!("gantry-guard-{}-custom", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("gantry.policy.yaml");
-    std::fs::write(&path, policy(port, guards, "tickets, words"))?;
+    std::fs::write(
+        &path,
+        policy(port, guards, "tickets, words")
+            + "roles:\n  - name: author\n    permissions: [edit_policy]\n  - name: keeper\n    permissions: [credentials]\n",
+    )?;
     std::fs::write(
         dir.join("gantry.keys.yaml"),
         format!(
-            "keys:\n  - name: maya.cohen\n    team: payments\n    sha256: {}\n  - name: ops\n    team: platform\n    admin: true\n    sha256: {}\n",
+            "keys:\n  - name: maya.cohen\n    team: payments\n    sha256: {}\n  - name: ops\n    team: platform\n    admin: true\n    sha256: {}\n  - name: author\n    team: platform\n    role: author\n    sha256: {}\n  - name: keeper\n    team: platform\n    role: keeper\n    sha256: {}\n",
             sha256_hex(MAYA.as_bytes()),
-            sha256_hex(admin.as_bytes())
+            sha256_hex(admin.as_bytes()),
+            sha256_hex(author.as_bytes()),
+            sha256_hex(keeper.as_bytes())
         ),
     )?;
     let gw = gantry_server::governed(&path, None, &|_| Some("provider-secret".into()))?;
@@ -1013,5 +1022,22 @@ async fn custom_detectors_block_or_shadow_and_the_admin_api_backtests_them() -> 
     )
     .await?;
     assert_eq!(answer.status, StatusCode::FORBIDDEN, "{}", answer.body);
+    let answer = send(
+        gw,
+        backtest(json!({"guardrail": "tickets", "corpus": corpus}), author)?,
+    )
+    .await?;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let answer = send(
+        gw,
+        backtest(json!({"guardrail": "tickets", "corpus": corpus}), keeper)?,
+    )
+    .await?;
+    assert_eq!(answer.status, StatusCode::FORBIDDEN, "{}", answer.body);
+    assert!(
+        answer.body.contains("edit_policy permission"),
+        "{}",
+        answer.body
+    );
     Ok(())
 }

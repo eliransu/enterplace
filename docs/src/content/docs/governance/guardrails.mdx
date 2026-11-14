@@ -209,7 +209,7 @@ curl -s -X POST http://127.0.0.1:8080/admin/guardrails/test \
        "corpus": [{"text": "badge E1234567", "expect": true}, {"text": "no id here", "expect": false}]}'
 ```
 
-It answers with `requests`, `hits`, `kinds`, `samples` and `labelled` (`precision`, `recall` and the four counts), and the call is recorded like every admin call.
+It needs the `edit_policy` permission. It answers with `requests`, `hits`, `kinds`, `samples` and `labelled` (`precision`, `recall` and the four counts), and the call is recorded like every admin call.
 
 A backtest runs the `secrets`, `pii`, `regex` and `keywords` types. A vendor or webhook guardrail is refused, because a backtest would send every example to the service; use `shadow_until` for those. `--since 7d` (and `"since"` in the API) asks for recent traffic. The audit log holds no prompt text by design, so until request bodies are captured, Gantry says so and asks for a corpus.
 
