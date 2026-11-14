@@ -86,7 +86,6 @@ gantry</a>
       <a class="nav-link" href="https://gantry-docs.eliran.me/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-line btn-sm" href="https://github.com/ggantry/gantry">GitHub</a>
         <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
@@ -125,7 +124,7 @@ gantry</a>
     <a href="https://gantry-docs.eliran.me/deploy/cloudflare/"><strong>Cloudflare</strong><span>Containers, with the audit chain sealed into R2.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
   </nav>
-  <p class="tbl-note">The guides use the Gantry Enterprise image with its Compose stack, Helm chart and Terraform modules. <span class="ent">Enterprise</span> Without a license the same image runs the open source edition. The open source gateway also builds from source, and has its own Helm chart and Kubernetes manifests.</p>
+  <p class="tbl-note">The guides use the Gantry Enterprise image with its Compose stack, Helm chart and Terraform modules. <span class="ent">Enterprise</span> Without a license the same image runs the open source edition.</p>
 </section>
 
 <section class="wrap sec">
@@ -179,8 +178,8 @@ store: { postgres_url_env: DATABASE_URL }</pre></figure>
   </div>
 </section>
 
-<section class="wrap sec">
-  <div class="sec-head solo"><h2>Limits to know before you start</h2></div>
+<section class="wrap sec doc">
+  <h2>Limits to know before you start</h2>
   <ul class="ticks out">
     <li><strong>Gantry serves plain HTTP unless you give it a certificate.</strong> Start it with <code>--tls-cert</code> and <code>--tls-key</code>, or put TLS in front of it, before traffic leaves one machine.</li>
     <li><strong>On Cloud Run and Container Apps, one replica.</strong> More than one replica on those two is planned. Kubernetes and ECS run several.</li>
@@ -261,7 +260,6 @@ gantry</a>
         <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a>
         <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>
         <a href="https://gantry-docs.eliran.me/getting-started/changelog/">Changelog</a>
-        <a href="https://github.com/ggantry/gantry">GitHub</a>
       </div>
     </nav>
   </div>

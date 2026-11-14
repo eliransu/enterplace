@@ -18,6 +18,28 @@
     closeMenus(b);
     b.setAttribute('aria-expanded', String(!open));
   }));
+  // Arrow keys: Down on a menu button opens it and moves into it, Up and Down move between its links.
+  $('#nav').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const btn = e.target.closest('.nav-btn');
+    const menu = btn ? btn.nextElementSibling : e.target.closest('.menu');
+    if (!menu) return;
+    e.preventDefault();
+    const links = $$('a', menu);
+    if (btn) {
+      closeMenus(btn);
+      btn.setAttribute('aria-expanded', 'true');
+      links[e.key === 'ArrowDown' ? 0 : links.length - 1].focus();
+    } else {
+      const k = links.indexOf(e.target) + (e.key === 'ArrowDown' ? 1 : -1);
+      links[(k + links.length) % links.length].focus();
+    }
+  });
+  // Tabbing out of an open menu closes it.
+  $('#nav').addEventListener('focusout', (e) => {
+    const item = e.target.closest('.nav-item');
+    if (item && e.relatedTarget && !item.contains(e.relatedTarget)) closeMenus();
+  });
   const burger = $('.burger');
   const sheet = (open) => {
     hdr.classList.toggle('open', open);
@@ -138,7 +160,7 @@
         if (mine !== run) return;
         if (k > last) {
           // A refused request skips the later checks, but the record is still written.
-          steps.forEach((s, j) => { if (j > last) s.className = j === recordStep ? 'pass' : 'skip'; });
+          steps.forEach((s, j) => { if (j > last) s.className = j === recordStep ? 'pass' : 'skipped'; });
           return;
         }
         steps[k].className = k === c.stop ? 'stop' : 'pass';

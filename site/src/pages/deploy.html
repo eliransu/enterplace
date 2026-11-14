@@ -25,7 +25,7 @@ nav: product
     <a href="docs:/deploy/azure/"><strong>Azure</strong><span>Terraform for Container Apps, Azure Database for PostgreSQL and Azure Files.</span>{{> arrow}}</a>
     <a href="docs:/deploy/cloudflare/"><strong>Cloudflare</strong><span>Containers, with the audit chain sealed into R2.</span>{{> arrow}}</a>
   </nav>
-  <p class="tbl-note">The guides use the Gantry Enterprise image with its Compose stack, Helm chart and Terraform modules. <span class="ent">Enterprise</span> Without a license the same image runs the open source edition. The open source gateway also builds from source, and has its own Helm chart and Kubernetes manifests.</p>
+  <p class="tbl-note">The guides use the Gantry Enterprise image with its Compose stack, Helm chart and Terraform modules. <span class="ent">Enterprise</span> Without a license the same image runs the open source edition.</p>
 </section>
 
 <section class="wrap sec">
@@ -79,8 +79,8 @@ store: { postgres_url_env: DATABASE_URL }</pre></figure>
   </div>
 </section>
 
-<section class="wrap sec">
-  <div class="sec-head solo"><h2>Limits to know before you start</h2></div>
+<section class="wrap sec doc">
+  <h2>Limits to know before you start</h2>
   <ul class="ticks out">
     <li><strong>Gantry serves plain HTTP unless you give it a certificate.</strong> Start it with <code>--tls-cert</code> and <code>--tls-key</code>, or put TLS in front of it, before traffic leaves one machine.</li>
     <li><strong>On Cloud Run and Container Apps, one replica.</strong> More than one replica on those two is planned. Kubernetes and ECS run several.</li>

@@ -112,8 +112,8 @@ gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
   </ol>
 </section>
 
-<section class="wrap sec">
-  <div class="sec-head solo"><h2>Limits to know before you start</h2></div>
+<section class="wrap sec doc">
+  <h2>Limits to know before you start</h2>
   <ul class="ticks out">
     <li><strong>The region label is yours to set.</strong> Gantry enforces it exactly. It does not check where a provider runs. Label a deployment with the region of the endpoint and the data processing terms you have with that provider.</li>
     <li><strong>Built-in guardrails match plain text.</strong> Text that is encoded, split across messages or translated is not found, and the detectors do not find names or street addresses. Add a vendor guardrail or your own service by webhook for those.</li>
@@ -122,8 +122,8 @@ gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
   </ul>
 </section>
 
-<section class="wrap sec">
-  <div class="sec-head solo"><h2>Questions people ask</h2></div>
+<section class="wrap sec doc">
+  <h2>Questions people ask</h2>
   <div class="qa">
     <details><summary>Does the audit log itself hold personal data?</summary><p>It holds the person or workload that asked, the team, the model, the decision and the cost. It holds no prompt text, no answer text and never the text a guardrail matched.</p></details>
     <details><summary>Can we see what a guardrail would do before it changes anything?</summary><p>Yes. Give it a <code>shadow_until</code> date and it records findings and changes nothing until then. You can also run it over a file of example prompts with <code>gantry guardrail test</code>.</p></details>

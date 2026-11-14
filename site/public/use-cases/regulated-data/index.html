@@ -86,7 +86,6 @@ gantry</a>
       <a class="nav-link" href="https://gantry-docs.eliran.me/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-line btn-sm" href="https://github.com/ggantry/gantry">GitHub</a>
         <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
@@ -211,8 +210,8 @@ gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
   </ol>
 </section>
 
-<section class="wrap sec">
-  <div class="sec-head solo"><h2>Limits to know before you start</h2></div>
+<section class="wrap sec doc">
+  <h2>Limits to know before you start</h2>
   <ul class="ticks out">
     <li><strong>The region label is yours to set.</strong> Gantry enforces it exactly. It does not check where a provider runs. Label a deployment with the region of the endpoint and the data processing terms you have with that provider.</li>
     <li><strong>Built-in guardrails match plain text.</strong> Text that is encoded, split across messages or translated is not found, and the detectors do not find names or street addresses. Add a vendor guardrail or your own service by webhook for those.</li>
@@ -221,8 +220,8 @@ gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
   </ul>
 </section>
 
-<section class="wrap sec">
-  <div class="sec-head solo"><h2>Questions people ask</h2></div>
+<section class="wrap sec doc">
+  <h2>Questions people ask</h2>
   <div class="qa">
     <details><summary>Does the audit log itself hold personal data?</summary><p>It holds the person or workload that asked, the team, the model, the decision and the cost. It holds no prompt text, no answer text and never the text a guardrail matched.</p></details>
     <details><summary>Can we see what a guardrail would do before it changes anything?</summary><p>Yes. Give it a <code>shadow_until</code> date and it records findings and changes nothing until then. You can also run it over a file of example prompts with <code>gantry guardrail test</code>.</p></details>
@@ -302,7 +301,6 @@ gantry</a>
         <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a>
         <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>
         <a href="https://gantry-docs.eliran.me/getting-started/changelog/">Changelog</a>
-        <a href="https://github.com/ggantry/gantry">GitHub</a>
       </div>
     </nav>
   </div>

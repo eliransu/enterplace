@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Security: what Gantry protects, and where it stops</title>
-<meta name="description" content="How Gantry protects keys, credentials and the audit log, what it does not cover, where your data goes when self-hosted, hybrid or hosted, the subprocessors, and how to report a vulnerability.">
+<meta name="description" content="How Gantry protects keys, credentials and the audit log, what it does not cover, where your data goes, and the subprocessors.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <link rel="canonical" href="https://gantry.eliran.me/security/">
@@ -14,7 +14,7 @@
 <meta property="og:site_name" content="Gantry">
 <meta property="og:url" content="https://gantry.eliran.me/security/">
 <meta property="og:title" content="Security: what Gantry protects, and where it stops">
-<meta property="og:description" content="How Gantry protects keys, credentials and the audit log, what it does not cover, where your data goes when self-hosted, hybrid or hosted, the subprocessors, and how to report a vulnerability.">
+<meta property="og:description" content="How Gantry protects keys, credentials and the audit log, what it does not cover, where your data goes, and the subprocessors.">
 <meta property="og:image" content="https://gantry.eliran.me/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -86,7 +86,6 @@ gantry</a>
       <a class="nav-link" href="https://gantry-docs.eliran.me/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-line btn-sm" href="https://github.com/ggantry/gantry">GitHub</a>
         <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
@@ -133,42 +132,19 @@ gantry</a>
 
 <section class="wrap sec doc" id="data">
   <h2>Where your data goes</h2>
-  <div class="stack">
-    <article class="panel">
-      <h3>Self-hosted</h3>
-      <p>Everything stays on your machines. Prompts and answers go from your callers, through Gantry, to the providers your policy names. The audit log, the policy and the keys file live on your disk. Nothing is sent to the Gantry project.</p>
-    </article>
-    <article class="panel">
-      <h3>Hybrid</h3>
-      <p>The gateway runs at your site with your provider keys, which stay there. It pulls the policy and the keys file (hashes only) from the control plane and keeps serving with the last files it wrote when the control plane cannot be reached. Prompts, answers, provider keys and client addresses never leave. Only these audit fields are shipped:</p>
-      <p class="fields">n event id time person team key method path model verdict code rule provider status ended input_tokens output_tokens cost_usd charged_usd trigger policy_sha256 keys_sha256 action prev hash</p>
-    </article>
-    <article class="panel">
-      <h3>Hosted</h3>
-      <p>Each organization gets its own gateway container. Provider keys are stored encrypted with AES-GCM in the control plane and sent only to that organization's container. Requests pass through the hosted service to the providers your policy names; prompts and answers are not recorded. The same audit fields as hybrid are kept in the control plane.</p>
-      <p class="note">A container's local audit log is lost when it sleeps, and its chain begins again at record 1. The shipped metadata stays in the control plane.</p>
-    </article>
-  </div>
+  <ul class="ticks">
+    <li><strong>Gantry is self-hosted.</strong> It runs on your machines, in your network or cloud account. There is no hosted Gantry service in the path.</li>
+    <li><strong>Prompts and answers</strong> go from your callers, through Gantry, to the providers your policy names, and back. Gantry does not store them.</li>
+    <li><strong>The audit log, the policy and the keys file</strong> live on your disk. Keys, kill switches and spend live in your Postgres when you use a store.</li>
+    <li><strong>Nothing is sent to the Gantry project.</strong> The Enterprise license is checked against a public key in the binary, with no network call.</li>
+  </ul>
 </section>
 
 <section class="wrap sec doc" id="subprocessors">
   <h2>Subprocessors</h2>
   <div class="doc-list-wrap">
-    <p>The hosted service and the hybrid control plane run on one subprocessor. Self-hosted Gantry uses none.</p>
-    <dl class="sub-list">
-      <dt>Cloudflare</dt>
-      <dd>Runs the control plane (Workers, D1), the hosted router and each organization's gateway container (Workers, Durable Objects, Containers). Stores policy, keys file hashes, encrypted provider keys and shipped audit metadata.</dd>
-    </dl>
+    <p>None. Self-hosted Gantry sends no data to anyone on Gantry's behalf.</p>
     <p class="note">The model providers your policy names (OpenAI, Anthropic and others) receive your requests under your own provider account. They are your providers, not Gantry's subprocessors.</p>
-  </div>
-</section>
-
-<section class="wrap sec doc" id="report">
-  <h2>Report a vulnerability</h2>
-  <div class="doc-list-wrap">
-    <p>Email <code>security@[DOMAIN]</code> privately. Do not open a public issue.</p>
-    <p class="note">Placeholder: the reporting address is not set up yet. <code>[DOMAIN]</code> is replaced before this page is published.</p>
-    <p>Include the version (<code>gantry version</code>), what you did, what happened and what you expected. Leave prompts and keys out of the report.</p>
   </div>
 </section>
 
@@ -244,7 +220,6 @@ gantry</a>
         <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a>
         <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>
         <a href="https://gantry-docs.eliran.me/getting-started/changelog/">Changelog</a>
-        <a href="https://github.com/ggantry/gantry">GitHub</a>
       </div>
     </nav>
   </div>

@@ -86,7 +86,6 @@ gantry</a>
       <a class="nav-link" href="https://gantry-docs.eliran.me/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-line btn-sm" href="https://github.com/ggantry/gantry">GitHub</a>
         <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
@@ -256,8 +255,8 @@ gantry explain gantry.policy.yaml \
   <p class="tbl-note">"No" means the guide was written from the tool's own documentation and has not been run through Gantry. <a href="https://gantry-docs.eliran.me/integrations/coding-tools/">The same table in the docs</a>, kept current.</p>
 </section>
 
-<section class="wrap sec">
-  <div class="sec-head solo"><h2>Limits to know before you start</h2></div>
+<section class="wrap sec doc">
+  <h2>Limits to know before you start</h2>
   <ul class="ticks out">
     <li><strong>Gantry sees what is sent through it.</strong> A tool that still calls a provider directly stays invisible until you point it at the gateway. The coverage report shows who holds a key and has sent nothing.</li>
     <li><strong>Claude Team and Enterprise seats cannot route through a gateway.</strong> For those developers Gantry has a watch setup that reads Claude Code's own usage data. It observes and does not block. <a href="https://gantry-docs.eliran.me/integrations/claude-team/">Claude Team and Enterprise</a></li>
@@ -266,8 +265,8 @@ gantry explain gantry.policy.yaml \
   </ul>
 </section>
 
-<section class="wrap sec">
-  <div class="sec-head solo"><h2>Questions people ask</h2></div>
+<section class="wrap sec doc">
+  <h2>Questions people ask</h2>
   <div class="qa">
     <details><summary>Does a developer have to change how they work?</summary><p>They change two settings once, or run <code>gantry login</code>. After that the tool behaves as before. A refusal arrives in the error shape the tool already shows, with the cause and what to do.</p></details>
     <details><summary>Can different teams get different models?</summary><p>Yes. A rule names the people or team it applies to and the models they may use. The first rule that names the person decides. <a href="https://gantry-docs.eliran.me/governance/policy/">The policy file</a></p></details>
@@ -348,7 +347,6 @@ gantry</a>
         <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a>
         <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>
         <a href="https://gantry-docs.eliran.me/getting-started/changelog/">Changelog</a>
-        <a href="https://github.com/ggantry/gantry">GitHub</a>
       </div>
     </nav>
   </div>

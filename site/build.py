@@ -20,7 +20,6 @@ ROOT = Path(__file__).parent
 SRC, OUT = ROOT / "src", ROOT / "public"
 SITE = "https://gantry.eliran.me"
 DOCS = "https://gantry-docs.eliran.me"
-GITHUB = "https://github.com/ggantry/gantry"
 VERSION = "0.1.0"
 ROOT_FILES = {"404"}  # written as public/<name>.html, left out of the sitemap
 
@@ -64,10 +63,10 @@ def gate(block):
 
 
 def expand(text):
-    """{{> name}} pulls in a partial. docs:/path and gh: are short for the two outside sites."""
+    """{{> name}} pulls in a partial. docs:/path is short for a page of the docs site."""
     text = re.sub(r"\{\{> ([\w-]+)\}\}", lambda m: expand(partial(m.group(1))), text)
     text = re.sub(r"\{\{gate\n(.*?)\n\}\}", lambda m: gate(m.group(1)), text, flags=re.S)
-    text = text.replace('href="docs:', f'href="{DOCS}').replace('href="gh:"', f'href="{GITHUB}"')
+    text = text.replace('href="docs:', f'href="{DOCS}')
     return text.replace("{{version}}", VERSION)
 
 

@@ -42,7 +42,6 @@ Short forms the build expands:
 | In the source | Becomes |
 |---|---|
 | `href="docs:/start/why/"` | A link to that page of the docs site |
-| `href="gh:"` | The GitHub repository |
 | `{{> name}}` | The partial `src/partials/name.html` |
 | `{{version}}` | The version set at the top of `build.py` |
 | `{{gate ... }}` | The request motif: lanes, discs and audit records. See `gate()` in `build.py` for the lines it takes. |

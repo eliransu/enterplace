@@ -86,7 +86,6 @@ gantry</a>
       <a class="nav-link" href="https://gantry-docs.eliran.me/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-line btn-sm" href="https://github.com/ggantry/gantry">GitHub</a>
         <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
@@ -213,8 +212,8 @@ gantry unkill --team support</pre></figure>
   </div>
 </section>
 
-<section class="wrap sec">
-  <div class="sec-head solo"><h2>Limits to know before you start</h2></div>
+<section class="wrap sec doc">
+  <h2>Limits to know before you start</h2>
   <ul class="ticks out">
     <li><strong>Gantry is in the request path.</strong> Run more than one replica on a Postgres store, and put it where your services can reach it. The deploy guides cover sizing.</li>
     <li><strong>The decision record says what Gantry decided.</strong> How the provider answered arrives in a second record, with status, tokens and cost, when the answer ends.</li>
@@ -223,8 +222,8 @@ gantry unkill --team support</pre></figure>
   </ul>
 </section>
 
-<section class="wrap sec">
-  <div class="sec-head solo"><h2>Questions people ask</h2></div>
+<section class="wrap sec doc">
+  <h2>Questions people ask</h2>
   <div class="qa">
     <details><summary>Our services already hold tokens from our identity provider. Do they need a Gantry key too?</summary><p>No. Gantry accepts JWTs from issuers you trust in place of a key, and reads the person and team from claims you name. <a href="https://gantry-docs.eliran.me/governance/access-control/">Access control</a></p></details>
     <details><summary>Does Gantry change the request?</summary><p>The body is forwarded byte for byte, except where your policy changes it: a guardrail that masks, or a translation you opted into. An unknown query parameter is refused by name, never dropped silently.</p></details>
@@ -305,7 +304,6 @@ gantry</a>
         <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a>
         <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>
         <a href="https://gantry-docs.eliran.me/getting-started/changelog/">Changelog</a>
-        <a href="https://github.com/ggantry/gantry">GitHub</a>
       </div>
     </nav>
   </div>

@@ -21,7 +21,7 @@ nav: use-cases
       </dl>
     </div>
     <div>
-      <div class="shot"><picture><source srcset="/img/console-audit-dark.webp" media="(prefers-color-scheme: dark)"><img src="/img/console-audit-light.webp" width="1440" height="1150" loading="lazy" alt="The Audit log page of the Gantry console, with counts of requests checked, refused and blocked today, and a table of decisions."></picture></div>
+      <figure class="shot shot-auto"><figcaption>Gantry console: Audit log</figcaption><div class="shot-in"><img class="only-light" src="/img/console-audit-light.webp" width="1440" height="1150" loading="lazy" alt="The Audit log page of the Gantry console, with counts of requests checked, refused and blocked today, and a table of decisions."><img class="only-dark" src="/img/console-audit-dark.webp" width="1440" height="1150" loading="lazy" alt="The Audit log page of the Gantry console, with counts of requests checked, refused and blocked today, and a table of decisions."></div></figure>
       <p class="shot-cap">The console's Audit log page, on test data. Refused and blocked decisions are the only colored rows.</p>
     </div>
   </div>
@@ -44,15 +44,15 @@ nav: use-cases
   </table>
 </section>
 
-<section class="wrap sec">
-  <div class="sec-head solo"><h2>Where it stops</h2></div>
+<section class="wrap sec doc">
+  <h2>Where it stops</h2>
   <ul class="ticks out">
     <li>Gantry is pre-1.0 and has not yet had an independent security audit.</li>
     <li>It sees only what is sent through it. Block direct provider access at the network if you need to be sure.</li>
     <li>Built-in guardrails match plain text. Encoded, split or translated text is not found.</li>
     <li>Whoever can write the policy, the keys file or the audit file controls them. Protect those like provider keys.</li>
   </ul>
-  <p style="margin-top: 24px"><a class="more" href="/security/">The full security page {{> arrow}}</a></p>
+  <p class="doc-more"><a class="more" href="/security/">The full security page {{> arrow}}</a></p>
 </section>
 
 <section class="wrap sec">
