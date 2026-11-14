@@ -169,6 +169,7 @@ fn gateway(dir: &std::path::Path) -> Result<Router, Error> {
 async fn rpc(app: &Router, key: &str, message: Value) -> Result<(StatusCode, Value), Error> {
     let request = Request::post("/mcp")
         .header(header::AUTHORIZATION, format!("Bearer {key}"))
+        .header(header::USER_AGENT, "claude-code/2.1.0 (cli)")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ACCEPT, "application/json, text/event-stream")
         .body(Body::from(message.to_string()))?;
@@ -315,6 +316,8 @@ async fn tools_from_two_servers_limited_by_policy_each_call_audited() -> TestRes
         .find(|r| r["tool"] == "create_issue" && r["verdict"] == "allow")
         .ok_or("no record of the allowed call")?;
     assert_eq!(allowed["server"], "github");
+    // The coverage report names the tool from it, as on the model routes.
+    assert_eq!(allowed["user_agent"], "claude-code/2.1.0 (cli)");
     assert_eq!(allowed["team"], "payments");
     assert_eq!(allowed["rule"], "payments-team");
     assert_eq!(allowed["key"], &sha256_hex(MAYA.as_bytes())[..8]);

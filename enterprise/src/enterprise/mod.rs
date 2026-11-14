@@ -6,6 +6,7 @@
 
 mod alerts;
 mod capture;
+mod devices;
 mod members;
 mod scim;
 mod segments;
@@ -32,6 +33,8 @@ const SCIM: &[&str] = &[scim::MIGRATION];
 /// For siem and retention, which share their tables, and for alerting, which reads the audit table they keep.
 /// Entry 2 is the captured text of audit export (`capture`).
 const SIEM: &[&str] = &[siem::MIGRATION, capture::MIGRATION];
+/// Enrolment tokens, device profiles, and what the device agents report.
+const DEVICES: &[&str] = &[devices::MIGRATION];
 /// Alert channels, rules and what fired. Runs after `SIEM`: alerting reads the records it ingests.
 const ALERTS: &[&str] = &[alerts::MIGRATION];
 
@@ -86,6 +89,10 @@ pub fn extend_with(
     if !alerts_on {
         alerts::locked(&mut extension, status);
     }
+    let devices_on = status.unlocked(devices::FEATURE);
+    if !devices_on {
+        devices::locked(&mut extension, status);
+    }
     // Retired on disk only through what the audit export has read, when it runs (for export or for alerting, which
     // reads the same table); through anything otherwise. With a store the request index must have copied it too.
     let export_reads = (siem_on || alerts_on) && host.postgres.is_some();
@@ -132,13 +139,13 @@ pub fn extend_with(
         }
         let _ = SHIPPERS.set(shippers);
     }
-    if !(members_on || siem_on || retention_on || alerts_on) {
+    if !(members_on || siem_on || retention_on || alerts_on || devices_on) {
         return Ok(extension);
     }
     // The license never stops traffic: a feature that cannot run says why and the gateway starts without it.
     let Some(pg) = host.postgres else {
         eprintln!(
-            "warning: the license unlocks enterprise features (members, audit export, retention, alerts) that are kept in Postgres, but the policy has no store. Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then they are off and the console signs in with admin keys only."
+            "warning: the license unlocks enterprise features (members, audit export, retention, alerts, devices) that are kept in Postgres, but the policy has no store. Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then they are off and the console signs in with admin keys only."
         );
         return Ok(extension);
     };
@@ -155,7 +162,18 @@ pub fn extend_with(
     if alerts_on {
         pg.migrate("enterprise.alerts", ALERTS)?;
     }
+    if devices_on {
+        pg.migrate("enterprise.devices", DEVICES)?;
+    }
     let db = Arc::new(Db::new(pg.clone()));
+    if devices_on {
+        devices::register(
+            &mut extension,
+            db.clone(),
+            host.keys.to_path_buf(),
+            host.audit_path.to_path_buf(),
+        );
+    }
     if members_on {
         members::register(&mut extension, db.clone(), host.keys.to_path_buf());
     }

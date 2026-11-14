@@ -89,10 +89,13 @@ GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55433/postgres cargo
 - LLM observability destinations (OTLP traces with GenAI conventions, Langfuse, HTTP callback) and opt-in prompt text
   (`siem/sinks.rs`, `capture.rs`, feature `siem`): text comes through `gantry_server::Capture`, redacted and kept
   encrypted for a limited time, never in the chain.
+- Devices (`devices.rs`, feature `devices`): enrolment tokens scoped to the install or a team, with expiry and an
+  admin API; the device profile per team; reports, drift and the Devices page, which merges reports with this
+  replica's audit traffic.
 - Alerting (`alerts.rs`, `alerts/channels.rs`, feature `alerts`): rules on the records `enterprise_audit` holds,
   evaluated on the exporter's tick.
 
 ## Still to port
 
-Policy editing with dry run and approval, reports, workload identity, Claude Code watch mode, devices, TOTP. The
+Policy editing with dry run and approval, reports, workload identity, Claude Code watch mode, TOTP. The
 admin API's "add an existing user to an org" has no counterpart in a one-org install.

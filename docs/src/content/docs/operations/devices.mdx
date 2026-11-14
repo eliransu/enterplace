@@ -1,0 +1,90 @@
+---
+title: Devices
+description: Enrol employee machines with the device agent, point Claude Code and Codex at Gantry, and see which coding tools call a provider directly. Enterprise feature devices.
+sidebar:
+  order: 12
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+With a license that includes `devices` (see [License key](/operations/license/)), Gantry adds a **Devices** page to the console and two routes for the device agent, `GET /device/profile` and `POST /device/report`. The agent (`gantry device`) runs on each employee machine, points Claude Code and Codex at the gateway, puts them back when someone changes them, and reports every coding tool it finds. Without the feature the page and both routes answer `license_required`.
+
+The feature keeps its tables in the store's Postgres (namespace `enterprise.devices`), so the policy needs `store:`. See [Store](/operations/store/).
+
+## Set up
+
+<Steps>
+
+1. **Create an enrolment token.** On the console's Devices page, under **Enrolment tokens**, give it a label (where it is used, such as `jamf-engineering`), a team or none, and how many days it is valid (1 to 365, default 90). The token is shown once; Gantry keeps only its hash. A team token enrols devices into that team; a token without a team takes each device's team from the keys file, by the name `gantry login` saved on the machine.
+
+2. **Set a device profile** (optional). Without one, devices send their tools to the address they reached Gantry at, and Claude Code and Codex are managed. A profile sets the gateway URL and the tools to manage, for every team or for one team, which wins for its members.
+
+3. **Run the agent.** From your MDM as a LaunchDaemon (see `deploy/mdm/README.md`), or by hand:
+
+    ```bash
+    GANTRY_DEVICE_TOKEN=gantry_dev_... gantry device --control-plane https://gantry.example.com --dry-run
+    ```
+
+    `--control-plane` is the gateway's address. `--dry-run` prints what it would change and the report it would send, and writes nothing. Without it the agent checks every 5 minutes (`--interval`).
+
+</Steps>
+
+Revoke a token on the same page. A revoked or expired token is refused with `invalid_token` or `token_expired` on the device's next check.
+
+## Admin API
+
+Tokens can be managed without the console, with an admin key (`admin: true` in the keys file) as bearer. Every call is an admin record.
+
+| Call | Does |
+|---|---|
+| `GET /console/devices/tokens` | Lists tokens: `id`, `label`, `team`, `created_by`, `created_at`, `expires_at`, `status` (`active`, `expired`, `revoked`). Never the token |
+| `POST /console/devices/tokens` | Creates one from `{"label": "...", "team": "...", "days": 90}` (`team` and `days` optional). Answers `201` with `id`, `token` and `expires_at`, the only time the token is shown |
+| `DELETE /console/devices/tokens/<id>` | Revokes it |
+| `GET /console/devices/devices.json` | Every device as last reported, the file `gantry audit coverage --devices` reads |
+
+```bash
+curl -X POST https://gantry.example.com/console/devices/tokens \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+  -d '{"label": "intune-web", "team": "web", "days": 30}'
+```
+
+## What the agent reads
+
+For each tool the agent reports one state: `not_installed`, `installed` (found, with no endpoint set, or one kept where no documented file holds it), `gantry` (every endpoint it names is the gateway) or `direct` (an endpoint that is not the gateway, or a provider key or login with no base URL). A `direct` tool's report lists where it sends.
+
+It reads only the files and settings each tool documents. It never reads keychains, app databases or the user's shell environment.
+
+| Tool | Found by | Endpoint read from |
+|---|---|---|
+| Claude Code | `~/.claude`, `claude` on the path | `env.ANTHROPIC_BASE_URL` in the managed settings, then `~/.claude/settings.json`. `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `apiKeyHelper` without a base URL is Anthropic; `CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_VERTEX` is that provider |
+| Codex | `~/.codex`, `codex` on the path | `model_provider` and its `[model_providers.<id>]` `base_url` in `~/.codex/config.toml`. The built-in OpenAI provider with `~/.codex/auth.json` is OpenAI |
+| GitHub Copilot | the VS Code extension `github.copilot*`, `~/.copilot` | `url` in VS Code's `chatLanguageModels.json`, `baseUrl` in `~/.copilot/providers.json` |
+| Zed | `~/.config/zed`, `Zed.app` | `api_url` under `language_models` in `~/.config/zed/settings.json` |
+| Qwen Code | `~/.qwen`, `qwen` on the path | `baseUrl` in `~/.qwen/settings.json` |
+| Gemini CLI | `~/.gemini`, `gemini` on the path | `GOOGLE_GEMINI_BASE_URL` in `~/.gemini/.env`, else any `security.auth.selectedType` in `~/.gemini/settings.json` is Google |
+| Kilo Code | `~/.config/kilo`, the VS Code extension `kilocode.kilo-code` | `baseURL` in `~/.config/kilo/kilo.json` |
+| Claude Desktop | `Claude.app`, `~/Library/Application Support/Claude` | `inferenceGatewayBaseUrl`, else `inferenceProvider`, in the managed preferences `com.anthropic.claudefordesktop` (per user first) |
+| Cursor | `~/.cursor`, `Cursor.app` | Not read: Cursor keeps its base URL in its own database. Reported as `installed` |
+| JetBrains AI Assistant | `~/Library/Application Support/JetBrains` | Not read: kept in the IDE's settings storage. Reported as `installed` |
+| Roo Code | the VS Code extension `rooveterinaryinc.roo-cline` | Not read: kept in VS Code's extension storage. Reported as `installed` |
+
+Only Claude Code and Codex are configured by the agent. The others are reported, so the coverage view shows where they send. A tool configured with no endpoint at all (Claude Code signed in with a Claude account, for example) is `installed`, not `direct`: no setting says where it goes.
+
+<Aside type="caution">
+`installed` is not proof of coverage. A Cursor, JetBrains or Roo Code with its own provider key shows as `installed`; the audit log then shows whether it reached Gantry.
+</Aside>
+
+## The Devices page
+
+- **Coverage**: one row per person from the audit log and the reports: the tools their traffic came from, their device count, devices not seen in 24 hours, and a `direct` tag per tool going to a provider, such as `codex on mbp-ana`. The audit log read is this replica's.
+- **Enrolment tokens** and **Device profiles**, as above.
+- **Drift**: the last 20 times a managed setting was changed back and re-applied.
+
+**Download devices.json** gives the reports to `gantry audit coverage --devices`. See [Coverage](/governance/coverage/).
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Coverage" href="/governance/coverage/" description="Requests per person and tool, merged with device reports." />
+	<LinkCard title="Coding tools" href="/integrations/coding-tools/" description="Every tool with a guide." />
+</CardGrid>

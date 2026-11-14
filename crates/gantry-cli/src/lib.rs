@@ -109,9 +109,11 @@ Commands:
         For a log whose last line was cut short by a write that failed (a full disk): shows that line
         and the chain before it, which must hold. With --yes, removes only that line and appends an
         audit_repaired record that holds what was removed. Run it while Gantry is stopped.
-  audit coverage [<file>] [--keys <file>]
+  audit coverage [<file>] [--keys <file>] [--devices <file>]
         Requests per person and coding tool (from each record's user agent), with refusals and the last
         time seen. With --keys, every key holder who sent nothing is listed with last seen never.
+        With --devices (devices.json from the console's Devices page, Gantry Enterprise), two more
+        columns: devices with the tool installed, and how many of them call a provider directly.
   serve --unchecked
         Forward every request without checking it, on this machine only. For benchmarks.
         GANTRY_ADDR sets the address, GANTRY_UPSTREAM the server to forward to.
@@ -412,11 +414,12 @@ pub async fn run(args: &[String]) -> ExitCode {
             )),
             _ => None,
         },
-        ["audit", "coverage", rest @ ..] => match options(rest, &["--keys"]) {
+        ["audit", "coverage", rest @ ..] => match options(rest, &["--keys", "--devices"]) {
             Some((positional, named)) if positional.len() <= 1 => Some(
                 audit_coverage(
                     Path::new(positional.first().copied().unwrap_or("gantry-audit.jsonl")),
                     named.get("--keys").map(Path::new),
+                    named.get("--devices").map(Path::new),
                 )
                 .map_or_else(fail, |()| ExitCode::SUCCESS),
             ),
@@ -579,7 +582,7 @@ pub async fn run(args: &[String]) -> ExitCode {
                 "gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>]",
             ),
             ["audit", "repair", ..] => Some("gantry audit repair [<file>] [--yes]"),
-            ["audit", "coverage", ..] => Some("gantry audit coverage [<file>] [--keys <file>]"),
+            ["audit", "coverage", ..] => Some("gantry audit coverage [<file>] [--keys <file>] [--devices <file>]"),
             ["providers", ..] => Some("gantry providers [--markdown]"),
             ["guardrail", ..] => Some(
                 "gantry guardrail test <name> (--corpus <file.jsonl> | --since <7d>) [--policy <file>]",
@@ -1271,34 +1274,12 @@ fn not_a_folder(path: &Path) -> Option<ExitCode> {
     })
 }
 
-/// Requests per person and coding tool, from the audit log's request records and their `user_agent`, and with
-/// `--keys`, every key holder who sent nothing. Tab-separated, like `key list`.
-fn audit_coverage(path: &Path, keys: Option<&Path>) -> Result<(), String> {
-    use std::collections::BTreeMap;
-    use std::io::BufRead;
-    // (person, tool) -> (team, requests, refused, last seen)
-    let mut rows: BTreeMap<(String, String), (String, u64, u64, String)> = BTreeMap::new();
-    // Every organization's chain too (`audit: { per_org: true }`).
-    let reader = audit::chains_reader(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    for line in reader.lines() {
-        let line = line.map_err(|e| format!("{}: {e}", path.display()))?;
-        let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        // A request's decision record has a verdict and no event; admin records have both, usage and
-        // configuration records have no verdict.
-        let (Some(verdict), None) = (record["verdict"].as_str(), record.get("event")) else {
-            continue;
-        };
-        let text = |field: &str| record[field].as_str().unwrap_or("-").to_string();
-        let tool = audit::tool_of(record["user_agent"].as_str());
-        let row = rows
-            .entry((text("person"), tool))
-            .or_insert_with(|| (text("team"), 0, 0, String::new()));
-        row.1 += 1;
-        row.2 += u64::from(verdict != "allow");
-        row.3 = text("time");
-    }
+/// Requests per person and coding tool, from the audit log's request records and their `user_agent`; with
+/// `--keys`, every key holder who sent nothing; with `--devices`, each tool's enrolled devices and how many of them
+/// call a provider directly. Tab-separated, like `key list`.
+fn audit_coverage(path: &Path, keys: Option<&Path>, devices: Option<&Path>) -> Result<(), String> {
+    use gantry_core::coverage;
+    let mut rows = coverage::traffic(path)?;
     if let Some(keys) = keys {
         let text = config::read_keys(keys)?.ok_or_else(|| {
             format!(
@@ -1306,15 +1287,29 @@ fn audit_coverage(path: &Path, keys: Option<&Path>) -> Result<(), String> {
                 keys.display()
             )
         })?;
-        for entry in config::key_entries(keys, &text).map_err(|problems| problems.join("\n"))? {
-            if !rows.keys().any(|(person, _)| *person == entry.name) {
-                rows.insert((entry.name, "-".into()), (entry.team, 0, 0, "never".into()));
-            }
-        }
+        let entries = config::key_entries(keys, &text).map_err(|problems| problems.join("\n"))?;
+        coverage::add_people(&mut rows, entries.into_iter().map(|e| (e.name, e.team)));
     }
-    println!("person\tteam\ttool\trequests\trefused\tlast_seen");
-    for ((person, tool), (team, requests, refused, last)) in rows {
-        println!("{person}\t{team}\t{tool}\t{requests}\t{refused}\t{last}");
+    let devices = devices.map(coverage::read_devices).transpose()?;
+    if let Some(devices) = &devices {
+        coverage::add_devices(&mut rows, devices);
+    }
+    let more = if devices.is_some() {
+        "\tdevices\tdirect"
+    } else {
+        ""
+    };
+    println!("person\tteam\ttool\trequests\trefused\tlast_seen{more}");
+    for ((person, tool), r) in rows {
+        let more = if devices.is_some() {
+            format!("\t{}\t{}", r.devices, r.direct)
+        } else {
+            String::new()
+        };
+        println!(
+            "{person}\t{}\t{tool}\t{}\t{}\t{}{more}",
+            r.team, r.requests, r.refused, r.last_seen
+        );
     }
     Ok(())
 }

@@ -81,24 +81,292 @@ fn on_path(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Every tool the agent looks for, by the name the coverage report gives it (`gantry_core::audit::tool_of`).
+pub const TOOLS: [&str; 11] = [
+    "claude-code",
+    "codex",
+    "cursor",
+    "github-copilot",
+    "zed",
+    "jetbrains-ai",
+    "qwen-code",
+    "gemini-cli",
+    "kilo-code",
+    "roo-code",
+    "claude-desktop",
+];
+
+/// The tools the agent can point at the gateway itself; the others it only inspects.
+pub const MANAGEABLE: [&str; 2] = ["claude-code", "codex"];
+
+/// Whether `dir` holds an entry whose name starts with `prefix`: VS Code keeps extensions as `<id>-<version>`.
+fn has_entry(dir: &Path, prefix: &str) -> bool {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with(prefix))
+        })
+        .unwrap_or(false)
+}
+
 /// Which tools are installed. With `--home` only that folder counts, so tests do not depend on the machine.
 fn installed(p: &Paths, tool: &str) -> bool {
     let h = &p.home;
     let app = |name: &str| {
-        p.system
-            && (Path::new("/Applications").join(name).exists()
-                || h.join("Applications").join(name).exists())
+        Path::new("/Applications").join(name).exists() && p.system
+            || h.join("Applications").join(name).exists()
     };
+    let bin = |name: &str| p.system && on_path(name);
+    let extension = |id: &str| has_entry(&h.join(".vscode/extensions"), id);
     match tool {
         "claude-code" => {
-            h.join(".claude").is_dir()
-                || h.join(".local/bin/claude").exists()
-                || (p.system && on_path("claude"))
+            h.join(".claude").is_dir() || h.join(".local/bin/claude").exists() || bin("claude")
         }
-        "codex" => h.join(".codex").is_dir() || (p.system && on_path("codex")),
+        "codex" => h.join(".codex").is_dir() || bin("codex"),
         "cursor" => h.join(".cursor").is_dir() || app("Cursor.app"),
-        "vscode" => h.join(".vscode").is_dir() || app("Visual Studio Code.app"),
+        "github-copilot" => extension("github.copilot") || h.join(".copilot").is_dir(),
+        "zed" => h.join(".config/zed").is_dir() || app("Zed.app"),
+        "jetbrains-ai" => {
+            h.join("Library/Application Support/JetBrains").is_dir()
+                || h.join(".config/JetBrains").is_dir()
+        }
+        "qwen-code" => h.join(".qwen").is_dir() || bin("qwen"),
+        "gemini-cli" => h.join(".gemini").is_dir() || bin("gemini"),
+        "kilo-code" => h.join(".config/kilo").is_dir() || extension("kilocode.kilo-code"),
+        "roo-code" => extension("rooveterinaryinc.roo-cline"),
+        "claude-desktop" => {
+            app("Claude.app") || h.join("Library/Application Support/Claude").is_dir()
+        }
         _ => false,
+    }
+}
+
+// ---- Where each tool sends. Read from the files and settings each tool documents, nothing else. ----
+
+fn read(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// Every string value of `"key": "value"` in a JSON or JSON-with-comments file (VS Code's and Zed's settings allow
+/// comments, which a JSON parser refuses).
+// ponytail: a scan, not a parser; a key named inside a string value would count too. A JSONC parser if that bites.
+fn string_values(text: &str, key: &str) -> Vec<String> {
+    let needle = format!("\"{key}\"");
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(&needle) {
+        rest = &rest[at + needle.len()..];
+        let Some(after) = rest.trim_start().strip_prefix(':') else {
+            continue;
+        };
+        let Some(value) = after.trim_start().strip_prefix('"') else {
+            continue;
+        };
+        if let Some(end) = value.find('"') {
+            out.push(value[..end].to_string());
+        }
+    }
+    out
+}
+
+/// A value of an XML property list: `<key>name</key><string>value</string>`.
+fn plist_value(text: &str, key: &str) -> Option<String> {
+    let after = text.split(&format!("<key>{key}</key>")).nth(1)?;
+    let value = after.trim_start().strip_prefix("<string>")?;
+    Some(value.split("</string>").next()?.trim().to_string())
+}
+
+/// A property list as XML text. Profiles an MDM installs are often binary; `plutil` (macOS) turns them into XML.
+fn plist_text(path: &Path, system: bool) -> String {
+    let Ok(bytes) = std::fs::read(path) else {
+        return String::new();
+    };
+    if !bytes.starts_with(b"bplist") {
+        return String::from_utf8_lossy(&bytes).into_owned();
+    }
+    if !system {
+        return String::new();
+    }
+    std::process::Command::new("plutil")
+        .args(["-convert", "xml1", "-o", "-"])
+        .arg(path)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+/// `NAME=value` from a dotenv file, with or without `export`.
+fn dotenv(text: &str, name: &str) -> Option<String> {
+    text.lines().find_map(|l| {
+        let l = l.trim();
+        let l = l.strip_prefix("export ").unwrap_or(l);
+        let value = l.strip_prefix(name)?.strip_prefix('=')?;
+        Some(
+            value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string(),
+        )
+    })
+}
+
+/// Codex: the active `model_provider` (default `openai`) and its `[model_providers.<id>]` `base_url`; the built-in
+/// OpenAI provider with a saved login (`auth.json`) goes to OpenAI.
+fn codex_endpoints(config: &str, logged_in: bool) -> Vec<String> {
+    let mut provider = "openai".to_string();
+    let mut table = String::new();
+    let mut urls: Vec<(String, String)> = Vec::new();
+    for line in config.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            table = t.trim_matches(|c| c == '[' || c == ']').trim().to_string();
+            continue;
+        }
+        let Some((k, v)) = t.split_once('=') else {
+            continue;
+        };
+        let v = v
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches('"')
+            .to_string();
+        match (table.as_str(), k.trim()) {
+            ("", "model_provider") => provider = v,
+            (t, "base_url") if t.starts_with("model_providers.") => {
+                urls.push((t["model_providers.".len()..].to_string(), v));
+            }
+            _ => {}
+        }
+    }
+    if let Some((_, url)) = urls.into_iter().find(|(id, _)| *id == provider) {
+        return vec![url];
+    }
+    if provider == "openai" && logged_in {
+        return vec!["https://api.openai.com/v1".into()];
+    }
+    Vec::new()
+}
+
+/// Where a tool's configuration sends its model requests: base URLs, or a provider's own address when only a
+/// provider key or provider login is configured. Empty when the configuration names none, or keeps it where no
+/// documented file holds it (Cursor, JetBrains AI Assistant, Roo Code keep theirs in the app's own storage).
+fn endpoints(p: &Paths, tool: &str) -> Vec<String> {
+    let h = &p.home;
+    match tool {
+        "claude-code" => {
+            // Managed settings win over the user's, so the first file that names an endpoint decides.
+            let mut files = vec![p.claude_settings.clone()];
+            if p.claude_settings != h.join(".claude/settings.json") {
+                files.push(h.join(".claude/settings.json"));
+            }
+            for file in files {
+                let v: Value = serde_json::from_str(&read(&file)).unwrap_or(Value::Null);
+                let env = &v["env"];
+                let set = |name: &str| env[name].as_str().is_some_and(|s| !s.is_empty());
+                if let Some(url) = env["ANTHROPIC_BASE_URL"].as_str().filter(|s| !s.is_empty()) {
+                    return vec![url.to_string()];
+                }
+                if set("CLAUDE_CODE_USE_BEDROCK") {
+                    return vec!["bedrock".into()];
+                }
+                if set("CLAUDE_CODE_USE_VERTEX") {
+                    return vec!["vertex".into()];
+                }
+                if set("ANTHROPIC_API_KEY")
+                    || set("ANTHROPIC_AUTH_TOKEN")
+                    || v["apiKeyHelper"].is_string()
+                {
+                    return vec!["https://api.anthropic.com".into()];
+                }
+            }
+            Vec::new()
+        }
+        "codex" => codex_endpoints(
+            &read(&h.join(".codex/config.toml")),
+            h.join(".codex/auth.json").exists(),
+        ),
+        "github-copilot" => {
+            let mut out = Vec::new();
+            for dir in ["Library/Application Support/Code/User", ".config/Code/User"] {
+                out.extend(string_values(
+                    &read(&h.join(dir).join("chatLanguageModels.json")),
+                    "url",
+                ));
+            }
+            out.extend(string_values(
+                &read(&h.join(".copilot/providers.json")),
+                "baseUrl",
+            ));
+            out
+        }
+        "zed" => string_values(&read(&h.join(".config/zed/settings.json")), "api_url"),
+        "qwen-code" => string_values(&read(&h.join(".qwen/settings.json")), "baseUrl"),
+        "gemini-cli" => {
+            if let Some(url) = dotenv(&read(&h.join(".gemini/.env")), "GOOGLE_GEMINI_BASE_URL") {
+                return vec![url];
+            }
+            match string_values(&read(&h.join(".gemini/settings.json")), "selectedType")
+                .first()
+                .map(String::as_str)
+            {
+                Some("vertex-ai") => vec!["vertex".into()],
+                Some(_) => vec!["https://generativelanguage.googleapis.com".into()],
+                None => Vec::new(),
+            }
+        }
+        "kilo-code" => string_values(&read(&h.join(".config/kilo/kilo.json")), "baseURL"),
+        "claude-desktop" => {
+            const DOMAIN: &str = "com.anthropic.claudefordesktop.plist";
+            let files = if p.system {
+                let user = h
+                    .file_name()
+                    .map(|u| u.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                vec![
+                    PathBuf::from("/Library/Managed Preferences")
+                        .join(user)
+                        .join(DOMAIN),
+                    PathBuf::from("/Library/Managed Preferences").join(DOMAIN),
+                ]
+            } else {
+                vec![h.join("Library/Managed Preferences").join(DOMAIN)]
+            };
+            for file in files {
+                let text = plist_text(&file, p.system);
+                if let Some(url) = plist_value(&text, "inferenceGatewayBaseUrl") {
+                    return vec![url];
+                }
+                if let Some(provider) = plist_value(&text, "inferenceProvider") {
+                    return vec![provider];
+                }
+            }
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The tool's state for the report, and the endpoints that are not the gateway.
+fn classify(found: Vec<String>, gateway: &str) -> (&'static str, Vec<String>) {
+    let gateway = gateway.trim_end_matches('/');
+    let at_gateway = |url: &str| {
+        url.strip_prefix(gateway)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    };
+    // A placeholder such as `${input:key}` or `{env:X}` is not an address.
+    let found: Vec<String> = found.into_iter().filter(|e| !e.contains('{')).collect();
+    if found.is_empty() {
+        return ("installed", Vec::new());
+    }
+    let direct: Vec<String> = found.into_iter().filter(|e| !at_gateway(e)).collect();
+    if direct.is_empty() {
+        ("gantry", direct)
+    } else {
+        ("direct", direct)
     }
 }
 
@@ -244,7 +512,7 @@ fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<V
         .collect();
     let mut tools = Vec::new();
     let mut env_needed = false;
-    for tool in ["claude-code", "codex", "cursor", "vscode"] {
+    for tool in TOOLS {
         let inst = installed(p, tool);
         let managed = inst && manage.iter().any(|m| m == tool);
         let change = match (managed, tool) {
@@ -258,11 +526,10 @@ fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<V
         };
         env_needed |= managed;
         let mut drift = false;
-        let mut configured = false;
         if let Some(c) = change {
             drift = !c.matches && applied.iter().any(|a| a == tool);
             if c.matches {
-                configured = true;
+                // Nothing to write.
             } else if dry_run {
                 println!("would write {} ({tool})", c.path.display());
             } else {
@@ -279,15 +546,25 @@ fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<V
                     if drift { "re-applied" } else { "wrote" },
                     c.path.display()
                 );
-                configured = true;
                 if !applied.iter().any(|a| a == tool) {
                     applied.push(tool.to_owned());
                 }
             }
         }
-        tools.push(
-            json!({ "tool": tool, "installed": inst, "configured": configured, "drift": drift }),
-        );
+        // Read back after writing, so the report says what the tool will do now.
+        let (state, direct) = if inst {
+            classify(endpoints(p, tool), gateway)
+        } else {
+            ("not_installed", Vec::new())
+        };
+        tools.push(json!({
+            "tool": tool,
+            "state": state,
+            "installed": inst,
+            "configured": state == "gantry",
+            "drift": drift,
+            "endpoints": direct,
+        }));
     }
     if env_needed {
         let c = plan(p.home.join(".config/gantry/env"), |c| {
@@ -316,12 +593,7 @@ fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<V
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let host = hostname();
-    // `gantry login` saves the person's name (their email) in the credentials file.
-    let email = std::fs::read_to_string(p.home.join(".config/gantry/credentials"))
-        .unwrap_or_default()
-        .lines()
-        .find_map(|l| l.strip_prefix("name=").map(|v| v.trim().to_owned()))
-        .filter(|v| !v.is_empty());
+    let email = person(&p.home);
     Ok(json!({
         "device_id": format!("{host}:{os_user}"),
         "hostname": host,
@@ -330,6 +602,15 @@ fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<V
         "agent_version": env!("CARGO_PKG_VERSION"),
         "tools": tools,
     }))
+}
+
+/// The person at this device: the name (their email) `gantry login` saved in the credentials file.
+fn person(home: &Path) -> Option<String> {
+    std::fs::read_to_string(home.join(".config/gantry/credentials"))
+        .unwrap_or_default()
+        .lines()
+        .find_map(|l| l.strip_prefix("name=").map(|v| v.trim().to_owned()))
+        .filter(|v| !v.is_empty())
 }
 
 fn hostname() -> String {
@@ -351,9 +632,15 @@ fn once(agent: &ureq::Agent, opts: &Options) -> Result<(), String> {
         ),
         other => format!("the control plane is unreachable: {other}"),
     };
-    let profile: Value = agent
+    let p = paths(opts.home.as_deref())?;
+    // The gateway answers with the profile of this person's team.
+    let mut ask = agent
         .get(&format!("{cp}/device/profile"))
-        .set("authorization", &auth)
+        .set("authorization", &auth);
+    if let Some(person) = person(&p.home) {
+        ask = ask.query("person", &person);
+    }
+    let profile: Value = ask
         .call()
         .map_err(call_err)?
         .into_json()
@@ -370,7 +657,6 @@ fn once(agent: &ureq::Agent, opts: &Options) -> Result<(), String> {
                 .collect()
         })
         .unwrap_or_default();
-    let p = paths(opts.home.as_deref())?;
     let report = cycle(&p, gateway, &manage, opts.dry_run)?;
     if opts.dry_run {
         println!("would report {report}");
@@ -464,13 +750,14 @@ mod tests {
         let r = cycle(&p, GW, &manage, false)?;
         assert_eq!(
             tool(&r, "claude-code"),
-            json!({"tool":"claude-code","installed":true,"configured":true,"drift":false})
+            json!({"tool":"claude-code","state":"gantry","installed":true,"configured":true,"drift":false,"endpoints":[]})
         );
-        assert_eq!(tool(&r, "codex")["installed"], false);
+        assert_eq!(tool(&r, "codex")["state"], "not_installed");
         assert_eq!(
             tool(&r, "cursor"),
-            json!({"tool":"cursor","installed":true,"configured":false,"drift":false})
+            json!({"tool":"cursor","state":"installed","installed":true,"configured":false,"drift":false,"endpoints":[]})
         );
+        assert_eq!(r["tools"].as_array().map(Vec::len), Some(TOOLS.len()));
         assert!(home.join(".config/gantry/env").exists());
 
         std::fs::write(&p.claude_settings, "{}").map_err(|e| e.to_string())?;
@@ -485,5 +772,149 @@ mod tests {
         assert_eq!(tool(&r, "claude-code")["drift"], false);
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
+    }
+
+    fn put(home: &Path, file: &str, text: &str) -> Result<(), String> {
+        let path = home.join(file);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(path, text).map_err(|e| e.to_string())
+    }
+
+    /// Each tool's documented configuration, pointed at a provider, reads as `direct`; at the gateway, as `gantry`.
+    #[test]
+    fn tools_configured_for_a_provider_report_direct() -> Result<(), String> {
+        let home =
+            std::env::temp_dir().join(format!("gantry-device-direct-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let h = &home;
+        put(
+            h,
+            ".claude/settings.json",
+            r#"{"env":{"ANTHROPIC_API_KEY":"sk-ant-x"}}"#,
+        )?;
+        put(h, ".codex/config.toml", "model = \"o3\"\n")?;
+        put(h, ".codex/auth.json", "{}")?;
+        put(
+            h,
+            ".vscode/extensions/github.copilot-chat-0.30.0/package.json",
+            "{}",
+        )?;
+        put(
+            h,
+            "Library/Application Support/Code/User/chatLanguageModels.json",
+            r#"[{"vendor":"customendpoint","apiKey":"${input:k}","url":"https://gw.example.com/v1"}]"#,
+        )?;
+        put(
+            h,
+            ".config/zed/settings.json",
+            "// Zed settings\n{ \"language_models\": { \"openai\": { \"api_url\": \"https://api.openai.com/v1\" } } }",
+        )?;
+        put(
+            h,
+            ".qwen/settings.json",
+            r#"{"modelProviders":{"openai":[{"baseUrl":"https://dashscope.aliyuncs.com/compatible-mode/v1","envKey":"K"}]}}"#,
+        )?;
+        put(
+            h,
+            ".gemini/settings.json",
+            r#"{"security":{"auth":{"selectedType":"gemini-api-key"}}}"#,
+        )?;
+        put(
+            h,
+            ".config/kilo/kilo.json",
+            r#"{"provider":{"gantry":{"options":{"baseURL":"https://gw.example.com/v1","apiKey":"{env:GANTRY_KEY}"}}}}"#,
+        )?;
+        put(
+            h,
+            ".vscode/extensions/rooveterinaryinc.roo-cline-3.0.0/package.json",
+            "{}",
+        )?;
+        put(
+            h,
+            "Library/Application Support/JetBrains/IntelliJIdea2026.3/options/x.xml",
+            "",
+        )?;
+        put(h, "Library/Application Support/Claude/config.json", "{}")?;
+        put(
+            h,
+            "Library/Managed Preferences/com.anthropic.claudefordesktop.plist",
+            "<plist><dict><key>inferenceProvider</key><string>gateway</string><key>inferenceGatewayBaseUrl</key>\n<string>https://other-gateway.example.net</string></dict></plist>",
+        )?;
+        let p = paths(Some(h))?;
+        // Inspect only: nothing is managed.
+        let r = cycle(&p, GW, &[], true)?;
+        let state = |t: &str| {
+            r["tools"]
+                .as_array()
+                .and_then(|a| a.iter().find(|x| x["tool"] == t))
+                .map(|x| {
+                    (
+                        x["state"].as_str().unwrap_or("").to_string(),
+                        x["endpoints"].clone(),
+                    )
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            state("claude-code"),
+            ("direct".into(), json!(["https://api.anthropic.com"]))
+        );
+        assert_eq!(
+            state("codex"),
+            ("direct".into(), json!(["https://api.openai.com/v1"]))
+        );
+        assert_eq!(state("github-copilot").0, "gantry");
+        assert_eq!(
+            state("zed"),
+            ("direct".into(), json!(["https://api.openai.com/v1"]))
+        );
+        assert_eq!(state("qwen-code").0, "direct");
+        assert_eq!(
+            state("gemini-cli"),
+            (
+                "direct".into(),
+                json!(["https://generativelanguage.googleapis.com"])
+            )
+        );
+        assert_eq!(state("kilo-code").0, "gantry");
+        assert_eq!(state("roo-code").0, "installed");
+        assert_eq!(state("jetbrains-ai").0, "installed");
+        assert_eq!(
+            state("claude-desktop"),
+            (
+                "direct".into(),
+                json!(["https://other-gateway.example.net"])
+            )
+        );
+        assert_eq!(state("cursor").0, "not_installed");
+
+        // Managing Claude Code and Codex turns both to the gateway.
+        let manage = vec!["claude-code".to_owned(), "codex".to_owned()];
+        let r = cycle(&p, GW, &manage, false)?;
+        for t in ["claude-code", "codex"] {
+            let x = r["tools"]
+                .as_array()
+                .and_then(|a| a.iter().find(|x| x["tool"] == t))
+                .cloned()
+                .unwrap_or_default();
+            assert_eq!(x["state"], "gantry", "{t}: {x}");
+        }
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    #[test]
+    fn a_lookalike_host_is_not_the_gateway() {
+        assert_eq!(
+            classify(vec!["https://gw.example.com.evil.io/v1".into()], GW).0,
+            "direct"
+        );
+        assert_eq!(
+            classify(vec!["https://gw.example.com".into()], GW).0,
+            "gantry"
+        );
+        assert_eq!(classify(vec!["${input:key}".into()], GW).0, "installed");
     }
 }
