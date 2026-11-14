@@ -2356,6 +2356,7 @@ impl Admitted {
         answer: Option<(Option<HeaderValue>, Bytes)>,
     ) {
         let mut me = self;
+        me.release_parallel();
         let Some(log) = me.audit.clone() else {
             me.close(status, ended, usage, hit, answer);
             return;
@@ -2383,6 +2384,7 @@ impl Admitted {
             (Usage::from_body(&body), Some((content_type, body)))
         };
         let mut me = self;
+        me.release_parallel();
         let Some(log) = me.audit.clone() else {
             let (usage, answer) = read(frames);
             me.close(status, Ended::Complete, usage, false, answer);
@@ -2396,6 +2398,14 @@ impl Admitted {
             },
             move |result| written(&decision, result),
         );
+    }
+
+    /// Gives back the request's places under parallel limits now that its answer has ended: at once, not on the
+    /// audit writer with its record, so the caller's next request finds the place free.
+    fn release_parallel(&mut self) {
+        for hold in self.parallel.drain(..) {
+            self.spend.release_parallel(&hold);
+        }
     }
 
     /// The work of [`Admitted::settle`], and the usage record when there is a log to write it to.

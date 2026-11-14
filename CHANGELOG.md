@@ -7,6 +7,12 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Fixed: a parallel place comes back with the answer
+
+- A request's place under a `parallel` limit (key or `limits:`) is given back as soon as its answer has ended, not
+  when its usage record is written, so a caller's next request right after an answer is no longer refused with
+  `parallel_limited`.
+
 ### Fixed: deleting a running background response
 
 - A background response deleted before Gantry saw it end is read at the provider before the delete is sent, so it is

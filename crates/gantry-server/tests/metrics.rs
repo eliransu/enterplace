@@ -119,27 +119,37 @@ rules:
         (v == "MOCK_KEY").then(|| "secret".into())
     })?;
     let audit = dir.join("gantry-audit.jsonl");
+    // Usage is recorded, and an answer kept in the cache, on the audit writer once each answer ends. Each request
+    // waits for the one before it to be settled: sent at once, the second could miss the first's cache entry.
+    let settled = |n: usize| {
+        let audit = audit.clone();
+        async move {
+            let start = Instant::now();
+            while std::fs::read_to_string(&audit)?
+                .matches("\"event\":\"usage\"")
+                .count()
+                < n
+            {
+                if start.elapsed() > Duration::from_secs(30) {
+                    return Err::<(), Error>(format!("{n} usage records never came").into());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Ok(())
+        }
+    };
 
     let (status, body) = send(&gw.router, chat("m", "write to dana@example.com")?).await?;
     assert_eq!(status, StatusCode::OK, "{body}");
+    settled(1).await?;
     let (status, _) = send(&gw.router, chat("m", "write to dana@example.com")?).await?;
     assert_eq!(status, StatusCode::OK);
+    settled(2).await?;
     let (status, body) = send(&gw.router, chat("smart", "hello")?).await?;
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, _) = send(&gw.router, chat("nope", "hello")?).await?;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    // Usage is recorded when each answer ends.
-    let start = Instant::now();
-    while std::fs::read_to_string(&audit)?
-        .matches("\"event\":\"usage\"")
-        .count()
-        < 3
-    {
-        if start.elapsed() > Duration::from_secs(3) {
-            return Err("no usage records".into());
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    settled(3).await?;
 
     let (status, text) = send(&gw.metrics, Request::get("/metrics").body(Body::empty())?).await?;
     assert_eq!(status, StatusCode::OK);

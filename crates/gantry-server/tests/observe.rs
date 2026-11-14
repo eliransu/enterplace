@@ -164,6 +164,21 @@ fn record(audit: &Path, id: &str) -> Result<Value, Error> {
         .ok_or_else(|| format!("no decision record for {id}").into())
 }
 
+/// Waits for the usage record of a decision: its charge is counted once it is written.
+async fn charged(audit: &Path, id: &str) -> Result<(), Error> {
+    for _ in 0..1500 {
+        let found = std::fs::read_to_string(audit)?
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .any(|r| r["id"] == id && r["event"] == "usage");
+        if found {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    Err(format!("no usage record for {id}").into())
+}
+
 fn would_refuse(record: &Value) -> Vec<String> {
     record["would_refuse"]
         .as_array()
@@ -195,7 +210,9 @@ async fn observe_forwards_what_a_budget_would_refuse_and_records_would_refuse() 
     assert_eq!(would_refuse(&second), ["budget_exceeded"], "{second}");
     assert_eq!(second["would_refuse"][0]["by"], "observe", "{second}");
 
-    // The second one was charged too, so the numbers are real when enforcement starts.
+    // The second one was charged too, so the numbers are real when enforcement starts. It is charged on the audit
+    // writer once its answer ended (held as a reservation until then): the third waits for its usage record.
+    charged(&s.audit, second["id"].as_str().unwrap_or_default()).await?;
     let (status, _, third) = send(app, chat(PAT, "m", "hi")?).await?;
     assert_eq!(status, StatusCode::OK);
     let third = record(&s.audit, &third)?;

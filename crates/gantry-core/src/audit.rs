@@ -2494,9 +2494,20 @@ mod tests {
         let path = temp("lost");
         let log = AuditLog::open_as(&path, TEST_BEAT, &Me::this_process())?;
         log.append(&entry("A"))?;
-        std::fs::write(lock_path(&path), lock_text(&elsewhere("a"), "abc", 0))?;
-        std::thread::sleep(TEST_BEAT * 3);
-        assert!(log.is_broken());
+        // The Gantry that took over keeps its lock current, as a live one does. Written once, the lock could be
+        // overwritten by a beat that read it a moment before (and a fixed wait loses to a slow wake under load), so
+        // it is written each half beat until this log sees it, for at most 10 seconds.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut n = 0;
+        while !log.is_broken() && Instant::now() < deadline {
+            std::fs::write(lock_path(&path), lock_text(&elsewhere("a"), "abc", n))?;
+            n += 1;
+            std::thread::sleep(TEST_BEAT / 2);
+        }
+        assert!(
+            log.is_broken(),
+            "the lock another Gantry took went unnoticed"
+        );
         assert!(log.append(&entry("B")).is_err());
         drop(log);
         assert!(
