@@ -9,4 +9,9 @@ run "plan" {
     condition     = module.gantry.revision_suffix != ""
     error_message = "the revision suffix, which names the audit log's folder, is empty"
   }
+
+  assert {
+    condition     = module.gantry.master_key_secret == "gantry-master-key" && module.gantry.export_key_secret == "gantry-export-key"
+    error_message = "without master_key_secret and export_key_secret the module makes both keys in the vault"
+  }
 }

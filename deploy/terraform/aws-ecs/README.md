@@ -14,7 +14,9 @@ switches and budgets, and EFS for each gateway's audit log.
 | Secrets Manager secret `DATABASE_URL` | Gantry reads the whole connection string from one variable |
 | SSM parameter with the policy, a busybox init container per task | ECS cannot mount a parameter as a file and the image has no shell, so the init container writes `/etc/gantry/gantry.policy.yaml` |
 | Security groups | Only the ALB reaches the tasks (8080); only the tasks reach the proxy and EFS; only the proxy reaches RDS |
-| CloudWatch log group, execution role | Logs; the role reads the secrets and the policy at start. The tasks have no AWS permissions |
+| Secrets Manager secrets `<name>/master-key` and `<name>/export-key`, random 64 hex characters each | `GANTRY_MASTER_KEY` (seals provider credentials in the store) and `GANTRY_EXPORT_KEY` (encrypts SIEM destination secrets). Made once and kept across applies; skipped for a key you pass as `master_key_secret_arn` or `export_key_secret_arn` |
+| CloudWatch log group, execution role | Logs; the role reads the secrets and the policy at start |
+| Task role allowed `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on `bedrock_resource_arns` | Bedrock providers sign with it through the AWS default credential chain, so no AWS keys are stored. Not made when `bedrock_resource_arns` is empty: the tasks then have no AWS permissions |
 
 Why RDS Proxy: Gantry checks the database's TLS certificate against the Mozilla roots built into it. RDS instances
 present certificates from the RDS certificate authorities, which are not among them, so a direct connection is
@@ -43,6 +45,9 @@ module "gantry" {
   image_pull_secret_arn    = "arn:aws:secretsmanager:...:secret:ghcr-pull"
   license_secret_arn       = "arn:aws:secretsmanager:...:secret:gantry-license"
   provider_key_secret_arns = { OPENAI_PROVIDER_KEY = "arn:aws:secretsmanager:...:secret:openai" }
+
+  # For Bedrock providers: the models and inference profiles the task role may invoke. No AWS keys.
+  bedrock_resource_arns = ["arn:aws:bedrock:us-east-1::foundation-model/anthropic.*"]
 }
 ```
 
@@ -56,6 +61,9 @@ The policy must have `audit: { path: /var/lib/gantry/gantry-audit.jsonl }` and
 
 - A deploy (new image or policy) stops each gateway before starting its replacement, because two tasks must never
   write one chain. Every service deploys at once, so expect a short gap; with `replicas = 1` always.
-- The database password is in Terraform state (it builds `DATABASE_URL`). Keep the state encrypted.
+- The database password is in Terraform state (it builds `DATABASE_URL`), and so are the master and export keys the
+  module makes. Keep the state encrypted, and a copy of the master key outside AWS: a lost one cannot be recovered.
+- A Bedrock provider in the policy takes no `key_env`: it signs as the task role. For Bedrock in another account, set
+  the provider's `role_arn` and let that role trust the output `bedrock_role_arn`.
 - The policy parameter holds up to 8 KB.
 - `deletion_protection` is on for the database and the load balancer. Turn it off before `terraform destroy`.

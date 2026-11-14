@@ -10,20 +10,31 @@ locals {
     policy  = var.policy
     keys    = var.provider_key_secrets
     license = var.license_secret
+    master  = var.master_key_secret
+    export  = var.export_key_secret
     cpu     = var.cpu
     memory  = var.memory
   })), 0, 10)}"
   # The connector's Unix socket. Gantry allows a connection without TLS only to its own machine, and a socket is.
   socket_dir = "/cloudsql/${google_sql_database_instance.this.connection_name}"
+  # The keys the caller did not pass, which the module makes.
+  generated_keys = toset(concat(
+    var.master_key_secret == null ? ["master-key"] : [],
+    var.export_key_secret == null ? ["export-key"] : [],
+  ))
   secrets = merge(
-    { DATABASE_URL = google_secret_manager_secret.database_url.secret_id },
+    {
+      DATABASE_URL      = google_secret_manager_secret.database_url.secret_id
+      GANTRY_MASTER_KEY = var.master_key_secret == null ? google_secret_manager_secret.generated["master-key"].secret_id : var.master_key_secret
+      GANTRY_EXPORT_KEY = var.export_key_secret == null ? google_secret_manager_secret.generated["export-key"].secret_id : var.export_key_secret
+    },
     var.license_secret == null ? {} : { GANTRY_LICENSE = var.license_secret },
     var.provider_key_secrets,
   )
 }
 
 resource "google_project_service" "this" {
-  for_each           = toset(["run.googleapis.com", "sqladmin.googleapis.com", "file.googleapis.com", "secretmanager.googleapis.com"])
+  for_each           = toset(concat(["run.googleapis.com", "sqladmin.googleapis.com", "file.googleapis.com", "secretmanager.googleapis.com"], var.vertex_ai ? ["aiplatform.googleapis.com"] : []))
   project            = var.project
   service            = each.value
   disable_on_destroy = false
@@ -38,6 +49,15 @@ resource "google_service_account" "gantry" {
 resource "google_project_iam_member" "sql_client" {
   project = var.project
   role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.gantry.email}"
+}
+
+# Vertex AI providers sign in as this service account (Gantry asks the metadata server for its token), so no key
+# or access token is stored.
+resource "google_project_iam_member" "vertex_ai" {
+  count   = var.vertex_ai ? 1 : 0
+  project = var.project
+  role    = "roles/aiplatform.user"
   member  = "serviceAccount:${google_service_account.gantry.email}"
 }
 
@@ -108,6 +128,31 @@ resource "google_secret_manager_secret" "database_url" {
 resource "google_secret_manager_secret_version" "database_url" {
   secret      = google_secret_manager_secret.database_url.id
   secret_data = "postgres://gantry:${random_password.db.result}@${urlencode(local.socket_dir)}/gantry?sslmode=disable"
+}
+
+# The master key (seals provider credentials kept in the store) and the export key (encrypts SIEM destination
+# secrets): 64 hex characters each. A key the caller does not pass is made here, once: random_bytes keeps its value
+# in state, so later applies leave it as it is.
+resource "random_bytes" "key" {
+  for_each = local.generated_keys
+  length   = 32
+}
+
+resource "google_secret_manager_secret" "generated" {
+  for_each  = local.generated_keys
+  project   = var.project
+  secret_id = "${var.name}-${each.key}"
+  labels    = var.labels
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.this]
+}
+
+resource "google_secret_manager_secret_version" "generated" {
+  for_each    = local.generated_keys
+  secret      = google_secret_manager_secret.generated[each.key].id
+  secret_data = random_bytes.key[each.key].hex
 }
 
 # The policy as a secret, because Cloud Run mounts secrets as files. It holds no secrets itself.
@@ -260,7 +305,7 @@ resource "google_cloud_run_v2_service" "this" {
     }
   }
 
-  depends_on = [google_secret_manager_secret_iam_member.gantry, google_project_iam_member.sql_client, google_secret_manager_secret_version.database_url]
+  depends_on = [google_secret_manager_secret_iam_member.gantry, google_project_iam_member.sql_client, google_project_iam_member.vertex_ai, google_secret_manager_secret_version.database_url, google_secret_manager_secret_version.generated]
 }
 
 resource "google_cloud_run_v2_service_iam_member" "public" {

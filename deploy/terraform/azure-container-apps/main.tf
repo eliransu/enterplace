@@ -11,20 +11,31 @@ locals {
     policy   = var.policy
     keys     = var.provider_key_secrets
     license  = var.license_secret
+    master   = var.master_key_secret
+    export   = var.export_key_secret
     registry = var.registry
     cpu      = var.cpu
     memory   = var.memory
   })), 0, 10)}"
   vault_uri = "https://${element(split("/", var.key_vault_id), length(split("/", var.key_vault_id)) - 1)}.vault.azure.net/secrets/"
+  # The keys the caller did not pass, which the module makes.
+  generated_keys = toset(concat(
+    var.master_key_secret == null ? ["master-key"] : [],
+    var.export_key_secret == null ? ["export-key"] : [],
+  ))
   # Container App secret name => Key Vault secret name, for every secret the gateway reads from the vault.
   vault_secrets = merge(
-    { database-url = azurerm_key_vault_secret.database_url.name },
+    {
+      database-url = azurerm_key_vault_secret.database_url.name
+      master-key   = var.master_key_secret == null ? azurerm_key_vault_secret.generated["master-key"].name : var.master_key_secret
+      export-key   = var.export_key_secret == null ? azurerm_key_vault_secret.generated["export-key"].name : var.export_key_secret
+    },
     var.license_secret == null ? {} : { license = var.license_secret },
     { for env_name, secret in var.provider_key_secrets : "key-${lower(replace(env_name, "_", "-"))}" => secret },
     var.registry == null ? {} : { registry-password = var.registry.password_secret },
   )
   env_secrets = merge(
-    { DATABASE_URL = "database-url" },
+    { DATABASE_URL = "database-url", GANTRY_MASTER_KEY = "master-key", GANTRY_EXPORT_KEY = "export-key" },
     var.license_secret == null ? {} : { GANTRY_LICENSE = "license" },
     { for env_name, _ in var.provider_key_secrets : env_name => "key-${lower(replace(env_name, "_", "-"))}" },
   )
@@ -131,6 +142,21 @@ resource "azurerm_key_vault_secret" "database_url" {
   name         = "${var.name}-database-url"
   key_vault_id = var.key_vault_id
   value        = "postgres://gantry:${random_password.db.result}@${azurerm_postgresql_flexible_server.this.fqdn}:5432/gantry?sslmode=verify-full"
+}
+
+# The master key (seals provider credentials kept in the store) and the export key (encrypts SIEM destination
+# secrets): 64 hex characters each. A key the caller does not pass is made here, once: random_bytes keeps its value
+# in state, so later applies leave it as it is.
+resource "random_bytes" "key" {
+  for_each = local.generated_keys
+  length   = 32
+}
+
+resource "azurerm_key_vault_secret" "generated" {
+  for_each     = local.generated_keys
+  name         = "${var.name}-${each.key}"
+  key_vault_id = var.key_vault_id
+  value        = random_bytes.key[each.key].hex
 }
 
 # The app reads its secrets from the vault as this identity.

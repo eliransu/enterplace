@@ -47,6 +47,24 @@ variable "provider_key_secrets" {
   default     = {}
 }
 
+variable "vertex_ai" {
+  description = "Let the gateway's service account call Vertex AI (roles/aiplatform.user on the project) and enable aiplatform.googleapis.com. Vertex providers then sign in as that service account: leave key_env out of them and store no access token."
+  type        = bool
+  default     = true
+}
+
+variable "master_key_secret" {
+  description = "Optional. Secret Manager secret ID, in this project, of the master key (64 hex characters) that seals provider credentials kept in the store. Becomes GANTRY_MASTER_KEY. Null makes one with a random value in the secret <name>-master-key, kept across applies (its value is in Terraform state). Keep a copy elsewhere: a lost master key cannot be recovered."
+  type        = string
+  default     = null
+}
+
+variable "export_key_secret" {
+  description = "Optional. Secret Manager secret ID, in this project, of the key (64 hex characters) that encrypts SIEM export destinations' secrets. Becomes GANTRY_EXPORT_KEY. Null makes one with a random value in the secret <name>-export-key, kept across applies (its value is in Terraform state)."
+  type        = string
+  default     = null
+}
+
 variable "license_secret" {
   description = "Secret Manager secret ID of the Gantry license key. Becomes GANTRY_LICENSE. Null runs without the enterprise features."
   type        = string

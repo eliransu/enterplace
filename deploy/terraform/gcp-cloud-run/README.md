@@ -12,7 +12,8 @@ budgets, the audit log on Filestore over NFS, and the policy and secrets in Secr
 | Cloud SQL connector volume (`/cloudsql`) | Gantry connects over a Unix socket; see below |
 | Filestore BASIC_HDD share `gantry`, mounted over NFS at `/var/lib/gantry` | The audit log, one folder per revision |
 | Secret Manager secrets for `DATABASE_URL` and the policy | The policy is mounted as `/etc/gantry/gantry.policy.yaml` |
-| Service account with `cloudsql.client` and access to each secret | What the gateway runs as |
+| Secret Manager secrets `<name>-master-key` and `<name>-export-key`, random 64 hex characters each | `GANTRY_MASTER_KEY` (seals provider credentials in the store) and `GANTRY_EXPORT_KEY` (encrypts SIEM destination secrets). Made once and kept across applies; skipped for a key you pass as `master_key_secret` or `export_key_secret` |
+| Service account with `cloudsql.client`, `aiplatform.user` (when `vertex_ai = true`, the default) and access to each secret | What the gateway runs as, and what Vertex AI providers sign in as |
 | `allUsers` invoker (when `public = true`) | Gantry's own keys decide who may call |
 
 **Cloud SQL through the connector, not a private IP.** Gantry checks the database's TLS certificate against the
@@ -61,6 +62,9 @@ The policy must have `audit: { path: /var/lib/gantry/gantry-audit.jsonl }` and
 
 - Filestore BASIC_HDD starts at 1 TiB. The `network` needs private services access only if you change the
   Filestore connect mode; the default (direct peering) needs nothing.
-- The database password is in Terraform state. Keep the state encrypted.
+- The database password is in Terraform state, and so are the master and export keys the module makes. Keep the
+  state encrypted, and a copy of the master key elsewhere: a lost one cannot be recovered.
+- Vertex AI providers (`vertex`, `vertex_anthropic`) sign in as the service account through the metadata server:
+  leave `key_env` out of them and store no access token. `vertex_ai = false` drops the role and the API.
 - `deletion_protection` is on for the database and the service. Turn it off before `terraform destroy`.
 - Organisation policies that forbid `allUsers` need `public = false`; callers then also send a Google identity token.

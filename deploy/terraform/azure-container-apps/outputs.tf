@@ -27,3 +27,13 @@ output "outbound_ips" {
   description = "Addresses the gateway calls model providers from, for providers that allow-list callers."
   value       = azurerm_container_app.this.outbound_ip_addresses
 }
+
+output "master_key_secret" {
+  description = "The Key Vault secret the gateway reads GANTRY_MASTER_KEY from."
+  value       = local.vault_secrets["master-key"]
+}
+
+output "export_key_secret" {
+  description = "The Key Vault secret the gateway reads GANTRY_EXPORT_KEY from."
+  value       = local.vault_secrets["export-key"]
+}

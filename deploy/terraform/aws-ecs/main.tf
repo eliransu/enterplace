@@ -6,8 +6,16 @@ data "aws_region" "current" {}
 locals {
   create_db               = var.database_url_secret_arn == null
   database_url_secret_arn = local.create_db ? aws_secretsmanager_secret.database_url[0].arn : var.database_url_secret_arn
+  master_key_secret_arn   = var.master_key_secret_arn == null ? aws_secretsmanager_secret.generated["master-key"].arn : var.master_key_secret_arn
+  export_key_secret_arn   = var.export_key_secret_arn == null ? aws_secretsmanager_secret.generated["export-key"].arn : var.export_key_secret_arn
+  # The keys the caller did not pass, which the module makes.
+  generated_keys = toset(concat(
+    var.master_key_secret_arn == null ? ["master-key"] : [],
+    var.export_key_secret_arn == null ? ["export-key"] : [],
+  ))
+  bedrock = length(coalesce(var.bedrock_resource_arns, [])) > 0
   runtime_secret_arns = compact(concat(
-    [local.database_url_secret_arn, var.license_secret_arn, var.image_pull_secret_arn],
+    [local.database_url_secret_arn, var.license_secret_arn, var.image_pull_secret_arn, local.master_key_secret_arn, local.export_key_secret_arn],
     values(var.provider_key_secret_arns),
   ))
   replicas    = { for i in range(var.replicas) : tostring(i) => i }
@@ -113,8 +121,53 @@ resource "aws_ecs_cluster" "this" {
   tags = var.tags
 }
 
-# The execution role pulls the image and reads the secrets and policy when a task starts. The gateway itself needs
-# no AWS permissions, so the tasks get no task role.
+# The master key (seals provider credentials kept in the store) and the export key (encrypts SIEM destination
+# secrets): 64 hex characters each, the same on every gateway. A key the caller does not pass is made here, once:
+# random_bytes keeps its value in state, so later applies leave it as it is.
+resource "random_bytes" "key" {
+  for_each = local.generated_keys
+  length   = 32
+}
+
+resource "aws_secretsmanager_secret" "generated" {
+  for_each = local.generated_keys
+  name     = "${var.name}/${each.key}"
+  tags     = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "generated" {
+  for_each      = local.generated_keys
+  secret_id     = aws_secretsmanager_secret.generated[each.key].id
+  secret_string = random_bytes.key[each.key].hex
+}
+
+# The execution role pulls the image and reads the secrets and policy when a task starts. The task role is the
+# gateway's own AWS identity, which Bedrock providers sign with (the AWS default credential chain finds it); it is
+# made only when bedrock_resource_arns names models, and may call nothing else.
+resource "aws_iam_role" "task" {
+  count = local.bedrock ? 1 : 0
+  name  = "${var.name}-task"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = "sts:AssumeRole", Principal = { Service = "ecs-tasks.amazonaws.com" } }]
+  })
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "bedrock" {
+  count = local.bedrock ? 1 : 0
+  name  = "invoke-bedrock"
+  role  = aws_iam_role.task[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+      Resource = var.bedrock_resource_arns
+    }]
+  })
+}
+
 resource "aws_iam_role" "execution" {
   name = "${var.name}-execution"
   assume_role_policy = jsonencode({
@@ -192,6 +245,7 @@ resource "aws_ecs_task_definition" "replica" {
   cpu                      = var.cpu
   memory                   = var.memory
   execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = local.bedrock ? aws_iam_role.task[0].arn : null
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = var.cpu_architecture
@@ -244,7 +298,11 @@ resource "aws_ecs_task_definition" "replica" {
         # The parameter's value is read at task start, so a new hash here is what rolls the tasks onto a new policy.
         environment = [{ name = "GANTRY_POLICY_SHA256", value = sha256(var.policy) }]
         secrets = concat(
-          [{ name = "DATABASE_URL", valueFrom = local.database_url_secret_arn }],
+          [
+            { name = "DATABASE_URL", valueFrom = local.database_url_secret_arn },
+            { name = "GANTRY_MASTER_KEY", valueFrom = local.master_key_secret_arn },
+            { name = "GANTRY_EXPORT_KEY", valueFrom = local.export_key_secret_arn },
+          ],
           var.license_secret_arn == null ? [] : [{ name = "GANTRY_LICENSE", valueFrom = var.license_secret_arn }],
           [for env_name, arn in var.provider_key_secret_arns : { name = env_name, valueFrom = arn }],
         )
@@ -260,7 +318,8 @@ resource "aws_ecs_task_definition" "replica" {
       var.image_pull_secret_arn == null ? {} : { repositoryCredentials = { credentialsParameter = var.image_pull_secret_arn } },
     ),
   ])
-  tags = var.tags
+  tags       = var.tags
+  depends_on = [aws_secretsmanager_secret_version.generated]
 }
 
 resource "aws_ecs_service" "replica" {

@@ -29,6 +29,16 @@ output "filestore_ip" {
 }
 
 output "service_account" {
-  description = "The service account the gateway runs as."
+  description = "The service account the gateway runs as, and Vertex AI providers sign in as."
   value       = google_service_account.gantry.email
+}
+
+output "master_key_secret" {
+  description = "The secret the gateway reads GANTRY_MASTER_KEY from."
+  value       = local.secrets["GANTRY_MASTER_KEY"]
+}
+
+output "export_key_secret" {
+  description = "The secret the gateway reads GANTRY_EXPORT_KEY from."
+  value       = local.secrets["GANTRY_EXPORT_KEY"]
 }

@@ -3,6 +3,10 @@ imagePullSecrets:
   - name: ghcr
 keys:
   existingSecret: gantry-keys
+masterKey:
+  existingSecret: gantry-master-key
+exportKey:
+  existingSecret: gantry-export-key
 metrics:
   enabled: true
   serviceMonitor:

@@ -26,6 +26,10 @@ module "gantry" {
 
   image_pull_secret_arn = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:ghcr-pull-AbCdEf"
   license_secret_arn    = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:gantry-license-AbCdEf"
+  bedrock_resource_arns = [
+    "arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "arn:aws:bedrock:eu-west-1:123456789012:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+  ]
   provider_key_secret_arns = {
     OPENAI_PROVIDER_KEY = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:openai-AbCdEf"
   }

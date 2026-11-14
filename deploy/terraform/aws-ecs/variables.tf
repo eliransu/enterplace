@@ -91,6 +91,24 @@ variable "provider_key_secret_arns" {
   default     = {}
 }
 
+variable "bedrock_resource_arns" {
+  description = "Amazon Bedrock foundation-model and inference-profile ARNs the gateways may invoke, such as [\"arn:aws:bedrock:us-east-1::foundation-model/anthropic.*\", \"arn:aws:bedrock:us-east-1:123456789012:inference-profile/*\"]. Non-empty creates a task role allowed bedrock:InvokeModel and bedrock:InvokeModelWithResponseStream on them, which Bedrock providers sign with: no AWS keys are stored. Empty or null creates no task role."
+  type        = list(string)
+  default     = []
+}
+
+variable "master_key_secret_arn" {
+  description = "Optional. Secrets Manager ARN of the master key (64 hex characters) that seals provider credentials kept in the store. Becomes GANTRY_MASTER_KEY. Null makes one with a random value in the secret <name>/master-key, kept across applies (its value is in Terraform state). Keep a copy outside AWS: a lost master key cannot be recovered."
+  type        = string
+  default     = null
+}
+
+variable "export_key_secret_arn" {
+  description = "Optional. Secrets Manager ARN of the key (64 hex characters) that encrypts SIEM export destinations' secrets. Becomes GANTRY_EXPORT_KEY. Null makes one with a random value in the secret <name>/export-key, kept across applies (its value is in Terraform state)."
+  type        = string
+  default     = null
+}
+
 variable "license_secret_arn" {
   description = "Secrets Manager ARN of the Gantry license key. Becomes GANTRY_LICENSE. Null runs without the enterprise features."
   type        = string

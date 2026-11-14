@@ -96,6 +96,17 @@ spec:
                   name: {{ include "gantry.fullname" . }}-postgres
                   key: DATABASE_URL
             {{- end }}
+            {{- if .Values.masterKey.existingSecret }}
+            - name: GANTRY_MASTER_KEY_FILE
+              value: /etc/gantry-master/{{ .Values.masterKey.key }}
+            {{- end }}
+            {{- if .Values.exportKey.existingSecret }}
+            - name: GANTRY_EXPORT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.exportKey.existingSecret }}
+                  key: {{ .Values.exportKey.key }}
+            {{- end }}
             {{- range $name, $value := .Values.otel }}
             - name: {{ $name }}
               value: {{ $value | quote }}
@@ -138,10 +149,25 @@ spec:
               readOnly: true
             - name: data
               mountPath: /var/lib/gantry
+            {{- if .Values.masterKey.existingSecret }}
+            - name: master-key
+              mountPath: /etc/gantry-master
+              readOnly: true
+            {{- end }}
       volumes:
         - name: policy
           configMap:
             name: {{ .Values.existingPolicyConfigMap | default (printf "%s-policy" (include "gantry.fullname" .)) }}
+        {{- if .Values.masterKey.existingSecret }}
+        - name: master-key
+          secret:
+            secretName: {{ .Values.masterKey.existingSecret }}
+            items:
+              - key: {{ .Values.masterKey.key }}
+                path: {{ .Values.masterKey.key }}
+            # Readable by the pod's group (fsGroup 65532) only.
+            defaultMode: 0440
+        {{- end }}
         {{- if .Values.keys.existingSecret }}
         - name: seed-keys
           secret:

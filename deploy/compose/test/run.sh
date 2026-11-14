@@ -30,6 +30,12 @@ grep -q 'image: python:3.12-alpine' docker-compose.override.yml || { echo "the f
 
 # Filled in as the page says.
 sed -i.bak "s/^POSTGRES_PASSWORD=\$/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+# The two optional keys, made as the page says: the master key turns provider credentials on.
+sed -i.bak "s/^GANTRY_MASTER_KEY=\$/GANTRY_MASTER_KEY=$(openssl rand -hex 32)/" .env
+sed -i.bak "s/^GANTRY_EXPORT_KEY=\$/GANTRY_EXPORT_KEY=$(openssl rand -hex 32)/" .env
+for k in GANTRY_MASTER_KEY GANTRY_EXPORT_KEY; do
+  grep -Eq "^$k=[0-9a-f]{64}\$" .env || { echo "the page's .env has no empty $k= line"; exit 1; }
+done
 sed -i.bak "s/^GANTRY_PORT=.*/GANTRY_PORT=${GANTRY_PORT:-18080}/" .env
 [ -z "${GANTRY_IMAGE:-}" ] || sed -i.bak "s|^GANTRY_IMAGE=.*|GANTRY_IMAGE=$GANTRY_IMAGE|" .env
 rm -f .env.bak
@@ -55,6 +61,15 @@ until curl -fsS "$url/healthz" >/dev/null 2>&1; do
   sleep 1
 done
 echo "healthz: $(curl -fsS "$url/healthz")"
+
+# The master key reached the gateway: the first gateway on a store seals a check value with it.
+sealed=$(docker compose exec -T postgres psql -U gantry -d gantry -tAc 'SELECT count(*) FROM gantry_master')
+[ "$sealed" = 1 ] || { echo "the master key did not reach the gateway: gantry_master has $sealed rows"; exit 1; }
+echo "master key: provider credentials are on"
+# And the export key is in its environment (only a siem license reads it).
+docker inspect "$(docker compose ps -q gantry)" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -Eq '^GANTRY_EXPORT_KEY=[0-9a-f]{64}$' || { echo "GANTRY_EXPORT_KEY did not reach the gateway"; exit 1; }
+echo "export key: set on the gateway"
 
 docker compose logs gantry | grep 'First run' || { echo "no first-run setup link in the log"; exit 1; }
 

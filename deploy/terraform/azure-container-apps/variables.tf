@@ -39,7 +39,7 @@ variable "policy" {
 }
 
 variable "key_vault_id" {
-  description = "An existing Key Vault with RBAC authorization holding the provider keys and the license. The module adds the DATABASE_URL secret to it (whoever runs Terraform needs Key Vault Secrets Officer) and lets the app read it."
+  description = "An existing Key Vault with RBAC authorization holding the provider keys and the license. The module adds the DATABASE_URL secret (and the master and export keys it makes) to it (whoever runs Terraform needs Key Vault Secrets Officer) and lets the app read it."
   type        = string
 }
 
@@ -47,6 +47,18 @@ variable "provider_key_secrets" {
   description = "Provider keys: the environment variable the policy's key_env names => secret name in key_vault_id, such as { OPENAI_PROVIDER_KEY = \"openai-key\" }. The module never reads the values."
   type        = map(string)
   default     = {}
+}
+
+variable "master_key_secret" {
+  description = "Optional. Secret name in key_vault_id holding the master key (64 hex characters) that seals provider credentials kept in the store. Becomes GANTRY_MASTER_KEY. Null makes one with a random value as the secret <name>-master-key, kept across applies (its value is in Terraform state). Keep a copy elsewhere: a lost master key cannot be recovered."
+  type        = string
+  default     = null
+}
+
+variable "export_key_secret" {
+  description = "Optional. Secret name in key_vault_id holding the key (64 hex characters) that encrypts SIEM export destinations' secrets. Becomes GANTRY_EXPORT_KEY. Null makes one with a random value as the secret <name>-export-key, kept across applies (its value is in Terraform state)."
+  type        = string
+  default     = null
 }
 
 variable "license_secret" {

@@ -40,6 +40,25 @@ keys, budgets and kill switches. Rate limits and the response cache stay per rep
 `postgres.enabled` starts a one-pod Postgres in the chart for trials. It is not for production: no backups, no high
 availability, no TLS: Gantry connects to it with `sslmode=disable` and says at start that the connection is not encrypted.
 
+## Master key and export key
+
+Both are optional, 64 hex characters (`openssl rand -hex 32`), the same on every replica, and read only from Secrets
+you make; neither is ever a value in `values.yaml`.
+
+```bash
+kubectl create secret generic gantry-master-key --from-literal=master-key=$(openssl rand -hex 32)
+kubectl create secret generic gantry-export-key --from-literal=export-key=$(openssl rand -hex 32)
+helm upgrade --install gantry ./gantry-deploy/helm/gantry --reuse-values \
+  --set masterKey.existingSecret=gantry-master-key --set exportKey.existingSecret=gantry-export-key
+```
+
+- `masterKey` seals provider credentials kept in the store. It is mounted as a file at `/etc/gantry-master` and named
+  by `GANTRY_MASTER_KEY_FILE`. Keep a copy in your secret manager: a lost master key cannot be recovered. Without it,
+  provider credentials are off and providers use `key_env`. Do not also set `GANTRY_MASTER_KEY` through
+  `envFromSecrets`: Gantry refuses both.
+- `exportKey` becomes `GANTRY_EXPORT_KEY`, which encrypts SIEM export destinations' secrets (license feature `siem`).
+  Without it, only destinations that sign in with the pod's cloud identity can be saved.
+
 ## Values
 
 | Value | Default | Description |
@@ -50,6 +69,8 @@ availability, no TLS: Gantry connects to it with `sslmode=disable` and says at s
 | `policy` | One OpenAI provider, one rule | The policy file, mounted at `/etc/gantry/gantry.policy.yaml`; reloads without a restart |
 | `existingPolicyConfigMap` | empty | Your own ConfigMap with key `gantry.policy.yaml` instead |
 | `envFromSecrets` | `[gantry-secrets]` | Secrets loaded as environment variables: provider keys, DATABASE_URL, GANTRY_LICENSE |
+| `masterKey.existingSecret`, `masterKey.key` | empty, `master-key` | Optional. A Secret with the master key for provider credentials, mounted as `GANTRY_MASTER_KEY_FILE` |
+| `exportKey.existingSecret`, `exportKey.key` | empty, `export-key` | Optional. A Secret with `GANTRY_EXPORT_KEY`, for SIEM destination secrets |
 | `keys.existingSecret` | empty | A Secret with `gantry.keys.yaml`, copied to a new volume once |
 | `keys.initImage` | `busybox:1.36.1` | Writes the keys file on a new volume (the Gantry image has no shell) |
 | `persistence.size`, `persistence.storageClassName` | `10Gi`, cluster default | One claim per replica |

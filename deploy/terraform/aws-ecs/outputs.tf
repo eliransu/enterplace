@@ -47,3 +47,18 @@ output "log_group_name" {
   description = "CloudWatch log group of the gateways."
   value       = aws_cloudwatch_log_group.this.name
 }
+
+output "bedrock_role_arn" {
+  description = "The task role Bedrock providers sign with, or null when bedrock_resource_arns is empty. Trust it from another account's role for a provider's role_arn."
+  value       = local.bedrock ? aws_iam_role.task[0].arn : null
+}
+
+output "master_key_secret_arn" {
+  description = "The secret the gateways read GANTRY_MASTER_KEY from."
+  value       = local.master_key_secret_arn
+}
+
+output "export_key_secret_arn" {
+  description = "The secret the gateways read GANTRY_EXPORT_KEY from."
+  value       = local.export_key_secret_arn
+}
