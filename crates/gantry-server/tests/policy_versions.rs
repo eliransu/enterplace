@@ -625,3 +625,110 @@ async fn the_console_adds_a_model_edits_a_key_and_shows_teams_and_versions() -> 
     assert!(headers.get(header::CONTENT_DISPOSITION).is_some());
     Ok(())
 }
+
+/// Each policy field the other branches added, in one version: organizations, profiles, scoped limits, roles,
+/// JWT issuers, trusted proxies, residency, capture, the semantic and prompt caches, file retention, parallel.
+fn every_field(port: u16) -> String {
+    format!(
+        "version: 1
+store: {{ postgres_url_env: GANTRY_STORE_URL, policy_from: store }}
+providers:
+  - name: mock
+    kind: openai
+    url: http://127.0.0.1:{port}
+    allow_private: true
+    models: [m, e]
+prices:
+  m: {{ input: 0, output: 1000 }}
+orgs: [acme]
+jwt:
+  - issuer: https://login.example.com
+    audience: gantry
+    jwks_url: https://login.example.com/jwks
+    team: ops
+trusted_proxies: [10.0.0.0/8]
+profiles:
+  - name: standard
+    models: [m]
+    rate: {{ rpm: 60 }}
+rules:
+  - name: everyone
+    principals: {{ any: true }}
+    profiles: [standard]
+    models: [m, e]
+    from: [0.0.0.0/0]
+    regions: [eu]
+    parallel: 4
+    cache: {{ ttl_seconds: 300, semantic: {{ model: e, threshold: 0.95 }} }}
+    prompt_cache: auto
+    capture: {{ to: console, days: 7, viewers: [admin] }}
+    file_retention_days: 7
+limits:
+  - {{ org: acme, budget: {{ usd: 100, per: week, tz: Europe/Berlin }}, parallel: 20 }}
+roles:
+  - name: finance
+    permissions: [see_spend]
+    org: acme
+"
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_policy_field_survives_a_saved_version_and_none_needs_a_restart() -> TestResult {
+    let Some(url) = database("policy_every_field").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let dir = dir("every-field")?;
+    let path = dir.join("gantry.policy.yaml");
+    let first = policy(port, "store");
+    std::fs::write(&path, &first)?;
+    let store_url = url.clone();
+    // A master key, so capture can seal what it keeps.
+    let gw = gantry_server::governed(&path, None, &|variable| match variable {
+        "GANTRY_STORE_URL" => Some(store_url.clone()),
+        "GANTRY_MASTER_KEY" => {
+            Some("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".into())
+        }
+        _ => None,
+    })?;
+    gantry_core::keyfile::add_entry("admin", "ops", ADMIN, true, &gw.loaded.keys_path)?;
+    gw.reloader.check(gantry_server::Trigger::FileChange);
+
+    let text = every_field(port);
+    let (status, body) = put(&gw.router, ADMIN, "\"1\"", &text).await?;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["state"], "live", "{body}");
+    // Applied by the reload: no field of them needs a restart.
+    assert_eq!(body["in_effect"], true, "{body}");
+    let (status, _, live) = call(&gw.router, "GET", "/admin/policy", ADMIN, &[], "").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(live, text, "the store keeps the whole text of the version");
+
+    // Read back through the store, every field loads as written.
+    let loaded = gantry_core::config::load_texts(&path, &live, &gw.loaded.keys_path, "")
+        .map_err(|e| e.join("\n"))?;
+    let policy = &loaded.policy;
+    assert_eq!(policy.orgs(), ["acme"]);
+    assert_eq!(policy.roles().len(), 1);
+    assert_eq!(policy.scope_limits().len(), 1);
+    assert_eq!(policy.jwt().len(), 1);
+    assert_eq!(
+        policy.client_ip("10.0.0.1".parse()?, &["198.51.100.4"]),
+        "198.51.100.4".parse::<std::net::IpAddr>()?
+    );
+    let rule = &policy.rule_list()[0];
+    assert_eq!(rule.profiles, ["standard"]);
+    assert_eq!(rule.limits.rpm, Some(60));
+    assert_eq!(rule.limits.parallel, Some(4));
+    assert_eq!(rule.limits.regions, Some(vec!["eu".to_string()]));
+    assert_eq!(rule.limits.from.len(), 1);
+    assert!(rule.limits.semantic.is_some() && rule.limits.prompt_cache);
+    assert_eq!(rule.limits.capture.as_ref().map(|c| c.days), Some(7));
+    assert_eq!(rule.limits.file_retention_days, Some(7));
+    let start = gantry_core::config::load_texts(&path, &first, &gw.loaded.keys_path, "")
+        .map_err(|e| e.join("\n"))?;
+    assert!(gantry_core::config::needs_restart(&start, &loaded).is_empty());
+    assert!(gantry_core::config::needs_restart(&loaded, &start).is_empty());
+    Ok(())
+}
