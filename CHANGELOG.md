@@ -7,6 +7,28 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Batches, images and realtime
+
+- Amazon Bedrock batch inference and Vertex AI batch prediction (Gemini, and Claude on Vertex AI) behind `/v1/files`
+  and `/v1/batches`: a provider's new `batch: { bucket, role_arn, url, storage_url }` names the S3 or Cloud Storage
+  bucket. Gantry checks and translates the lines, keeps the file in the bucket, starts the provider's job, answers
+  status in OpenAI's shape, meters each result line at the batch price, and serves the results as OpenAI output and
+  error files owned by the batch's creator. The provider is the model's deployment; a rule with `regions:` reaches an
+  alias deployment labelled with one of them. New refusal codes `batch_not_configured`, `wrong_endpoint`,
+  `provider_refused`.
+- Batch results pass the batch owner's `on: [answer]` guardrails when downloaded (OpenAI output files, Anthropic
+  message batch results): block replaces the line's answer with an error object, mask masks, and each line with a
+  finding gets a `batch_result_guardrails` record.
+- File uploads and batch creations count against `rpm` (rule, key and `limits:`), and a rule's new
+  `batch: { max_lines, max_open }` refuses with `batch_too_many_lines` and `batch_too_many_open`.
+- `POST /v1/images/edits` and `POST /v1/images/variations`: multipart forms decided on their `model` field, guarded on
+  their text fields, reserved and charged per image (`n`).
+- Realtime sessions charge audio and text tokens apart, from the providers' usage details, at the new price fields
+  `input_audio`, `output_audio` and `cache_read_audio`. Usage records carry `input_audio_tokens`,
+  `output_audio_tokens` and `cache_read_audio_tokens`.
+- The price table from LiteLLM's map now carries audio token prices and batch prices (`batch_input`, `batch_output`,
+  `batch_cache_read`); a batch line pays them where set, half the model's price where not.
+
 ### Browser access
 
 - `cors:` in the policy: `allowed_origins` lists the browser origins (or `"*"`) that may call Gantry's routes. Off by

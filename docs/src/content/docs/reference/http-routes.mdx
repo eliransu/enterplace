@@ -17,6 +17,8 @@ Gantry serves the OpenAI and Anthropic routes your clients already call, plus a 
 | `POST` | `/v1/responses` | yes | yes | OpenAI Responses (Codex CLI and newer SDKs) |
 | `POST` | `/v1/embeddings` | yes | yes | OpenAI embeddings |
 | `POST` | `/v1/images/generations` | yes | yes | OpenAI image generation |
+| `POST` | `/v1/images/edits` | yes | yes | OpenAI image edits, `multipart/form-data`, priced per image |
+| `POST` | `/v1/images/variations` | yes | yes | OpenAI image variations, `multipart/form-data`, priced per image |
 | `POST` | `/v1/audio/transcriptions` | yes | yes | OpenAI transcription, `multipart/form-data` |
 | `POST` | `/v1/audio/speech` | yes | yes | OpenAI text to speech |
 | `POST` | `/v1/moderations` | yes | yes | OpenAI moderations |
@@ -43,7 +45,7 @@ A request goes to the one provider that lists its model, and only if that provid
 | `/v1/chat/completions` | `openai`, `azure`, `gemini` and `vertex` (the last two translated to Google's API). Also `anthropic`, `bedrock` and `vertex_anthropic` with `accept_chat: true`, translated |
 | `/v1/messages` | `anthropic`, `bedrock`, `vertex_anthropic`. Also `openai`, `azure`, `gemini` and `vertex` with `accept_messages: true`, translated |
 | `/v1/messages/count_tokens` | `anthropic` only |
-| `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank` | `openai` only |
+| `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/images/edits`, `/v1/images/variations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank` | `openai` only |
 
 A model on a provider that does not serve the route is refused with `wrong_route`, and the message names the route to use. An alias tries only the deployments whose provider serves the route. See [Providers](/providers/overview/).
 

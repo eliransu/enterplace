@@ -183,6 +183,7 @@ These routes go to the `openai` provider that serves the request's `model`, or a
 | Route | Body | Guardrails read | Usage and cost |
 |---|---|---|---|
 | `POST /v1/images/generations` | JSON | `prompt` (a string; any other shape is refused under a rule with guardrails) | `usage` when reported (gpt-image models), else `per_image` times the images in `data` |
+| `POST /v1/images/edits`, `POST /v1/images/variations` | `multipart/form-data`, parsed strictly, forwarded byte for byte; the policy reads its `model` field | Every text field but `model`, such as an edit's `prompt`. Not the images. | `usage` when reported, else `per_image` times the images in `data`; a budget reserves `per_image` times the form's `n` |
 | `POST /v1/audio/transcriptions` | `multipart/form-data`, parsed strictly, forwarded byte for byte | Every text field but `model`, such as `prompt`. Not the audio. | `usage` when reported, else the reservation |
 | `POST /v1/audio/speech` | JSON; the audio answer streams through | `input` and `instructions` (strings; any other shape is refused under a rule with guardrails) | None reported: charged its reservation under a budget |
 | `POST /v1/moderations` | JSON | `input`: a string, a list of strings, or `text` items | None reported |

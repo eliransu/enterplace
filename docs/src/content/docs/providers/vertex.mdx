@@ -150,6 +150,10 @@ Callers use `POST /v1/chat/completions`. Gantry applies the same translation as 
 
 A `vertex` provider can fall back to a `gemini` or another `vertex` provider. With `accept_messages: true`, Claude Code can use these Gemini models too.
 
+## Batches
+
+With a `batch:` section naming a bucket, `/v1/files` and `/v1/batches` run as Vertex AI batch prediction, for Gemini and Claude, on files Gantry keeps in Cloud Storage, owned, checked, reserved and metered per line like OpenAI batches. See [Bedrock and Vertex AI batches](/providers/batches-and-realtime/#bedrock-and-vertex-ai-batches).
+
 ## Errors from gantry check
 
 ```text
