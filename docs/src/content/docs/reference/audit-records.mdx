@@ -79,6 +79,8 @@ Fields present only in some cases:
 | `key_rotated` | object | The key was rotated and is in its grace: `{"replaced_by": "8a41c2d0", "expires": "2026-11-16T09:14:02Z"}` |
 | `auth`, `jwt_issuer`, `jwt_subject` | string | The caller sent a [JWT](/governance/access-control/#jwts-from-your-identity-provider): `auth` is `jwt`, with the token's issuer and subject. Never the token |
 | `ip_not_allowed` | string | An `ip_not_allowed` refusal: `key` or `rule`, whichever `from` list refused it |
+| `outcome` | string | `would_refuse`: the request was forwarded, and observe mode or a `shadow_until` let through at least one decision against it. See [`would_refuse`](#would_refuse) |
+| `would_refuse` | array | What would have refused it: one entry per decision. See [`would_refuse`](#would_refuse) |
 | `guardrails` | array or string | The rule has guardrails. One entry per guardrail and kind found; an empty list means they ran and found nothing. The string `not_run: the body is audio` for a transcription |
 
 A `guardrails` entry:
@@ -90,6 +92,23 @@ A `guardrails` entry:
 | `kind` | string | The kind of finding, such as `aws_access_key` or `email_address` |
 | `action` | string | `block`, `mask`, `warn`, or `skipped` when a `fail_open` webhook did not answer |
 | `count` | integer | How many were found |
+
+### would_refuse
+
+Each decision that [observe mode](/governance/policy/#observe-mode) or a `shadow_until` did not enforce:
+
+```json
+{"verdict":"allow","code":null,"outcome":"would_refuse","would_refuse":[{"code":"budget_exceeded","by":"observe","message":"Refused: team \"payments\" has spent $0.0010 of its $0.0015 budget for this day under rule \"payments\". ...","applied":{"of":"rule","scope":"team:payments","limit":"budget","source":"rule \"payments\" (line 12)","overrides":[],"shadow":"observe","usd":0.0015,"per":"day"}}]}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `code` | string | The [refusal code](/reference/refusal-codes/) it would have had |
+| `by` | string | `observe` for the policy's mode, `shadow_until` for the rule's, budget's or limits entry's own shadow period |
+| `message` | string | The refusal message the caller would have seen |
+| other fields | | What the refusal would have added to the record: `applied` and `limit` for a budget or rate, `key_models`, or `guardrail` |
+
+`verdict` stays `allow` and `code` stays `null`: the request was allowed. A request that something else then refused keeps its `would_refuse` list, without `outcome`.
 
 ## Usage
 

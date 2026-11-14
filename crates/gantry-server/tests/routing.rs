@@ -768,6 +768,7 @@ async fn images_are_charged_by_the_image_and_their_prompt_is_guarded() -> TestRe
                 },
                 models: Vec::new(),
                 from: None,
+                shadow_until: None,
             }],
             ..Limits::default()
         })
@@ -978,6 +979,7 @@ async fn image_and_speech_requests_under_a_budget_need_a_price_that_bounds_them(
                 },
                 models: Vec::new(),
                 from: None,
+                shadow_until: None,
             }],
             ..Limits::default()
         })

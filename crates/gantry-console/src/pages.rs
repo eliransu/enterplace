@@ -2161,7 +2161,17 @@ pub fn audit(view: &AuditView<'_>) -> String {
                 |r| record_sheet(r, &ctx, &close),
             )
     };
-    let banner = kills_banner(view.kills) + &banner;
+    // Observe mode forwards what the policy would refuse: whoever reads the log must know nothing was stopped.
+    let observing = view
+        .loaded
+        .is_some_and(|l| l.policy.mode() == gantry_core::policy::Mode::Observe);
+    let observe = if observing {
+        r#"<div class="g-banner" role="status"><span class="t-body">Observe mode: nothing is blocked. What the policy would refuse is let through and marked would_refuse. Kill switches, unknown keys and unknown models are still refused.</span></div>
+"#
+    } else {
+        ""
+    };
+    let banner = kills_banner(view.kills) + observe + &banner;
     let main = format!(
         "{banner}{}\n{chain}\n\n{stats}\n\n{toolbar}\n\n{list}",
         head("Audit log", lead, &verify)

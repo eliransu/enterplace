@@ -70,6 +70,7 @@ gantry key new ci.release --team platform --budget 20/month --tpm 50000 --parall
 | `usd` | number | required | US dollars, above 0. |
 | `per` | string | required | When the budget starts again. See [Periods](#periods). |
 | `tz` | string | UTC | An IANA time zone, such as `America/New_York` or `Asia/Jerusalem`. Calendar periods start at midnight there, daylight saving included. |
+| `shadow_until` | string | none | In a rule or a profile only: a UTC date or time. Until then the budget records what it would refuse and refuses nothing. See [Trying a limit first](#trying-a-limit-first). |
 | `models` | list | every model | In a rule or a profile only: count requests for these models alone (by the name sent, an alias, or the model an alias sends to), in a counter of their own. |
 
 `budget:` takes one budget or a list of them. Two budgets over the same period and the same models in one place are refused: they would be one counter with two limits.
@@ -100,6 +101,20 @@ Each entry names one scope and sets any of `budget`, `rate` (`rpm`, `tpm`) and `
 | `{ model: o3 }` | Requests for that model, by the name sent or the model an alias sends to. `"*"` counts each model on its own. |
 
 Add `org: <org>` to any entry but `global` and `org` to keep it to one organization. Team, person, customer, tag and model counters are kept per organization, so team `payments` of `acme` and team `payments` of `globex` never share one.
+
+### Trying a limit first
+
+A rule, each budget of a rule or profile, and each `limits:` entry take `shadow_until`, a UTC date or time. Until then the limit counts as usual and records each request it would refuse as [`would_refuse`](/reference/audit-records/#would_refuse); the request is forwarded. After the date it enforces. Other limits keep enforcing meanwhile.
+
+```yaml
+limits:
+  - team: payments
+    budget: { usd: 500, per: month }
+    rate: { rpm: 600 }
+    shadow_until: 2026-12-31
+```
+
+On a `limits:` entry, `shadow_until` goes on the entry and covers all of its limits. A request a shadowed budget would refuse is still charged to it. `gantry check` refuses a `shadow_until` that is not a date, naming where it is, such as `rules[0].budget.shadow_until`. To try every rule and limit at once, use [observe mode](/governance/policy/#observe-mode).
 
 ### Inheritance and overrides
 

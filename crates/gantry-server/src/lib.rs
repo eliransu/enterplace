@@ -1246,6 +1246,8 @@ struct Seen<'a> {
     routing: Option<serde_json::Value>,
     /// Set when the key was replaced by a rotation and is in its grace period.
     rotated: Option<serde_json::Value>,
+    /// What observe mode or a shadow period let through: one entry per decision that would have refused it.
+    would_refuse: Vec<serde_json::Value>,
 }
 
 const CUSTOMER: &str = "x-gantry-customer";
@@ -1587,13 +1589,32 @@ async fn check<'a>(
         })?
     };
     // Rules decide on the name the caller sent, an alias included: an admin allows "smart", not each deployment.
-    let decision = policy.decide(person, &peek.model);
+    let mut decision = policy.decide(person, &peek.model);
+    let shadow = match decision {
+        Decision::Allow(_) => None,
+        Decision::ModelNotAllowed(rule) => Some(policy.observing(rule.shadow_until.as_deref())),
+        // A caller no rule names, or a key's own model list, has no shadow period of its own: only the mode.
+        Decision::NoRule | Decision::KeyModelNotAllowed(_) => Some(policy.observing(None)),
+    };
+    if let Some(Some(by)) = shadow {
+        observed(
+            seen,
+            rule_refusal(decision, person, &peek.model, parts.uri.path()),
+            by,
+        );
+        decision = Decision::Allow(match decision {
+            Decision::ModelNotAllowed(rule) | Decision::KeyModelNotAllowed(rule) => rule,
+            _ => &gantry_core::policy::OBSERVED,
+        });
+    }
     if let Decision::Allow(rule) = decision {
         seen.rule = Some(rule);
         seen.model = Some(peek.model.clone());
         customer_and_tags(&mut parts.headers, person, rule, seen)?;
     }
-    let model = seen.model.insert(peek.model);
+    // A copy of its own, so seen can still take what is observed below.
+    seen.model = Some(peek.model.clone());
+    let model = &peek.model;
     killed(state, person, &key_sha256, Some(model))?;
     // UX12-1: a switch on a model also stops each alias that can send to it.
     for deployment in version
@@ -1610,14 +1631,25 @@ async fn check<'a>(
             // Tags were read and checked with the customer above. Gantry's own: the provider has no use for it.
             let tags = seen.tags.clone();
             parts.headers.remove("x-gantry-session");
-            let want = Want {
+            let mut want = Want {
                 team: &person.team,
                 tags: &tags,
                 regions: rule.limits.regions.as_deref(),
                 session: session_of(&parts.headers, person),
             };
-            let (chain, translate, routing) =
-                targets(state, version, route, parts.uri.path(), model, &want)?;
+            let found = match targets(state, version, route, parts.uri.path(), model, &want) {
+                Err(refusal) if refusal.code == "region_not_allowed" => {
+                    let Some(by) = policy.observing(rule.shadow_until.as_deref()) else {
+                        return Err(refusal);
+                    };
+                    // Observed residency: recorded, then routed as if the rule kept requests nowhere in particular.
+                    observed(seen, refusal, by);
+                    want.regions = None;
+                    targets(state, version, route, parts.uri.path(), model, &want)
+                }
+                other => other,
+            };
+            let (chain, translate, routing) = found?;
             seen.routing = routing;
             let chosen = chain.first().map_or(0, |c| c.0);
             let alias = version.aliases.iter().find(|a| a.name == *model);
@@ -1687,17 +1719,27 @@ async fn check<'a>(
             });
             Ok(Next::Forward(parts, bytes, permit))
         }
-        Decision::NoRule => Err(Refusal::new(
+        Decision::NoRule => Err(rule_refusal(decision, person, model, parts.uri.path())),
+        Decision::KeyModelNotAllowed(rule) | Decision::ModelNotAllowed(rule) => {
+            seen.rule = Some(rule);
+            Err(rule_refusal(decision, person, model, parts.uri.path()))
+        }
+    }
+}
+
+/// The refusal of a request the rules do not allow. An allowed one has none: it gets a generic `no_rule`.
+fn rule_refusal(decision: Decision<'_>, person: &Principal, model: &str, path: &str) -> Refusal {
+    match decision {
+        Decision::Allow(_) | Decision::NoRule => Refusal::new(
             StatusCode::FORBIDDEN,
             "no_rule",
             format!(
                 "Refused: no rule in the policy names \"{}\" or team \"{}\", so nothing is allowed. Ask a Gantry admin to add a rule.",
                 person.name, person.team
             ),
-        )),
-        Decision::KeyModelNotAllowed(rule) => {
-            seen.rule = Some(rule);
-            let hint = claude_code_hint(parts.uri.path());
+        ),
+        Decision::KeyModelNotAllowed(_) => {
+            let hint = claude_code_hint(path);
             let mut refusal = Refusal::new(
                 StatusCode::FORBIDDEN,
                 "model_not_allowed",
@@ -1709,15 +1751,14 @@ async fn check<'a>(
                 ),
             );
             refusal.record = Some(Box::new(serde_json::json!({ "key_models": true })));
-            Err(refusal)
+            refusal
         }
         Decision::ModelNotAllowed(rule) => {
-            seen.rule = Some(rule);
             let hint = match &rule.models {
                 Models::Only(models) if models.is_empty() => "",
-                _ => claude_code_hint(parts.uri.path()),
+                _ => claude_code_hint(path),
             };
-            Err(Refusal::new(
+            Refusal::new(
                 StatusCode::FORBIDDEN,
                 "model_not_allowed",
                 format!(
@@ -1726,9 +1767,54 @@ async fn check<'a>(
                     rule.name,
                     allowed_models(rule)
                 ),
-            ))
+            )
         }
     }
+}
+
+/// In observe mode, each guardrail set to block that found something, as the refusal it would have made.
+fn would_block(seen: &mut Seen<'_>, entries: &[guard::AuditEntry]) {
+    let Some(rule) = seen.rule else {
+        return;
+    };
+    for guard in rule
+        .guardrails
+        .iter()
+        .filter(|g| g.action == guard::Action::Block)
+    {
+        let found: Vec<String> = entries
+            .iter()
+            .filter(|e| e.guardrail == guard.name && e.action == guard::SHADOW)
+            .map(|e| format!("{} ({})", e.kind, e.count))
+            .collect();
+        if found.is_empty() {
+            continue;
+        }
+        let mut refusal = Refusal::new(
+            StatusCode::FORBIDDEN,
+            guard::BLOCKED_CODE,
+            format!(
+                "Refused: guardrail \"{}\" would block this request: it contains {}. Observe mode let it through.",
+                guard.name,
+                found.join(", ")
+            ),
+        );
+        refusal.record = Some(Box::new(serde_json::json!({ "guardrail": guard.name })));
+        observed(seen, refusal, "observe");
+    }
+}
+
+/// Records a decision against a request that observe mode or a shadow period does not enforce: the request goes on,
+/// and its record lists what would have refused it, with the refusal's code, message and detail.
+fn observed(seen: &mut Seen<'_>, refusal: Refusal, by: &'static str) {
+    let mut entry = serde_json::Map::new();
+    entry.insert("code".into(), refusal.code.into());
+    entry.insert("by".into(), by.into());
+    entry.insert("message".into(), refusal.message.into());
+    if let Some(serde_json::Value::Object(extra)) = refusal.record.map(|r| *r) {
+        entry.extend(extra);
+    }
+    seen.would_refuse.push(serde_json::Value::Object(entry));
 }
 
 /// Who sent the request, from their Gantry key: refused when the key is unknown, expired or stopped by a kill switch.
@@ -2667,7 +2753,22 @@ async fn decide(
     .await;
     // What the guardrails found, when the rule has any: an empty list says they ran and found nothing.
     let mut found = None;
-    let guards = seen.rule.map_or(&[][..], |rule| rule.guardrails.as_slice());
+    let mut guards = seen.rule.map_or(&[][..], |rule| rule.guardrails.as_slice());
+    // In observe mode every guardrail runs as in its shadow period: it records what it finds, and neither blocks nor
+    // masks. A block it would have made goes on the record as would_refuse.
+    let shadowed: Vec<Guardrail>;
+    let observe = policy.mode() == gantry_core::policy::Mode::Observe;
+    if observe && !guards.is_empty() {
+        shadowed = guards
+            .iter()
+            .cloned()
+            .map(|mut g| {
+                g.shadow_until = Some("9999-12-31".into());
+                g
+            })
+            .collect();
+        guards = &shadowed;
+    }
     // An audio upload holds no text a guardrail reads. It is forwarded, and its record says the guardrails did not
     // run on it, rather than that they ran and found nothing.
     let on_request = guards.iter().any(|g| g.on.request);
@@ -2684,6 +2785,9 @@ async fn decide(
     outcome = match outcome {
         Ok(Next::Forward(parts, bytes, held)) if on_request && !not_text => {
             let (checked, entries) = guarded(state, guards, &seen, decision, parts, bytes).await;
+            if observe {
+                would_block(&mut seen, &entries);
+            }
             found = Some(entries);
             checked.map(|(parts, bytes)| Next::Forward(parts, bytes, held))
         }
@@ -2841,6 +2945,15 @@ async fn decide(
             record.insert("jwt_issuer".into(), jwt.issuer.as_str().into());
             record.insert("jwt_subject".into(), jwt.subject.as_str().into());
         }
+        if !seen.would_refuse.is_empty() {
+            if outcome.is_ok() {
+                record.insert("outcome".into(), "would_refuse".into());
+            }
+            record.insert(
+                "would_refuse".into(),
+                std::mem::take(&mut seen.would_refuse).into(),
+            );
+        }
         if let Some(deployment) = &seen.deployment {
             // The model on the record is the alias the caller sent and the rule decided on; this is where it went first.
             record.insert(
@@ -2957,8 +3070,11 @@ async fn limit(
                 for_caller(provider.kind, &provider.name, plan, decision, response).await?,
             ))
         }
-        spend::Admit::Go(meter, cache) => {
+        spend::Admit::Go(meter, cache, would_refuse) => {
             seen.cache = cache;
+            for (refusal, by) in would_refuse {
+                observed(seen, refusal, by);
+            }
             parts.extensions.insert(meter);
             Ok(None)
         }

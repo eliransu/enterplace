@@ -13,8 +13,9 @@ use crate::{
     guard::{self, Guardrail, GuardrailFile},
     id::sha256_hex,
     policy::{
-        Budget, CacheScope, CallerKey, Cap, Capture, Cidr, JwtTrust, KeyOptions, Limits, Models,
-        Period, Permission, Policy, Principal, Role, Rule, ScopeKind, ScopeLimit, Semantic, Who,
+        Budget, CacheScope, CallerKey, Cap, Capture, Cidr, JwtTrust, KeyOptions, Limits, Mode,
+        Models, Period, Permission, Policy, Principal, Role, Rule, ScopeKind, ScopeLimit, Semantic,
+        Who,
     },
     usage::{PriceOverrides, price_for},
 };
@@ -169,6 +170,8 @@ const KNOWN: &[&str] = &[
     "to",
     "days",
     "viewers",
+    // Last, so a misspelled "models" (one letter off both) is still offered "models", the word far more often meant.
+    "mode",
 ];
 /// Keys whose value is a map whose keys the user chooses: model names, or header names under `headers_env`.
 /// Those names are not Gantry keys, so the unknown-key scan never reads them.
@@ -189,6 +192,9 @@ pub const MAX_RETRIES: u32 = 5;
 #[serde(deny_unknown_fields)]
 struct PolicyFile {
     version: u32,
+    /// `observe` forwards what the policy would refuse and records it; `enforce`, the default, refuses it.
+    #[serde(default)]
+    mode: Option<String>,
     providers: Vec<ProviderFile>,
     rules: Vec<RuleFile>,
     #[serde(default)]
@@ -248,6 +254,8 @@ struct LimitFile {
     rate: Option<RateFile>,
     #[serde(default)]
     parallel: Option<i64>,
+    #[serde(default)]
+    shadow_until: Option<String>,
 }
 
 /// A named set of models, guardrails, tools and limits that rules include with `profiles:`.
@@ -549,6 +557,8 @@ struct RuleFile {
     capture: Option<CaptureFile>,
     #[serde(default)]
     file_retention_days: Option<i64>,
+    #[serde(default)]
+    shadow_until: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -580,6 +590,9 @@ struct BudgetFile {
     /// In a rule or a profile: count only these models.
     #[serde(default)]
     models: Vec<String>,
+    /// In a rule or a profile: until then the budget records what it would refuse and refuses nothing.
+    #[serde(default)]
+    shadow_until: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1099,11 +1112,17 @@ fn budget_of(budget: &BudgetFile, at: &str, errors: &mut Vec<String>) -> Option<
 fn caps_of(
     budgets: &BudgetsFile,
     at: &str,
+    path: &str,
     from: Option<&str>,
     errors: &mut Vec<String>,
 ) -> Vec<Cap> {
     let mut caps: Vec<Cap> = Vec::new();
-    for file in budgets.list() {
+    for (j, file) in budgets.list().iter().enumerate() {
+        let path = match budgets {
+            BudgetsFile::One(_) => format!("{path}.shadow_until"),
+            BudgetsFile::Many(_) => format!("{path}[{j}].shadow_until"),
+        };
+        let shadow_until = shadow_of(&file.shadow_until, at, &path, errors);
         let Some(budget) = budget_of(file, at, errors) else {
             continue;
         };
@@ -1123,15 +1142,39 @@ fn caps_of(
             budget,
             models,
             from: from.map(str::to_string),
+            shadow_until,
         });
     }
     caps
+}
+
+/// A `shadow_until`, checked: a UTC date or time. `path` names it in the policy, as `rules[0].budget.shadow_until`.
+fn shadow_of(
+    until: &Option<String>,
+    at: &str,
+    path: &str,
+    errors: &mut Vec<String>,
+) -> Option<String> {
+    match until {
+        Some(text) if !valid_expiry(text) => {
+            errors.push(format!(
+                "{at}: {path} is \"{text}\". Write a UTC date or time, for example 2026-12-31 or 2026-12-31T18:00:00Z: until then what it would refuse is forwarded and recorded as would_refuse."
+            ));
+            None
+        }
+        other => other.clone(),
+    }
 }
 
 /// Budgets of a scope, where model lists have no place: the scope says what counts.
 fn scope_budgets(budgets: &BudgetsFile, at: &str, errors: &mut Vec<String>) -> Vec<Budget> {
     let mut out: Vec<Budget> = Vec::new();
     for file in budgets.list() {
+        if file.shadow_until.is_some() {
+            errors.push(format!(
+                "{at}: shadow_until on a budget of a limits entry shadows only that budget, and the entry's other limits would still refuse. Write shadow_until on the entry itself, next to budget."
+            ));
+        }
         if !file.models.is_empty() {
             errors.push(format!(
                 "{at}: models on a budget belongs in a rule or a profile. Here, add an entry with model: <name> to the limits list instead."
@@ -1875,7 +1918,7 @@ fn policy_rules(
         } else {
             Models::Only(all_models)
         };
-        let mut limits = limits(rule, &at, errors);
+        let mut limits = limits(rule, i, &at, errors);
         let mut overrides = Vec::new();
         for profile in &profiles {
             merge_profile(profile, &mut limits, &mut overrides, &at("profiles"));
@@ -1933,6 +1976,12 @@ fn policy_rules(
             tags: rule.tags.clone(),
             customers: rule.customers.clone(),
             overrides,
+            shadow_until: shadow_of(
+                &rule.shadow_until,
+                &at("shadow_until"),
+                &format!("rules[{i}].shadow_until"),
+                errors,
+            ),
         });
     }
     rules
@@ -1972,7 +2021,7 @@ fn merge_profile(
     // repeat its problems, so they go nowhere here.
     let mut quiet = Vec::new();
     if let Some(budgets) = &profile.budget {
-        for cap in caps_of(budgets, at, Some(&profile.name), &mut quiet) {
+        for cap in caps_of(budgets, at, "budget", Some(&profile.name), &mut quiet) {
             match limits
                 .budgets
                 .iter()
@@ -2053,7 +2102,7 @@ fn check_profiles(file: &Path, text: &str, parsed: &PolicyFile, errors: &mut Vec
             ));
         }
         if let Some(budgets) = &profile.budget {
-            caps_of(budgets, &at, None, errors);
+            caps_of(budgets, &at, &format!("profiles[{i}].budget"), None, errors);
         }
         if let Some(n) = profile.parallel {
             parallel_of(n, &at, errors);
@@ -2173,6 +2222,12 @@ fn scope_limits(
             rpm,
             tpm,
             parallel,
+            shadow_until: shadow_of(
+                &entry.shadow_until,
+                &at,
+                &format!("limits[{i}].shadow_until"),
+                errors,
+            ),
         });
     }
     out
@@ -2446,10 +2501,16 @@ fn rule_guardrails(
 }
 
 /// The budget, rate and cache of one rule, each checked. `at` gives the place of a key in the rule.
-fn limits(rule: &RuleFile, at: &dyn Fn(&str) -> String, errors: &mut Vec<String>) -> Limits {
+fn limits(
+    rule: &RuleFile,
+    i: usize,
+    at: &dyn Fn(&str) -> String,
+    errors: &mut Vec<String>,
+) -> Limits {
     let mut limits = Limits::default();
     if let Some(budgets) = &rule.budget {
-        limits.budgets = caps_of(budgets, &at("budget"), None, errors);
+        let path = format!("rules[{i}].budget");
+        limits.budgets = caps_of(budgets, &at("budget"), &path, None, errors);
     }
     if let Some(n) = rule.parallel {
         limits.parallel = parallel_of(n, &at("parallel"), errors);
@@ -3734,6 +3795,18 @@ pub fn load_texts(
         &mut errors,
     );
     let store = store_setting(policy_path, policy_text, &parsed, &mut errors);
+    let mode = match parsed.mode.as_deref() {
+        None | Some("enforce") => Mode::Enforce,
+        Some("observe") => Mode::Observe,
+        Some(other) => {
+            errors.push(format!(
+                "{}:{}: mode is \"{other}\". Write mode: observe to forward every request and record what the policy would refuse, or mode: enforce (the default) to refuse it.",
+                policy_path.display(),
+                line_of_key(policy_text, "mode", 1, usize::MAX)
+            ));
+            Mode::Enforce
+        }
+    };
     check_orgs(policy_path, policy_text, &parsed, &mut errors);
     check_profiles(policy_path, policy_text, &parsed, &mut errors);
     let scope_limits = scope_limits(policy_path, policy_text, &parsed, &mut errors);
@@ -3783,7 +3856,8 @@ pub fn load_texts(
                 .with_roles(roles)
                 .with_orgs(parsed.orgs.clone())
                 .with_jwt(jwt)
-                .with_trusted_proxies(trusted_proxies),
+                .with_trusted_proxies(trusted_proxies)
+                .with_mode(mode),
             providers,
             audit_path,
             keys_path: keys_file.to_path_buf(),
@@ -3844,6 +3918,20 @@ pub fn same_connection(a: &Provider, b: &Provider) -> bool {
         && a.region == b.region
         && a.role_arn == b.role_arn
         && a.allow_private == b.allow_private
+}
+
+/// What `gantry check` warns about in a policy that loads: observe mode, and models no provider serves.
+pub fn warnings(policy_path: &Path, loaded: &Loaded) -> Vec<String> {
+    let mut out = Vec::new();
+    if loaded.policy.mode() == Mode::Observe {
+        out.push(format!(
+            "warning: {}:{}: mode: observe is on, so nothing is refused but a missing, bad or revoked key, an unknown model and a kill switch. What the policy would refuse is forwarded and recorded as would_refuse. Remove the line, or write mode: enforce, to enforce the policy.",
+            policy_path.display(),
+            line_of_key(&loaded.policy_text, "mode", 1, usize::MAX)
+        ));
+    }
+    out.extend(unserved_models(policy_path, loaded));
+    out
 }
 
 /// A warning for each model a rule names that no provider serves. Requests for it are refused, so it is
@@ -4450,6 +4538,7 @@ rules:
                     },
                     models: Vec::new(),
                     from: None,
+                    shadow_until: None,
                 }],
                 parallel: None,
                 inherited: Vec::new(),
