@@ -69,7 +69,7 @@ Fields present only in some cases:
 | `cache_match`, `cache_scope`, `cache_origin`, `cache_similarity` | string or number | On a hit: `exact` or `semantic`, `person` or `team`, the decision that made the answer, and the similarity of a semantic hit. See [Caching](/routing/caching/#records-headers-and-metrics) |
 | `cache_embedding` | string | On a miss the semantic cache embedded: the embeddings decision |
 | `prompt_cache` | array | Where `prompt_cache: auto` placed cache breakpoints: `tools`, `system`, `messages` |
-| `user_agent` | string | The caller sent a `user-agent` header, cut to 200 characters. [Coverage](/governance/coverage/) counts requests per tool from it. Not on MCP records |
+| `user_agent` | string | The caller sent a `user-agent` header, cut to 200 characters. [Coverage](/governance/coverage/) counts requests per tool from it. On MCP records too |
 | `translated` | `true` | The request was translated for the provider (`accept_chat`, `accept_messages`, Gemini, Vertex AI) |
 | `alias`, `deployment` | string | The model is an alias: the alias sent, and the deployment tried first as `provider/model` |
 | `limit` | object | Refused by a limit: `{"kind":"rpm","of":"rule","value":60}`, `{"kind":"tpm","of":"rule","value":1000,"request_could_use":1228}` or `{"kind":"parallel","of":"key","value":4}`, where `of` is `rule` or `key` |

@@ -4,6 +4,7 @@ pub mod audit;
 pub mod catalog;
 pub mod chat;
 pub mod config;
+pub mod coverage;
 pub mod eventstream;
 pub mod gemini;
 pub mod guard;

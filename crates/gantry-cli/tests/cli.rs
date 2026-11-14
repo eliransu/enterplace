@@ -354,6 +354,92 @@ fn audit_coverage_counts_requests_per_person_and_tool_and_names_who_was_not_seen
     Ok(())
 }
 
+#[test]
+fn audit_coverage_with_device_reports_counts_devices_and_tools_going_direct() -> TestResult {
+    let dir = workdir("coverage-devices")?;
+    let log_path = dir.join("gantry-audit.jsonl");
+    let log = gantry_core::audit::AuditLog::open(&log_path)?;
+    log.append(&gantry_core::audit::Entry {
+        id: "A",
+        person: Some("ana"),
+        team: Some("payments"),
+        user_agent: Some("claude-cli/2.0.14 (external, cli)"),
+        allowed: true,
+        method: "POST",
+        path: "/v1/messages",
+        ..Default::default()
+    })?;
+    drop(log);
+    // As the console's Devices page downloads it (devices.json).
+    let devices = dir.join("devices.json");
+    std::fs::write(
+        &devices,
+        serde_json::json!([
+            {"person": "ana", "team": "payments", "device_id": "mbp:ana", "hostname": "mbp", "last_seen": "2026-11-14T06:00:00Z",
+             "tools": [{"tool": "claude-code", "state": "gantry"}, {"tool": "codex", "state": "direct", "endpoints": ["https://api.openai.com/v1"]}]},
+            {"person": "ana", "team": "payments", "device_id": "air:ana", "hostname": "air", "last_seen": "2026-11-14T06:00:00Z",
+             "tools": [{"tool": "codex", "state": "installed"}]},
+            {"person": "dan", "team": "web", "device_id": "pc:dan", "hostname": "pc", "last_seen": "2026-11-14T06:00:00Z",
+             "tools": [{"tool": "cursor", "state": "not_installed"}]}
+        ])
+        .to_string(),
+    )?;
+    let out = gantry(
+        &[
+            "audit",
+            "coverage",
+            &log_path.display().to_string(),
+            "--devices",
+            &devices.display().to_string(),
+        ],
+        &[],
+    )?;
+    let text = String::from_utf8(out.stdout)?;
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines.first().copied(),
+        Some("person\tteam\ttool\trequests\trefused\tlast_seen\tdevices\tdirect")
+    );
+    // Seen in traffic and configured for Gantry on one device.
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("ana\tpayments\tclaude-code\t1\t0\t") && l.ends_with("\t1\t0")),
+        "{text}"
+    );
+    // Never reached Gantry: installed on two devices, going to OpenAI directly on one.
+    assert!(
+        lines.contains(&"ana\tpayments\tcodex\t0\t0\tnever\t2\t1"),
+        "{text}"
+    );
+    // An enrolled device with no tool installed still shows the person.
+    assert!(lines.contains(&"dan\tweb\t-\t0\t0\tnever\t1\t0"), "{text}");
+
+    std::fs::write(&devices, "not json")?;
+    let out = gantry(
+        &[
+            "audit",
+            "coverage",
+            &log_path.display().to_string(),
+            "--devices",
+            &devices.display().to_string(),
+        ],
+        &[],
+    )?;
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("devices.json"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn audit_verify_says_what_was_retired_and_that_the_rest_holds() -> TestResult {

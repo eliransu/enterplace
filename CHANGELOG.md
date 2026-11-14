@@ -7,6 +7,23 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Devices and coverage
+
+- Devices (enterprise, license feature `devices`): the self-hosted gateway now serves the device agent's
+  `GET /device/profile` and `POST /device/report`, with enrolment tokens scoped to the install or one team, expiring
+  (1 to 365 days) and revocable from the console's new Devices page or the admin API (`/console/devices/tokens`, an
+  admin key as bearer). Profiles are per team. Reports, tools and drift are kept in Postgres (namespace
+  `enterprise.devices`). The Devices page shows, per person, the tools seen in traffic, enrolled devices and each tool
+  calling a provider directly.
+- `gantry device` reports a state per tool (`not_installed`, `installed`, `gantry`, `direct`) and looks for Codex,
+  Claude Code, Cursor, GitHub Copilot (VS Code and CLI), Zed, JetBrains AI Assistant, Qwen Code, Gemini CLI, Kilo Code,
+  Roo Code and Claude Desktop, from each tool's documented configuration files only. It sends the person `gantry
+  login` saved, so the gateway answers with their team's profile. Tool names now match `gantry audit coverage`
+  (`github-copilot`, was `vscode`).
+- `gantry audit coverage --devices devices.json` merges the device reports (downloaded from the Devices page) with
+  the audit log: two more columns, `devices` and `direct`.
+- MCP records (`/mcp`) carry `user_agent`, so MCP clients count in the coverage report.
+
 ### Browser access
 
 - `cors:` in the policy: `allowed_origins` lists the browser origins (or `"*"`) that may call Gantry's routes. Off by

@@ -283,6 +283,8 @@ async fn serve(mcp: Shared, bundle: Option<String>, request: Request) -> Respons
 #[derive(Clone, Default)]
 struct Asked {
     client: Option<String>,
+    /// The caller's `user-agent`, which names the coding tool for the coverage report.
+    user_agent: Option<String>,
     person: Option<Principal>,
     /// First 8 hex characters of the hash of the credential's key.
     key: Option<String>,
@@ -315,6 +317,12 @@ async fn post(mcp: &Shared, bundle: Option<String>, request: Request, decision: 
             .extensions
             .get::<ClientAddr>()
             .map(|addr| addr.0.ip().to_string()),
+        user_agent: parts
+            .headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| !v.is_empty())
+            .map(str::to_string),
         origin: oauth::origin(&parts),
         bundle,
         ..Asked::default()
@@ -1415,6 +1423,7 @@ async fn record(
         person: asked.person.as_ref().map(|p| p.name.as_str()),
         team: asked.person.as_ref().map(|p| p.team.as_str()),
         client: asked.client.as_deref(),
+        user_agent: asked.user_agent.as_deref(),
         key: asked.key.as_deref(),
         method: "POST",
         path: &path,

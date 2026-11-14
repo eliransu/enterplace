@@ -283,16 +283,17 @@ Exit `0` when there is nothing to repair or the repair is done. Exit `1` when it
 
 ## audit coverage
 
-Counts the request records in the audit log per person and coding tool, read from each record's `user_agent`. With `--keys`, every key holder who sent nothing is listed too.
+Counts the request records in the audit log per person and coding tool, read from each record's `user_agent`. With `--keys`, every key holder who sent nothing is listed too. With `--devices`, the device agent's reports add each tool's enrolled devices and how many of them call a provider directly.
 
 ```text
-gantry audit coverage [<file>] [--keys <file>]
+gantry audit coverage [<file>] [--keys <file>] [--devices <file>]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `<file>` | `gantry-audit.jsonl` | The audit log, sealed segments included |
 | `--keys` | none | The keys file the gateway serves with. Each name in it with no requests gets a row with tool `-` and last seen `never` |
+| `--devices` | none | `devices.json` from the console's Devices page (Gantry Enterprise). Adds the columns `devices` and `direct`, and rows for tools installed on devices that never reached Gantry |
 
 ```text
 person	team	tool	requests	refused	last_seen

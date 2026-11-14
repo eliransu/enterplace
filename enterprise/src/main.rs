@@ -25,9 +25,11 @@ const USAGE: &str = "usage:
       --metrics <host:port> serves Prometheus metrics at GET /metrics on that address.
       HTTPS_PROXY is used to reach the control plane and secret sources.
   gantry device --control-plane <url> [--interval <seconds>] [--dry-run] [--once] [--home <folder>]
-      Point the signed-in user's coding tools at the org's gateway every --interval seconds (default 300) and
-      report coverage. The enrolment token goes in GANTRY_DEVICE_TOKEN, or in the file GANTRY_DEVICE_TOKEN_FILE
-      names (default /Library/Application Support/Gantry/device-token, which the MDM profile installs).
+      Point the signed-in user's Claude Code and Codex at the gateway every --interval seconds (default 300) and
+      report each coding tool's state (installed, through Gantry, or direct to a provider). --control-plane is the
+      gateway's address (license feature devices). The enrolment token goes in GANTRY_DEVICE_TOKEN, or in the file
+      GANTRY_DEVICE_TOKEN_FILE names (default /Library/Application Support/Gantry/device-token, which the MDM profile
+      installs).
   gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
       Run the gateway on local files, as `gantry serve` does.
   gantry serve --unchecked
@@ -255,7 +257,7 @@ async fn main() -> ExitCode {
                     .unwrap_or_else(|err| Err(err.to_string()))
             }
             (None, _) => Err(format!("`device` needs --control-plane.\n{USAGE}")),
-            (_, None) => Err("no enrolment token: set GANTRY_DEVICE_TOKEN, or GANTRY_DEVICE_TOKEN_FILE to a file holding it. Owners create one under Devices in the app.".to_owned()),
+            (_, None) => Err("no enrolment token: set GANTRY_DEVICE_TOKEN, or GANTRY_DEVICE_TOKEN_FILE to a file holding it. An owner or admin creates one on the console's Devices page.".to_owned()),
         },
         Some("license") => license_command(&args[1..]),
         Some("serve") if args.get(1).map(String::as_str) == Some("--unchecked") => {

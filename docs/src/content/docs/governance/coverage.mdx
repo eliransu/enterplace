@@ -52,22 +52,41 @@ Matching ignores case. Any other user agent is shown by its first product withou
 | `OpenAI/JS`, `OpenAI/Python` and similar | A tool or script that sends its SDK's user agent |
 
 <Aside type="caution">
-The audit log shows what reached Gantry. It cannot show a tool that calls a provider directly. A person who uses Gantry from one tool and a provider key in another shows up as covered.
+The audit log shows what reached Gantry. It cannot show a tool that calls a provider directly. A person who uses Gantry from one tool and a provider key in another shows up as covered, until their devices report (below).
 </Aside>
 
-## What the report does not cover yet
+MCP calls (`/mcp`) carry `user_agent` too, so an MCP client counts under its tool.
 
-The report is built from audit data alone. The device agent in Gantry Enterprise (`gantry device`) inspects each machine's tool settings and could tell "configured for Gantry" from "configured for a provider directly", but it reports only to the hosted Gantry app. The self-hosted gateway lacks:
+## Devices: tools that bypass Gantry
 
-- The `GET /device/profile` and `POST /device/report` endpoints the agent calls.
-- Enrolment tokens and storage for device reports.
-- A "configured for a provider directly" state in the agent's report. It reports `installed`, `configured` (pointed at Gantry) and `drift`, for Claude Code, Codex, Cursor and VS Code only.
+The device agent of Gantry Enterprise (`gantry device`, license feature `devices`) reads each coding tool's documented configuration on every enrolled machine and reports one state per tool: `not_installed`, `installed`, `gantry` (pointed at the gateway) or `direct` (pointed at a provider, or holding a provider key or login). See [Devices](/operations/devices/) for enrolment and what is read for each tool.
 
-MCP records (`/mcp`) do not carry `user_agent`.
+The console's **Devices** page merges those reports with the audit log, per person: the tools their traffic came from, their enrolled devices, and each tool going direct, as `codex on mbp-ana`. Its **Download devices.json** link gives the reports to the command line:
+
+```bash
+gantry audit coverage /var/lib/gantry/gantry-audit.jsonl --keys gantry.keys.yaml --devices devices.json
+```
+
+```text
+person	team	tool	requests	refused	last_seen	devices	direct
+ana	dev	claude-code	2	0	2026-11-14T06:13:19.949Z	1	0
+ana	dev	codex	0	0	never	2	1
+dan	web	-	0	0	never	1	0
+```
+
+| Column | Means |
+|---|---|
+| `devices` | The person's enrolled devices with the tool installed. For tool `-`, every enrolled device of theirs, none with a tool |
+| `direct` | Of those, the devices where the tool is configured to call a provider directly |
+
+A tool with requests and `direct` 0 is covered. A tool with `direct` above 0 reaches a provider from at least one device, whatever its traffic says. A row with 0 requests and `devices` above 0 is installed and has never reached Gantry.
+
+Devices are matched to people by the name `gantry login` saved on the machine (the key's name). A device whose user never ran `gantry login` shows as `<os user>@<hostname>`.
 
 ## Related
 
 <CardGrid>
 	<LinkCard title="Coding tools" href="/integrations/coding-tools/" description="Every tool with a guide, and what stays outside Gantry." />
 	<LinkCard title="Audit records" href="/reference/audit-records/" description="Every field of a request record." />
+	<LinkCard title="Devices" href="/operations/devices/" description="Enrol machines, and what the device agent reads per tool." />
 </CardGrid>
