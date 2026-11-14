@@ -53,7 +53,7 @@ Team `legal` reaches only `azure-eu`. Everyone else gets the fastest of the two 
 |---|---|---|
 | `round_robin` (default) | In turn, each as often as its `weight` | `round_robin: its turn by weight` |
 | `least_busy` | The fewest requests in flight through this gateway | `least_busy: 2 in flight` |
-| `lowest_latency` | The lowest 90th percentile time to first byte over its last 32 answers on this gateway. A deployment not measured yet goes first, so each is measured before it is judged | `lowest_latency: p90 time to first byte 412 ms` |
+| `lowest_latency` | The lowest 90th percentile time to first byte over its last 32 answers on this gateway, or with a [store](/operations/store/#session-pins-and-latency) over the last 32 answers on each gateway, pooled, so every replica ranks deployments on the same numbers. A deployment not measured yet goes first, so each is measured before it is judged | `lowest_latency: p90 time to first byte 412 ms` |
 | `lowest_cost` | The cheapest by its model's [price](/routing/pricing/), input plus output per million tokens. A deployment with no price goes after every priced one | `lowest_cost: $2.75 per million tokens in and out` |
 
 Before any balance: a deployment cooling down after a failure is passed over, and once its cooldown ends one request probes it (`probe: ...`). The rest of the deployments follow as the chain of fallbacks, cooling ones last.
@@ -94,7 +94,7 @@ The session is read from the first of these headers on the request: `x-gantry-se
 
 - The pinned deployment is used while it is not cooling down. When it fails, the session moves to the next deployment the balance picks, and stays there.
 - A session idle for an hour is forgotten.
-- Pins are kept per gateway. Behind a load balancer without stickiness, a session may be pinned once on each gateway it reaches.
+- Without a store, pins are kept per gateway: behind a load balancer without stickiness, a session may be pinned once on each gateway it reaches. With a [store](/operations/store/#session-pins-and-latency), pins are shared: a session pinned on one replica goes to the same deployment on every replica, within about a second.
 
 The record says `session: pinned to <deployment>` when a pin decided.
 

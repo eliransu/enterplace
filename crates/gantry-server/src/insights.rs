@@ -650,6 +650,24 @@ impl Index for PgIndex {
         })
     }
 
+    fn lines(&self, since: &str, max: usize) -> Pending<Vec<String>> {
+        let pg = self.pg.clone();
+        let since = since.to_string();
+        let max = i64::try_from(max).unwrap_or(i64::MAX);
+        Box::pin(async move {
+            let client = pg.connect().await?;
+            let rows = client
+                .query(
+                    "SELECT line FROM (SELECT line, time, id FROM gantry_requests WHERE time >= $1::text::timestamptz \
+                     ORDER BY time DESC, id DESC LIMIT $2) newest ORDER BY time, id",
+                    &[&since, &max],
+                )
+                .await
+                .map_err(db)?;
+            rows.iter().map(|row| row.try_get(0).map_err(db)).collect()
+        })
+    }
+
     fn rows(&self, query: &Query) -> Pending<Vec<Row>> {
         let pg = self.pg.clone();
         let query = query.clone();

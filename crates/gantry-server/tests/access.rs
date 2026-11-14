@@ -617,6 +617,89 @@ async fn a_jwt_from_a_trusted_issuer_is_decided_and_recorded_as_its_person_and_a
     Ok(())
 }
 
+#[tokio::test]
+async fn a_jwt_signs_in_to_the_admin_api_with_the_role_its_groups_claim_names() -> TestResult {
+    let port = provider().await?.port();
+    let idp = Idp::start().await?;
+    let issuer = idp.url.clone();
+    let top = format!(
+        "jwt:\n  - issuer: {issuer}\n    audience: gantry\n    jwks_url: {issuer}/jwks\n    person_claim: email\n    team: platform\n    role_claim: groups\n\
+roles:\n  - name: keykeeper\n    permissions: [see_keys]\n    sso_values: [gantry-keys]\n  - name: policy-editor\n    permissions: [edit_policy]\n    sso_values: [gantry-policy]\n"
+    );
+    let (gw, dir) = gateway("jwt-admin", port, &top, "")?;
+    let token = |groups: Value| {
+        idp.token(&json!({
+            "iss": issuer, "aud": "gantry", "sub": "u-77", "email": "noa@example.com",
+            "groups": groups, "exp": now() + 300,
+        }))
+    };
+    let keeper = token(json!(["engineering", "gantry-keys"]))?;
+    let (status, body) = answer(&gw.router, request("GET", "/admin/keys", &keeper, "")?).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // The role holds see_keys only: issuing a key is refused for the permission, not the token.
+    let (status, body) = answer(
+        &gw.router,
+        request(
+            "POST",
+            "/admin/keys",
+            &keeper,
+            r#"{"name":"x","team":"ops"}"#,
+        )?,
+    )
+    .await?;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "not_permitted"),
+        "{body}"
+    );
+    // The policy API takes the same token, with the role its claim names.
+    let editor = token(json!("gantry-policy"))?;
+    let (status, body) = answer(&gw.router, request("GET", "/admin/policy", &editor, "")?).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = answer(&gw.router, request("GET", "/admin/policy", &keeper, "")?).await?;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "not_permitted"),
+        "{body}"
+    );
+    // No group a role lists: no admin role at all.
+    let nobody = token(json!(["engineering"]))?;
+    let (status, body) = answer(&gw.router, request("GET", "/admin/keys", &nobody, "")?).await?;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "not_admin"),
+        "{body}"
+    );
+    assert!(body.to_string().contains("groups"), "{body}");
+    // A bad token is refused as on the model routes.
+    let expired = idp.token(&json!({
+        "iss": issuer, "aud": "gantry", "sub": "u-77", "email": "noa@example.com",
+        "groups": ["gantry-keys"], "exp": now() - 3600,
+    }))?;
+    let (status, body) = answer(&gw.router, request("GET", "/admin/keys", &expired, "")?).await?;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::UNAUTHORIZED, "jwt_expired"),
+        "{body}"
+    );
+    // The records name the issuer and subject, never the token.
+    let all = records(&dir)?;
+    let admin: Vec<&Value> = all.iter().filter(|r| r["event"] == "admin").collect();
+    let listed = admin
+        .iter()
+        .find(|r| r["action"] == "list_keys" && r["verdict"] == "allow")
+        .ok_or("no list_keys record")?;
+    assert_eq!(listed["person"], "noa@example.com");
+    assert_eq!(listed["auth"], "jwt");
+    assert_eq!(listed["jwt_issuer"], issuer.as_str());
+    assert_eq!(listed["jwt_subject"], "u-77");
+    let text = std::fs::read_to_string(dir.join("gantry-audit.jsonl"))?;
+    for t in [&keeper, &editor, &nobody, &expired] {
+        assert!(!text.contains(t.as_str()), "a token was recorded");
+    }
+    Ok(())
+}
+
 /// A request from a browser page: the same call with an `Origin`, or the preflight a browser sends first.
 fn from_origin(
     method: &str,

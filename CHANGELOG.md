@@ -20,6 +20,28 @@ one repository. How a release is made: RELEASING.md.
   request is checked: it is never forwarded, traced or recorded. Refusals there use Google's error shape. A body
   naming another model than the path is refused with `ambiguous_model`.
 
+### Replicas share routing and the dry run
+
+- With a store, session affinity pins and `lowest_latency` measurements are shared: every replica pins a coding
+  agent's session to the same deployment and ranks deployments on the same pooled p90 time to first byte, read from
+  memory and refreshed with the 500 ms poll (no database call per request). New tables `gantry_affinity` and
+  `gantry_latency` in the migration namespace `gantry_routing`. Without a store, each gateway keeps its own, as before.
+- The policy dry run (`POST /admin/policy/dry-run` and the console's **Dry run**) replays every gateway's requests from
+  the store's shared request index, plus this gateway's not yet copied ones, each once. Without a store it replays
+  this gateway's audit log. The result names its `source` (`store` or `audit_log`) and a `note`.
+
+### JWT on the admin API
+
+- `role_claim` on a `jwt:` issuer: its tokens sign in to the admin API with the first role whose `sso_values` holds one
+  of the claim's values (for example `groups`). Records keep the issuer and subject, never the token. A token with no
+  matching role is refused with `not_admin`.
+
+### CI
+
+- `scripts/console_edit_check.py` (the console's editing pages in a real Chrome) runs in CI as the `console-edit` job,
+  against its own Postgres, and in `scripts/ci.sh` when `GANTRY_TEST_DATABASE_URL`, Chrome and `psql` are present.
+  `--fresh` makes its own database.
+
 ### Browser access
 
 - `cors:` in the policy: `allowed_origins` lists the browser origins (or `"*"`) that may call Gantry's routes. Off by

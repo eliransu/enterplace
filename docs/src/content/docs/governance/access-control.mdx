@@ -98,6 +98,7 @@ rules:
 | `person_claim` | string | `sub` | The claim that names the person, such as `email` |
 | `team_claim` | string | one of the two | The claim that names the team. A list of one value is read as that value |
 | `team` | string | one of the two | One team for every caller of this issuer |
+| `role_claim` | string | none | The claim (a string or a list, such as `groups`) whose values sign in to the admin API. Without it, this issuer's tokens are refused on the admin API |
 
 What is checked, each failing closed:
 
@@ -107,7 +108,34 @@ What is checked, each failing closed:
 
 The decision record names the person and team from the token, with `"auth": "jwt"`, `jwt_issuer` and `jwt_subject`. The token itself is never recorded. Its `key` is the first 8 hex characters of the SHA-256 of issuer and subject, so a [kill switch](/governance/kill-switches/) by key prefix, `gantry kill --person`, budgets, rate limits and rules all work for JWT callers as for keys.
 
-Keys keep working beside JWTs. The admin API takes Gantry admin keys only.
+Keys keep working beside JWTs.
+
+### The admin API
+
+The same tokens sign in to the admin API (`/admin/keys`, `/admin/kills`, `/admin/credentials`, `/admin/policy` and the rest) when the issuer has `role_claim`. The token gets the first role under [`roles:`](/governance/policy/#console-roles) whose `sso_values` holds one of the claim's values, and may do what that role permits, as a key with that role may:
+
+```yaml title="gantry.policy.yaml"
+jwt:
+  - issuer: https://login.example.com
+    audience: gantry
+    jwks_url: https://login.example.com/.well-known/jwks.json
+    person_claim: email
+    team: platform
+    role_claim: groups
+roles:
+  - name: key-admins
+    permissions: [see_keys, issue_keys, revoke_keys]
+    sso_values: [gantry-key-admins]
+  - name: policy-editors
+    permissions: [edit_policy]
+    sso_values: [gantry-policy]
+```
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" https://gantry.example.com/admin/keys
+```
+
+A token whose claim holds no role's value is refused with `not_admin` (403), naming the claim. A token that fails a check above is refused with its `jwt_*` code, as on the model routes. Each call's `admin` record names the person, with `"auth": "jwt"`, `jwt_issuer` and `jwt_subject`; the token is never recorded. `DELETE /admin/keys/self` gives up the Gantry key it is sent with, so it is refused for a token.
 
 ## Errors
 

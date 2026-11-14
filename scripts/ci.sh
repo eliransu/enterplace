@@ -74,6 +74,24 @@ if [ "$bench" = 1 ]; then
   done
   [ "$passed" = 1 ] || { echo "the bench gate failed in all 3 attempts"; exit 1; }
 fi
+step "the console's editing pages in a real Chrome against Postgres"
+# Opt in by having all three: GANTRY_TEST_DATABASE_URL, Chrome and psql (to make the check's own database). CI runs
+# it as its own job (console-edit in .github/workflows/ci.yml), so it is not run twice there.
+chrome=""
+for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome chromium; do
+  if command -v "$c" >/dev/null 2>&1; then chrome="$c"; break; fi
+done
+if [ -n "${CI:-}" ]; then
+  echo "skipped here: the console-edit job runs it."
+elif [ -n "${GANTRY_TEST_DATABASE_URL:-}" ] && [ -n "$chrome" ] && command -v psql >/dev/null; then
+  cargo build --locked -q -p gantry-cli
+  url="$GANTRY_TEST_DATABASE_URL"
+  # A local test database, as the store tests use it: no TLS unless the URL asks for it.
+  case "$url" in *sslmode=*) ;; *\?*) url="$url&sslmode=disable" ;; *) url="$url?sslmode=disable" ;; esac
+  python3 scripts/console_edit_check.py --fresh --chrome "$chrome" --database "$url" --port 20760
+else
+  echo "skipped: needs GANTRY_TEST_DATABASE_URL, Chrome and psql."
+fi
 step "docs build"
 # The docs site needs Node. Without it this step says so instead of failing a Rust-only machine.
 if command -v npm >/dev/null; then

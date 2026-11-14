@@ -63,7 +63,7 @@ Approval is read from the live version, so turning it off is itself a change tha
 
 ## Dry run
 
-A dry run replays this gateway's request records from the last hours against the draft, with each key's own model list, and lists:
+A dry run replays the request records of the last hours against the draft, with each key's own model list, and lists:
 
 | List | Means |
 |---|---|
@@ -71,7 +71,9 @@ A dry run replays this gateway's request records from the last hours against the
 | Now allowed | Refused then by the policy (`no_rule`, `model_not_allowed`, `unknown_model`); the draft would allow it. |
 | Allowed by another rule | Allowed both times, by a different rule, whose budget, limits and guardrails would apply. |
 
-Requests refused before the policy decided (an unknown key, a budget, a guardrail, a kill switch) are counted and not replayed. Each gateway keeps its own audit chain, so a dry run sees the requests this gateway served.
+Requests refused before the policy decided (an unknown key, a budget, a guardrail, a kill switch) are counted and not replayed.
+
+With a [store](/operations/store/), a dry run on any gateway replays the requests every gateway served: it reads the shared request index (`gantry_requests`, copied from each gateway every 2 seconds) and this gateway's own audit log for what the index has not copied yet, each request once. At most the newest 100,000 requests are replayed; the result says so when there were more. Without a store it replays this gateway's own audit log, and says so. The result names its `source` (`store` or `audit_log`) and a `note`, and the console shows the note above the lists.
 
 ## Versions and rollback
 

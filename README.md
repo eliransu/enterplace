@@ -141,7 +141,7 @@ Gantry is pre-1.0 (0.1.0, see [CHANGELOG.md](CHANGELOG.md)) and runs as a single
 scripts/ci.sh
 ```
 
-Runs the same checks as CI: format, clippy with warnings as errors, every test, the release build, every policy example through `gantry check`, the overhead bench gate and the docs build. Conventions are in [AGENTS.md](AGENTS.md).
+Runs the same checks as CI: format, clippy with warnings as errors, every test, the release build, every policy example through `gantry check`, the overhead bench gate and the docs build. With `GANTRY_TEST_DATABASE_URL`, Chrome and `psql` present it also drives the console's editing pages in a real Chrome (`scripts/console_edit_check.py`), which CI runs as its own `console-edit` job. Conventions are in [AGENTS.md](AGENTS.md).
 
 ## License
 

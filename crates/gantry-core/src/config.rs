@@ -358,6 +358,8 @@ struct JwtFile {
     team_claim: Option<String>,
     #[serde(default)]
     team: Option<String>,
+    #[serde(default)]
+    role_claim: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -3756,6 +3758,13 @@ fn jwt_trusts(
             (None, Some(team)) if valid_name(team) => {}
             _ => errors.push(format!("{at}: give exactly one of team_claim (the claim that names the caller's team, such as team) or team (one team for every caller of this issuer).")),
         }
+        if entry
+            .role_claim
+            .as_ref()
+            .is_some_and(|c| c.trim().is_empty())
+        {
+            errors.push(format!("{at}: role_claim names the claim (a string or a list) whose values sign in to the admin API with the role whose sso_values hold one, such as groups. Remove it to keep this issuer off the admin API."));
+        }
         if parsed
             .jwt
             .iter()
@@ -3773,6 +3782,7 @@ fn jwt_trusts(
                 person_claim,
                 team_claim: entry.team_claim.clone(),
                 team: entry.team.clone(),
+                role_claim: entry.role_claim.clone(),
             });
         }
     }
@@ -4350,6 +4360,16 @@ rules:
         );
         for (from, to, expected) in [
             ("balance: lowest_latency", "balance: lowest_cost", ""),
+            (
+                "team_claim: team\n",
+                "team_claim: team\n    role_claim: groups\n",
+                "",
+            ),
+            (
+                "team_claim: team\n",
+                "team_claim: team\n    role_claim: \" \"\n",
+                "role_claim names the claim",
+            ),
             (
                 "balance: lowest_latency",
                 "balance: fastest",

@@ -165,6 +165,24 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     fn cooled(&self, deployment: &str, cooldown: Duration);
     /// A deployment that was cooling down answered: every gateway may use it again. Does not wait.
     fn warmed(&self, deployment: &str);
+    /// Whether session pins and deployment latency are shared through this store, so every gateway pins a session
+    /// to the same deployment and ranks deployments on the same numbers. Without, each gateway keeps its own.
+    fn shares_routing(&self) -> bool {
+        false
+    }
+    /// The deployment `session` is pinned to on any gateway, if it sent within `idle`. From memory.
+    fn pinned(&self, _session: &str, _idle: Duration) -> Option<String> {
+        None
+    }
+    /// Pins `session` to `deployment` on every gateway. Does not wait: written with the next poll.
+    fn pin(&self, _session: &str, _deployment: &str) {}
+    /// Each deployment's 90th percentile time to first byte, in milliseconds, over the recent answers of every
+    /// gateway. From memory, polled.
+    fn latency(&self) -> Arc<std::collections::HashMap<String, u32>> {
+        Arc::default()
+    }
+    /// A deployment answered here after `ms`: one sample every gateway ranks it on. Does not wait.
+    fn observed(&self, _deployment: &str, _ms: u32) {}
     /// Opens a console session, by the SHA-256 of its ID, for `who`, ending after `ttl`.
     fn open_session(&self, id_sha256: String, who: String, ttl: Duration) -> Pending<()>;
     /// Who a console session is for, or `None` when it is unknown, ended or expired.

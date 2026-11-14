@@ -80,7 +80,8 @@ fn key_value(config: &tokio_postgres::Config, port: Option<u16>, database: &str)
     )
 }
 
-/// A provider whose every answer used 3 output tokens. Model `slow` answers after a second.
+/// A provider whose every answer used 3 output tokens. Model `slow` answers after a second, `lag`
+/// after 150 ms.
 async fn provider() -> Result<u16, Error> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
@@ -89,6 +90,9 @@ async fn provider() -> Result<u16, Error> {
         post(|body: Bytes| async move {
             if body.windows(6).any(|w| w == b"\"slow\"") {
                 tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            if body.windows(5).any(|w| w == b"\"lag\"") {
+                tokio::time::sleep(Duration::from_millis(150)).await;
             }
             axum::response::Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
@@ -118,7 +122,13 @@ providers:
     url: http://127.0.0.1:{port}
     allow_private: true
     key_env: MOCK_KEY
-    models: [m, free, slow]
+    models: [m, free, slow, lag]
+  - name: mock2
+    kind: openai
+    url: http://127.0.0.1:{port}
+    allow_private: true
+    key_env: MOCK_KEY
+    models: [fast]
   - name: dead
     kind: openai
     url: http://127.0.0.1:{dead}
@@ -131,6 +141,16 @@ aliases:
     deployments:
       - {{ provider: dead, model: gone }}
       - {{ provider: mock, model: free }}
+  - name: sticky
+    session_affinity: true
+    deployments:
+      - {{ provider: mock, model: free }}
+      - {{ provider: mock2, model: fast }}
+  - name: quick
+    balance: lowest_latency
+    deployments:
+      - {{ provider: mock, model: lag }}
+      - {{ provider: mock2, model: fast }}
 prices:
   m: {{ input: 0, output: 1000 }}
 rules:
@@ -155,7 +175,7 @@ rules:
     rate: {{ tpm: 300 }}
   - name: paired
     principals: {{ team: paired }}
-    models: [pair]
+    models: [pair, sticky, quick]
   - name: shop
     principals: {{ team: shop }}
     models: [m]
@@ -1219,6 +1239,101 @@ async fn a_deployment_that_failed_on_one_gateway_is_passed_over_by_the_others() 
         !log.contains("dead/gone"),
         "b sent to the deployment a found dead: {log}"
     );
+    Ok(())
+}
+
+/// The deployment and the reason of each routed request in `gw`'s audit log, oldest first.
+fn routes(gw: &Governed) -> Result<Vec<(String, String)>, Error> {
+    let log = std::fs::read_to_string(dir_of(gw).join("gantry-audit.jsonl"))?;
+    Ok(log
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|r| r["routing"]["deployment"].is_string())
+        .map(|r| {
+            (
+                r["routing"]["deployment"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                r["routing"]["reason"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect())
+}
+
+async fn send(gw: &Governed, body: &str, session: Option<&str>) -> Result<(), Error> {
+    let mut request = request("POST", "/v1/chat/completions", MAYA, body)?;
+    if let Some(session) = session {
+        request
+            .headers_mut()
+            .insert("x-claude-code-session-id", session.parse()?);
+    }
+    let (status, body) = answer(&gw.router, request).await?;
+    if status != StatusCode::OK {
+        return Err(format!("{status} {body}").into());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_pinned_on_one_gateway_goes_to_the_same_deployment_on_the_other() -> TestResult {
+    let Some(url) = database("affinity").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let [a, b, _c] = three("affinity", &url, port, &[("maya", "paired", MAYA)])?;
+    let sticky = r#"{"model":"sticky","messages":[]}"#;
+    // Moves b's round robin on, so its own turn would differ from a's for the session.
+    send(&b, sticky, None).await?;
+    send(&a, sticky, Some("s1")).await?;
+    let pinned = routes(&a)?.last().map(|r| r.0.clone()).unwrap_or_default();
+    assert!(!pinned.is_empty());
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    for _ in 0..4 {
+        send(&b, sticky, Some("s1")).await?;
+    }
+    let seen = routes(&b)?;
+    for (deployment, reason) in &seen[1..] {
+        assert_eq!(deployment, &pinned, "b moved the session: {seen:?}");
+        assert!(reason.starts_with("session: pinned"), "{reason}");
+    }
+    assert_eq!(seen.len(), 5, "{seen:?}");
+    // Another session is still balanced as usual on b.
+    send(&b, sticky, Some("s2")).await?;
+    let last = routes(&b)?.last().map(|r| r.1.clone()).unwrap_or_default();
+    assert!(last.starts_with("round_robin"), "{last}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lowest_latency_ranks_deployments_on_what_every_gateway_measured() -> TestResult {
+    let Some(url) = database("ttfb").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let [a, b, _c] = three("ttfb", &url, port, &[("maya", "paired", MAYA)])?;
+    let quick = r#"{"model":"quick","messages":[]}"#;
+    // a measures both, a poll apart: the first deployment answers after 150 ms, the second at once. Each gateway
+    // ranks on the shared numbers only, so a too waits for its own samples to come back from the store.
+    for _ in 0..3 {
+        send(&a, quick, None).await?;
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+    }
+    let on_a = routes(&a)?;
+    assert_eq!(
+        on_a.last().map(|r| r.0.as_str()),
+        Some("mock2/fast"),
+        "{on_a:?}"
+    );
+    // b sent nothing to either, and still goes to the fast one first, on the numbers a measured.
+    send(&b, quick, None).await?;
+    let on_b = routes(&b)?;
+    let (deployment, reason) = on_b.first().cloned().unwrap_or_default();
+    assert_eq!(deployment, "mock2/fast", "{on_b:?}");
+    assert!(reason.contains("p90 time to first byte"), "{reason}");
     Ok(())
 }
 
