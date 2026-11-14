@@ -1986,23 +1986,26 @@ mod tests {
 
     #[test]
     fn a_new_gantry_waits_for_the_old_one_and_continues_its_chain() -> TestResult {
+        // The old Gantry must stop between six beats (a stale lock) and eight (the new one's deadline) after the
+        // new one starts waiting. With TEST_BEAT that window is 200 ms, and on a loaded machine a sleeping thread
+        // wakes later than that: about one run in five failed under load. A beat of 600 ms gives 600 ms; every
+        // check is the same.
+        let beat = TEST_BEAT * 3;
         let path = temp("rollout");
-        let old = AuditLog::open_as(&path, TEST_BEAT, &elsewhere("old"))?;
+        let old = AuditLog::open_as(&path, beat, &elsewhere("old"))?;
         old.append(&entry("A"))?;
         let started = Instant::now();
         let new = std::thread::spawn({
             let path = path.clone();
-            move || AuditLog::open_as(&path, TEST_BEAT, &elsewhere("new"))
+            move || AuditLog::open_as(&path, beat, &elsewhere("new"))
         });
-        // The record is written while the new one waits, well before its deadline: a flush to disk on a busy
-        // machine can take longer than the one beat between the end of the sleep below and that deadline, which
-        // made the old Gantry stop too late about once in five runs under load.
-        std::thread::sleep(TEST_BEAT * 3);
+        // Written and flushed while the new one waits, well before its deadline.
+        std::thread::sleep(beat * 3);
         old.append(&entry("B"))?;
         old.flush();
         // Longer than a stale lock takes, counted from the start of the wait: the old one beats, so the new one
         // keeps waiting.
-        std::thread::sleep((TEST_BEAT * 7).saturating_sub(started.elapsed()));
+        std::thread::sleep((beat * 7).saturating_sub(started.elapsed()));
         assert!(!new.is_finished(), "the new Gantry did not wait");
         assert!(!old.is_broken(), "the old Gantry lost its lock");
         drop(old);
