@@ -25,7 +25,7 @@ Run Gantry and point your tools at it.
     gantry start
     ```
 
-    `gantry start` asks which providers you use and writes `gantry.policy.yaml` with observe mode on and one rule that allows everyone. It prints an admin key once, prints the settings for Claude Code, Codex and Cursor, and starts the gateway.
+    `gantry start` asks which providers you use and writes `gantry.policy.yaml` with observe mode on and one rule that allows everyone. It prints an admin key once, prints the settings for the coding tools it finds on the machine (Claude Code, Codex, Cursor, VS Code), and starts the gateway.
 
 2. Make one key for the people who try it first:
 
@@ -39,7 +39,7 @@ Run Gantry and point your tools at it.
 
 </Steps>
 
-In observe mode Gantry forwards every request from a key it knows. A request with a missing or wrong key, or for a model your providers do not list, is still refused.
+In observe mode Gantry forwards every request from a key it knows. A request with a missing, wrong, expired or revoked key, or for a model your providers do not list, is still refused.
 
 ## Check it worked
 
@@ -60,19 +60,21 @@ You can see tools, models and cost, with one line per key. To see people and tea
 
 ### The policy `gantry start` writes
 
-With both provider keys set, the file looks like this:
+With both provider keys set, `gantry start --yes --no-serve` writes exactly this:
 
 ```yaml title="gantry.policy.yaml"
+# Written by gantry start. Step 1, See: every key may use every model, and in observe mode
+# nothing is blocked; what a rule would refuse is recorded. Reference: https://gantry-docs.eliran.me/governance/policy/
 version: 1
 mode: observe
 providers:
   - name: openai
     preset: openai
-    key_env: OPENAI_API_KEY
-    models: [gpt-4o-mini, gpt-4o]
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-5, gpt-5-mini, gpt-5-codex, gpt-4o-mini]
   - name: anthropic
     preset: anthropic
-    key_env: ANTHROPIC_API_KEY
+    key_env: ANTHROPIC_PROVIDER_KEY
     models: [claude-sonnet-5-5, claude-haiku-5-5]
 rules:
   - name: everyone
@@ -80,14 +82,16 @@ rules:
     models: ["*"]
 ```
 
-Add a model to a provider's `models` list to serve it. The provider keys stay in the environment and never appear in the file.
+Add a model to a provider's `models` list to serve it. The provider keys stay in the environment and never appear in the file. The policy reads them from `OPENAI_PROVIDER_KEY` and `ANTHROPIC_PROVIDER_KEY`, so the tool settings can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to your Gantry key in the same shell. `gantry start` passes a key it found under `OPENAI_API_KEY` to the gateway it runs, and prints the `export OPENAI_PROVIDER_KEY=$OPENAI_API_KEY` line for the next `gantry serve`.
 
 ### What observe mode does
 
 | Situation | In observe mode |
 |---|---|
 | A rule, budget, rate limit or guardrail would refuse the request | Forwarded, and recorded as `would_refuse` with the refusal code |
-| No key, an unknown key or a revoked key | Refused |
+| The same on batches, files, fine-tuning, realtime, passthrough and MCP tools, or for an address, tag or customer the rule does not list | Forwarded, and recorded as `would_refuse` |
+| A budget applies and the cost cannot be estimated (`no_price`, `max_tokens_needed`, `stored_context`) | Forwarded, and recorded as `would_refuse` with that code |
+| No key, an unknown, expired or revoked key | Refused |
 | A model no provider lists | Refused |
 | A [kill switch](/governance/kill-switches/) matches | Refused with `killed` |
 
@@ -100,6 +104,8 @@ Add a model to a provider's `models` list to serve it. The provider keys stay in
 | `--providers openai,anthropic` | Names the providers instead of asking |
 | `--yes` | Accepts every default, for scripts and CI |
 | `--dir <path>` | Writes the files in that folder |
+| `--listen <host:port>` | Where the gateway listens, `127.0.0.1:8080` by default. The printed settings use it |
+| `--all-tools` | Prints the settings for every tool, not only the ones found on the machine |
 | `--force` | Overwrites an existing `gantry.policy.yaml`. Without it, `gantry start` refuses to |
 | `--no-serve` | Writes the files and does not start the gateway |
 

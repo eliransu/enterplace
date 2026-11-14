@@ -76,14 +76,15 @@ Commands:
         the catalog (default openai, see `gantry providers`) and the models it serves (--models; openai defaults
         to gpt-4o-mini): everyone may use them. Then set
         the provider key it names and run `gantry serve`, which prints a one-time link to make the first admin.
-  start [--dir <path>] [--providers <a,b>] [--yes] [--force] [--no-serve]
-        Step 1 in one command. Reads provider keys from the environment (OPENAI_API_KEY, ANTHROPIC_API_KEY,
-        GEMINI_API_KEY, or the _PROVIDER_KEY form), writes gantry.policy.yaml in observe mode with one rule that
-        lets every key use every model, makes an admin key (printed once, its hash in gantry.keys.yaml), prints
-        the settings for Claude Code, Codex, the OpenAI SDKs and Cursor, and runs the gateway. --dir names the
-        folder (default the current one); --providers openai,anthropic picks providers in place of the ones found;
-        on a terminal it asks unless --yes. It never writes over a policy unless --force. --no-serve stops before
-        running the gateway.
+  start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--yes] [--force] [--no-serve] [--all-tools]
+        Step 1 in one command. Reads provider keys from the environment (OPENAI_PROVIDER_KEY or OPENAI_API_KEY,
+        and the same for ANTHROPIC and GEMINI), writes gantry.policy.yaml in observe mode with one rule that lets
+        every key use every model and reads each key from <PROVIDER>_PROVIDER_KEY, makes an admin key (printed
+        once, its hash in gantry.keys.yaml), prints the settings for the coding tools found on this machine
+        (claude, codex, cursor, code on PATH; --all-tools prints all) and the OpenAI SDKs, and runs the gateway
+        on --listen (default 127.0.0.1:8080). --dir names the folder (default the current one); --providers
+        openai,anthropic picks providers in place of the ones found; on a terminal it asks unless --yes. It never
+        writes over a policy unless --force. --no-serve stops before running the gateway.
   providers [--markdown]
         List the provider catalog: id, name, kind and URL. A policy provider may say `preset: <id>` in place
         of its url and kind. --markdown prints the reference page of the docs.
@@ -492,9 +493,9 @@ pub async fn run(args: &[String]) -> ExitCode {
             let pairs: Vec<&str> = rest
                 .iter()
                 .copied()
-                .filter(|a| !matches!(*a, "--yes" | "--force" | "--no-serve"))
+                .filter(|a| !matches!(*a, "--yes" | "--force" | "--no-serve" | "--all-tools"))
                 .collect();
-            match options(&pairs, &["--dir", "--providers"]) {
+            match options(&pairs, &["--dir", "--providers", "--listen"]) {
                 Some((positional, named)) if positional.is_empty() => {
                     let options = start::Options {
                         dir: Path::new(named.get("--dir").copied().unwrap_or(".")),
@@ -502,6 +503,11 @@ pub async fn run(args: &[String]) -> ExitCode {
                         yes: flag("--yes"),
                         force: flag("--force"),
                         serve: !flag("--no-serve"),
+                        listen: named
+                            .get("--listen")
+                            .copied()
+                            .unwrap_or(start::DEFAULT_LISTEN),
+                        all_tools: flag("--all-tools"),
                     };
                     Some(
                         start::run(&options)
@@ -577,7 +583,7 @@ pub async fn run(args: &[String]) -> ExitCode {
                 "gantry guardrail test <name> (--corpus <file.jsonl> | --since <7d>) [--policy <file>]",
             ),
             ["start", ..] => Some(
-                "gantry start [--dir <path>] [--providers <a,b>] [--yes] [--force] [--no-serve]",
+                "gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--yes] [--force] [--no-serve] [--all-tools]",
             ),
             ["init", ..] => Some("gantry init [--provider <id>] [--models <a,b>] [--out <policy file>]"),
             ["login", ..] => Some("gantry login <gantry url> [--no-browser]"),

@@ -1966,10 +1966,11 @@ fn start_writes_an_observe_policy_from_env_keys() -> TestResult {
     assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
 
     let policy = std::fs::read_to_string(dir.join("gantry.policy.yaml"))?;
+    // The policy reads the provider name, so the tool lines can set OPENAI_API_KEY to the Gantry key in one shell.
     for line in [
         "mode: observe\n",
-        "key_env: OPENAI_API_KEY\n",
-        "key_env: ANTHROPIC_API_KEY\n",
+        "key_env: OPENAI_PROVIDER_KEY\n",
+        "key_env: ANTHROPIC_PROVIDER_KEY\n",
         "models: [\"*\"]\n",
     ] {
         assert!(policy.contains(line), "{line}: {policy}");
@@ -1983,18 +1984,27 @@ fn start_writes_an_observe_policy_from_env_keys() -> TestResult {
     assert!(!file.contains(keys[0]), "{file}");
     assert!(file.contains("admin: true"), "{file}");
 
-    // Checked without its mode line, which a gateway without observe mode refuses as an unknown field.
-    let checked = dir.join("check.policy.yaml");
-    std::fs::write(&checked, policy.replace("mode: observe\n", ""))?;
+    // A key found under the provider's own name is to be exported under the name the policy reads.
+    for line in [
+        "export OPENAI_PROVIDER_KEY=$OPENAI_API_KEY\n",
+        "export ANTHROPIC_PROVIDER_KEY=$ANTHROPIC_API_KEY\n",
+    ] {
+        assert!(stdout.contains(line), "{line}: {stdout}");
+    }
+    assert!(!stdout.contains("another shell"), "{stdout}");
+
     let keys_file = path(&dir, "gantry.keys.yaml");
     let out = gantry(
         &[
             "check",
-            &checked.display().to_string(),
+            &path(&dir, "gantry.policy.yaml"),
             "--keys",
             &keys_file,
         ],
-        BOTH_KEYS,
+        &[
+            ("OPENAI_PROVIDER_KEY", "sk-test-openai"),
+            ("ANTHROPIC_PROVIDER_KEY", "sk-ant-test"),
+        ],
     )?;
     assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
     assert!(
@@ -2033,7 +2043,7 @@ fn start_refuses_to_overwrite_without_force() -> TestResult {
 #[test]
 fn start_prints_tool_settings() -> TestResult {
     let dir = start_dir("tools")?;
-    let out = start(&dir, &[], BOTH_KEYS)?;
+    let out = start(&dir, &["--all-tools"], BOTH_KEYS)?;
     assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
     let stdout = String::from_utf8(out.stdout)?;
     for text in [
@@ -2045,9 +2055,45 @@ fn start_prints_tool_settings() -> TestResult {
         "env_key = \"GANTRY_KEY\"",
         "Cursor",
         "Override OpenAI Base URL:  http://127.0.0.1:8080/v1",
+        "VS Code",
     ] {
         assert!(stdout.contains(text), "{text}: {stdout}");
     }
+    Ok(())
+}
+
+#[test]
+fn start_prints_only_the_tools_found_and_the_listen_address() -> TestResult {
+    let dir = start_dir("found")?;
+    // A PATH of its own with only `claude` on it, so the test does not depend on this machine's tools.
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin)?;
+    std::fs::write(bin.join("claude"), "")?;
+    let path = bin.display().to_string();
+    let mut env = BOTH_KEYS.to_vec();
+    env.push(("PATH", &path));
+    let out = start(&dir, &["--listen", "127.0.0.1:9191"], &env)?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let stdout = String::from_utf8(out.stdout)?;
+    for text in [
+        "Claude Code",
+        "export ANTHROPIC_BASE_URL=http://127.0.0.1:9191\n",
+        "export OPENAI_BASE_URL=http://127.0.0.1:9191/v1\n",
+        "console at http://127.0.0.1:9191/console",
+        "--listen 127.0.0.1:9191",
+    ] {
+        assert!(stdout.contains(text), "{text}: {stdout}");
+    }
+    for text in ["Codex", "Cursor", "VS Code", "8080"] {
+        assert!(!stdout.contains(text), "{text}: {stdout}");
+    }
+
+    // Nothing on PATH: no tool lines, and the flag that prints them all.
+    let dir = start_dir("none")?;
+    let out = start(&dir, &[], BOTH_KEYS)?;
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(!stdout.contains("Claude Code"), "{stdout}");
+    assert!(stdout.contains("--all-tools"), "{stdout}");
     Ok(())
 }
 
@@ -2057,7 +2103,11 @@ fn start_without_any_provider_key_says_which_env_to_set() -> TestResult {
     let out = start(&dir, &[], &[])?;
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8(out.stderr)?;
-    for name in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] {
+    for name in [
+        "OPENAI_PROVIDER_KEY",
+        "ANTHROPIC_PROVIDER_KEY",
+        "OPENAI_API_KEY",
+    ] {
         assert!(stderr.contains(name), "{name}: {stderr}");
     }
     assert!(!dir.join("gantry.policy.yaml").exists());
@@ -2066,6 +2116,6 @@ fn start_without_any_provider_key_says_which_env_to_set() -> TestResult {
     // A provider asked for by name names its own variable.
     let out = start(&dir, &["--providers", "anthropic"], BOTH_KEYS[..1].as_ref())?;
     assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8(out.stderr)?.contains("ANTHROPIC_API_KEY"));
+    assert!(String::from_utf8(out.stderr)?.contains("ANTHROPIC_PROVIDER_KEY"));
     Ok(())
 }

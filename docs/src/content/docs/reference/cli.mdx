@@ -25,21 +25,23 @@ gantry help
 
 ## start
 
-Step 1 in one command: writes a policy in observe mode, makes an admin key, prints the settings for your coding tools and runs the gateway.
+Step 1 in one command: writes a policy in observe mode, makes an admin key, prints the settings for the coding tools on this machine and runs the gateway.
 
 ```text
-gantry start [--dir <path>] [--providers <a,b>] [--yes] [--force] [--no-serve]
+gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--yes] [--force] [--no-serve] [--all-tools]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `--dir <path>` | the current folder | Where `gantry.policy.yaml`, `gantry.keys.yaml` and the audit log go. Made if missing |
 | `--providers <a,b>` | every provider with a key in the environment | `openai`, `anthropic` or `gemini`. Each needs its key set. For another provider use `gantry init` |
+| `--listen <host:port>` | `127.0.0.1:8080` | Where the gateway listens. Every URL `start` prints uses it |
 | `--yes` | off | Takes the defaults without asking. Without it, on a terminal, `start` asks which providers to use |
 | `--force` | off | Writes over an existing `gantry.policy.yaml`. The keys file is kept and gets one more admin key |
 | `--no-serve` | off | Stops after writing the files and printing the settings |
+| `--all-tools` | off | Prints the settings for every tool `start` knows, not only the ones found on this machine |
 
-Provider keys are read from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`, or from `OPENAI_PROVIDER_KEY` and the like, which win when both are set. The policy names the variable it found in `key_env`; the key itself is never written.
+Provider keys are read from `OPENAI_PROVIDER_KEY` or `OPENAI_API_KEY`, and the same for `ANTHROPIC` and `GEMINI` (the `_PROVIDER_KEY` form wins when both are set). The policy always reads `<PROVIDER>_PROVIDER_KEY`, so the tool lines can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to the Gantry key in the same shell. The key itself is never written. A key found under `<PROVIDER>_API_KEY` is passed to the gateway `start` runs, and `start` prints the `export <PROVIDER>_PROVIDER_KEY=$<PROVIDER>_API_KEY` line to run before a later `gantry serve`.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -55,11 +57,11 @@ mode: observe
 providers:
   - name: openai
     preset: openai
-    key_env: OPENAI_API_KEY
+    key_env: OPENAI_PROVIDER_KEY
     models: [gpt-5, gpt-5-mini, gpt-5-codex, gpt-4o-mini]
   - name: anthropic
     preset: anthropic
-    key_env: ANTHROPIC_API_KEY
+    key_env: ANTHROPIC_PROVIDER_KEY
     models: [claude-sonnet-5-5, claude-haiku-5-5]
 rules:
   - name: everyone
@@ -67,11 +69,7 @@ rules:
     models: ["*"]
 ```
 
-The admin key is printed once, as `export GANTRY_KEY=gantry_...`, and only its hash is saved in `gantry.keys.yaml`. It signs in to the console. Then come the lines for [Claude Code](/integrations/claude-code/), [Codex](/integrations/codex/), the [OpenAI SDKs](/integrations/sdks/) and [Cursor](/integrations/cursor/), each using `$GANTRY_KEY`. Claude Code's lines need the `anthropic` provider; Codex, Cursor and the SDKs need `openai`.
-
-<Aside type="caution">
-When the provider key is in `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, the tool lines set that same variable to the Gantry key. Run the tools in another shell than the gateway, or keep the provider key in `ANTHROPIC_PROVIDER_KEY` or `OPENAI_PROVIDER_KEY`.
-</Aside>
+The admin key is printed once, as `export GANTRY_KEY=gantry_...`, and only its hash is saved in `gantry.keys.yaml`. It signs in to the console. Then come the lines for the tools found on this machine: [Claude Code](/integrations/claude-code/) when `claude` is on `PATH`, [Codex](/integrations/codex/) when `codex` is on `PATH` or `~/.codex` exists, [Cursor](/integrations/cursor/) when `cursor` is, and the VS Code extensions when `code` is. The [OpenAI SDKs](/integrations/sdks/) lines always come. Each uses `$GANTRY_KEY`. Claude Code's lines need the `anthropic` provider; the others need `openai`.
 
 Exit `2` when no provider key is set (the error names the variables), when a provider in `--providers` has no key or is not one `start` knows, and when `gantry.policy.yaml` exists without `--force`. Nothing is written in those cases.
 
