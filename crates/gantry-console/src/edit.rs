@@ -573,11 +573,21 @@ async fn teams_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
     };
     let mut teams: std::collections::BTreeMap<&str, Vec<(&str, bool)>> =
         std::collections::BTreeMap::new();
-    for (_, who) in loaded.policy.entries() {
+    for (_, who) in loaded
+        .policy
+        .entries()
+        .filter(|(_, w)| admin.covers(&w.org, &w.team, w.customer.as_deref()))
+    {
         teams
             .entry(who.team.as_str())
             .or_default()
             .push((who.name.as_str(), who.admin));
+    }
+    // Teams the policy lists show even before their first key, to those who see every team or this one.
+    for team in loaded.policy.teams() {
+        if !admin.confined() || admin.teams.contains(&team.name) {
+            teams.entry(team.name.as_str()).or_default();
+        }
     }
     let mut rows = String::new();
     for (team, people) in &mut teams {
@@ -615,9 +625,14 @@ async fn teams_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
                 _ => format!("{} (everyone)", esc(&r.name)),
             },
         );
+        let listed = loaded.policy.teams().iter().find(|t| t.name == *team);
+        let owner = listed
+            .and_then(|t| t.owner.as_deref())
+            .map(|o| format!(", owner {}", esc(o)))
+            .unwrap_or_default();
         let _ = write!(
             rows,
-            r#"<tr><td>{}<span class="g-table__sub">{}</span></td><td class="g-table__wide">{}</td><td>{rule}</td><td class="g-table__num">{budget}</td></tr>"#,
+            r#"<tr><td>{}<span class="g-table__sub">{}{owner}</span></td><td class="g-table__wide">{}</td><td>{rule}</td><td class="g-table__num">{budget}</td></tr>"#,
             esc(team),
             gantry_core::count(people.len(), "key"),
             names.join("<br>"),

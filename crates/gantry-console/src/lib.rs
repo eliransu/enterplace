@@ -9,6 +9,7 @@ mod edit;
 pub mod html;
 mod insights;
 mod pages;
+mod saml;
 mod sso;
 
 use std::{
@@ -492,6 +493,9 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .route("/sign-out", get(sign_out))
         .route("/sso/start", get(sso_start))
         .route("/sso/callback", get(sso_callback))
+        .route("/saml/start", get(saml_start))
+        .route("/saml/acs", post(saml_acs))
+        .route("/saml/metadata", get(saml_metadata))
         // `gantry login` opens the browser here: the same sign-in, then a personal key for the CLI instead of a session.
         .route("/cli/login", get(sso_start))
         .route("/cli/token", post(cli_token))
@@ -1136,7 +1140,7 @@ fn set_cookie(response: &mut Response, cookie: &str) {
 impl Console {
     /// Whether the sign-in page offers single sign-on.
     fn sso_on(&self) -> bool {
-        matches!(self.sso_config(), Ok(Some(_)))
+        matches!(self.sign_in_config(), Ok((Some(_), _) | (_, Some(_))))
     }
 
     /// The identity provider's discovery and keys, from the cache while it is fresh.
@@ -1169,6 +1173,16 @@ impl Console {
     /// recorded. Anyone can make a sign-in fail, so past [`FLOOD`] in a minute from one client address the rest are
     /// summed up in one record written when that minute closes, with the true count per refusal code.
     async fn sso_refused(&self, email: Option<&str>, refusal: &sso::Refusal) -> Response {
+        self.sign_in_refused("sso", email, refusal).await
+    }
+
+    /// [`Console::sso_refused`], for the way in named by `via`: `sso` or `saml`.
+    async fn sign_in_refused(
+        &self,
+        via: &'static str,
+        email: Option<&str>,
+        refusal: &sso::Refusal,
+    ) -> Response {
         let key = flood_key(client());
         let seen = self.count_refusal(&key, refusal.code);
         if seen <= FLOOD {
@@ -1176,7 +1190,7 @@ impl Console {
                 action: "console_sign_in",
                 by: email.map(|e| (e, "")),
                 key: None,
-                target: json!({ "via": "sso", "reason": refusal.message }),
+                target: json!({ "via": via, "reason": refusal.message }),
             };
             let _ = record(self, &act, Some(refusal.code), None).await;
         } else if seen == FLOOD + 1 {
@@ -1242,9 +1256,11 @@ async fn sso_start(
         };
         let _ = record(&console, &act, None, None).await;
     }
-    let sso = match console.sso_config() {
-        Ok(Some(sso)) => sso,
-        Ok(None) => {
+    let sso = match console.sign_in_config() {
+        Ok((Some(sso), _)) => sso,
+        // SAML is the only single sign-on set up: the sign-in page's button leads there.
+        Ok((None, Some(_))) if cli.is_none() => return redirect("/console/saml/start"),
+        Ok((None, _)) => {
             let message = "Single sign-on is not set up. Sign in with an admin key, or add a console.sso section to the policy file.".to_string();
             return console
                 .sso_refused(None, &refused("sso_config", message))
@@ -1323,6 +1339,217 @@ async fn sso_start(
         }
     };
     set_cookie(&mut response, &cli_cookie);
+    response
+}
+
+const SAML_COOKIE: &str = "gantry_saml";
+
+/// `console.saml` as it is now, or why there is none.
+fn saml_config(console: &Console) -> Result<config::Saml, sso::Refusal> {
+    match console.sign_in_config() {
+        Ok((_, Some(saml))) => Ok(saml),
+        Ok((_, None)) => Err(sso::Refusal {
+            code: "sso_config",
+            message: "SAML sign-in is not set up. Sign in with an admin key, or add a console.saml section to the policy file.".into(),
+        }),
+        Err(errors) => Err(sso::Refusal {
+            code: "sso_config",
+            message: format!(
+                "SAML sign-in is off because the policy file has problems: {errors} Run gantry check, fix them, and try again."
+            ),
+        }),
+    }
+}
+
+/// The service provider metadata, for an identity provider that imports it.
+async fn saml_metadata(State(console): State<Console>) -> Response {
+    match saml_config(&console) {
+        Ok(saml) => guarded(
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/samlmetadata+xml")],
+                saml::metadata(&saml),
+            )
+                .into_response(),
+        ),
+        Err(refusal) => page(
+            StatusCode::NOT_FOUND,
+            pages::sign_in("", &html::esc(&refusal.message), console.sso_on()),
+        ),
+    }
+}
+
+/// Sends the browser to the identity provider with a request whose ID only this browser's sealed cookie holds.
+async fn saml_start(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    uri: Uri,
+    tls: Tls,
+) -> Response {
+    if let Some(starts) = console.count_start() {
+        let act = Act {
+            action: "console_sso_starts",
+            by: None,
+            key: None,
+            target: json!({ "via": "saml", "starts": starts, "within_seconds": 60, "reason": "many SAML sign-in starts within a minute: a flood, or many people signing in at once. Starts are not recorded one by one; each finished or refused sign-in is." }),
+        };
+        let _ = record(&console, &act, None, None).await;
+    }
+    let saml = match saml_config(&console) {
+        Ok(saml) => saml,
+        Err(refusal) => return console.sign_in_refused("saml", None, &refusal).await,
+    };
+    let (Some(id), Some(seal)) = (random_hex(), console.0.seal.as_ref()) else {
+        return page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            pages::sign_in("", NO_RANDOM, true),
+        );
+    };
+    // An ID starts with a letter or underscore (xs:ID).
+    let id = format!("_{id}");
+    let now = unix_now();
+    let expires = now + SSO_PENDING.as_secs();
+    let sealed = format!("{id}.{expires}");
+    let cookie = format!("{sealed}.{}", mac(seal, &sealed));
+    let mut response = redirect(&saml::authn_url(
+        &saml,
+        &id,
+        i64::try_from(now).unwrap_or(i64::MAX),
+        &id,
+    ));
+    // The identity provider posts the answer from its own site: only a SameSite=None cookie comes with a
+    // cross-site POST, and browsers take one only when it is Secure. Over plain http (a provider on this machine,
+    // the same site) Lax comes with it.
+    let site = if secure(&headers, &uri, &tls) {
+        "None; Secure"
+    } else {
+        "Lax"
+    };
+    set_cookie(
+        &mut response,
+        &format!(
+            "{SAML_COOKIE}={cookie}; Path=/console/saml; Max-Age={}; HttpOnly; SameSite={site}",
+            SSO_PENDING.as_secs()
+        ),
+    );
+    response
+}
+
+/// Where the identity provider posts its answer: checks everything, then opens a session.
+async fn saml_acs(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    uri: Uri,
+    tls: Tls,
+    body: String,
+) -> Response {
+    let refused = |code, message: &str| sso::Refusal {
+        code,
+        message: message.to_string(),
+    };
+    if body.len() > saml::MAX_RESPONSE {
+        return console
+            .sign_in_refused("saml", None, &refused("saml_response", "The identity provider's response is larger than Gantry takes. Remove attributes the console does not need from the SAML app."))
+            .await;
+    }
+    let form = Form::parse(&body);
+    let relay = form.get("RelayState");
+    let cookie = cookie_value(&headers, SAML_COOKIE).unwrap_or_default();
+    let now = unix_now();
+    let checked = console
+        .0
+        .seal
+        .as_ref()
+        .map_or(Err(BadState::Foreign), |seal| {
+            state_left(seal, &cookie, relay, now)
+        });
+    let left = match checked {
+        Ok(left) => left,
+        Err(BadState::Expired) => {
+            return console
+                .sign_in_refused("saml", None, &refused("saml_replay", "This sign-in has expired. Start again from the sign-in page and finish within 10 minutes."))
+                .await;
+        }
+        Err(BadState::Foreign) => {
+            return console
+                .sign_in_refused("saml", None, &refused("saml_replay", "The identity provider answered a sign-in this browser did not start, so it was refused: Gantry takes only sign-ins started from its own sign-in page, not from the identity provider's app list. Start again from the console's sign-in page; if it repeats, allow cookies for this address."))
+                .await;
+        }
+    };
+    let saml = match saml_config(&console) {
+        Ok(saml) => saml,
+        Err(refusal) => return console.sign_in_refused("saml", None, &refusal).await,
+    };
+    let now = i64::try_from(now).unwrap_or(i64::MAX);
+    let signed = match saml::verify(form.get("SAMLResponse"), &saml, relay, now) {
+        Ok(signed) => signed,
+        Err(refusal) => return console.sign_in_refused("saml", None, &refusal).await,
+    };
+    // Each request answers once, and each assertion is used once, for as long as it would be taken.
+    let lasts = u64::try_from(signed.until.saturating_sub(now) + 60).unwrap_or(left);
+    if !console.remember(&format!("saml-request:{relay}"), left)
+        || !console.remember(
+            &format!("saml-assertion:{}", signed.id),
+            lasts.min(24 * 3600),
+        )
+    {
+        return console
+            .sign_in_refused(
+                "saml",
+                Some(&signed.email),
+                &refused(
+                    "saml_replay",
+                    "This sign-in was already used. Start again from the sign-in page.",
+                ),
+            )
+            .await;
+    }
+    let groups: Vec<&str> = signed.groups.iter().map(String::as_str).collect();
+    let admitted = sso::admit_person(
+        signed.email,
+        &groups,
+        &sso::Access::of_saml(&saml),
+        &console.roles(),
+        &console.teams(),
+    );
+    let (email, role, team) = match admitted {
+        Ok(admitted) => admitted,
+        Err((email, refusal)) => {
+            return console
+                .sign_in_refused("saml", email.as_deref(), &refusal)
+                .await;
+        }
+    };
+    let act = Act {
+        action: "console_sign_in",
+        by: Some((&email, &team)),
+        key: None,
+        target: json!({ "via": "saml", "role": role }),
+    };
+    if record(&console, &act, None, None).await.is_err() {
+        return page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            pages::sign_in("", NOT_RECORDED, true),
+        );
+    }
+    let session = match console.open_session(Who::Sso { email, role, team }).await {
+        Ok(session) => session,
+        Err(err) => {
+            return page(
+                StatusCode::SERVICE_UNAVAILABLE,
+                pages::sign_in("", &err, true),
+            );
+        }
+    };
+    let mut response = page(StatusCode::OK, pages::signed_in_sso());
+    set_cookie(
+        &mut response,
+        &session_cookie(&session, &headers, &uri, &tls),
+    );
+    set_cookie(
+        &mut response,
+        &format!("{SAML_COOKIE}=; Path=/console/saml; Max-Age=0; HttpOnly; SameSite=Lax"),
+    );
     response
 }
 
@@ -2640,14 +2867,17 @@ mod tests {
             Who::Sso {
                 email: "maya@acme.com".into(),
                 role: "read_only".into(),
+                team: String::new(),
             },
             Who::Sso {
                 email: "lee@acme.com".into(),
                 role: "admin".into(),
+                team: "payments".into(),
             },
             Who::Sso {
                 email: "fin@acme.com".into(),
                 role: "finance".into(),
+                team: String::new(),
             },
             Who::Account("acct 7".into()),
         ] {
@@ -2655,6 +2885,10 @@ mod tests {
             assert_eq!(who_of(&text).map(|w| who_text(&w)), Some(text));
         }
         assert!(who_of("root everything").is_none());
+        // A session opened before teams reads back with no team.
+        assert!(
+            matches!(who_of("sso admin lee@acme.com"), Some(Who::Sso { team, .. }) if team.is_empty())
+        );
     }
 
     #[test]

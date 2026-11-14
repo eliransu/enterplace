@@ -5354,7 +5354,7 @@ pub async fn serve_policy_with(
     }
     println!(
         "Console: {scheme}://{addr}/console (sign in with an admin key{})",
-        if loaded.sso.is_some() {
+        if loaded.sso.is_some() || loaded.saml.is_some() {
             " or single sign-on"
         } else {
             ""
