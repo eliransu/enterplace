@@ -1,0 +1,15 @@
+{
+  "name": "gantry-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/containers": "0.3.7",
+    "@cloudflare/workers-types": "5.20261113.1",
+    "typescript": "7.0.2",
+    "wrangler": "4.161.0"
+  }
+}

@@ -116,6 +116,8 @@ pub struct Setup {
     pub env: Env,
     pub siem: bool,
     pub retention: bool,
+    /// Set to the last record read into the table, so segments that leave the disk have been read first.
+    pub read_through: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// One replica's exporter: reads its chain into the table, sends it on, and applies retention to it.
@@ -126,6 +128,7 @@ pub(crate) struct Exporter {
     replica: String,
     siem: bool,
     retention: bool,
+    read_through: Arc<std::sync::atomic::AtomicU64>,
     key: Option<[u8; 32]>,
     sinks: Arc<Sinks>,
     /// Where the last read stopped, so the next one does not read the file from the start.
@@ -168,6 +171,7 @@ pub fn register(extension: &mut gantry_server::Extension, setup: Setup) -> Resul
         replica,
         siem: setup.siem,
         retention: setup.retention,
+        read_through: setup.read_through,
         key,
         sinks: Arc::new(Sinks::new(setup.env)),
         hint: Mutex::new(None),
@@ -489,6 +493,8 @@ impl Exporter {
     /// Copies the records written since the last call into the table. Returns how many.
     pub(crate) async fn ingest(&self) -> Result<usize, String> {
         let after = self.ingested().await?;
+        self.read_through
+            .fetch_max(after, std::sync::atomic::Ordering::SeqCst);
         let path = self.path.clone();
         let mut hint = self
             .hint
@@ -526,6 +532,8 @@ impl Exporter {
         .await
         .map_err(db_error)?;
         tx.commit().await.map_err(db_error)?;
+        self.read_through
+            .fetch_max(last, std::sync::atomic::Ordering::SeqCst);
         Ok(rows.len())
     }
 

@@ -1276,6 +1276,7 @@ async fn delivery_retries_with_backoff_and_resumes_from_the_cursor_after_a_resta
         replica: ex.replica.clone(),
         siem: true,
         retention: false,
+        read_through: ex.read_through.clone(),
         key: ex.key,
         sinks: Arc::new(Sinks::new(env_of(&[]))),
         hint: Mutex::new(None),
