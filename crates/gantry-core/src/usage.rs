@@ -61,6 +61,9 @@ impl Usage {
         if answer["usageMetadata"].is_object() {
             return Some(Self::from_gemini(&answer["usageMetadata"]));
         }
+        if let Some(triton) = Self::from_triton(&answer) {
+            return Some(triton);
+        }
         let usage = &answer["usage"];
         if !usage.is_object() {
             return None;
@@ -68,12 +71,35 @@ impl Usage {
         if answer["object"] == "response" {
             return Some(Self::from_responses(usage));
         }
+        // Bedrock Converse.
+        if usage.get("inputTokens").is_some() {
+            return Some(crate::converse::usage(usage));
+        }
+        // Cohere v2: what it bills, else what it counted.
+        if let Some(cohere) = Self::from_cohere(usage) {
+            return Some(cohere);
+        }
         if usage.get("prompt_tokens").is_some() || usage.get("completion_tokens").is_some() {
             return Some(Self::from_openai(usage));
         }
         let mut found = Self::default();
         found.merge_anthropic(usage);
         Some(found)
+    }
+
+    /// Reads the token counts of a Triton generate answer, which a model reports as its `num_input_tokens` and
+    /// `num_output_tokens` outputs (vLLM's backend, when the request sets `return_num_input_tokens` and
+    /// `return_num_output_tokens`). None when it reports neither.
+    pub fn from_triton(answer: &Value) -> Option<Self> {
+        let input = answer["num_input_tokens"].as_u64();
+        let output = answer["num_output_tokens"].as_u64();
+        (answer.get("text_output").is_some() && (input.is_some() || output.is_some())).then(|| {
+            Self {
+                input: input.unwrap_or_default(),
+                output: output.unwrap_or_default(),
+                ..Self::default()
+            }
+        })
     }
 
     /// Reads an OpenAI `usage` object.
@@ -107,6 +133,18 @@ impl Usage {
             cache_write_1h: 0,
             ..Self::default()
         }
+    }
+
+    /// Reads a Cohere v2 `usage` object: the billed units, else the tokens counted. None for another format.
+    pub fn from_cohere(usage: &Value) -> Option<Self> {
+        let units = [&usage["billed_units"], &usage["tokens"]]
+            .into_iter()
+            .find(|u| u["input_tokens"].is_number() || u["output_tokens"].is_number())?;
+        Some(Self {
+            input: units["input_tokens"].as_u64().unwrap_or_default(),
+            output: units["output_tokens"].as_u64().unwrap_or_default(),
+            ..Self::default()
+        })
     }
 
     /// Reads a Gemini `usageMetadata` object.
@@ -171,6 +209,9 @@ pub struct UsageScanner {
     events: u64,
     /// OpenAI's `data: [DONE]` passed: the provider finished the stream.
     finished: bool,
+    /// For an AWS event stream (Bedrock's own streaming answers, passed through as sent): its messages are decoded
+    /// and each event read as a `data:` line would be.
+    aws: Option<crate::eventstream::Decoder>,
 }
 
 /// String fields of streamed events that hold generated text.
@@ -212,8 +253,38 @@ impl UsageScanner {
         Self::default()
     }
 
+    /// A scanner for an AWS event stream: Bedrock's InvokeModelWithResponseStream (`chunk` events holding the
+    /// model's own events, base64) or ConverseStream (its `metadata` event carries the usage).
+    pub fn aws_eventstream() -> Self {
+        Self {
+            aws: Some(crate::eventstream::Decoder::default()),
+            ..Self::default()
+        }
+    }
+
     /// Feeds the next bytes of the stream, split anywhere.
     pub fn feed(&mut self, mut bytes: &[u8]) {
+        if let Some(decoder) = &mut self.aws {
+            // A damaged stream is read no further: what it reported so far stands, and it is not done.
+            let messages = decoder.feed(bytes).unwrap_or_default();
+            for message in messages {
+                let Ok(payload) = serde_json::from_slice::<Value>(&message.payload) else {
+                    continue;
+                };
+                let event = match message.header(":event-type") {
+                    Some("chunk") => payload["bytes"]
+                        .as_str()
+                        .and_then(crate::eventstream::base64_decode)
+                        .and_then(|b| serde_json::from_slice::<Value>(&b).ok()),
+                    Some(name) => Some(serde_json::json!({ name: payload })),
+                    None => None,
+                };
+                if let Some(event) = event {
+                    self.on_line(format!("data: {event}").as_bytes());
+                }
+            }
+            return;
+        }
         while let Some(end) = bytes.iter().position(|&b| b == b'\n') {
             self.line.extend_from_slice(&bytes[..end]);
             bytes = &bytes[end + 1..];
@@ -263,6 +334,19 @@ impl UsageScanner {
         }
         // Most events carry text, not usage, and need no parsing. A quoted key cannot occur inside a JSON
         // string, where quotes are escaped, so this never skips a line that holds usage.
+        // Triton's generate_stream: each response counts the tokens it added, and the prompt.
+        let has = |key: &[u8]| data.windows(key.len()).any(|w| w == key);
+        if has(b"\"num_output_tokens\"") || has(b"\"num_input_tokens\"") {
+            if let Some(more) = serde_json::from_slice::<Value>(data)
+                .ok()
+                .and_then(|event| Usage::from_triton(&event))
+            {
+                let usage = self.usage.get_or_insert_default();
+                usage.input = usage.input.max(more.input);
+                usage.output += more.output;
+            }
+            return;
+        }
         if !data.windows(7).any(|w| w == b"\"usage\"")
             && !data.windows(15).any(|w| w == b"\"usageMetadata\"")
         {
@@ -281,7 +365,18 @@ impl UsageScanner {
             self.done |= stopped || !event["promptFeedback"]["blockReason"].is_null();
             return;
         }
+        // Bedrock ConverseStream, as eventstream::ConverseToSse writes it: the metadata event comes last.
+        if event["metadata"]["usage"].is_object() {
+            self.usage = Some(crate::converse::usage(&event["metadata"]["usage"]));
+            self.done = true;
+            return;
+        }
         match event["type"].as_str() {
+            // Cohere v2: message-end carries the counts of the whole answer.
+            Some("message-end") => {
+                self.usage = Usage::from_cohere(&event["delta"]["usage"]);
+                self.done = true;
+            }
             Some(kind) if kind.starts_with("response.") => {
                 // Only the events that end a response (completed, incomplete, failed) carry its usage.
                 if event["response"]["usage"].is_object() {
@@ -355,6 +450,13 @@ pub struct Price {
     pub batch_output: Option<f64>,
     #[serde(default)]
     pub batch_cache_read: Option<f64>,
+    /// US dollars per second of video, for a video model (Sora, Veo). A video is charged this for each second it
+    /// holds when it is done, and reserves it for each second it asks for.
+    #[serde(default)]
+    pub per_second: Option<f64>,
+    /// US dollars per object created, for what is billed per use rather than by the token.
+    #[serde(default)]
+    pub per_call: Option<f64>,
     /// Where the price came from, written in each usage record. Never read from a file: a price in one is the policy's.
     #[serde(skip)]
     pub source: PriceSource,
@@ -415,6 +517,8 @@ impl Price {
             batch_input: None,
             batch_output: None,
             batch_cache_read: None,
+            per_second: None,
+            per_call: None,
             source: PriceSource::Builtin,
         }
     }
@@ -489,6 +593,8 @@ impl Price {
             self.batch_input,
             self.batch_output,
             self.batch_cache_read,
+            self.per_second,
+            self.per_call,
         ];
         if all.into_iter().flatten().any(|p| !p.is_finite() || p < 0.0) {
             return Err(format!(
@@ -519,9 +625,83 @@ pub struct BuiltinPrice {
 const ANTHROPIC_PRICES: &str = "https://platform.claude.com/docs/en/about-claude/pricing";
 const OPENAI_PRICES: &str = "https://developers.openai.com/api/docs/pricing";
 
+/// Sora's prices are on each model's page. OpenAI shut both models down on 2026-09-24; the prices stay for records
+/// made before then and for a provider that still serves them.
+const SORA_2_PRICES: &str = "https://developers.openai.com/api/docs/models/sora-2";
+const SORA_2_PRO_PRICES: &str = "https://developers.openai.com/api/docs/models/sora-2-pro";
+/// Google's page lists Veo as US dollars "/ 1 count" and does not name the unit; LiteLLM's price map (MIT) gives the
+/// same figures as `output_cost_per_second`, which is the unit used here.
+const VEO_PRICES: &str = "https://cloud.google.com/model-garden/pricing (values), LiteLLM model_prices_and_context_window.json output_cost_per_second (unit)";
+
+impl Price {
+    /// A price per second of video, with no token price.
+    fn per_second(per_second: f64) -> Self {
+        Self {
+            input: 0.0,
+            output: 0.0,
+            cache_read: None,
+            cache_write: None,
+            cache_write_1h: None,
+            long_context: None,
+            max_output: None,
+            max_context: None,
+            per_image: None,
+            per_second: Some(per_second),
+            source: PriceSource::Builtin,
+            ..Self::default()
+        }
+    }
+}
+
+/// Code interpreter containers are billed per session of 20 minutes, by the minute with a 5-minute minimum.
+pub const CONTAINER_SESSION_MINUTES: u64 = 20;
+pub const CONTAINER_MINIMUM_MINUTES: u64 = 5;
+pub const CONTAINER_PRICES: &str = OPENAI_PRICES;
+pub const CONTAINER_PRICES_CHECKED: &str = "2026-11-14";
+
+/// US dollars per 20-minute session of a code interpreter container of this memory size (`1g`, `4g`, `16g`, `64g`).
+pub fn container_price(size: &str) -> Option<f64> {
+    match size {
+        "1g" => Some(0.03),
+        "4g" => Some(0.12),
+        "16g" => Some(0.48),
+        "64g" => Some(1.92),
+        _ => None,
+    }
+}
+
+/// What a container of this size costs for `seconds` of life: whole minutes, at least the minimum.
+pub fn container_cost(size: &str, seconds: u64) -> Option<f64> {
+    let minutes = seconds.div_ceil(60).max(CONTAINER_MINIMUM_MINUTES);
+    container_price(size).map(|session| session * minutes as f64 / CONTAINER_SESSION_MINUTES as f64)
+}
+
 /// Prices of the models named in the README and specs. Standard tier, global routing.
 pub fn builtin_prices() -> Vec<BuiltinPrice> {
     let checked = "2026-11-13";
+    let video = |model: &'static str, per_second: f64, source| BuiltinPrice {
+        model,
+        price: Price::per_second(per_second),
+        source,
+        checked: "2026-11-14",
+    };
+    // Video, per second generated, at the size Gantry asks for: 720p (Sora's 1280x720 and Veo's default), with
+    // audio for Veo 3 and later, the dearer of Veo's two prices.
+    let mut table = vec![
+        video("sora-2", 0.10, SORA_2_PRICES),
+        video("sora-2-pro", 0.30, SORA_2_PRO_PRICES),
+        video("veo-3.1-generate-001", 0.40, VEO_PRICES),
+        video("veo-3.1-fast-generate-001", 0.10, VEO_PRICES),
+        video("veo-3.1-lite-generate-001", 0.05, VEO_PRICES),
+        video("veo-3.0-generate-001", 0.40, VEO_PRICES),
+        video("veo-3.0-fast-generate-001", 0.10, VEO_PRICES),
+        video("veo-2.0-generate-001", 0.50, VEO_PRICES),
+    ];
+    table.extend(token_prices(checked));
+    table
+}
+
+fn token_prices(checked: &'static str) -> Vec<BuiltinPrice> {
     // OpenAI charges nothing extra to write its cache on these models, so writes cost the input price.
     vec![
         BuiltinPrice {
@@ -622,6 +802,8 @@ fn litellm_row(line: &'static str) -> Option<(&'static str, Price)> {
             batch_input: None,
             batch_output: None,
             batch_cache_read: None,
+            per_second: None,
+            per_call: None,
             source: PriceSource::Litellm,
         })
     };

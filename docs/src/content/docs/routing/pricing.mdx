@@ -88,6 +88,8 @@ Prices are US dollars per million tokens, 0 or more. Prices change without a res
 | `per_image` | number | none | US dollars per image, for an image model billed by the image. |
 | `input_audio`, `output_audio`, `cache_read_audio` | number | `input`, `output`, `cache_read` | Per million audio tokens: prompt audio, generated audio, cached prompt audio. A realtime session's usage events split tokens by modality, and each part is charged its own price. Set them for a realtime model: audio usually costs several times text. |
 | `batch_input`, `batch_output`, `batch_cache_read` | number | half the price | Per million tokens for a batch line. With `batch_input` and `batch_output` set, a batch line pays them (and other parts in the same proportion); without them, half the model's price, as OpenAI, Anthropic, Bedrock and Vertex AI bill batches. |
+| `per_second` | number | none | US dollars per second of video, for a video model (Sora, Veo). |
+| `per_call` | number | none | US dollars per object created, for what is billed per use. |
 
 ## How prices drive budgets
 
@@ -95,6 +97,8 @@ A budget reserves the most a request could cost before it is sent, then replaces
 
 - **No token limit.** A request that sets none of `max_tokens`, `max_completion_tokens` or `max_output_tokens` reserves the model's `max_output`. Without one, it is refused with `max_tokens_needed` (400). Built-in values: 16384 for `gpt-4o-mini` and `gpt-4o`, 64000 for `claude-sonnet-5-5` and `claude-haiku-5-5`.
 - **Stored context.** A Responses request that names `previous_response_id`, `conversation` or `prompt` is refused under a budget with `stored_context` (400), unless the model has `max_context`.
+- **Videos and containers.** A video reserves the seconds it asks for at `per_second` and is charged its seconds when done. A container is priced by its memory size from Gantry's table (OpenAI's price per 20-minute session, by the minute with a 5-minute minimum), not by a model's price. See [Videos and containers](/providers/videos-and-containers/).
+- **Bedrock and Azure names.** A model with no price of its own is priced as the Bedrock model ID or Azure deployment it is called by, when the table knows that name.
 - **Images.** An images request reserves `n` (default 1) times `per_image` and is charged for each image in the answer. An image or speech model priced by the token needs `max_output` instead, and reserves `n` times it. Without either, it is refused with `max_tokens_needed`.
 
 <Aside type="caution">

@@ -122,6 +122,23 @@ pub fn openai_to_gemini_request(request: &Value) -> Result<(Value, bool)> {
             "tool_choice" => insert(&mut out, "toolConfig", gemini_tool_choice(value)?),
             // Gemini may call several functions in one turn and has no switch to stop it.
             "parallel_tool_calls" if *value == true => {}
+            // Gemini 3 takes a thinking level; Gemini 2.5 a budget in tokens (translate::thinking_budget).
+            "reasoning_effort" => {
+                let gemini_3 = request["model"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("gemini-3"));
+                let thinking = match (value.as_str(), gemini_3) {
+                    (Some("none"), false) => json!({"thinkingBudget": 0}),
+                    (Some(level @ ("minimal" | "low" | "medium" | "high")), true) => {
+                        json!({"thinkingLevel": level})
+                    }
+                    (Some(level), false) if crate::translate::thinking_budget(level).is_some() => {
+                        json!({"thinkingBudget": crate::translate::thinking_budget(level)})
+                    }
+                    _ => return untranslatable(&describe(key, value), TO_GEMINI),
+                };
+                insert(&mut config, "thinkingConfig", thinking);
+            }
             // SAFE_TO_DROP.
             "user" | "safety_identifier" | "prompt_cache_key" | "metadata" => {}
             _ if is_openai_default(key, value) => {}
@@ -697,7 +714,7 @@ mod tests {
                 json!({"parallel_tool_calls": false}),
                 "\"parallel_tool_calls\"",
             ),
-            (json!({"reasoning_effort": "high"}), "\"reasoning_effort\""),
+            (json!({"reasoning_effort": "xhigh"}), "\"reasoning_effort\""),
             (json!({"audio": {"voice": "x"}}), "\"audio\""),
             (
                 json!({"tools": [{"type": "function", "function": {"name": "f", "strict": true}}]}),

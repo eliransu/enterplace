@@ -1,6 +1,6 @@
 ---
 title: OpenAI and compatible vendors
-description: Configure OpenAI and OpenAI-compatible vendors such as Groq, Mistral, Together, Fireworks, DeepSeek and OpenRouter as kind openai providers.
+description: Configure OpenAI and OpenAI-compatible vendors such as DeepSeek, xAI, Together, Fireworks, Perplexity, Cerebras, OpenRouter, Hugging Face, Databricks and Snowflake as kind openai providers.
 sidebar:
   order: 2
 ---
@@ -174,7 +174,23 @@ A Responses request's `max_output_tokens` sizes its budget reservation.
 
 - A request with `previous_response_id` or `store: true` leaves the conversation stored at OpenAI under Gantry's provider key. The record shows the request; Gantry does not track what the provider stored.
 - Under a budget, a request that names stored context (`previous_response_id`, `conversation` or `prompt`) is refused with `stored_context`, unless the model's price sets `max_context`. See [Pricing](/routing/pricing/).
-- Other Responses routes (`GET` and `DELETE /v1/responses/{id}`, input items, cancel) are refused with `unknown_route`.
+- A response made through Gantry is its creator's: `GET /v1/responses/{id}` (with `include`, `stream` and `starting_after`), `GET /v1/responses/{id}/input_items`, `DELETE /v1/responses/{id}` and `POST /v1/responses/{id}/cancel` reach the provider that made it (OpenAI, or Azure at its own path) for them alone; anyone else is answered 404, as for files and batches, and an admin key reaches all. Each read is decided and recorded. A response translated for a provider that does not speak Responses is kept by Gantry instead, for an hour, when the request said `"store": true`; reading one that was not kept is refused with `not_kept`, and cancelling one with `not_background`. Where it is kept: see [Held answers](#held-answers).
+- A background response (`"background": true`, not streamed) is answered `queued` and has used nothing yet, so its usage record says `usage: background` and charges nothing; the budget reservation its request made stays held. Gantry charges what it used, from the response's `usage`, the first time it sees the response ended (`completed`, `incomplete`, `failed` or `cancelled`): when its creator reads it (`GET`) or cancels it, or when Gantry asks for it itself, once a minute, so a response nobody reads is still charged. The usage record names it (`response`, `background: true`) and the reservation is given back. With a store, the first replica to see it end charges it and the others do not. One deleted before Gantry saw it end is read once more and charged what it used, or its reservation if the provider says nothing more.
+
+## Async jobs
+
+`POST /v1/async/<route>` runs a request in the background on one of `chat/completions`, `completions`, `responses`, `embeddings`, `messages`, `moderations`, `rerank`, `images/generations`, `audio/speech`, `audio/transcriptions`. The body is the route's own. Gantry answers `202` with `{"id": "job_...", "status": "pending"}` at once, then runs the request on the governed route: decided, guarded, budgeted and recorded under its own decision, as if sent there. `GET /v1/async/<route>/<id>` answers `202` while it runs and `200` when it ends, with `status` (`completed` or `failed`), `status_code`, `result` or `error`, `decision` (the inner request's record) and `expires_at`. Only the submitter (or an admin key) reads it; anyone else gets 404.
+
+- The answer is held for an hour after the job ends, or `x-gantry-async-ttl` seconds (60 to 86400).
+- A job cannot stream: `"stream": true` is refused with `stream_not_async`.
+- Where the answer is held: see below.
+
+## Held answers
+
+Async job answers and translated responses kept with `"store": true` are text Gantry holds for their owner. They are never written to the audit log.
+
+- With a store (`store:` in the policy), they are kept in its database, table `gantry_batches_held` (namespace `batches`, migration 2), so any replica answers for any job or response. When the gateway has a master key (`GANTRY_MASTER_KEY`, as for provider credentials), each answer is sealed with it (AES-256-GCM); without one it is kept as JSON, so set a master key wherever the database is not trusted with prompts and answers. Expired answers are deleted as new ones are held; reads never return one past its time.
+- Without a store, they are kept in the memory of the replica that took them, and lost when it restarts.
 
 ## Images, audio, moderations and rerank
 
@@ -200,6 +216,38 @@ Guardrails never read the audio of a transcription. Do not give transcription mo
 </Aside>
 
 Image and speech models priced by the token need `max_output` in their price under a budget or a tokens-per-minute limit; image models priced by the image need `per_image`. See [Pricing](/routing/pricing/).
+
+## Presets
+
+Each of these has a `preset:` in the [provider catalog](/reference/providers/), with the URL from its own documentation:
+
+| Provider | `preset` | Notes |
+|---|---|---|
+| DeepSeek | `deepseek` | Chat. `deepseek-reasoner` returns `reasoning_content`, which Gantry passes on. |
+| xAI | `xai` | Chat, Responses. |
+| Together AI | `together` | Chat, embeddings, rerank. |
+| Fireworks AI | `fireworks` | Chat, embeddings. |
+| Perplexity | `perplexity` | Chat; citations come back in the answer as Perplexity sends them. |
+| Cerebras | `cerebras` | Chat. |
+| OpenRouter | `openrouter` | Chat, Responses. |
+| Hugging Face Inference Providers | `huggingface` | Chat. |
+| Databricks Model Serving | `databricks` | Write your workspace URL, `https://<workspace>.cloud.databricks.com/serving-endpoints`, next to the preset; the key is a Databricks token. Model names are serving endpoint names. |
+| Snowflake Cortex | `snowflake` | Write your account URL, `https://<account>.snowflakecomputing.com/api/v2/cortex/v1`, next to the preset; the key is a programmatic access token. |
+| Ollama, vLLM, LM Studio | `ollama`, `vllm`, `lmstudio` | Local: `allow_private: true`. See [Local models](/providers/local-models/). |
+
+A preset whose URL holds a placeholder in capitals fails `gantry check` until the provider writes its own `url`:
+
+```yaml
+  - name: databricks
+    preset: databricks
+    url: https://acme.cloud.databricks.com/serving-endpoints
+    key_env: DATABRICKS_TOKEN
+    models: [databricks-claude-sonnet-5-5, databricks-gpt-5]
+```
+
+Databricks model names in the price table carry the `databricks-` prefix Databricks gives its foundation model endpoints, so budgets price them without a `prices:` entry.
+
+Cohere and IBM watsonx.ai have native kinds: see [Cohere and watsonx.ai](/providers/cohere-and-watsonx/).
 
 ## Related
 

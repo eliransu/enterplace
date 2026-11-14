@@ -73,6 +73,8 @@ const KNOWN: &[&str] = &[
     "buffer_stream",
     "check_stream_every",
     "file_retention_days",
+    "containers",
+    "sizes",
     "passthrough",
     "provider",
     "paths",
@@ -96,6 +98,8 @@ const KNOWN: &[&str] = &[
     "max_open",
     "bucket",
     "storage_url",
+    "per_second",
+    "per_call",
     "above_prompt_tokens",
     "price",
     "console",
@@ -131,6 +135,10 @@ const KNOWN: &[&str] = &[
     "threshold",
     "anonymizer_url",
     "project_id",
+    "oci_signing",
+    "tenancy",
+    "user",
+    "fingerprint",
     "template_id",
     "case_sensitive",
     "whole_word",
@@ -837,6 +845,15 @@ struct ProviderFile {
     proxy_env: Option<String>,
     #[serde(default)]
     batch: Option<ProviderBatchFile>,
+    // watsonx.ai: the project its requests are made in.
+    #[serde(default)]
+    project_id: Option<String>,
+    // openai or azure: chat completions requests for its models are sent to the Responses API, translated.
+    #[serde(default)]
+    chat_as_responses: Option<bool>,
+    // openai (OCI Generative AI): requests are signed with an OCI API signing key instead of carrying a key.
+    #[serde(default)]
+    oci_signing: Option<OciSigningFile>,
 }
 
 #[derive(Deserialize)]
@@ -849,6 +866,37 @@ struct ProviderBatchFile {
     url: Option<String>,
     #[serde(default)]
     storage_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OciSigningFile {
+    tenancy: String,
+    user: String,
+    fingerprint: String,
+    #[serde(default)]
+    key_file: Option<String>,
+    #[serde(default)]
+    key_env: Option<String>,
+}
+
+/// An OCI API signing key: the IDs that make its keyId, and where its private key (PEM) is. Requests are signed
+/// with OCI's HTTP signature (version 1, rsa-sha256).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OciSigning {
+    pub tenancy: String,
+    pub user: String,
+    pub fingerprint: String,
+    /// The private key's file, read at start; or, when None, the environment variable in `key_env`.
+    pub key_file: Option<PathBuf>,
+    pub key_env: Option<String>,
+}
+
+impl OciSigning {
+    /// `<tenancy OCID>/<user OCID>/<key fingerprint>`, as OCI's Authorization header names the key.
+    pub fn key_id(&self) -> String {
+        format!("{}/{}/{}", self.tenancy, self.user, self.fingerprint)
+    }
 }
 
 #[derive(Deserialize)]
@@ -907,6 +955,7 @@ struct RuleFile {
     file_retention_days: Option<i64>,
     #[serde(default)]
     batch: Option<RuleBatchFile>,
+    containers: Option<ContainersFile>,
     #[serde(default)]
     shadow_until: Option<String>,
 }
@@ -919,6 +968,15 @@ struct RuleBatchFile {
     #[serde(default)]
     max_open: Option<i64>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContainersFile {
+    sizes: Vec<String>,
+}
+
+/// The memory sizes OpenAI offers for a code interpreter container.
+pub const CONTAINER_SIZES: [&str; 4] = ["1g", "4g", "16g", "64g"];
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1803,6 +1861,23 @@ pub enum Kind {
     /// Claude on Google Cloud Vertex AI: the messages body sent to rawPredict or streamRawPredict, with an OAuth
     /// access token as a Bearer token.
     VertexAnthropic,
+    /// Amazon Bedrock's Converse and ConverseStream for every model family Bedrock serves through them (Anthropic,
+    /// Meta, Mistral, Cohere, Amazon Nova, AI21, DeepSeek, Qwen, OpenAI gpt-oss), signed with AWS Signature Version 4.
+    /// Callers use the chat completions route, translated both ways; embeddings go to InvokeModel (Titan, Cohere).
+    BedrockConverse,
+    /// Cohere's own API (v2 chat, embed and rerank), keyed by a Bearer token. Chat is translated both ways.
+    Cohere,
+    /// IBM watsonx.ai (text/chat and text/embeddings), with an IAM token Gantry trades the API key for.
+    Watsonx,
+    /// Model Garden models on Vertex AI behind its OpenAI-compatible endpoint (`.../endpoints/openapi`), with an
+    /// OAuth access token as a Bearer token.
+    VertexOpenAi,
+    /// An Amazon SageMaker real-time endpoint whose container takes the chat completions body (LMI, TGI's Messages
+    /// API), reached at InvokeEndpoint and signed with AWS Signature Version 4. Each model maps to an endpoint name.
+    Sagemaker,
+    /// Replicate's predictions API, keyed by a Bearer token. Chat is translated to a model's `input` and the
+    /// prediction is waited for.
+    Replicate,
 }
 
 impl Kind {
@@ -1815,6 +1890,12 @@ impl Kind {
             Kind::Gemini => "gemini",
             Kind::Vertex => "vertex",
             Kind::VertexAnthropic => "vertex_anthropic",
+            Kind::BedrockConverse => "bedrock_converse",
+            Kind::Cohere => "cohere",
+            Kind::Watsonx => "watsonx",
+            Kind::VertexOpenAi => "vertex_openai",
+            Kind::Sagemaker => "sagemaker",
+            Kind::Replicate => "replicate",
         }
     }
 
@@ -1828,6 +1909,12 @@ impl Kind {
             Kind::Gemini,
             Kind::Vertex,
             Kind::VertexAnthropic,
+            Kind::BedrockConverse,
+            Kind::Cohere,
+            Kind::Watsonx,
+            Kind::VertexOpenAi,
+            Kind::Sagemaker,
+            Kind::Replicate,
         ]
         .into_iter()
         .find(|kind| kind.word() == word)
@@ -1841,9 +1928,52 @@ impl Kind {
     /// The API its callers speak, which decides the routes that reach it: `OpenAi` or `Anthropic`.
     pub fn api(self) -> Kind {
         match self {
-            Kind::OpenAi | Kind::Azure | Kind::Gemini | Kind::Vertex => Kind::OpenAi,
+            Kind::OpenAi
+            | Kind::Azure
+            | Kind::Gemini
+            | Kind::Vertex
+            | Kind::BedrockConverse
+            | Kind::Cohere
+            | Kind::Watsonx
+            | Kind::VertexOpenAi
+            | Kind::Sagemaker
+            | Kind::Replicate => Kind::OpenAi,
             Kind::Anthropic | Kind::Bedrock | Kind::VertexAnthropic => Kind::Anthropic,
         }
+    }
+
+    /// A chat completions request is translated to the provider's own body as it is sent, and its answer back.
+    pub fn translates_chat(self) -> bool {
+        matches!(
+            self,
+            Kind::Gemini
+                | Kind::Vertex
+                | Kind::BedrockConverse
+                | Kind::Cohere
+                | Kind::Watsonx
+                | Kind::Replicate
+        )
+    }
+
+    /// Signed with AWS Signature Version 4, from the provider's region and model IDs.
+    pub fn aws(self) -> bool {
+        matches!(
+            self,
+            Kind::Bedrock | Kind::BedrockConverse | Kind::Sagemaker
+        )
+    }
+
+    /// Amazon Bedrock, either API: what `/bedrock/` passes through to.
+    pub fn bedrock(self) -> bool {
+        matches!(self, Kind::Bedrock | Kind::BedrockConverse)
+    }
+
+    /// Takes a Google OAuth access token: from key_env, or from Application Default Credentials without one.
+    pub fn google_auth(self) -> bool {
+        matches!(
+            self,
+            Kind::Vertex | Kind::VertexAnthropic | Kind::VertexOpenAi
+        )
     }
 }
 
@@ -1954,6 +2084,12 @@ pub struct Provider {
     pub proxy_env: Option<String>,
     /// Where the provider's own batch jobs keep their files: Bedrock batch inference and Vertex AI batch prediction.
     pub batch: Option<ProviderBatch>,
+    /// watsonx.ai's project.
+    pub project_id: Option<String>,
+    /// Whether chat completions requests for its models are sent to the Responses API, translated both ways.
+    pub chat_as_responses: bool,
+    /// Signs requests with an OCI API signing key, in place of a provider key.
+    pub oci_signing: Option<OciSigning>,
 }
 
 /// How a Bedrock or Vertex AI provider runs batches through `/v1/batches`.
@@ -3043,17 +3179,11 @@ fn rule_passthrough(
             line_of_key(text, "passthrough", line, until)
         );
         for entry in &rule.passthrough {
-            match providers.iter().find(|p| p.name == entry.provider) {
-                None => errors.push(format!(
+            if !providers.iter().any(|p| p.name == entry.provider) {
+                errors.push(format!(
                     "{at}: passthrough names no provider named \"{}\". Use the name of one under providers:.",
                     entry.provider
-                )),
-                Some(p) if matches!(p.kind, Kind::Bedrock | Kind::Vertex | Kind::VertexAnthropic) => errors.push(format!(
-                    "{at}: provider \"{}\" is {}, whose requests Gantry must sign or translate, so it cannot be reached as sent. Pass through to an openai, anthropic, azure or gemini provider.",
-                    entry.provider,
-                    p.kind.word()
-                )),
-                Some(_) => {}
+                ));
             }
             if entry.paths.is_empty() {
                 errors.push(format!(
@@ -3415,6 +3545,21 @@ fn limits(
             ));
         }
     }
+    if let Some(containers) = &rule.containers {
+        let sizes: Vec<String> = containers
+            .sizes
+            .iter()
+            .map(|s| s.trim().to_string())
+            .collect();
+        if sizes.is_empty() || sizes.iter().any(|s| !CONTAINER_SIZES.contains(&s.as_str())) {
+            errors.push(format!(
+                "{}: containers lists the memory sizes of code interpreter containers this rule's callers may create, each one of 1g, 4g, 16g or 64g, for example containers: {{ sizes: [1g, 4g] }}. To allow no containers, remove the line.",
+                at("containers")
+            ));
+        } else {
+            limits.containers = sizes;
+        }
+    }
     if let Some(every) = rule.check_stream_every {
         match u32::try_from(every) {
             Ok(every @ 50..=100_000) => limits.check_stream_every = Some(every),
@@ -3774,10 +3919,16 @@ fn provider_lines(text: &str) -> Vec<usize> {
 fn map_key(kind: Kind) -> Option<&'static str> {
     match kind {
         Kind::Azure => Some("deployments"),
-        Kind::Bedrock => Some("model_ids"),
-        Kind::OpenAi | Kind::Anthropic | Kind::Gemini | Kind::Vertex | Kind::VertexAnthropic => {
-            None
-        }
+        Kind::Bedrock | Kind::BedrockConverse | Kind::Sagemaker => Some("model_ids"),
+        Kind::OpenAi
+        | Kind::Anthropic
+        | Kind::Gemini
+        | Kind::Vertex
+        | Kind::VertexAnthropic
+        | Kind::Cohere
+        | Kind::Watsonx
+        | Kind::VertexOpenAi
+        | Kind::Replicate => None,
     }
 }
 
@@ -3798,17 +3949,69 @@ fn provider_options(
     if entry.deployments.is_some() && kind != Some(Kind::Azure) {
         only("deployments", "azure", errors);
     }
-    if entry.api_version.is_some() && kind != Some(Kind::Azure) {
-        only("api_version", "azure", errors);
+    let aws = kind.is_some_and(Kind::aws);
+    if entry.api_version.is_some() && !matches!(kind, Some(Kind::Azure | Kind::Watsonx)) {
+        only("api_version", "azure or watsonx", errors);
     }
-    if entry.model_ids.is_some() && kind != Some(Kind::Bedrock) {
-        only("model_ids", "bedrock", errors);
+    if entry.model_ids.is_some() && !aws {
+        only(
+            "model_ids",
+            "bedrock, bedrock_converse or sagemaker",
+            errors,
+        );
     }
-    if entry.region.is_some() && kind != Some(Kind::Bedrock) {
-        only("region", "bedrock", errors);
+    if entry.region.is_some() && !aws {
+        only("region", "bedrock, bedrock_converse or sagemaker", errors);
     }
-    if entry.role_arn.is_some() && kind != Some(Kind::Bedrock) {
-        only("role_arn", "bedrock", errors);
+    if entry.role_arn.is_some() && !aws {
+        only("role_arn", "bedrock, bedrock_converse or sagemaker", errors);
+    }
+    if entry.project_id.is_some() && kind != Some(Kind::Watsonx) {
+        only("project_id", "watsonx", errors);
+    }
+    if entry.chat_as_responses.is_some() && !matches!(kind, Some(Kind::OpenAi | Kind::Azure)) {
+        only("chat_as_responses", "openai or azure", errors);
+    }
+    if let Some(oci) = &entry.oci_signing {
+        if kind != Some(Kind::OpenAi) {
+            only("oci_signing", "openai (preset oci)", errors);
+        }
+        if entry.key_env.is_some() || entry.key_file.is_some() || entry.credential.is_some() {
+            errors.push(format!(
+                "{}: provider \"{}\" signs its requests with oci_signing, so it takes no key_env, key_file or credential. Keep oci_signing, or remove it and keep the API key.",
+                at("oci_signing"),
+                entry.name
+            ));
+        }
+        match (&oci.key_file, &oci.key_env) {
+            (Some(path), None) if !path.trim().is_empty() => {}
+            (None, Some(env))
+                if !env.is_empty()
+                    && env.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') => {}
+            _ => errors.push(format!(
+                "{}: oci_signing takes one of key_file (the path of the API signing key's PEM file, for example ~/.oci/oci_api_key.pem written out in full) or key_env (an environment variable that holds the PEM). The key itself never goes in this file.",
+                at("oci_signing")
+            )),
+        }
+        let ocid = |id: &str, of: &str| id.starts_with(&format!("ocid1.{of}."));
+        if !ocid(&oci.tenancy, "tenancy") || !ocid(&oci.user, "user") || oci.fingerprint.len() != 47
+        {
+            errors.push(format!(
+                "{}: oci_signing needs tenancy (ocid1.tenancy...), user (ocid1.user...) and fingerprint (aa:bb:..., 16 pairs) as the OCI console shows them under the user's API keys. Copy them from there.",
+                at("oci_signing")
+            ));
+        }
+    }
+    if let Some(project) = &entry.project_id
+        && (project.is_empty()
+            || !project
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+    {
+        errors.push(format!(
+            "{}: project_id is the ID of a watsonx.ai project, letters, digits and dashes, as shown under the project's Manage tab.",
+            at("project_id")
+        ));
     }
     if let Some(batch) = &entry.batch {
         let scheme = match kind {
@@ -3882,7 +4085,7 @@ fn provider_options(
     }
     if entry.accept_messages.is_some() && kind.is_some_and(|k| k.api() != Kind::OpenAi) {
         errors.push(format!(
-            "{}: accept_messages translates messages requests (Claude Code) to the chat completions API, so it is for a provider of kind openai, azure, gemini or vertex. Remove the line.",
+            "{}: accept_messages translates messages requests (Claude Code) to the chat completions API, so it is for a provider of a kind that takes chat completions (openai, azure, gemini, vertex, vertex_openai, bedrock_converse, cohere, watsonx, sagemaker or replicate). Remove the line.",
             at("accept_messages")
         ));
     }
@@ -3893,10 +4096,43 @@ fn provider_options(
         ));
     }
     match kind {
+        Some(Kind::Watsonx) => {
+            if entry.project_id.is_none() {
+                errors.push(format!(
+                    "{}: a watsonx provider needs project_id, the watsonx.ai project its requests are made in, for example `project_id: 0f6c1c3e-5d6a-4b4e-9b1e-2a7d1c9f0a11`.",
+                    at("kind")
+                ));
+            }
+            if let Some(version) = entry.api_version.as_deref()
+                && !(version.len() == 10
+                    && version.bytes().enumerate().all(|(i, b)| {
+                        if i == 4 || i == 7 {
+                            b == b'-'
+                        } else {
+                            b.is_ascii_digit()
+                        }
+                    }))
+            {
+                errors.push(format!(
+                    "{}: api_version is the date of the watsonx.ai API version, as IBM writes it: 2024-05-31.",
+                    at("api_version")
+                ));
+            }
+        }
         Some(Kind::Azure) => {
+            // The v1 API (a url ending in /openai/v1) takes no api_version.
+            let v1 = entry
+                .url
+                .as_deref()
+                .is_some_and(|u| u.trim_end_matches('/').ends_with("/openai/v1"));
             match entry.api_version.as_deref() {
+                None if v1 => {}
+                Some(_) if v1 => errors.push(format!(
+                    "{}: a url ending in /openai/v1 is Azure's v1 API, which takes no api_version. Remove the line, or use the resource's url without /openai/v1 to keep a dated version.",
+                    at("api_version")
+                )),
                 None => errors.push(format!(
-                    "{}: an azure provider needs api_version, the Azure OpenAI REST API version, for example `api_version: 2024-10-21`.",
+                    "{}: an azure provider needs api_version, the Azure OpenAI REST API version, for example `api_version: 2024-10-21`, or a url ending in /openai/v1 for the v1 API.",
                     at("kind")
                 )),
                 Some(version) => {
@@ -3925,7 +4161,21 @@ fn provider_options(
                 ));
             }
         }
-        Some(Kind::Bedrock) => {
+        Some(Kind::Sagemaker) => {
+            if entry.region.is_none() {
+                errors.push(format!(
+                    "{}: a sagemaker provider needs region, the AWS region its endpoints run in, for example `region: us-east-1`.",
+                    at("kind")
+                ));
+            }
+            if entry.model_ids.is_none() {
+                errors.push(format!(
+                    "{}: a sagemaker provider needs model_ids, the SageMaker endpoint that serves each model, for example `model_ids: {{ llama-3-70b: my-llama-endpoint }}`.",
+                    at("kind")
+                ));
+            }
+        }
+        Some(Kind::Bedrock | Kind::BedrockConverse) => {
             if entry.region.is_none() {
                 errors.push(format!(
                     "{}: a bedrock provider needs region, the AWS region it runs in, for example `region: us-east-1`.",
@@ -4091,10 +4341,10 @@ fn check_fallback(
     let Some(other_kind) = other.kind.as_deref().and_then(Kind::from_word) else {
         return;
     };
-    // A chat request for gemini or vertex is translated before it is recorded, so its fallback takes the same body.
-    if other_kind.api() != kind.api() || other_kind.google() != kind.google() {
+    // A chat request for a kind that translates chat is translated as it is sent, so its fallback must translate too.
+    if other_kind.api() != kind.api() || other_kind.translates_chat() != kind.translates_chat() {
         errors.push(format!(
-            "{}: fallback \"{name}\" is of kind {}, which speaks another API than this provider ({}). A fallback must take the same requests: anthropic and bedrock take messages, openai and azure take chat completions, gemini and vertex take Google's generateContent, anthropic, bedrock and vertex_anthropic take messages.",
+            "{}: fallback \"{name}\" is of kind {}, which speaks another API than this provider ({}). A fallback must take the same requests: openai, azure and vertex_openai take chat completions as sent; gemini, vertex, bedrock_converse, cohere and watsonx take chat completions translated; anthropic, bedrock and vertex_anthropic take messages.",
             at("fallback"),
             other_kind.word(),
             kind.word()
@@ -4140,7 +4390,20 @@ fn presets(file: &Path, text: &str, entries: &mut [ProviderFile], errors: &mut V
             ));
             continue;
         };
-        entry.url.get_or_insert_with(|| preset.url.to_string());
+        if preset.needs_url() && entry.url.is_none() {
+            let line = lines.get(i).copied().unwrap_or(0);
+            let until = lines.get(i + 1).copied().unwrap_or(usize::MAX);
+            errors.push(format!(
+                "{}:{}: preset \"{id}\" holds a placeholder in its URL ({}). Write your own url next to the preset, with your workspace or account in place of the capitals.",
+                file.display(),
+                line_of_key(text, "preset", line, until),
+                preset.url
+            ));
+        }
+        // An AWS preset's URL follows from the provider's region, as a hand-written one's does.
+        if !(preset.kind.aws() && entry.region.is_some()) {
+            entry.url.get_or_insert_with(|| preset.url.to_string());
+        }
         entry
             .kind
             .get_or_insert_with(|| preset.kind.word().to_string());
@@ -4180,7 +4443,7 @@ fn providers(
                 let kind = Kind::from_word(word);
                 if kind.is_none() {
                     errors.push(format!(
-                        "{}: kind is \"{word}\". It must be openai (the chat completions API), anthropic (the messages API), azure (Azure OpenAI), bedrock (Amazon Bedrock, Anthropic models), gemini (Google's Gemini API) vertex (Gemini on Google Cloud Vertex AI) or vertex_anthropic (Claude on Google Cloud Vertex AI).",
+                        "{}: kind is \"{word}\". It must be openai (the chat completions API), anthropic (the messages API), azure (Azure OpenAI), bedrock (Amazon Bedrock InvokeModel, Anthropic models), bedrock_converse (Amazon Bedrock Converse, every model family), gemini (Google's Gemini API), vertex (Gemini on Google Cloud Vertex AI), vertex_anthropic (Claude on Google Cloud Vertex AI), vertex_openai (Model Garden on Vertex AI), cohere (Cohere's own API), watsonx (IBM watsonx.ai), sagemaker (an Amazon SageMaker endpoint) or replicate (Replicate's predictions API).",
                         at("kind")
                     ));
                 }
@@ -4188,7 +4451,7 @@ fn providers(
             }
             None => None,
         };
-        let bedrock = kind == Some(Kind::Bedrock);
+        let bedrock = kind.is_some_and(Kind::aws);
         let region = entry.region.as_deref();
         if let Some(region) = region {
             let shaped = !region.is_empty()
@@ -4205,6 +4468,9 @@ fn providers(
         // Bedrock's URL follows from its region. A url may still be given, for a private endpoint or a test.
         let url = match (&entry.url, bedrock, region) {
             (Some(url), _, _) => Some(url.clone()),
+            (None, true, Some(region)) if kind == Some(Kind::Sagemaker) => Some(format!(
+                "https://runtime.sagemaker.{region}.amazonaws.com/endpoints"
+            )),
             (None, true, Some(region)) => {
                 Some(format!("https://bedrock-runtime.{region}.amazonaws.com"))
             }
@@ -4229,6 +4495,12 @@ fn providers(
                 if kind == Some(Kind::VertexAnthropic) && !url.ends_with("/publishers/anthropic") {
                     errors.push(format!(
                         "{}: a vertex_anthropic provider's url ends in /publishers/anthropic, for example https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic.",
+                        at("url")
+                    ));
+                }
+                if kind == Some(Kind::VertexOpenAi) && !url.ends_with("/endpoints/openapi") {
+                    errors.push(format!(
+                        "{}: a vertex_openai provider's url ends in /endpoints/openapi, for example https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/endpoints/openapi.",
                         at("url")
                     ));
                 }
@@ -4310,9 +4582,12 @@ fn providers(
             (None, false)
                 if entry.key_file.is_some()
                     || entry.credential.is_some()
-                    || !entry.keys.is_empty() => {}
+                    || !entry.keys.is_empty()
+                    || entry.oci_signing.is_some() => {}
             // Vertex AI signs in with Google's Application Default Credentials.
-            (None, false) if matches!(kind, Some(Kind::Vertex | Kind::VertexAnthropic)) => {}
+            (None, false) if kind.is_some_and(Kind::google_auth) => {}
+            // Azure OpenAI signs in with Microsoft Entra ID without a key.
+            (None, false) if kind == Some(Kind::Azure) => {}
             (None, false) => errors.push(format!(
                 "{}:{line}: provider \"{}\" has no key_env. Add the name of the environment variable that holds its key, for example `key_env: OPENAI_API_KEY`, or `key_file:` with the path of a file that holds it, or `credential:` with the name of a provider credential kept in the store. A model server of kind openai on this machine with `allow_private: true` may leave it out.",
                 file.display(),
@@ -4510,6 +4785,15 @@ fn providers(
                         .storage_url
                         .as_ref()
                         .map(|u| u.trim_end_matches('/').to_string()),
+                }),
+                project_id: entry.project_id.clone(),
+                chat_as_responses: entry.chat_as_responses.unwrap_or(false),
+                oci_signing: entry.oci_signing.as_ref().map(|oci| OciSigning {
+                    tenancy: oci.tenancy.clone(),
+                    user: oci.user.clone(),
+                    fingerprint: oci.fingerprint.clone(),
+                    key_file: oci.key_file.as_ref().map(PathBuf::from),
+                    key_env: oci.key_env.clone(),
                 }),
             });
         }
@@ -5077,6 +5361,8 @@ pub fn same_connection(a: &Provider, b: &Provider) -> bool {
         && a.headers_env == b.headers_env
         && a.proxy_env == b.proxy_env
         && a.timeouts == b.timeouts
+        && a.project_id == b.project_id
+        && a.oci_signing == b.oci_signing
 }
 
 /// What `gantry check` warns about in a policy that loads: observe mode, and models no provider serves.
@@ -5235,12 +5521,18 @@ rules:
         );
         assert!(!rule.reaches("openai", "/v1/organization/admin_api_keys"));
         assert!(!rule.reaches("anthropic", "/v1/batches"));
+        // Bedrock and Vertex AI are signed on the way out, so a rule may pass through to them too.
+        let signed = check(
+            "pt-bedrock",
+            &with("      - { provider: bedrock, paths: [/model/x/converse] }\n"),
+            None,
+        )?;
+        assert!(signed.is_ok(), "{signed:?}");
         for (entry, expected) in [
             (
                 "      - { provider: nope, paths: [/v1/x] }\n",
                 "no provider named \"nope\"",
             ),
-            ("      - { provider: bedrock, paths: [/x] }\n", "bedrock"),
             (
                 "      - { provider: openai, paths: [v1/x] }\n",
                 "starts with /",
@@ -6136,6 +6428,41 @@ guardrails:
     }
 
     #[test]
+    fn containers_load_and_a_size_openai_does_not_offer_is_named() -> TestResult {
+        let with = |extra: &str| {
+            GOOD.replace(
+                "    models: [gpt-4o-mini]\n",
+                &format!("    models: [gpt-4o-mini]\n{extra}"),
+            )
+        };
+        let loaded = check(
+            "containers",
+            &with("    containers: { sizes: [1g, 4g] }\n"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        assert_eq!(
+            loaded.policy.rule_list()[0].limits.containers,
+            vec!["1g".to_string(), "4g".to_string()]
+        );
+        for bad in ["{ sizes: [] }", "{ sizes: [2g] }", "{ allow: true }"] {
+            let refused = check(
+                "containers-bad",
+                &with(&format!("    containers: {bad}\n")),
+                None,
+            )?
+            .err()
+            .ok_or("a bad containers line loaded")?
+            .join("\n");
+            assert!(
+                refused.contains("containers") || refused.contains("allow"),
+                "{bad}: {refused}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn file_retention_days_loads_and_a_bad_one_names_the_range() -> TestResult {
         let with = |extra: &str| {
             GOOD.replace(
@@ -6529,6 +6856,91 @@ rules:
     principals: { any: true }
     models: [\"*\"]
 ";
+
+    #[test]
+    fn a_sagemaker_preset_takes_its_url_from_the_region_and_needs_endpoints() -> TestResult {
+        let policy = "version: 1\nproviders:\n  - name: sm\n    preset: sagemaker\n    region: eu-west-1\n    models: [llama]\n    model_ids: { llama: my-endpoint }\n  - name: rep\n    preset: replicate\n    key_env: REPLICATE_API_TOKEN\n    models: [meta/llama]\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n";
+        let loaded = check("sagemaker", policy, None)?.map_err(|e| e.join("\n"))?;
+        let [sm, rep] = &loaded.providers[..] else {
+            return Err("two providers".into());
+        };
+        assert_eq!(sm.kind, Kind::Sagemaker);
+        assert_eq!(
+            sm.url,
+            "https://runtime.sagemaker.eu-west-1.amazonaws.com/endpoints"
+        );
+        assert_eq!(sm.upstream_models["llama"], "my-endpoint");
+        assert_eq!(
+            (rep.kind, rep.url.as_str()),
+            (Kind::Replicate, "https://api.replicate.com/v1")
+        );
+        let refused = check(
+            "sagemaker-bad",
+            &policy.replace("    model_ids: { llama: my-endpoint }\n", ""),
+            None,
+        )?
+        .err()
+        .ok_or("a sagemaker provider without endpoints loaded")?
+        .join("\n");
+        assert!(refused.contains("SageMaker endpoint"), "{refused}");
+        Ok(())
+    }
+
+    #[test]
+    fn an_oci_provider_signs_with_an_api_signing_key_instead_of_a_key() -> TestResult {
+        let policy = "version: 1\nproviders:\n  - name: oci\n    preset: oci\n    oci_signing:\n      tenancy: ocid1.tenancy.oc1..aaaa\n      user: ocid1.user.oc1..bbbb\n      fingerprint: 20:3b:97:13:55:1c:5b:0d:d3:37:d8:50:4e:c5:3a:34\n      key_env: OCI_API_KEY_PEM\n    models: [meta.llama-3.3-70b-instruct]\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n";
+        let loaded = check("oci-signing", policy, None)?.map_err(|e| e.join("\n"))?;
+        let oci = loaded.providers[0]
+            .oci_signing
+            .as_ref()
+            .ok_or("no oci_signing")?;
+        assert_eq!(
+            oci.key_id(),
+            "ocid1.tenancy.oc1..aaaa/ocid1.user.oc1..bbbb/20:3b:97:13:55:1c:5b:0d:d3:37:d8:50:4e:c5:3a:34"
+        );
+        assert_eq!(loaded.providers[0].key_env, "");
+        for (bad, says) in [
+            ("      key_env: OCI_API_KEY_PEM\n", "key_file"),
+            ("    preset: oci\n", "kind"),
+            ("      user: ocid1.user.oc1..bbbb\n", "user"),
+        ] {
+            let text = match bad {
+                "    preset: oci\n" => {
+                    policy.replace(bad, "    preset: oci\n    key_env: OCI_KEY\n")
+                }
+                _ => policy.replace(bad, ""),
+            };
+            let refused = check("oci-signing-bad", &text, None)?
+                .err()
+                .ok_or("a bad oci_signing loaded")?
+                .join("\n");
+            assert!(
+                refused.contains(says) || refused.contains("oci_signing"),
+                "{refused}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn an_azure_v1_url_takes_no_api_version() -> TestResult {
+        let v1 = MORE.replace(
+            "    url: https://acme.openai.azure.com\n    key_env: AZURE_OPENAI_KEY\n    api_version: 2024-10-21\n",
+            "    url: https://acme.openai.azure.com/openai/v1\n    key_env: AZURE_OPENAI_KEY\n",
+        );
+        let loaded = check("azure-v1", &v1, None)?.map_err(|e| e.join("\n"))?;
+        assert_eq!(loaded.providers[0].api_version, None);
+        let both = v1.replace(
+            "/openai/v1\n    key_env: AZURE_OPENAI_KEY\n",
+            "/openai/v1\n    key_env: AZURE_OPENAI_KEY\n    api_version: 2024-10-21\n",
+        );
+        let refused = check("azure-v1-dated", &both, None)?
+            .err()
+            .ok_or("a v1 url with api_version loaded")?
+            .join("\n");
+        assert!(refused.contains("takes no api_version"), "{refused}");
+        Ok(())
+    }
 
     #[test]
     fn azure_bedrock_fallbacks_and_paths_load() -> TestResult {
@@ -6980,7 +7392,7 @@ rules:
             (
                 "fallback: vertex",
                 "fallback: ollama",
-                "take Google's generateContent",
+                "take chat completions translated",
             ),
             ("kind: gemini", "kind: palm", "gemini (Google's Gemini API)"),
         ] {

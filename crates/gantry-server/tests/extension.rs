@@ -204,7 +204,7 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
     assert_eq!(
         rows,
         vec![
-            ("batches".to_string(), 1),
+            ("batches".to_string(), 2),
             ("demo".to_string(), 1),
             ("gantry_policy".to_string(), 1),
             ("gantry_routing".to_string(), 2),

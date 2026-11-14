@@ -275,6 +275,74 @@ one repository. How a release is made: RELEASING.md.
 - `gantry import litellm --url <proxy> --master-key-env <VAR>` reads a running LiteLLM proxy's model list, keys and
   teams through its management API, writes team budgets as `limits:`, and issues one Gantry key per LiteLLM key into a
   new keys file, printing each beside the key it replaces.
+### Cloud providers and translation
+
+- `kind: bedrock_converse`: every model family Bedrock serves through Converse and ConverseStream (Anthropic, Meta
+  Llama, Mistral, Cohere, Amazon Nova, AI21, DeepSeek, Qwen, OpenAI gpt-oss) on the chat completions and Responses
+  routes, translated both ways with tool use, images and documents, and Claude Code through `accept_messages`.
+  Amazon Titan and Cohere embeddings on Bedrock. Bedrock token counts (CountTokens) for `kind: bedrock`.
+- Azure OpenAI signs in with Microsoft Entra ID when it has no key: client credentials, AKS workload identity and
+  managed identity, renewed in process. The Responses API and embeddings reach Azure deployments.
+- Vertex AI: embeddings (`:predict`), rerank (the Ranking API), Claude token counts (count-tokens), Veo videos, and
+  `kind: vertex_openai` for Model Garden models behind the OpenAI-compatible endpoint.
+- Embeddings on every provider that offers them: OpenAI, Azure, Bedrock, Vertex AI, Gemini, Cohere, watsonx.ai.
+- `POST /v1/responses` reaches Anthropic, Bedrock, Vertex AI, Gemini, Cohere and watsonx.ai, translated through chat,
+  with Responses streaming events and function calls; state the provider does not keep is refused by name.
+  `chat_as_responses: true` sends chat requests to Responses-only models.
+- Reasoning maps across providers: `reasoning_effort` becomes Claude's thinking budget (1024, 4096, 16384), Gemini's
+  thinking budget or level, Nova's and gpt-oss's settings on Converse, and Cohere's thinking; Claude Code's thinking
+  budget becomes `reasoning_effort`; readable reasoning comes back as `reasoning_content`. The table is on the
+  providers overview. **Changed:** `reasoning_effort` `low`, `medium` and `high` to Claude now sends a thinking budget
+  instead of `output_config.effort`; `xhigh` and `max` still send effort.
+- Signed passthrough: `/bedrock/<path>` and `/vertex/<path>` (and `/passthrough/<provider>/` for those kinds, which
+  `gantry check` no longer refuses) are signed with SigV4 or the Google token, with the model in the path decided.
+- `/v1/videos` (Sora, and Veo through the same route) and `/v1/containers`, owned by their creator, guarded,
+  budgeted and priced with the new `per_second` and `per_call` price fields (containers: see below).
+- Native kinds `cohere` (v2 chat, embed, rerank) and `watsonx` (IBM watsonx.ai, IAM token traded for the API key).
+  Presets `cohere-native`, `watsonx`, `deepseek`, `databricks` and `snowflake` (the last two need your own URL).
+- A model priced under no name of its own is priced as the Bedrock model ID or Azure deployment it is called by.
+- **Changed (migration):** code interpreter containers are allowed by a rule field, `containers: { sizes: [1g, 4g] }`,
+  instead of the model names `container-1g`, `container-4g`, `container-16g` and `container-64g`, which are no longer
+  models or prices. A rule without `containers:` allows none: move each `container-<size>` listed under a rule's
+  `models:` into its `containers: { sizes: [...] }`. A container is now priced from OpenAI's per-session price by size
+  (0.03, 0.12, 0.48, 1.92 US dollars per 20 minutes, by the minute, 5 at least): one session reserved at creation,
+  charged for the minutes it lived when it expires or is deleted. Usage records say `model: container`,
+  `container_size` and `price: per_minute`.
+- Video prices checked against the providers' pages on 2026-11-14 and cited in the price table and docs:
+  `veo-3.0-fast-generate-001` is 0.10 per second (it was 0.15, a wrong figure); `veo-3.1-generate-001`,
+  `veo-3.1-fast-generate-001` and `veo-3.1-lite-generate-001` added. Google lists Veo "per count"; the per-second unit
+  is LiteLLM's (MIT price map), and the docs say so. Sora 2 is shut down at OpenAI since 2026-09-24; its prices stay.
+- `GET`, `DELETE` and `cancel` on `/v1/responses/<id>`, and `GET /v1/responses/<id>/input_items`, for the response's
+  creator alone (others get 404), at OpenAI or Azure. A response translated for another provider is kept by Gantry,
+  for an hour, when the request says `"store": true`.
+- Async jobs: `POST /v1/async/<route>` runs a model request in the background on the governed route and
+  `GET /v1/async/<route>/<id>` reads its answer, held for its submitter for an hour (`x-gantry-async-ttl`).
+- Azure: images, transcription, speech and legacy completions on deployment paths, and the v1 API (a `url` ending in
+  `/openai/v1`, no `api_version`), with images and audio sent to its preview.
+- Vertex AI and the Gemini API count a Gemini model's tokens (`countTokens`) for `POST /v1/messages/count_tokens`.
+- Native kinds `sagemaker` (SageMaker endpoints with an OpenAI-shaped container, signed with SigV4, streams included)
+  and `replicate` (predictions translated from chat, waited for and cancelled after 60 seconds). Presets `sagemaker`,
+  `replicate`, `oci` (OCI Generative AI, API key) and `triton` (Triton's OpenAI-compatible frontend).
+- A Bedrock stream through signed passthrough is charged the usage its events report, not its reservation.
+- With a store, async job answers and translated responses kept with `store: true` are kept in Postgres (table
+  `gantry_batches_held`, namespace `batches`, migration 2), sealed under the master key when there is one, so any
+  replica answers for them; without a store they stay in the memory of the replica that took them.
+- Background responses (`background: true`): the queued answer charges nothing and keeps its reservation; what the
+  response used is charged once, the first time Gantry sees it ended (read by its creator, cancelled, deleted, or polled
+  once a minute), on one replica only with a store.
+- Replicate streams live: `stream: true` creates the prediction with `"stream": true` and passes each event of its
+  `urls.stream` on as a chat chunk, with usage read from the prediction when it is done. Input fields follow each
+  model family's schema on Replicate (Meta, IBM Granite, Anthropic, Google, OpenAI), and a field a family has no
+  place for is refused by name. **Changed:** `temperature`, `top_p`, `seed` and `stop` to an Anthropic model on
+  Replicate, and `seed` and `stop` to a Google or OpenAI one, are now refused instead of sent.
+- OCI Generative AI request signing: `oci_signing` (tenancy, user, fingerprint, and `key_file` or `key_env`) signs
+  each request with an OCI API signing key, in place of an API key.
+- Triton's generate extension through passthrough (`/v2/models/<model>/generate` and `/generate_stream`): the model
+  is decided from the path and metered from its `num_input_tokens` and `num_output_tokens` when it reports them; an
+  unpriced one under a budget is refused with `no_price`.
+- Files written into a container are read by the request guardrails, and files read back from one by the answer
+  guardrails, when they are text. Video requests take an `input_reference` image, as multipart or JSON, with the
+  prompt guarded; Veo gets the image in its instance.
 
 ### Browser access
 

@@ -1,13 +1,16 @@
 ---
 title: Amazon Bedrock
-description: Serve Claude on Amazon Bedrock through Gantry's messages route, signed with AWS Signature Version 4 with the role Gantry runs as or AWS keys in its environment.
+description: Serve Claude on Bedrock's InvokeModel, every model family on Bedrock's Converse, and Titan and Cohere embeddings, signed with AWS Signature Version 4 with the role Gantry runs as or AWS keys in its environment.
 sidebar:
   order: 5
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A provider of `kind: bedrock` serves Claude models on Amazon Bedrock. Claude Code and the Anthropic SDKs call Gantry's `POST /v1/messages` as usual; Gantry rewrites the body for InvokeModel, signs it, and streams Bedrock's answer back in Anthropic's format.
+Two kinds reach Amazon Bedrock, both signed with the same AWS credentials:
+
+- `kind: bedrock` serves Claude models through InvokeModel. Claude Code and the Anthropic SDKs call Gantry's `POST /v1/messages` as usual; Gantry rewrites the body for InvokeModel, signs it, and streams Bedrock's answer back in Anthropic's format.
+- `kind: bedrock_converse` serves every model family Bedrock offers through Converse (Anthropic, Meta Llama, Mistral, Cohere, Amazon Nova, AI21, DeepSeek, Qwen, OpenAI gpt-oss) on the chat completions and Responses routes, and Titan and Cohere embeddings. See [Bedrock Converse](#bedrock-converse).
 
 ## Setup
 
@@ -60,7 +63,7 @@ Credentials from sources 2 to 4 expire after an hour or a few. Gantry renews the
 
 Gantry makes these calls itself, as documented by AWS. It never runs the `aws` command and reads no AWS config file, so a profile in `~/.aws/config`, including an IAM Identity Center (SSO) profile, is not read. For local use, export the keys of such a profile into the environment first.
 
-The role needs `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the models and inference profiles it serves.
+The role needs `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the models and inference profiles it serves (Converse and ConverseStream are authorized by the same two actions), and `bedrock:CountTokens` for token counts.
 
 ### IRSA on EKS
 
@@ -144,15 +147,65 @@ A Bedrock error, streamed or not, reaches the caller in Anthropic's error shape 
 {"type":"error","error":{"type":"invalid_request_error","message":"Amazon Bedrock ValidationException: ..."}}
 ```
 
+## Token counts
+
+`POST /v1/messages/count_tokens` goes to Bedrock's CountTokens (`/model/<id>/count-tokens`), with the InvokeModel body base64-encoded as it requires, and Bedrock's count comes back as Anthropic's `{"input_tokens": n}`. Counting is free and recorded.
+
 ## Limits
 
-- `POST /v1/messages/count_tokens` is refused with `wrong_route` for a Bedrock model. Gantry does not call Bedrock's CountTokens.
 - Betas are passed on as sent. A beta Bedrock does not offer comes back as Bedrock's 400.
 - `accept_chat: true` lets chat completions clients reach these models, translated. See [Translation](/routing/translation/).
 
 ## Batches
 
 With a `batch:` section naming a bucket, `/v1/files` and `/v1/batches` run as Bedrock batch inference, on files Gantry keeps in S3, owned, checked, reserved and metered per line like OpenAI batches. See [Bedrock and Vertex AI batches](/providers/batches-and-realtime/#bedrock-and-vertex-ai-batches).
+## Bedrock Converse
+
+```yaml title="gantry.policy.yaml"
+providers:
+  - name: bedrock
+    kind: bedrock_converse
+    region: us-east-1
+    models: [llama-3.1-70b, nova-pro, mistral-large, gpt-oss-120b, titan-embed]
+    model_ids:
+      llama-3.1-70b: meta.llama3-1-70b-instruct-v1:0
+      nova-pro: amazon.nova-pro-v1:0
+      mistral-large: mistral.mistral-large-2407-v1:0
+      gpt-oss-120b: openai.gpt-oss-120b-1:0
+      titan-embed: amazon.titan-embed-text-v2:0
+    accept_messages: true            # Claude Code may use these models too
+```
+
+A chat completions request goes to Converse, or ConverseStream when it says `"stream": true`:
+
+```text
+POST https://bedrock-runtime.us-east-1.amazonaws.com/model/meta.llama3-1-70b-instruct-v1%3A0/converse
+POST https://bedrock-runtime.us-east-1.amazonaws.com/model/meta.llama3-1-70b-instruct-v1%3A0/converse-stream
+```
+
+**Carried over:** system and developer messages (as `system`), user text, images (inline base64: png, jpeg, gif, webp) and documents (pdf, csv, txt, html, md), assistant tool calls (as `toolUse`) and tool results (as `toolResult`), function tools (as `toolConfig`) with `tool_choice` `auto`, `required` and a named tool, `max_tokens` or `max_completion_tokens`, `temperature`, `top_p`, `stop`, and `user` (as `requestMetadata.user`, which Bedrock keeps in its invocation logs). `reasoning_effort` becomes `additionalModelRequestFields`: a thinking budget for Claude, `reasoningConfig` for Nova, `reasoning_effort` for gpt-oss; it is refused for families that take none. See [Reasoning across providers](/providers/overview/#reasoning-across-providers).
+
+**Answers** come back as chat completions: text, tool calls, `reasoning_content` from readable `reasoningContent`, the finish reason (`tool_use` is `tool_calls`, `max_tokens` is `length`, `guardrail_intervened` and `content_filtered` are `content_filter`) and usage, cache reads and writes included. A stream's AWS event stream is checked message by message and becomes `chat.completion.chunk` events, with the usage chunk when the client asked for it. Usage is read from Converse's own counts before translation, so a stream without `include_usage` is still metered exactly.
+
+**Refused by name:** an image by URL (Converse takes inline images only), `response_format`, `n` above 1, `logprobs`, `parallel_tool_calls: false`, a tool with `strict`, `tool_choice: none` in a conversation that holds tool calls, a system message after the conversation started, and any field Gantry does not know.
+
+`POST /v1/responses` reaches these models translated to chat, then to Converse. With `accept_messages: true`, Claude Code reaches them translated to chat, then to Converse.
+
+### Embeddings
+
+`POST /v1/embeddings` for an Amazon Titan Text Embeddings model (`amazon.titan-embed-text-v2:0`, `amazon.titan-embed-text-v1`) or a Cohere Embed model (`cohere.embed-english-v3`, `cohere.embed-multilingual-v3`) goes to InvokeModel with the body that model takes, and comes back as OpenAI's embeddings list:
+
+- Titan embeds one text per request: `input` as a list of more than one is refused, naming the fix. `dimensions` is carried over.
+- Cohere takes a list; `input_type` (default `search_document`) and `dimensions` (as `output_dimension`) are carried over.
+- Tokens are Titan's `inputTextTokenCount`, or Bedrock's `X-Amzn-Bedrock-Input-Token-Count` header for Cohere.
+
+### Prices
+
+A model named for callers (`llama-3.1-70b`) is priced as the Bedrock model ID it is called by when the policy sets no price for it, and an inference profile (`us.meta...`) as its model: the LiteLLM price table holds Bedrock's IDs. Set `prices:` in the policy for a model the table lacks.
+
+## Passthrough
+
+`/bedrock/<path>` reaches Bedrock's own API, signed with the provider's AWS credentials, on paths a rule lists under `passthrough:` for the provider, for example `/bedrock/model/amazon.nova-pro-v1:0/converse` or Bedrock batch inference. The model ID in a `/model/<id>/...` path is decided by the rule under the name the policy knows it by, and the call is recorded and metered like any other. With several Bedrock providers, name one in `x-gantry-provider`. A streamed answer (`invoke-with-response-stream`, `converse-stream`) is passed on as Bedrock's event stream, unchanged, and charged the usage its events report: the Anthropic `message_start` and `message_delta` counts inside InvokeModel's `chunk` events, or ConverseStream's `metadata` event. See [Passthrough](/governance/policy/#passthrough).
 
 ## Errors from gantry check
 

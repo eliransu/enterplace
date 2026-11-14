@@ -21,6 +21,18 @@
 //! - gcloud's application default credentials file;
 //! - the metadata server of GCE, GKE with Workload Identity, and Cloud Run
 //!   (<https://cloud.google.com/compute/docs/access/authenticate-workloads#applications>).
+//!
+//! Microsoft Entra ID for Azure OpenAI, in the order of the Azure Identity libraries' default chain:
+//! - a client secret in AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET, as client credentials
+//!   (<https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow>);
+//! - workload identity on AKS: the federated token in AZURE_FEDERATED_TOKEN_FILE as a client assertion
+//!   (<https://learn.microsoft.com/en-us/azure/aks/workload-identity-overview>);
+//! - managed identity: the App Service and Container Apps endpoint (IDENTITY_ENDPOINT, IDENTITY_HEADER), else the
+//!   instance metadata service of VMs and AKS nodes
+//!   (<https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/how-to-use-vm-token>).
+//!
+//! IBM Cloud IAM for watsonx.ai: the API key traded for an access token
+//! (<https://cloud.ibm.com/docs/account?topic=account-iamtoken_from_apikey>).
 
 use std::sync::{Arc, RwLock, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -209,6 +221,249 @@ pub fn google(provider: &str, env: Env<'_>) -> Result<Live<HeaderValue>, String>
             "provider \"{provider}\" is on Vertex AI, and Gantry found no Google credentials. It tried, in order: {tried}. Run Gantry with a service account (attached to the VM or Cloud Run service, or through GKE Workload Identity), set GOOGLE_APPLICATION_CREDENTIALS to a service account key file, or set key_env to a variable holding an access token, and start again."
         )
     })
+}
+
+/// The scope and resource Azure OpenAI tokens are issued for.
+const AZURE_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
+const AZURE_RESOURCE: &str = "https://cognitiveservices.azure.com";
+
+/// The Microsoft Entra ID token for an Azure OpenAI provider that has no key, as the `Authorization` header: the
+/// first source of the Azure Identity default chain that answers, renewed in the background.
+pub fn entra(provider: &str, env: Env<'_>) -> Result<Live<HeaderValue>, String> {
+    let var = |name: &str| {
+        env(name)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let authority = var("AZURE_AUTHORITY_HOST")
+        .unwrap_or_else(|| "https://login.microsoftonline.com".into())
+        .trim_end_matches('/')
+        .to_string();
+    let client = var("AZURE_CLIENT_ID");
+    let mut chain = Vec::new();
+    if let (Some(tenant), Some(id), Some(secret)) = (
+        var("AZURE_TENANT_ID"),
+        client.clone(),
+        var("AZURE_CLIENT_SECRET"),
+    ) {
+        chain.push(Entra::Secret {
+            url: format!("{authority}/{tenant}/oauth2/v2.0/token"),
+            client: id,
+            secret,
+        });
+    }
+    if let (Some(tenant), Some(id), Some(file)) = (
+        var("AZURE_TENANT_ID"),
+        client.clone(),
+        var("AZURE_FEDERATED_TOKEN_FILE"),
+    ) {
+        chain.push(Entra::Workload {
+            url: format!("{authority}/{tenant}/oauth2/v2.0/token"),
+            client: id,
+            file,
+        });
+    }
+    if let (Some(endpoint), Some(secret)) = (var("IDENTITY_ENDPOINT"), var("IDENTITY_HEADER")) {
+        chain.push(Entra::AppService {
+            endpoint,
+            secret,
+            client: client.clone(),
+        });
+    }
+    chain.push(Entra::Imds {
+        host: var("AZURE_POD_IDENTITY_AUTHORITY_HOST")
+            .unwrap_or_else(|| "http://169.254.169.254".into())
+            .trim_end_matches('/')
+            .to_string(),
+        client,
+    });
+    start(provider, chain).map_err(|tried| {
+        format!(
+            "provider \"{provider}\" is on Azure OpenAI with no key, so Gantry signs in with Microsoft Entra ID, and it found no credentials. It tried, in order: {tried}. Run Gantry with a managed identity or AKS workload identity that holds the Cognitive Services OpenAI User role, set AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET, or give the provider key_env with its API key, and start again."
+        )
+    })
+}
+
+/// The IBM Cloud IAM token for a watsonx.ai provider, traded for its API key and renewed in the background.
+pub fn ibm(provider: &str, api_key: &str, env: Env<'_>) -> Result<Live<HeaderValue>, String> {
+    let url = env("IBM_CLOUD_IAM_URL")
+        .map(|v| v.trim().trim_end_matches('/').to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "https://iam.cloud.ibm.com".into());
+    start(
+        provider,
+        vec![Ibm {
+            url: format!("{url}/identity/token"),
+            key: api_key.to_string(),
+        }],
+    )
+    .map_err(|tried| {
+        format!(
+            "provider \"{provider}\" is on watsonx.ai, and IBM Cloud IAM did not trade its API key for a token: {tried}. Check that key_env holds an IBM Cloud API key with access to the project, and start again."
+        )
+    })
+}
+
+/// A bearer token from an OAuth token answer: `access_token`, with `expires_in` in seconds, a number or a string.
+fn bearer(json: &str) -> Result<Fetched<HeaderValue>, String> {
+    let answer: Value =
+        serde_json::from_str(json).map_err(|_| "the token answer is not JSON".to_string())?;
+    let token = answer
+        .get("access_token")
+        .and_then(Value::as_str)
+        .ok_or("the token answer holds no access_token")?;
+    let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+        .map_err(|_| "the access token cannot go in an HTTP header".to_string())?;
+    value.set_sensitive(true);
+    let lasts = match answer.get("expires_in") {
+        Some(Value::Number(n)) => n.as_u64(),
+        Some(Value::String(s)) => s.parse().ok(),
+        _ => None,
+    }
+    .unwrap_or(3600);
+    Ok(Fetched {
+        value,
+        expires: Some(SystemTime::now() + Duration::from_secs(lasts)),
+    })
+}
+
+enum Entra {
+    Secret {
+        url: String,
+        client: String,
+        secret: String,
+    },
+    Workload {
+        url: String,
+        client: String,
+        file: String,
+    },
+    AppService {
+        endpoint: String,
+        secret: String,
+        client: Option<String>,
+    },
+    Imds {
+        host: String,
+        client: Option<String>,
+    },
+}
+
+impl Source for Entra {
+    type Out = HeaderValue;
+
+    fn describe(&self) -> String {
+        match self {
+            Entra::Secret { client, .. } => format!(
+                "the client secret of app {client} (AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET)"
+            ),
+            Entra::Workload { file, .. } => format!(
+                "the workload identity token in {file} (AZURE_FEDERATED_TOKEN_FILE, as AKS sets it)"
+            ),
+            Entra::AppService { endpoint, .. } => format!(
+                "the managed identity endpoint {endpoint} (IDENTITY_ENDPOINT, as App Service and Container Apps set it)"
+            ),
+            Entra::Imds { host, .. } => {
+                format!(
+                    "the managed identity of the VM, from the instance metadata service at {host}"
+                )
+            }
+        }
+    }
+
+    async fn fetch(&self, http: &Http) -> Result<Fetched<HeaderValue>, String> {
+        let json = match self {
+            Entra::Secret {
+                url,
+                client,
+                secret,
+            } => {
+                let body = form(&[
+                    ("grant_type", "client_credentials"),
+                    ("client_id", client),
+                    ("client_secret", secret),
+                    ("scope", AZURE_SCOPE),
+                ]);
+                call(http, Method::POST, url, &[("content-type", FORM)], body).await?
+            }
+            Entra::Workload { url, client, file } => {
+                // Read at every renewal: AKS rotates the file.
+                let assertion = read_trimmed(file)?;
+                let body = form(&[
+                    ("grant_type", "client_credentials"),
+                    ("client_id", client),
+                    (
+                        "client_assertion_type",
+                        "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                    ),
+                    ("client_assertion", &assertion),
+                    ("scope", AZURE_SCOPE),
+                ]);
+                call(http, Method::POST, url, &[("content-type", FORM)], body).await?
+            }
+            Entra::AppService {
+                endpoint,
+                secret,
+                client,
+            } => {
+                let mut url = format!(
+                    "{endpoint}?api-version=2019-08-01&resource={}",
+                    sigv4::uri_encode(AZURE_RESOURCE, false)
+                );
+                if let Some(id) = client {
+                    url.push_str(&format!("&client_id={}", sigv4::uri_encode(id, false)));
+                }
+                call(
+                    http,
+                    Method::GET,
+                    &url,
+                    &[("x-identity-header", secret)],
+                    Vec::new(),
+                )
+                .await?
+            }
+            Entra::Imds { host, client } => {
+                let mut url = format!(
+                    "{host}/metadata/identity/oauth2/token?api-version=2018-02-01&resource={}",
+                    sigv4::uri_encode(AZURE_RESOURCE, false)
+                );
+                if let Some(id) = client {
+                    url.push_str(&format!("&client_id={}", sigv4::uri_encode(id, false)));
+                }
+                call(http, Method::GET, &url, &[("metadata", "true")], Vec::new()).await?
+            }
+        };
+        bearer(&json)
+    }
+}
+
+struct Ibm {
+    url: String,
+    key: String,
+}
+
+impl Source for Ibm {
+    type Out = HeaderValue;
+
+    fn describe(&self) -> String {
+        format!("the API key traded at {}", self.url)
+    }
+
+    async fn fetch(&self, http: &Http) -> Result<Fetched<HeaderValue>, String> {
+        let body = form(&[
+            ("grant_type", "urn:ibm:params:oauth:grant-type:apikey"),
+            ("apikey", &self.key),
+        ]);
+        let json = call(
+            http,
+            Method::POST,
+            &self.url,
+            &[("content-type", FORM), ("accept", "application/json")],
+            body,
+        )
+        .await?;
+        bearer(&json)
+    }
 }
 
 /// Finds the first source that answers, on a thread with a runtime of its own so that it works from any caller,

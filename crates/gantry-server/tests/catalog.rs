@@ -73,6 +73,14 @@ fn dir(id: &str) -> std::io::Result<PathBuf> {
 
 /// One governed request through the preset. Returns what went wrong, if anything.
 async fn smoke(preset: &Preset, port: u16, seen: &Seen) -> Result<(), Error> {
+    // watsonx.ai trades its key for an IAM token first, SageMaker signs with AWS credentials and its region, and
+    // Replicate answers with a prediction: providers_cloud.rs runs each against a mock of its own.
+    if matches!(
+        preset.kind,
+        Kind::Watsonx | Kind::Sagemaker | Kind::Replicate
+    ) {
+        return Ok(());
+    }
     let path = path_of(preset.url);
     let dir = dir(preset.id)?;
     let policy = dir.join("gantry.policy.yaml");
@@ -118,6 +126,11 @@ rules:
             "/v1/chat/completions",
             r#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#,
             format!("{path}/models/m:generateContent"),
+        ),
+        Kind::Cohere => (
+            "/v1/chat/completions",
+            r#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#,
+            format!("{path}/chat"),
         ),
         _ => (
             "/v1/chat/completions",

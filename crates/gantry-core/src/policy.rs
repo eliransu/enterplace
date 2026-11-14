@@ -738,6 +738,9 @@ pub struct Limits {
     pub batch_max_lines: Option<u32>,
     /// The most batches a person under this rule may have open (not yet ended) at once.
     pub batch_max_open: Option<u32>,
+    /// The memory sizes (`1g`, `4g`, `16g`, `64g`) of the code interpreter containers the rule's callers may create.
+    /// Empty allows none.
+    pub containers: Vec<String>,
 }
 
 /// Whose requests share a rule's cached answers.

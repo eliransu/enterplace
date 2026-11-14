@@ -258,6 +258,151 @@ impl BedrockToSse {
     }
 }
 
+/// Turns Bedrock's ConverseStream event stream into server-sent events, one `data: {"<event type>": payload}` line
+/// per event, as the bytes arrive. An exception becomes `data: {"error": {...}}` in OpenAI's error shape.
+#[derive(Debug, Default)]
+pub struct ConverseToSse {
+    decoder: Decoder,
+}
+
+impl ConverseToSse {
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        let mut out = Vec::new();
+        for message in self.decoder.feed(bytes)? {
+            let event = match (
+                message.header(":message-type"),
+                message.header(":event-type"),
+            ) {
+                (Some("event"), Some(name)) => {
+                    let payload: Value = serde_json::from_slice(&message.payload)
+                        .map_err(|_| "the provider sent an event that is not JSON.".to_string())?;
+                    json!({ name: payload })
+                }
+                (Some("event"), None) => continue,
+                (Some("exception"), _) => {
+                    let error = anthropic_error(
+                        message.header(":exception-type").unwrap_or_default(),
+                        &message.payload,
+                    );
+                    json!({"error": {"message": error["error"]["message"], "type": error["error"]["type"], "code": null}})
+                }
+                _ => {
+                    let error = anthropic_error(
+                        message.header(":error-code").unwrap_or_default(),
+                        message
+                            .header(":error-message")
+                            .unwrap_or_default()
+                            .as_bytes(),
+                    );
+                    json!({"error": {"message": error["error"]["message"], "type": error["error"]["type"], "code": null}})
+                }
+            };
+            out.extend_from_slice(format!("data: {event}\n\n").as_bytes());
+        }
+        Ok(out)
+    }
+
+    pub fn finish(&mut self) -> Result<Vec<u8>, String> {
+        if self.decoder.is_clean() {
+            Ok(Vec::new())
+        } else {
+            Err("the provider's event stream ended in the middle of a message.".into())
+        }
+    }
+}
+
+/// Turns SageMaker's InvokeEndpointWithResponseStream event stream into chat completions server-sent events as the
+/// bytes arrive. Each `PayloadPart` holds the container's raw output, cut anywhere: JSON lines of chunks (LMI) or
+/// `data:` lines (TGI's Messages API). Each whole line becomes one `data:` event, and the stream ends with `[DONE]`.
+#[derive(Debug, Default)]
+pub struct PayloadToSse {
+    decoder: Decoder,
+    line: Vec<u8>,
+    done: bool,
+}
+
+impl PayloadToSse {
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        let mut out = Vec::new();
+        for message in self.decoder.feed(bytes)? {
+            match (
+                message.header(":message-type"),
+                message.header(":event-type"),
+            ) {
+                (Some("event"), Some("PayloadPart")) => {
+                    self.line.extend_from_slice(&message.payload)
+                }
+                (Some("event"), _) => continue,
+                _ => {
+                    let error = anthropic_error(
+                        message
+                            .header(":exception-type")
+                            .or(message.header(":error-code"))
+                            .unwrap_or_default(),
+                        &message.payload,
+                    );
+                    let message = error["error"]["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .replace("Amazon Bedrock", "Amazon SageMaker");
+                    let event = json!({"error": {"message": message, "type": "upstream_error", "code": null}});
+                    out.extend_from_slice(format!("data: {event}\n\n").as_bytes());
+                }
+            }
+            while let Some(end) = self.line.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = self.line.drain(..=end).collect();
+                self.write(&line, &mut out);
+            }
+        }
+        Ok(out)
+    }
+
+    fn write(&mut self, line: &[u8], out: &mut Vec<u8>) {
+        let line = line.trim_ascii();
+        if line.is_empty() || line.starts_with(b"event:") || line.starts_with(b":") {
+            return;
+        }
+        let data = line.strip_prefix(b"data:").map_or(line, <[u8]>::trim_ascii);
+        self.done |= data == b"[DONE]";
+        out.extend_from_slice(b"data: ");
+        out.extend_from_slice(data);
+        out.extend_from_slice(b"\n\n");
+    }
+
+    pub fn finish(&mut self) -> Result<Vec<u8>, String> {
+        if !self.decoder.is_clean() {
+            return Err("the provider's event stream ended in the middle of a message.".into());
+        }
+        let mut out = Vec::new();
+        let rest = std::mem::take(&mut self.line);
+        self.write(&rest, &mut out);
+        if !self.done {
+            out.extend_from_slice(b"data: [DONE]\n\n");
+        }
+        Ok(out)
+    }
+}
+
+/// One SageMaker `PayloadPart` event holding `bytes`, for tests and mock providers.
+pub fn payload_part(bytes: &[u8]) -> Vec<u8> {
+    encode(
+        &[(":message-type", "event"), (":event-type", "PayloadPart")],
+        bytes,
+    )
+}
+
+/// One ConverseStream event of type `name`, for tests and mock providers.
+pub fn converse_event(name: &str, payload: &Value) -> Vec<u8> {
+    encode(
+        &[
+            (":message-type", "event"),
+            (":event-type", name),
+            (":content-type", "application/json"),
+        ],
+        payload.to_string().as_bytes(),
+    )
+}
+
 /// Encodes one message, for tests and mock providers.
 pub fn encode(headers: &[(&str, &str)], payload: &[u8]) -> Vec<u8> {
     let mut head = Vec::new();
@@ -294,6 +439,7 @@ pub fn chunk(event: &Value) -> Vec<u8> {
     )
 }
 
+/// Standard base64 with padding, as Bedrock reads a blob in JSON.
 pub fn base64_encode(bytes: &[u8]) -> String {
     const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();

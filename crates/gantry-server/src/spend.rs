@@ -1232,6 +1232,11 @@ fn hints(body: &[u8]) -> Result<Hints, String> {
                         })?;
                         hints.max_output = hints.max_output.max(value);
                     }
+                    // Triton's generate extension: the model's parameters, its output limit among them.
+                    "parameters" => {
+                        let value: Value = map.next_value()?;
+                        hints.max_output = hints.max_output.max(value["max_tokens"].as_u64());
+                    }
                     "n" => {
                         let value: Option<u64> = map.next_value().map_err(|_| {
                             A::Error::custom(format!(
@@ -1404,6 +1409,17 @@ pub(crate) struct Admitted {
     captured: Option<Bytes>,
     /// A streamed answer's frames, kept only for a captured request.
     stream_copy: Option<Vec<Bytes>>,
+    /// A background response (`background: true`): when its answer says it is still queued or running, nothing is
+    /// charged now and its reservation is handed on here, held until the response is settled.
+    deferred: Option<tokio::sync::oneshot::Sender<Deferred>>,
+}
+
+/// What a background response leaves to be settled when it ends: the reservations it holds (as a batch keeps them),
+/// what it could cost, and the model it was charged at.
+pub(crate) struct Deferred {
+    pub reserved: Vec<Value>,
+    pub estimate: Option<f64>,
+    pub model: String,
 }
 
 /// A request body to keep with its answer, per its rule's `capture:`.
@@ -1558,6 +1574,7 @@ pub(crate) async fn admit(
             .filter(|c| c.wanted(&ask.person.team))
             .map(|_| ask.body.clone()),
         stream_copy: None,
+        deferred: None,
     };
     // The caller pays their provider: unless the rule says otherwise, budgets (what the organization pays) do not
     // reserve or count it. Rate and token limits still hold.
@@ -2293,6 +2310,11 @@ fn most_cost(price: &Price, body_bytes: usize, stored: u64, output: u64) -> f64 
 }
 
 impl Admitted {
+    /// A background response: settled when it ends, not now, if its answer says it has not.
+    pub(crate) fn defer(&mut self, to: tokio::sync::oneshot::Sender<Deferred>) {
+        self.deferred = Some(to);
+    }
+
     /// Marks whether the provider holds the request now, so a caller who leaves before the answer is charged.
     pub(crate) fn forwarded(&mut self, yes: bool) {
         self.forwarded = yes;
@@ -2400,6 +2422,39 @@ impl Admitted {
             });
         }
         let complete = !matches!(ended, Ended::CutOff | Ended::CallerLeft);
+        // A background response still queued or running has used nothing yet: its reservation is held on until it is
+        // settled (batch::settle), where what it used is charged once.
+        let pending = status.is_success()
+            && complete
+            && !hit
+            && usage.is_none()
+            && answer.as_ref().is_some_and(|(_, body)| {
+                serde_json::from_slice::<Value>(body)
+                    .is_ok_and(|a| matches!(a["status"].as_str(), Some("queued" | "in_progress")))
+            });
+        let deferred = match self.deferred.take() {
+            Some(to) if pending => {
+                let estimate = self
+                    .reservations
+                    .first()
+                    .map(|r| r.usd)
+                    .or_else(|| self.estimate());
+                let handed = Deferred {
+                    reserved: self.reservations.iter().map(Reservation::to_json).collect(),
+                    estimate,
+                    model: self.model.clone(),
+                };
+                // Held on only once the registry has it; if it is gone, it is settled here as any answer.
+                match to.send(handed) {
+                    Ok(()) => {
+                        self.reservations.clear();
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }
+            _ => false,
+        };
         // An image model priced by the image is charged for each image the answer holds.
         let images = self
             .price
@@ -2445,7 +2500,7 @@ impl Admitted {
             .zip(self.price.as_ref())
             .map(|(output, price)| most_cost(price, self.body_len, 0, output));
         let charged = match cost {
-            _ if hit => 0.0,
+            _ if hit || deferred => 0.0,
             None if left => ceiling().unwrap_or_default(),
             Some(cost) if status.is_success() && partial => cost.max(ceiling().unwrap_or(0.0)),
             Some(cost) => cost,
@@ -2620,6 +2675,7 @@ impl Admitted {
             _ if left => "caller_left",
             (false, Some(_)) if partial => "partial",
             (false, Some(_)) => "reported",
+            _ if deferred => "background",
             (false, None) if streamed.is_some() => "estimated",
             (false, None) => "not_reported",
         };
@@ -2765,10 +2821,9 @@ impl Metered {
     pub(crate) fn wrap(response: Response, admitted: Admitted) -> Response {
         let status = response.status();
         let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
-        let stream = content_type
-            .as_ref()
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.starts_with("text/event-stream"));
+        let kind = content_type.as_ref().and_then(|v| v.to_str().ok());
+        let aws = kind.is_some_and(|v| v.starts_with("application/vnd.amazon.eventstream"));
+        let stream = aws || kind.is_some_and(|v| v.starts_with("text/event-stream"));
         let keep = !stream || admitted.capture.is_some() || admitted.captured.is_some();
         response.map(|inner| {
             Body::new(Metered {
@@ -2778,7 +2833,11 @@ impl Metered {
                 content_type,
                 // A captured stream is kept too, for its body.
                 frames: keep.then(Vec::new),
-                scanner: stream.then(UsageScanner::new),
+                scanner: match (aws, stream) {
+                    (true, _) => Some(UsageScanner::aws_eventstream()),
+                    (_, true) => Some(UsageScanner::new()),
+                    _ => None,
+                },
                 kept: 0,
                 ended: false,
             })
@@ -2866,9 +2925,43 @@ impl Drop for Metered {
     }
 }
 
+/// The seconds a video request asks for: OpenAI's `seconds` (a string), or the model's default (Veo 8, Sora 4).
+pub(crate) fn video_seconds(body: &serde_json::Value) -> u64 {
+    match &body["seconds"] {
+        serde_json::Value::String(s) => s.parse().ok(),
+        serde_json::Value::Number(n) => n.as_u64(),
+        _ => None,
+    }
+    .unwrap_or_else(|| {
+        if body["model"].as_str().is_some_and(|m| m.starts_with("veo")) {
+            8
+        } else {
+            4
+        }
+    })
+}
+
+/// What a video or a container costs by its unit price: seconds asked for at `per_second` on /v1/videos, one object
+/// at `per_call` on /v1/containers. None for a request priced by the token.
+pub(crate) fn per_unit_cost(body: &[u8], route: &str, price: &Price) -> Option<f64> {
+    if route.starts_with("/v1/videos") {
+        let body: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+        return price
+            .per_second
+            .map(|each| each * video_seconds(&body) as f64);
+    }
+    if route.starts_with("/v1/containers") {
+        return price.per_call;
+    }
+    None
+}
+
 /// What a batch line could cost at its model's full price, as a budget reserves a live request: Err says why that
 /// is unknown.
 pub(crate) fn most_for(body: &[u8], route: &str, price: &Price) -> Result<f64, String> {
+    if let Some(cost) = per_unit_cost(body, route, price) {
+        return Ok(cost);
+    }
     let hints = hints(body)?;
     let output = output_tokens(&hints, Some(price), route).ok_or_else(|| {
         "it does not say how many output tokens it may use (max_tokens, or max_output_tokens on /v1/responses), and its model has no max_output in its price".to_string()

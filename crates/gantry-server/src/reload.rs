@@ -373,7 +373,7 @@ fn route(
     policy_text: &str,
 ) -> Result<ProviderRoute, String> {
     let set = |variable: &str| provider_key(variable).filter(|value| !value.trim().is_empty());
-    let (key, aws, google) = if provider.kind == Kind::Bedrock {
+    let (key, aws, google) = if provider.kind.aws() {
         // The AWS default chain, as the SDKs read it, and never through the aws command.
         let region = provider.region.as_deref().unwrap_or_default();
         let aws = crate::cloud::aws(
@@ -411,9 +411,15 @@ fn route(
                 )
             })?;
         (Some(Secret::new(value)), None, None)
-    } else if provider.key_env.is_empty()
-        && matches!(provider.kind, Kind::Vertex | Kind::VertexAnthropic)
-    {
+    } else if provider.key_env.is_empty() && provider.kind == Kind::Azure {
+        let entra = crate::cloud::entra(&provider.name, provider_key)?;
+        println!(
+            "gantry: provider \"{}\" signs in to Microsoft Entra ID with {}.",
+            provider.name,
+            entra.source()
+        );
+        (None, None, Some(entra))
+    } else if provider.key_env.is_empty() && provider.kind.google_auth() {
         let google = crate::cloud::google(&provider.name, provider_key)?;
         println!(
             "gantry: provider \"{}\" signs in to Google Cloud with {}.",
@@ -470,6 +476,14 @@ fn route(
         })?)),
         None => None,
     };
+    // watsonx.ai takes an IAM token, which IBM Cloud trades for the API key the policy points at.
+    let (key, google) = match (provider.kind, key) {
+        (Kind::Watsonx, Some(api_key)) => {
+            let token = crate::cloud::ibm(&provider.name, &api_key.0, provider_key)?;
+            (None, Some(token))
+        }
+        (_, key) => (key, google),
+    };
     Ok(ProviderRoute {
         name: provider.name.clone(),
         kind: provider.kind,
@@ -493,7 +507,39 @@ fn route(
         headers,
         proxy,
         batch: provider.batch.clone(),
+        project_id: provider.project_id.clone(),
+        chat_as_responses: provider.chat_as_responses,
+        oci: provider
+            .oci_signing
+            .as_ref()
+            .map(|oci| oci_signer(&provider.name, oci, &set))
+            .transpose()?,
     })
+}
+
+/// The OCI API signing key a provider names, read from its file or environment variable once, at start.
+fn oci_signer(
+    name: &str,
+    oci: &gantry_core::config::OciSigning,
+    set: &dyn Fn(&str) -> Option<String>,
+) -> Result<Arc<crate::oci::Signer>, String> {
+    let pem = match (&oci.key_file, &oci.key_env) {
+        (Some(path), _) => std::fs::read_to_string(path).map_err(|err| {
+            format!(
+                "provider \"{name}\" signs with the OCI API key in {}, which cannot be read: {err}. Fix the path or its permissions and start again.",
+                path.display()
+            )
+        })?,
+        (None, Some(variable)) => set(variable).ok_or_else(|| {
+            format!(
+                "provider \"{name}\" signs with the OCI API key in the environment variable {variable}, which is not set. Set it to the key's PEM text and start again."
+            )
+        })?,
+        (None, None) => return Err(format!("provider \"{name}\" has oci_signing without key_file or key_env. Add one.")),
+    };
+    crate::oci::Signer::from_pem(&oci.key_id(), &pem)
+        .map(Arc::new)
+        .map_err(|why| format!("provider \"{name}\": {why}"))
 }
 
 /// What a binary that embeds the gateway builds its additions from, once the files are checked and the store is open.
@@ -1029,6 +1075,7 @@ impl Reloader {
                     upstream.retries = provider.retries;
                     upstream.accept_chat = provider.accept_chat;
                     upstream.accept_messages = provider.accept_messages;
+                    upstream.chat_as_responses = provider.chat_as_responses;
                     upstream
                 }
                 None => {
@@ -1070,7 +1117,7 @@ impl Reloader {
             return Reload::Rejected(vec![problem]);
         }
         let version = Arc::new(Snapshot {
-            policy: Some(new.policy.clone()),
+            policy: crate::mapped_prices(Some(new.policy.clone()), &providers),
             providers,
             aliases: new.aliases.clone(),
             policy_sha256: new.policy_sha256.clone(),

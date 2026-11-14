@@ -57,6 +57,10 @@ async fn provider() -> Result<(u16, Seen), Error> {
             )
         }))
         .route("/v1/fine_tuning/jobs", post(|| async { json(r#"{"id":"ftjob-1","object":"fine_tuning.job","status":"queued","model":"model-a","training_file":"file-in"}"#) }))
+        .route("/v1/chat/completions", post(|| async { json(r#"{"id":"c1","object":"chat.completion","model":"model-a","choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":1}}"#) }))
+        .route("/v1/messages", post(|| async { json(r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-a","content":[{"type":"text","text":"Kept answer"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":2}}"#) }))
+        .route("/v1/responses", post(|| async { json(r#"{"id":"resp_bg","object":"response","status":"queued","background":true,"model":"model-a","output":[]}"#) }))
+        .route("/v1/responses/resp_bg", get(|| async { json(r#"{"id":"resp_bg","object":"response","status":"completed","background":true,"model":"model-a","output":[],"usage":{"input_tokens":100,"output_tokens":10}}"#) }))
         .layer(axum::middleware::from_fn(move |request: Request<Body>, next: axum::middleware::Next| {
             let note = note.clone();
             async move {
@@ -758,6 +762,232 @@ async fn with_a_store_every_replica_answers_for_a_file_and_a_batch_is_metered_on
         })
         .sum::<Result<usize, Error>>()?;
     assert_eq!(lines, 2, "one usage record per line, on one replica");
+    Ok(())
+}
+
+/// Two replicas on one store, with a master key, and the keys both read.
+async fn replicas(
+    url: &str,
+    port: u16,
+    test: &str,
+) -> Result<[(gantry_server::Governed, PathBuf); 2], Error> {
+    let gateway = |name: String| -> Result<(gantry_server::Governed, PathBuf), Error> {
+        let (policy, audit) = files(&name, port, "    budget: { usd: 100, per: month }\n")?;
+        let text = std::fs::read_to_string(&policy)?;
+        std::fs::write(
+            &policy,
+            text.replacen(
+                "version: 1\n",
+                "version: 1\nstore: { postgres_url_env: GANTRY_STORE_URL }\n",
+                1,
+            ),
+        )?;
+        let url = url.to_string();
+        let gw = gantry_server::governed(&policy, None, &move |variable| match variable {
+            "GANTRY_STORE_URL" => Some(url.clone()),
+            "GANTRY_MASTER_KEY" => Some("ab".repeat(32)),
+            "GANTRY_MASTER_KEY_FILE" => None,
+            _ => Some("provider-secret".into()),
+        })?;
+        Ok((gw, audit))
+    };
+    let a = gateway(format!("{test}-a"))?;
+    let b = gateway(format!("{test}-b"))?;
+    for (name, key) in [("dana", DANA), ("omer", OMER)] {
+        gantry_core::keyfile::add_entry(name, "data", key, false, &a.0.loaded.keys_path)?;
+    }
+    for gw in [&a.0, &b.0] {
+        for _ in 0..50 {
+            gw.reloader.check(gantry_server::Trigger::FileChange);
+            let (status, _) = call(
+                &gw.router,
+                "GET",
+                "/v1/files",
+                OMER,
+                "application/json",
+                vec![],
+            )
+            .await?;
+            if status != StatusCode::UNAUTHORIZED {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+    Ok([a, b])
+}
+
+/// Asks `path` until the answer is not `waiting`.
+async fn until_not(
+    app: &Router,
+    path: &str,
+    key: &str,
+    waiting: &[StatusCode],
+) -> Result<(StatusCode, String), Error> {
+    let mut last = (StatusCode::NOT_FOUND, String::new());
+    for _ in 0..100 {
+        last = call(app, "GET", path, key, "application/json", vec![]).await?;
+        if !waiting.contains(&last.0) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    Ok(last)
+}
+
+#[tokio::test]
+async fn with_a_store_any_replica_serves_held_answers_and_a_background_response_is_charged_once()
+-> Result<(), Error> {
+    let Some(url) = database("held_shared").await? else {
+        return Ok(());
+    };
+    let (port, _seen) = provider().await?;
+    let [(a, a_audit), (b, b_audit)] = replicas(&url, port, "held").await?;
+
+    // An async job submitted to one replica is answered by the other, for its submitter alone.
+    let chat =
+        br#"{"model":"model-a","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#;
+    let (status, body) = call(
+        &a.router,
+        "POST",
+        "/v1/async/chat/completions",
+        DANA,
+        "application/json",
+        chat.to_vec(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let job: Value = serde_json::from_str(&body)?;
+    let path = format!(
+        "/v1/async/chat/completions/{}",
+        job["id"].as_str().ok_or("no id")?
+    );
+    let (status, body) = until_not(
+        &b.router,
+        &path,
+        DANA,
+        &[StatusCode::ACCEPTED, StatusCode::NOT_FOUND],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let done: Value = serde_json::from_str(&body)?;
+    assert_eq!(done["status"], "completed", "{done}");
+    assert_eq!(done["result"]["choices"][0]["message"]["content"], "Hi");
+    let (status, _) = call(&b.router, "GET", &path, OMER, "application/json", vec![]).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // A translated response kept with store: true is read on the other replica, and kept sealed.
+    let kept = br#"{"model":"claude-a","input":"hello","max_output_tokens":10,"store":true}"#;
+    let (status, body) = call(
+        &a.router,
+        "POST",
+        "/v1/responses",
+        DANA,
+        "application/json",
+        kept.to_vec(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let made: Value = serde_json::from_str(&body)?;
+    let path = format!("/v1/responses/{}", made["id"].as_str().ok_or("no id")?);
+    let (status, body) = until_not(&b.router, &path, DANA, &[StatusCode::NOT_FOUND]).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(serde_json::from_str::<Value>(&body)?, made);
+    let (status, _) = call(&b.router, "GET", &path, OMER, "application/json", vec![]).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
+    tokio::spawn(connection);
+    let rows = client
+        .query("SELECT value, sealed FROM gantry_batches_held", &[])
+        .await?;
+    assert_eq!(
+        rows.len(),
+        2,
+        "the job and the kept response are in the store"
+    );
+    for row in rows {
+        let value: Vec<u8> = row.try_get(0)?;
+        assert!(
+            row.try_get::<_, bool>(1)?,
+            "held answers are sealed under the master key"
+        );
+        assert!(!String::from_utf8_lossy(&value).contains("Kept answer"));
+    }
+    // Deleted on one replica, gone on the other.
+    let (status, body) = call(&b.router, "DELETE", &path, DANA, "application/json", vec![]).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = call(&a.router, "GET", &path, DANA, "application/json", vec![]).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // A background response: nothing charged when it is queued, its usage once when it is seen done.
+    let background =
+        br#"{"model":"model-a","input":"long job","max_output_tokens":100,"background":true}"#;
+    let (status, body) = call(
+        &a.router,
+        "POST",
+        "/v1/responses",
+        DANA,
+        "application/json",
+        background.to_vec(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = until_not(
+        &b.router,
+        "/v1/responses/resp_bg",
+        DANA,
+        &[StatusCode::NOT_FOUND],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    for gw in [&a, &b, &a] {
+        let (status, body) = call(
+            &gw.router,
+            "GET",
+            "/v1/responses/resp_bg",
+            DANA,
+            "application/json",
+            vec![],
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let mut all = records(&a_audit)?;
+    all.extend(records(&b_audit)?);
+    let queued = all
+        .iter()
+        .find(|r| r["event"] == "usage" && r["usage"] == "background")
+        .ok_or("no usage record for the queued response")?;
+    assert_eq!(queued["charged_usd"], 0.0);
+    let settled: Vec<&Value> = all
+        .iter()
+        .filter(|r| r["event"] == "usage" && r["response"] == "resp_bg")
+        .collect();
+    assert_eq!(
+        settled.len(),
+        1,
+        "charged once across replicas: {settled:?}"
+    );
+    assert_eq!(settled[0]["input_tokens"], 100);
+    assert_eq!(settled[0]["output_tokens"], 10);
+    let charged = settled[0]["charged_usd"].as_f64().ok_or("no charge")?;
+    assert!((charged - 0.12).abs() < 1e-9, "{charged}");
+    // Its reservation was given back: nothing stays reserved in the store.
+    let mut reserved = f64::NAN;
+    for _ in 0..50 {
+        reserved = client
+            .query_one(
+                "SELECT COALESCE(SUM(reserved), 0)::float8 FROM gantry_spend",
+                &[],
+            )
+            .await?
+            .try_get(0)?;
+        if reserved.abs() < 1e-9 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(reserved.abs() < 1e-9, "still reserved: {reserved}");
     Ok(())
 }
 

@@ -1,0 +1,146 @@
+---
+title: SageMaker, Replicate, OCI and Triton
+description: Reach Amazon SageMaker endpoints signed with SigV4, Replicate predictions translated from chat and streamed live, Oracle OCI Generative AI with an API key or a signing key, and NVIDIA Triton through its OpenAI-compatible frontend or its generate extension.
+sidebar:
+  order: 10
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Callers use the OpenAI routes for all four. Every request is decided, guarded, budgeted and recorded as on any other route, and `accept_messages: true` lets Claude Code reach them.
+
+## Amazon SageMaker
+
+A provider of `kind: sagemaker` reaches SageMaker real-time endpoints whose container takes the chat completions body: the Large Model Inference (LMI) containers, and Text Generation Inference with its Messages API. Each model maps to an endpoint name under `model_ids`. Requests are signed with AWS Signature Version 4 (service `sagemaker`) from the same AWS credentials a Bedrock provider uses: a role, or `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Never a provider key.
+
+```yaml
+providers:
+  - name: sagemaker
+    preset: sagemaker
+    region: eu-west-1
+    models: [llama-3-70b]
+    model_ids: { llama-3-70b: my-llama-endpoint }
+```
+
+The URL follows from `region` (`https://runtime.sagemaker.<region>.amazonaws.com/endpoints`). A chat request for `llama-3-70b` goes to:
+
+```text
+POST https://runtime.sagemaker.eu-west-1.amazonaws.com/endpoints/my-llama-endpoint/invocations
+POST https://runtime.sagemaker.eu-west-1.amazonaws.com/endpoints/my-llama-endpoint/invocations-response-stream   (stream: true)
+```
+
+The body goes as sent. A streamed answer comes in SageMaker's event stream, whose `PayloadPart` events carry the container's output cut anywhere; Gantry joins them into whole lines and passes each on as a chat completions `data:` event, ending with `data: [DONE]`. Usage is read from the answer's `usage` (LMI reports it whole; a stream that reports none is charged its reservation). `POST /v1/responses` reaches the endpoint translated to chat. Through `/passthrough/<provider>/endpoints/<endpoint>/...` a rule can reach any endpoint's own API, signed, with the endpoint decided as its model.
+
+## Replicate
+
+A provider of `kind: replicate` (preset `replicate`) reaches Replicate's predictions API with `Authorization: Bearer <key>`. A model is named as Replicate names it, `owner/name`, or `owner/name:version` to pin a version.
+
+```yaml
+providers:
+  - name: replicate
+    preset: replicate
+    key_env: REPLICATE_API_TOKEN
+    models: [meta/meta-llama-3-70b-instruct]
+```
+
+A chat request becomes a prediction of the model, waited for:
+
+```text
+POST https://api.replicate.com/v1/models/meta/meta-llama-3-70b-instruct/predictions
+Prefer: wait=60
+Cancel-After: 60s
+{"input": {"prompt": "User: hi\nAssistant:", "system_prompt": "Be brief.", "max_tokens": 64}}
+```
+
+- The conversation is written into `prompt` as a transcript (`User: ...`, `Assistant: ...`, ending `Assistant:`), which every language model's schema takes. The other fields depend on the model's family, below. A field the model's schema has no place for (tools, images, `response_format`, or `temperature` for Claude) is refused by name, never dropped.
+- The prediction's `output` becomes the answer's text, and its `metrics` (`input_token_count`, `output_token_count`) the usage, when the model reports them.
+- A prediction not done after 60 seconds is cancelled by Replicate (`Cancel-After`), so nothing keeps billing, and the caller gets a 504 that says so.
+
+### Streaming
+
+A request with `stream: true` streams live. The prediction is created with `"stream": true` and no wait, and Gantry reads its `urls.stream` (server-sent events, `Accept: text/event-stream`) as Replicate's streaming guide describes. Each `output` event becomes a chat completions chunk as it arrives; `done` ends the answer with its finish chunk; an `error` event (or a `done` with a reason) ends it with an error event. Once the stream is done, Gantry reads the prediction (`urls.get`) once for its `metrics`, and the usage is metered from them. The usage chunk is passed on only when the request asks for it (`stream_options.include_usage`). A streamed prediction is cancelled by Replicate after 300 seconds (`Cancel-After: 300s`). A model that does not stream (no `urls.stream`) is refused with a 502 that says to send it without `stream`. The provider key is sent only to Replicate's own hosts.
+
+### Input fields by model family
+
+Checked on 2026-11-14 against each model's API schema on replicate.com. The family is the model's owner.
+
+| Family (owner) | Checked on | System messages | `max_tokens` becomes | `temperature`, `top_p` | `seed` | `stop` |
+|---|---|---|---|---|---|---|
+| `meta`, and any owner not listed | `meta/meta-llama-3-70b-instruct`, `meta/meta-llama-3-8b-instruct` | `system_prompt` | `max_tokens` | yes | yes | `stop_sequences`, comma separated |
+| `ibm-granite` | `ibm-granite/granite-3.3-8b-instruct` | `system_prompt` | `max_tokens` | yes | yes | `stop`, a list |
+| `anthropic` | `anthropic/claude-4.5-sonnet` | `system_prompt` | `max_tokens` | refused | refused | refused |
+| `google` | `google/gemini-2.5-flash` | `system_instruction` | `max_output_tokens` | yes | refused | refused |
+| `openai` | `openai/gpt-4o-mini` | `system_prompt` | `max_completion_tokens` | yes | refused | refused |
+
+<Aside type="caution">
+Input fields are set per model by its schema on Replicate. A community model whose schema differs from its family's answers with its own error, passed on.
+</Aside>
+
+## Oracle OCI Generative AI
+
+Preset `oci` reaches OCI Generative AI's OpenAI-compatible endpoint with an OCI Generative AI API key, as `kind: openai`. The preset's URL is for `us-chicago-1`; write your region's URL for another. Keys are per region, and need an IAM policy that lets them call the service.
+
+```yaml
+providers:
+  - name: oci
+    preset: oci
+    key_env: OCI_GENAI_API_KEY
+    models: [meta.llama-3.3-70b-instruct]
+```
+
+Chat goes to `https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/v1/chat/completions`, Responses to `.../actions/v1/responses`.
+
+### Request signing with an API signing key
+
+In place of an API key, `oci_signing` signs each request with an OCI API signing key, as OCI's request signing guide describes (signature version 1, `rsa-sha256`): the `date`, `(request-target)` and `host` of every request, and the `content-length`, `content-type` and `x-content-sha256` (the base64 SHA-256 of the body) of one with a body, in the `Authorization: Signature ...` header with `keyId` `<tenancy>/<user>/<fingerprint>`.
+
+```yaml
+providers:
+  - name: oci
+    preset: oci
+    oci_signing:
+      tenancy: ocid1.tenancy.oc1..aaaa...
+      user: ocid1.user.oc1..aaaa...
+      fingerprint: 20:3b:97:13:55:1c:5b:0d:d3:37:d8:50:4e:c5:3a:34
+      key_file: /run/secrets/oci_api_key.pem   # or key_env: OCI_API_KEY_PEM, a variable holding the PEM
+    models: [meta.llama-3.3-70b-instruct]
+```
+
+- The tenancy, user and fingerprint are the ones the OCI console shows for the user's API key. The private key is the PEM file the console gave (PKCS #8, or PKCS #1 `BEGIN RSA PRIVATE KEY`), RSA of 2048 bits or more, without a passphrase. It is read once at start.
+- A provider with `oci_signing` takes no `key_env`, `key_file` or `credential`; `gantry check` says so. The user needs an IAM policy that lets it use Generative AI in the compartment.
+- The gateway's clock must be within 5 minutes of OCI's, or OCI answers 401.
+
+## NVIDIA Triton Inference Server
+
+Preset `triton` reaches Triton's OpenAI-compatible frontend (vLLM and TensorRT-LLM backends) at `http://localhost:9000/v1`, as `kind: openai`, with `allow_private: true`. It serves chat completions, completions, and embeddings with vLLM, and reports usage.
+
+### The generate extension
+
+Triton's own generate extension (`POST /v2/models/<model>/generate` and `/generate_stream`) is on Triton's HTTP port (8000 by default), so it is reached through passthrough, on a provider whose `url` is that port and a rule that lists the path:
+
+```yaml
+providers:
+  - name: triton
+    kind: openai
+    url: http://localhost:8000
+    allow_private: true
+    models: [llama]
+rules:
+  - name: ml
+    principals: { team: ml }
+    models: [llama]
+    passthrough:
+      - provider: triton
+        paths: [/v2/models]
+```
+
+- The model is the path segment after `/v2/models/`, decided by the rule as on a model route, and priced by that name.
+- Triton's generate answer carries no token counts of its own. Gantry meters it from the model's `num_input_tokens` and `num_output_tokens` outputs when the model reports them: vLLM's backend does when the request sets `return_num_input_tokens` and `return_num_output_tokens` (for example in `parameters`, or as top-level fields). A stream's `num_output_tokens` are added up across its responses. `parameters.max_tokens` sizes the budget reservation, else the price's `max_output`.
+- A model that reports no counts is passthrough without metering: under a budget it is charged its reservation, and without one an estimate from the prompt. A model that has no price under a budget is refused with `no_price` before it is sent; add its price under `prices:` to reach it under a budget.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Providers overview" href="/providers/overview/" description="Every kind and the routes it serves." />
+	<LinkCard title="Amazon Bedrock" href="/providers/bedrock/" description="The AWS credentials SageMaker shares." />
+</CardGrid>

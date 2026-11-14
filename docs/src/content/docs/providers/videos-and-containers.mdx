@@ -1,0 +1,100 @@
+---
+title: Videos and containers
+description: Generate videos with Sora and Veo through OpenAI's videos API, and run code interpreter containers, each owned by its creator, guarded, budgeted and priced per second of video or per minute of container.
+sidebar:
+  order: 9
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Videos and containers are objects that outlive the request that made them. Gantry serves them as it serves files and batches: each belongs to the person who created it through Gantry, anyone else is answered as if it did not exist (an admin key sees all), lists show only your own, and who owns what is written to the audit log (and kept in the store, namespace `batches`, when there is one).
+
+## Videos
+
+| Route | Sora (`openai`) | Veo (`vertex`) |
+|---|---|---|
+| `POST /v1/videos` | `POST /v1/videos` | `POST <url>/models/<model>:predictLongRunning` |
+| `GET /v1/videos/<id>` | `GET /v1/videos/<id>` | `POST <url>/models/<model>:fetchPredictOperation` |
+| `GET /v1/videos/<id>/content` | `GET /v1/videos/<id>/content` (`variant` passed on) | the operation's video, decoded; or `{"gcs_uri": ...}` when Veo wrote it to Cloud Storage |
+| `POST /v1/videos/<id>/remix` | `POST /v1/videos/<id>/remix` | refused: a remix is Sora's |
+| `DELETE /v1/videos/<id>` | `DELETE /v1/videos/<id>` | refused: Veo keeps nothing to delete |
+| `GET /v1/videos` | your own videos | |
+
+A video request is a JSON object (`model`, `prompt`, `seconds`, `size`, and an optional `input_reference` of `image_url` or `file_id`), or `multipart/form-data` with those fields and an `input_reference` image file (PNG, JPEG or WebP). For Veo, `seconds` becomes `durationSeconds`, `size` the `aspectRatio` (wider than tall is `16:9`, else `9:16`), the image the instance's `image` (base64; from a form, or a `data:` URL in `image_url`), and any other field is refused by name. A `file_id` must be a file you uploaded through Gantry.
+
+1. The model is decided by the caller's rule, and a kill switch on it stops the request.
+2. The prompt (the text fields of a form) is read by the rule's guardrails, which block or mask it before the provider sees it. The image is passed on, not read.
+3. The seconds asked for (default 4 for Sora, 8 for Veo) are reserved against the budgets at the model's `per_second` price.
+4. When the video is done (read by its owner, or found by the poll Gantry runs every minute), its seconds are charged and the reservation given back; a failed video is charged nothing. The usage record says `price: per_second`.
+
+### Built-in video prices
+
+US dollars per second of video, read from each provider's own page on 2026-11-14, at the size Gantry asks for: 720p (Sora's `1280x720`, Veo's default; Gantry sends Veo no resolution), and for Veo 3 and later the video-with-audio price, the dearer of Veo's two.
+
+| Model | Per second | Source |
+|---|---|---|
+| `sora-2` | 0.10 | [OpenAI, sora-2](https://developers.openai.com/api/docs/models/sora-2) |
+| `sora-2-pro` | 0.30 (720p; 0.50 at 1024x1792, 0.70 at 1080p) | [OpenAI, sora-2-pro](https://developers.openai.com/api/docs/models/sora-2-pro) |
+| `veo-3.1-generate-001` | 0.40 | [Google Cloud](https://cloud.google.com/model-garden/pricing) |
+| `veo-3.1-fast-generate-001` | 0.10 | Google Cloud |
+| `veo-3.1-lite-generate-001` | 0.05 | Google Cloud |
+| `veo-3.0-generate-001` | 0.40 | Google Cloud |
+| `veo-3.0-fast-generate-001` | 0.10 | Google Cloud |
+| `veo-2.0-generate-001` | 0.50 | Google Cloud |
+
+<Aside type="caution">
+OpenAI shut down Sora 2 and its Videos API on 2026-09-24. The Sora prices stay for records made before then and for a provider that still serves the API. `sora-2-pro` is priced at its 720p rate: a request for a larger size is under-counted, so set its price under `prices:` if a provider still serves it at that size.
+
+Google's page lists Veo prices as US dollars "per count" without naming the unit. LiteLLM's MIT price map gives the same figures as `output_cost_per_second`, which is the unit Gantry uses. The figures match Google's page; the unit is LiteLLM's reading of it.
+</Aside>
+
+Set another price under `prices:` in the policy:
+
+```yaml
+prices:
+  sora-2-pro: { input: 0, output: 0, per_second: 0.50 }
+```
+
+## Containers
+
+| Route | Sent to |
+|---|---|
+| `POST /v1/containers` | `POST /v1/containers` |
+| `GET /v1/containers` | your own containers |
+| `GET`, `DELETE /v1/containers/<id>` and `GET`, `POST`, `DELETE` under `/v1/containers/<id>/files` | as sent, to your own container only |
+
+A container has no model, so a rule allows it by its memory size, from its `memory_limit` (`1g` when it sends none):
+
+```yaml
+rules:
+  - name: data-team
+    principals: { team: data }
+    models: [gpt-4o]
+    containers: { sizes: [1g, 4g] }
+```
+
+A rule without `containers:` allows none, and a size it does not list is refused with `container_not_allowed`, naming the sizes it does list. Each `file_ids` entry must be a file you uploaded through Gantry.
+
+### Container prices
+
+OpenAI bills a container per 20-minute session by its size, by the minute with a 5-minute minimum ([pricing](https://developers.openai.com/api/docs/pricing), read on 2026-11-14):
+
+| Size | Per 20-minute session |
+|---|---|
+| `1g` | 0.03 |
+| `4g` | 0.12 |
+| `16g` | 0.48 |
+| `64g` | 1.92 |
+
+A whole session is reserved against the budgets when the container is created. It is charged when it expires (found by its owner's read or by the poll every minute: from its creation until `expires_after` minutes past its last use) or when it is deleted (until then), by the minute, at least 5. A container the provider no longer knows is charged one idle session. The usage record says `model: container`, `container_size` and `price: per_minute`.
+
+### Files in a container
+
+A text file written into a container (`POST /v1/containers/<id>/files`, multipart) is read by the rule's request guardrails first: a block refuses the upload, a mask writes the masked text in its place. A file read back (`GET /v1/containers/<id>/files/<file>/content`), such as one the code wrote, is read by the rule's answer guardrails (`on: [answer]`) before you see it. A file that is not UTF-8 text (an image, an archive) cannot be read and passes as it is. A file named by `file_id` must be one you uploaded through Gantry.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Files, batches and realtime" href="/providers/batches-and-realtime/" description="The other objects Gantry owns for their creator." />
+	<LinkCard title="Pricing" href="/routing/pricing/" description="per_second and the other price fields." />
+</CardGrid>
