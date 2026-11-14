@@ -236,6 +236,8 @@ fn price(input: f64, output: f64) -> Price {
         max_output: None,
         max_context: None,
         per_image: None,
+        per_second: None,
+        per_call: None,
         source: Default::default(),
     }
 }

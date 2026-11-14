@@ -749,6 +749,8 @@ async fn images_are_charged_by_the_image_and_their_prompt_is_guarded() -> TestRe
             max_output: None,
             max_context: None,
             per_image: Some(0.04),
+            per_second: None,
+            per_call: None,
             source: Default::default(),
         },
     );
@@ -964,6 +966,8 @@ async fn image_and_speech_requests_under_a_budget_need_a_price_that_bounds_them(
         max_output,
         max_context: None,
         per_image: None,
+        per_second: None,
+        per_call: None,
         source: Default::default(),
     };
     let mut prices = PriceOverrides::new();

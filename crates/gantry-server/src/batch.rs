@@ -1,4 +1,4 @@
-//! Files, batches and fine-tuning jobs, governed natively rather than passed through.
+//! Files, batches, fine-tuning jobs, videos and containers, governed natively rather than passed through.
 //!
 //! OpenAI's `/v1/files`, `/v1/batches` and `/v1/fine_tuning/jobs`, and Anthropic's `/v1/messages/batches`:
 //!
@@ -11,6 +11,12 @@
 //!   provider reported, one usage record per line, and the reservation is given back.
 //! - A file is kept for the days the rule's `file_retention_days` sets: OpenAI is told to expire it, and Gantry
 //!   deletes what the provider still holds when the time is up.
+//!
+//! - A video (OpenAI's `/v1/videos`, Sora; or Veo on Vertex AI, reached through the same route) is decided by its
+//!   model, its prompt guarded, and the seconds it asks for reserved at the model's `per_second` price; it is charged
+//!   for its seconds when it is done, and nothing when it fails.
+//! - A container (OpenAI's `/v1/containers`) is decided by the model `container-<memory>` (container-1g by default)
+//!   and charged that model's `per_call` price when it is created. Its files are reached only through it.
 //!
 //! Who owns what is written to the audit log (`owned`, `owned_settled`, `owned_deleted` records). With a store it is
 //! also kept in Postgres (namespace `batches`), so every replica answers for every object; without one it is read
@@ -85,6 +91,8 @@ pub(crate) fn routes(keep: Arc<AppState>) -> Router<AppState> {
         "/v1/batches",
         "/v1/messages/batches",
         "/v1/fine_tuning/jobs",
+        "/v1/videos",
+        "/v1/containers",
     ] {
         router = router
             .route(path, route())
@@ -99,6 +107,8 @@ enum Item {
     Batch,
     MessageBatch,
     FineTune,
+    Video,
+    Container,
 }
 
 impl Item {
@@ -108,13 +118,22 @@ impl Item {
             Self::Batch => "batch",
             Self::MessageBatch => "message_batch",
             Self::FineTune => "fine_tuning_job",
+            Self::Video => "video",
+            Self::Container => "container",
         }
     }
 
     fn from_word(word: &str) -> Option<Self> {
-        [Self::File, Self::Batch, Self::MessageBatch, Self::FineTune]
-            .into_iter()
-            .find(|i| i.word() == word)
+        [
+            Self::File,
+            Self::Batch,
+            Self::MessageBatch,
+            Self::FineTune,
+            Self::Video,
+            Self::Container,
+        ]
+        .into_iter()
+        .find(|i| i.word() == word)
     }
 }
 
@@ -523,6 +542,16 @@ enum Op {
     TuneList,
     /// A job, and what of it: "" for the job, or cancel, pause, resume, events, checkpoints.
     Tune(String, String),
+    VideoCreate,
+    VideoRemix(String),
+    VideoList,
+    /// A video, and what of it: "" for the object, or content.
+    Video(String, String),
+    VideoDelete(String),
+    ContainerCreate,
+    ContainerList,
+    /// A container, and the path below it: "" for the container, or files and what lies under them.
+    Container(String, String),
 }
 
 fn op(method: &Method, path: &str) -> Option<Op> {
@@ -573,6 +602,20 @@ fn op(method: &Method, path: &str) -> Option<Op> {
             j,
             what @ ("cancel" | "pause" | "resume"),
         ] if post => Op::Tune(id(j)?, (*what).to_string()),
+        ["v1", "videos"] if post => Op::VideoCreate,
+        ["v1", "videos"] if get => Op::VideoList,
+        ["v1", "videos", v] if get => Op::Video(id(v)?, String::new()),
+        ["v1", "videos", v] if delete => Op::VideoDelete(id(v)?),
+        ["v1", "videos", v, "content"] if get => Op::Video(id(v)?, "content".into()),
+        ["v1", "videos", v, "remix"] if post => Op::VideoRemix(id(v)?),
+        ["v1", "containers"] if post => Op::ContainerCreate,
+        ["v1", "containers"] if get => Op::ContainerList,
+        ["v1", "containers", c, rest @ ..] if get || post || delete => {
+            for segment in rest {
+                id(segment)?;
+            }
+            Op::Container(id(c)?, rest.join("/"))
+        }
         _ => return None,
     })
 }
@@ -581,7 +624,7 @@ fn unknown_batch_route() -> Refusal {
     Refusal::new(
         StatusCode::NOT_FOUND,
         "unknown_route",
-        "Refused: Gantry serves these file and batch routes: POST and GET /v1/files, GET and DELETE /v1/files/<id>, GET /v1/files/<id>/content, POST and GET /v1/batches, GET /v1/batches/<id>, POST /v1/batches/<id>/cancel, POST and GET /v1/messages/batches, GET and DELETE /v1/messages/batches/<id>, GET /v1/messages/batches/<id>/results, POST /v1/messages/batches/<id>/cancel, POST and GET /v1/fine_tuning/jobs, GET /v1/fine_tuning/jobs/<id> with /events and /checkpoints, and POST /v1/fine_tuning/jobs/<id>/cancel, /pause and /resume. Check the method and the path.",
+        "Refused: Gantry serves these file and batch routes: POST and GET /v1/files, GET and DELETE /v1/files/<id>, GET /v1/files/<id>/content, POST and GET /v1/batches, GET /v1/batches/<id>, POST /v1/batches/<id>/cancel, POST and GET /v1/messages/batches, GET and DELETE /v1/messages/batches/<id>, GET /v1/messages/batches/<id>/results, POST /v1/messages/batches/<id>/cancel, POST and GET /v1/fine_tuning/jobs, GET /v1/fine_tuning/jobs/<id> with /events and /checkpoints, POST /v1/fine_tuning/jobs/<id>/cancel, /pause and /resume, POST and GET /v1/videos, GET and DELETE /v1/videos/<id>, GET /v1/videos/<id>/content, POST /v1/videos/<id>/remix, POST and GET /v1/containers, and GET, POST and DELETE under /v1/containers/<id>. Check the method and the path.",
     )
 }
 
@@ -596,6 +639,8 @@ enum Then {
     Delete(String),
     /// Passed on as it comes: file content, batch results, job events.
     Stream,
+    /// A Veo operation on Vertex AI read for a video: its object, or with `true` its content.
+    Veo(String, bool),
 }
 
 struct Ready {
@@ -848,7 +893,7 @@ fn checked_query(uri: &Uri, key: &str) -> Result<String, Refusal> {
     let Some(query) = uri.query() else {
         return Ok(String::new());
     };
-    const NAMES: [&str; 7] = [
+    const NAMES: [&str; 8] = [
         "after",
         "limit",
         "order",
@@ -856,6 +901,7 @@ fn checked_query(uri: &Uri, key: &str) -> Result<String, Refusal> {
         "before_id",
         "after_id",
         "metadata",
+        "variant",
     ];
     for pair in query.split('&') {
         let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
@@ -1152,7 +1198,17 @@ async fn prepare<'a>(
                 crate::killed(state, person, &key_sha256, Some(model))?;
             }
             seen.model = file.models.first().cloned();
-            let reserved = reserve(state, policy, person, rule, &file, file_id, seen).await?;
+            let reserved = reserve(
+                state,
+                policy,
+                person,
+                rule,
+                &file,
+                file_id,
+                seen,
+                BATCH_SHARE,
+            )
+            .await?;
             let mut created = Owned::new(Item::Batch, &file.provider, person, seen, decision);
             created.purpose = file.model_of.get("").cloned().unwrap_or_default();
             created.models = file.models.clone();
@@ -1268,6 +1324,7 @@ async fn prepare<'a>(
                 &created,
                 "this message batch",
                 seen,
+                BATCH_SHARE,
             )
             .await?;
             created.reserved = reserved.clone();
@@ -1287,6 +1344,285 @@ async fn prepare<'a>(
             );
             ready.reserved = reserved;
             Ok(ready)
+        }
+        Op::VideoCreate | Op::VideoRemix(_) => {
+            let (bytes, _held) =
+                crate::read_body(Some(&person.name), state, &parts.headers, body).await?;
+            let mut body = object(&bytes).map_err(|_| {
+                bad(
+                    "unreadable_request",
+                    "Refused: Gantry takes a video request as a JSON object with model, prompt, seconds and size; an input_reference image goes through the provider's own API with /passthrough/. Send JSON.".into(),
+                )
+            })?;
+            // A remix is a new video from one of the caller's own, at the same provider and model.
+            let remixed = match &op {
+                Op::VideoRemix(id) => {
+                    let (original, provider) =
+                        owned(state, version, person, id, Item::Video, seen).await?;
+                    if version.providers[provider].kind != Kind::OpenAi {
+                        return Err(bad(
+                            "untranslatable",
+                            "Refused: a remix is OpenAI's, and this video was made by Veo on Vertex AI. Create a new video with the changed prompt.".into(),
+                        ));
+                    }
+                    body["model"] = original.models.first().cloned().unwrap_or_default().into();
+                    Some((id.clone(), provider))
+                }
+                _ => None,
+            };
+            let model = body["model"].as_str().map(String::from).ok_or_else(|| {
+                bad(
+                    "unreadable_request",
+                    "Refused: a video request names its model in \"model\", a string, so the policy can be checked. Send one.".into(),
+                )
+            })?;
+            seen.model = Some(model.clone());
+            let checked = check_lines(
+                state,
+                policy,
+                person,
+                rule,
+                &key_sha256,
+                seen,
+                decision,
+                vec![(1, "video".into(), "/v1/videos", body.clone())],
+                "video",
+            )
+            .await
+            .map_err(|mut r| {
+                r.message = r.message.replace(
+                    "Refused: video 1 of the batch: ",
+                    "Refused: the video request: ",
+                );
+                r
+            })?;
+            seen.would_refuse
+                .extend(checked.would_refuse.iter().cloned());
+            if let Some(Some(masked)) = checked.masked.first() {
+                body = masked.clone();
+            }
+            let provider = match &remixed {
+                Some((_, provider)) => *provider,
+                None => version
+                    .providers
+                    .iter()
+                    .position(|p| matches!(p.kind, Kind::OpenAi | Kind::Vertex) && p.serves(&model))
+                    .ok_or_else(|| {
+                        Refusal::new(
+                            StatusCode::FORBIDDEN,
+                            "unknown_model",
+                            format!(
+                                "Refused: no openai or vertex provider of this Gantry serves video model \"{model}\". Check the model name, or ask a Gantry admin to add it to a provider."
+                            ),
+                        )
+                    })?,
+            };
+            let mut created = Owned::new(
+                Item::Video,
+                &version.providers[provider].name,
+                person,
+                seen,
+                decision,
+            );
+            created.models = vec![model.clone()];
+            // For a video, lines holds the seconds it asks for: what it is charged for when it is done.
+            created.lines = spend::video_seconds(&body) as usize;
+            created.estimate = checked.estimate;
+            let reserved = reserve(
+                state,
+                policy,
+                person,
+                rule,
+                &created,
+                "this video",
+                seen,
+                1.0,
+            )
+            .await?;
+            created.reserved = reserved.clone();
+            extra.insert("object".into(), "video".into());
+            extra.insert("seconds".into(), created.lines.into());
+            if !checked.found.is_empty() {
+                extra.insert("guardrails".into(), Value::Array(checked.found));
+            }
+            headers.insert(header::CONTENT_TYPE, json_type);
+            let (target, out) = match (&remixed, version.providers[provider].kind) {
+                // A remix takes the prompt alone: the model is the original's.
+                (Some((id, _)), _) => {
+                    let mut remix = body.clone();
+                    if let Some(fields) = remix.as_object_mut() {
+                        fields.remove("model");
+                    }
+                    (
+                        format!("/v1/videos/{id}/remix"),
+                        Bytes::from(remix.to_string()),
+                    )
+                }
+                (None, Kind::Vertex) => (
+                    format!("/models/{}:predictLongRunning", crate::sigv4_encode(&model)),
+                    Bytes::from(veo_request(&body)?.to_string()),
+                ),
+                _ => ("/v1/videos".into(), Bytes::from(body.to_string())),
+            };
+            let mut ready = ready(
+                provider,
+                Method::POST,
+                target,
+                out,
+                Then::Create(Box::new(created)),
+            );
+            ready.reserved = reserved;
+            Ok(ready)
+        }
+        Op::VideoList | Op::ContainerList => {
+            let path = if matches!(op, Op::VideoList) {
+                "/v1/videos"
+            } else {
+                "/v1/containers"
+            };
+            let provider = pick(version, Kind::OpenAi, &parts.headers, None)?;
+            Ok(ready(
+                provider,
+                Method::GET,
+                format!("{path}{query}"),
+                Bytes::new(),
+                Then::List,
+            ))
+        }
+        Op::Video(id, what) => {
+            let id = id.clone();
+            let (video, provider) = owned(state, version, person, &id, Item::Video, seen).await?;
+            extra.insert("object_id".into(), id.as_str().into());
+            seen.model = video.models.first().cloned();
+            if version.providers[provider].kind == Kind::Vertex {
+                // Veo keeps the video in its long-running operation, read back by name.
+                let model = video.models.first().cloned().unwrap_or_default();
+                headers.insert(header::CONTENT_TYPE, json_type);
+                return Ok(Ready {
+                    headers,
+                    ..ready(
+                        provider,
+                        Method::POST,
+                        format!(
+                            "/models/{}:fetchPredictOperation",
+                            crate::sigv4_encode(&model)
+                        ),
+                        Bytes::from(json!({"operationName": video.purpose}).to_string()),
+                        Then::Veo(id, what == "content"),
+                    )
+                });
+            }
+            let (target, then) = if what == "content" {
+                (format!("/v1/videos/{id}/content{query}"), Then::Stream)
+            } else {
+                (format!("/v1/videos/{id}"), Then::Read(id))
+            };
+            Ok(ready(provider, Method::GET, target, Bytes::new(), then))
+        }
+        Op::VideoDelete(id) => {
+            let id = id.clone();
+            let (_, provider) = owned(state, version, person, &id, Item::Video, seen).await?;
+            if version.providers[provider].kind == Kind::Vertex {
+                return Err(bad(
+                    "untranslatable",
+                    "Refused: Veo on Vertex AI keeps no video to delete: it is in the operation's answer, or in the Cloud Storage bucket it was written to. Delete it there.".into(),
+                ));
+            }
+            extra.insert("object_id".into(), id.as_str().into());
+            Ok(ready(
+                provider,
+                Method::DELETE,
+                format!("/v1/videos/{id}"),
+                Bytes::new(),
+                Then::Delete(id),
+            ))
+        }
+        Op::ContainerCreate => {
+            let (bytes, _held) =
+                crate::read_body(Some(&person.name), state, &parts.headers, body).await?;
+            let body = object(&bytes)?;
+            let memory = body["memory_limit"].as_str().unwrap_or("1g");
+            if !matches!(memory, "1g" | "4g" | "16g" | "64g") {
+                return Err(bad(
+                    "unreadable_request",
+                    format!(
+                        "Refused: memory_limit \"{memory}\" is not one OpenAI offers: send 1g, 4g, 16g or 64g."
+                    ),
+                ));
+            }
+            // A container has no model: the rule allows it by the name of its size, and that is what it is priced as.
+            let model = format!("container-{memory}");
+            seen.model = Some(model.clone());
+            decide_model(
+                policy,
+                person,
+                rule,
+                &model,
+                "the container",
+                &mut seen.would_refuse,
+            )?;
+            crate::killed(state, person, &key_sha256, Some(&model))?;
+            for file in body["file_ids"].as_array().map_or(&[][..], Vec::as_slice) {
+                let file = file.as_str().unwrap_or_default();
+                owned(state, version, person, file, Item::File, seen).await?;
+            }
+            let provider = pick(version, Kind::OpenAi, &parts.headers, None)?;
+            let mut created = Owned::new(
+                Item::Container,
+                &version.providers[provider].name,
+                person,
+                seen,
+                decision,
+            );
+            created.models = vec![model.clone()];
+            created.lines = 1;
+            created.estimate = price_for(&model, policy.prices())
+                .and_then(|p| spend::per_unit_cost(&bytes, "/v1/containers", &p));
+            let reserved = reserve(
+                state,
+                policy,
+                person,
+                rule,
+                &created,
+                "this container",
+                seen,
+                1.0,
+            )
+            .await?;
+            created.reserved = reserved.clone();
+            extra.insert("object".into(), "container".into());
+            headers.insert(header::CONTENT_TYPE, json_type);
+            let mut ready = ready(
+                provider,
+                Method::POST,
+                "/v1/containers".into(),
+                bytes,
+                Then::Create(Box::new(created)),
+            );
+            ready.reserved = reserved;
+            Ok(ready)
+        }
+        Op::Container(id, rest) => {
+            let id = id.clone();
+            let (_, provider) = owned(state, version, person, &id, Item::Container, seen).await?;
+            extra.insert("object_id".into(), id.as_str().into());
+            // ponytail: files written into a container are forwarded as sent, not read by the guardrails; route
+            // them through /v1/files (guarded) and name them in file_ids when that matters.
+            let (bytes, _held) =
+                crate::read_body(Some(&person.name), state, &parts.headers, body).await?;
+            if let Some(content_type) = parts.headers.get(header::CONTENT_TYPE) {
+                headers.insert(header::CONTENT_TYPE, content_type.clone());
+            }
+            let target = if rest.is_empty() {
+                format!("/v1/containers/{id}{query}")
+            } else {
+                format!("/v1/containers/{id}/{rest}{query}")
+            };
+            let then = match (&parts.method, rest.is_empty()) {
+                (&Method::DELETE, true) => Then::Delete(id),
+                _ => Then::Stream,
+            };
+            Ok(ready(provider, parts.method.clone(), target, bytes, then))
         }
         Op::TuneCreate => {
             let (bytes, _held) =
@@ -1344,6 +1680,56 @@ async fn prepare<'a>(
     Ok(out)
 }
 
+/// An OpenAI video request as Veo's predictLongRunning body. A field Veo has no equivalent for is refused by name.
+fn veo_request(body: &Value) -> Result<Value, Refusal> {
+    let mut parameters = json!({"sampleCount": 1, "durationSeconds": spend::video_seconds(body)});
+    for (key, value) in body.as_object().into_iter().flatten() {
+        match key.as_str() {
+            "model" | "prompt" | "seconds" => {}
+            "size" => {
+                let (w, h) = value
+                    .as_str()
+                    .and_then(|s| s.split_once('x'))
+                    .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
+                    .ok_or_else(|| {
+                        bad(
+                            "unreadable_request",
+                            "Refused: size is width x height, for example 1280x720.".into(),
+                        )
+                    })?;
+                parameters["aspectRatio"] = if w >= h { "16:9" } else { "9:16" }.into();
+            }
+            _ => {
+                return Err(bad(
+                    "untranslatable",
+                    format!(
+                        "Refused: the parameter \"{key}\" has no equivalent in Veo on Vertex AI. Remove it, or use a Sora model."
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(json!({"instances": [{"prompt": body["prompt"]}], "parameters": parameters}))
+}
+
+/// A Veo operation as an OpenAI video object.
+fn veo_object(operation: &Value, id: &str, model: &str, seconds: usize) -> Value {
+    let status = match (operation["done"].as_bool(), operation["error"].is_object()) {
+        (_, true) => "failed",
+        (Some(true), _) => "completed",
+        _ => "in_progress",
+    };
+    json!({
+        "id": id,
+        "object": "video",
+        "model": model,
+        "status": status,
+        "seconds": seconds.to_string(),
+        "progress": if status == "in_progress" { 50 } else { 100 },
+        "error": operation["error"]["message"].as_str().map(|m| json!({"message": m})),
+    })
+}
+
 fn masked_unwritable() -> Refusal {
     Refusal::new(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1395,6 +1781,7 @@ pub(crate) fn decide_model(
 }
 
 /// Reserves a batch's estimate at batch prices against the budgets that apply. Nothing when none applies.
+#[allow(clippy::too_many_arguments)]
 async fn reserve(
     state: &AppState,
     policy: &Policy,
@@ -1403,6 +1790,7 @@ async fn reserve(
     batch: &Owned,
     what: &str,
     seen: &mut Seen<'_>,
+    share: f64,
 ) -> Result<Vec<Value>, Refusal> {
     let budgets = budgets_of(policy, person, rule, batch);
     if budgets.is_empty() {
@@ -1424,7 +1812,7 @@ async fn reserve(
         &state.spend,
         &budgets,
         rule,
-        estimate * BATCH_SHARE,
+        estimate * share,
         "This batch",
         Some(&mut observed),
     )
@@ -1966,7 +2354,7 @@ async fn fetch(
     mut headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, Refusal> {
-    if !matches!(provider.kind, Kind::OpenAi | Kind::Anthropic) {
+    if !matches!(provider.kind, Kind::OpenAi | Kind::Anthropic | Kind::Vertex) {
         return Err(bad(
             "wrong_provider",
             format!(
@@ -1991,6 +2379,9 @@ async fn fetch(
     }
     if let Some((name, value)) = &provider.key {
         headers.insert(name.clone(), value.clone());
+    }
+    if let Some(token) = &provider.google {
+        headers.insert(header::AUTHORIZATION, token.get());
     }
     let mut request = axum::http::Request::new(Body::from(body));
     *request.method_mut() = method;
@@ -2052,6 +2443,59 @@ async fn after(
     }
     let mut value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     match ready.then {
+        // Veo answers with an operation's name; the caller gets a video object whose ID stands for it.
+        Then::Create(mut owned) if owned.item == Item::Video && value["name"].is_string() => {
+            let name = value["name"].as_str().unwrap_or_default().to_string();
+            let tail: String = name
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+                .take(100)
+                .collect();
+            let id = format!("video_veo_{tail}");
+            owned.purpose = name;
+            let model = owned.models.first().cloned().unwrap_or_default();
+            let object = veo_object(&json!({}), &id, &model, owned.lines);
+            write(state, owned.record(&id)).await;
+            state.owned.put(&id, *owned).await;
+            Ok(respond(Bytes::from(object.to_string())))
+        }
+        Then::Veo(id, content) => {
+            let Some(video) = state.owned.get(&id).await else {
+                return Ok(respond(body));
+            };
+            let model = video.models.first().cloned().unwrap_or_default();
+            let object = veo_object(&value, &id, &model, video.lines);
+            settle(state, version, &id, &object).await;
+            if !content {
+                return Ok(respond(Bytes::from(object.to_string())));
+            }
+            let first = &value["response"]["videos"][0];
+            if let Some(bytes) = first["bytesBase64Encoded"]
+                .as_str()
+                .and_then(gantry_core::eventstream::base64_decode)
+            {
+                let mime = first["mimeType"].as_str().unwrap_or("video/mp4");
+                let mut response = (StatusCode::OK, bytes).into_response();
+                if let Ok(mime) = HeaderValue::from_str(mime) {
+                    response.headers_mut().insert(header::CONTENT_TYPE, mime);
+                }
+                return Ok(response);
+            }
+            if let Some(uri) = first["gcsUri"].as_str() {
+                return Ok(respond(Bytes::from(json!({"gcs_uri": uri}).to_string())));
+            }
+            Err(Refusal::new(
+                StatusCode::CONFLICT,
+                "not_ready",
+                format!(
+                    "Refused: video \"{id}\" is {}, so it has no content yet. Ask again when its status is completed.",
+                    object["status"].as_str().unwrap_or("in progress")
+                ),
+            ))
+        }
         Then::Create(owned) => {
             let Some(id) = value["id"].as_str() else {
                 release(state, &ready.reserved);
@@ -2066,7 +2510,12 @@ async fn after(
                     "gantry: decision {decision}: the owner of {id} could not be written to the audit log"
                 );
             }
+            let container = owned.item == Item::Container;
             state.owned.put(id, owned).await;
+            // A container is billed once, when it is made.
+            if container {
+                settle(state, version, id, &json!({"status": "created"})).await;
+            }
             Ok(respond(body))
         }
         Then::List => {
@@ -2117,6 +2566,8 @@ fn ended(item: Item, object: &Value) -> bool {
             object["status"].as_str(),
             Some("succeeded" | "failed" | "cancelled")
         ),
+        Item::Video => matches!(object["status"].as_str(), Some("completed" | "failed")),
+        Item::Container => object["status"] == "created",
         Item::File => false,
     }
 }
@@ -2145,6 +2596,77 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
     done.insert("id".into(), owned.decision.as_str().into());
     done.insert("time".into(), audit::timestamp().into());
     done.insert("object_id".into(), id.into());
+    if matches!(item, Item::Video | Item::Container) {
+        // Priced by the unit: a video's seconds when it is done (nothing when it failed), a container once.
+        let model = owned.models.first().cloned().unwrap_or_default();
+        let price = version
+            .policy
+            .as_ref()
+            .and_then(|p| price_for(&model, p.prices()));
+        let succeeded = object["status"] != "failed";
+        let cost = match (item, &price) {
+            (Item::Video, Some(price)) => {
+                let seconds = match &object["seconds"] {
+                    Value::String(s) => s.parse().ok(),
+                    Value::Number(n) => n.as_u64(),
+                    _ => None,
+                }
+                .unwrap_or(owned.lines as u64);
+                price.per_second.map(|each| each * seconds as f64)
+            }
+            (_, Some(price)) => price.per_call,
+            _ => None,
+        };
+        let mut extra = Map::new();
+        extra.insert(item.word().into(), id.into());
+        if item == Item::Video {
+            extra.insert("seconds".into(), object["seconds"].clone());
+        }
+        let counted = counted(version, &owned, &model);
+        let (charged, record) = spend::charge(
+            &state.spend,
+            spend::Line {
+                decision: &owned.decision,
+                person: &owned.person,
+                team: &owned.team,
+                key: &owned.key,
+                org: &owned.org,
+                customer: owned.customer.as_deref(),
+                tags: &owned.tags,
+                counted: &counted,
+                model: &model,
+                provider: &owned.provider,
+                version: (&version.policy_sha256, &version.keys_sha256),
+                price: None,
+                usage: None,
+                share: 1.0,
+                unreported: cost.or(owned.estimate).unwrap_or_default(),
+                succeeded,
+                extra,
+            },
+        );
+        // Priced by the unit, not the token: the record says so and what it came to.
+        let mut record = record;
+        if cost.is_some() && succeeded {
+            record.insert("cost_usd".into(), charged.into());
+            record.insert(
+                "price".into(),
+                if item == Item::Video {
+                    "per_second"
+                } else {
+                    "per_call"
+                }
+                .into(),
+            );
+        }
+        write(state, record).await;
+        release(state, &owned.reserved);
+        done.insert("status".into(), object["status"].clone());
+        done.insert("charged_usd".into(), charged.into());
+        write(state, done).await;
+        state.owned.settled(id).await;
+        return;
+    }
     if item == Item::FineTune {
         // OpenAI's job object names the tokens trained, and no price for them: they are recorded, not charged.
         done.insert("status".into(), object["status"].clone());
@@ -2339,7 +2861,33 @@ async fn poll(state: &AppState) {
             Item::Batch => format!("/v1/batches/{id}"),
             Item::MessageBatch => format!("/v1/messages/batches/{id}"),
             Item::FineTune => format!("/v1/fine_tuning/jobs/{id}"),
+            Item::Video => format!("/v1/videos/{id}"),
+            Item::Container => format!("/v1/containers/{id}"),
         };
+        // A Veo video is asked for through its operation.
+        if owned.item == Item::Video && !owned.settled && provider.kind == Kind::Vertex {
+            let model = owned.models.first().cloned().unwrap_or_default();
+            if let Ok(answer) = fetch(
+                state,
+                provider,
+                Method::POST,
+                &format!(
+                    "/models/{}:fetchPredictOperation",
+                    crate::sigv4_encode(&model)
+                ),
+                HeaderMap::new(),
+                Bytes::from(json!({"operationName": owned.purpose}).to_string()),
+            )
+            .await
+                && answer.status().is_success()
+                && let Ok(body) = collect(answer.into_body(), crate::MAX_BODY_BYTES).await
+                && let Ok(operation) = serde_json::from_slice::<Value>(&body)
+            {
+                let object = veo_object(&operation, &id, &model, owned.lines);
+                settle(state, &version, &id, &object).await;
+            }
+            continue;
+        }
         if !owned.settled && owned.item != Item::File {
             if let Ok(answer) = fetch(
                 state,

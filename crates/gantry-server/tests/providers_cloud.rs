@@ -1285,3 +1285,165 @@ async fn bedrock_and_vertex_passthrough_are_signed_and_governed() -> TestResult 
     assert_eq!(vertex.hits.load(Ordering::SeqCst), 1);
     Ok(())
 }
+
+// 8. Videos and containers.
+
+const OMER: &str = "gantry_fedcba9876543210fedcba9876543210fedcba9876543210fedcba98765432";
+
+async fn get(
+    gw: &Gateway,
+    path: &str,
+    key: &str,
+) -> Result<(StatusCode, HeaderMap, String), Box<dyn std::error::Error>> {
+    let request = Request::get(path)
+        .header(header::AUTHORIZATION, format!("Bearer {key}"))
+        .body(Body::empty())?;
+    send(gw, request).await
+}
+
+async fn usage_of(gw: &Gateway, headers: &HeaderMap) -> Result<Value, Box<dyn std::error::Error>> {
+    Ok(records_of(gw, headers).await?.1)
+}
+
+#[tokio::test]
+async fn a_sora_video_is_guarded_owned_and_charged_for_its_seconds_when_done() -> TestResult {
+    let openai = mock(vec![
+        Reply::Json(json!({"id": "video_1", "object": "video", "model": "sora-2", "status": "queued", "seconds": "8", "size": "1280x720"})),
+        Reply::Json(json!({"id": "video_1", "object": "video", "model": "sora-2", "status": "completed", "seconds": "8", "size": "1280x720"})),
+    ])
+    .await?;
+    let policy = everyone()
+        .with_key(OMER, "omer.levi", "payments")
+        .with_guardrails(&[Guardrail {
+            name: "no-secrets".into(),
+            action: Action::Block,
+            check: Check::Secrets,
+            on: gantry_core::guard::On::REQUEST,
+            shadow_until: None,
+        }]);
+    let gw = gateway(
+        "sora",
+        vec![route("openai", Kind::OpenAi, openai.url(""), &["sora-2"])],
+        policy,
+    )?;
+    let secret = json!({"model": "sora-2", "prompt": "a sign reading AKIAIOSFODNN7EXAMPLE"});
+    let (status, _, text) = post(&gw, "/v1/videos", &secret).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    assert_eq!(openai.hits.load(Ordering::SeqCst), 0);
+    let (status, created, text) = post(
+        &gw,
+        "/v1/videos",
+        &json!({"model": "sora-2", "prompt": "a calm sea", "seconds": "8", "size": "1280x720"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(openai.first()?.0, "/v1/videos");
+    // Someone else is told it does not exist.
+    let (status, _, _) = get(&gw, "/v1/videos/video_1", OMER).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, text) = get(&gw, "/v1/videos/video_1", MAYA).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let usage = usage_of(&gw, &created).await?;
+    // Eight seconds at $0.10.
+    assert!(close(cost(&usage), 0.8), "{usage}");
+    assert_eq!(usage["model"], "sora-2");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_veo_video_goes_through_the_videos_route_and_comes_back_whole() -> TestResult {
+    let operation = "projects/acme/locations/us-central1/publishers/google/models/veo-3.0-generate-001/operations/abc-123";
+    let vertex = mock(vec![
+        Reply::Json(json!({"name": operation})),
+        Reply::Json(json!({"name": operation, "done": true, "response": {"videos": [{"bytesBase64Encoded": "AAEC", "mimeType": "video/mp4"}]}})),
+    ])
+    .await?;
+    let gw = gateway(
+        "veo",
+        vec![route(
+            "vertex",
+            Kind::Vertex,
+            vertex_base(&vertex),
+            &["veo-3.0-generate-001"],
+        )],
+        everyone(),
+    )?;
+    let (status, created, text) = post(
+        &gw,
+        "/v1/videos",
+        &json!({"model": "veo-3.0-generate-001", "prompt": "a calm sea", "size": "720x1280"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let video: Value = serde_json::from_str(&text)?;
+    assert_eq!(video["id"], "video_veo_abc-123");
+    let (target, sent, body) = vertex.first()?;
+    assert_eq!(
+        target,
+        "/v1/projects/acme/locations/us-central1/publishers/google/models/veo-3.0-generate-001:predictLongRunning"
+    );
+    assert_eq!(sent[header::AUTHORIZATION], "Bearer vertex-provider-key");
+    let body: Value = serde_json::from_slice(&body)?;
+    assert_eq!(
+        body,
+        json!({"instances": [{"prompt": "a calm sea"}], "parameters": {"sampleCount": 1, "durationSeconds": 8, "aspectRatio": "9:16"}})
+    );
+    let (status, _, text) = get(&gw, "/v1/videos/video_veo_abc-123/content", MAYA).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, _, body) = vertex.nth(1)?;
+    assert!(
+        target.ends_with("/models/veo-3.0-generate-001:fetchPredictOperation"),
+        "{target}"
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body)?["operationName"],
+        operation
+    );
+    let usage = usage_of(&gw, &created).await?;
+    // Eight seconds of Veo 3 at $0.40.
+    assert!(close(cost(&usage), 3.2), "{usage}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_container_is_decided_by_its_size_charged_once_and_reached_only_by_its_owner()
+-> TestResult {
+    let openai = mock(vec![
+        Reply::Json(
+            json!({"id": "cntr_1", "object": "container", "name": "work", "status": "running"}),
+        ),
+        Reply::Json(json!({"object": "list", "data": []})),
+    ])
+    .await?;
+    let policy = Policy::new()
+        .with_key(MAYA, "maya.cohen", "payments")
+        .with_key(OMER, "omer.levi", "payments")
+        .with_rule(
+            "payments",
+            Who::Team("payments".into()),
+            Models::Only(vec!["container-1g".into()]),
+        );
+    let gw = gateway(
+        "containers",
+        vec![route("openai", Kind::OpenAi, openai.url(""), &["gpt-4o"])],
+        policy,
+    )?;
+    let (status, _, text) = post(
+        &gw,
+        "/v1/containers",
+        &json!({"name": "big", "memory_limit": "64g"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    assert!(text.contains("container-64g"), "{text}");
+    let (status, created, text) = post(&gw, "/v1/containers", &json!({"name": "work"})).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let usage = usage_of(&gw, &created).await?;
+    assert!(close(cost(&usage), 0.03), "{usage}");
+    let (status, _, _) = get(&gw, "/v1/containers/cntr_1/files", OMER).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, text) = get(&gw, "/v1/containers/cntr_1/files", MAYA).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(openai.nth(1)?.0, "/v1/containers/cntr_1/files");
+    Ok(())
+}

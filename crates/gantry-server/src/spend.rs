@@ -2661,9 +2661,43 @@ impl Drop for Metered {
     }
 }
 
+/// The seconds a video request asks for: OpenAI's `seconds` (a string), or the model's default (Veo 8, Sora 4).
+pub(crate) fn video_seconds(body: &serde_json::Value) -> u64 {
+    match &body["seconds"] {
+        serde_json::Value::String(s) => s.parse().ok(),
+        serde_json::Value::Number(n) => n.as_u64(),
+        _ => None,
+    }
+    .unwrap_or_else(|| {
+        if body["model"].as_str().is_some_and(|m| m.starts_with("veo")) {
+            8
+        } else {
+            4
+        }
+    })
+}
+
+/// What a video or a container costs by its unit price: seconds asked for at `per_second` on /v1/videos, one object
+/// at `per_call` on /v1/containers. None for a request priced by the token.
+pub(crate) fn per_unit_cost(body: &[u8], route: &str, price: &Price) -> Option<f64> {
+    if route.starts_with("/v1/videos") {
+        let body: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+        return price
+            .per_second
+            .map(|each| each * video_seconds(&body) as f64);
+    }
+    if route.starts_with("/v1/containers") {
+        return price.per_call;
+    }
+    None
+}
+
 /// What a batch line could cost at its model's full price, as a budget reserves a live request: Err says why that
 /// is unknown.
 pub(crate) fn most_for(body: &[u8], route: &str, price: &Price) -> Result<f64, String> {
+    if let Some(cost) = per_unit_cost(body, route, price) {
+        return Ok(cost);
+    }
     let hints = hints(body)?;
     let output = output_tokens(&hints, Some(price), route).ok_or_else(|| {
         "it does not say how many output tokens it may use (max_tokens, or max_output_tokens on /v1/responses), and its model has no max_output in its price".to_string()
@@ -3068,6 +3102,8 @@ mod tests {
             max_output: None,
             max_context: None,
             per_image: None,
+            per_second: None,
+            per_call: None,
             source: Default::default(),
         };
         // 3,000,000 bytes is 1,000,000 tokens at 4 dollars, and 1000 output tokens at 10 dollars per million.
@@ -3087,6 +3123,8 @@ mod tests {
             max_output: Some(16384),
             max_context: None,
             per_image: None,
+            per_second: None,
+            per_call: None,
             source: Default::default(),
         };
         let out = |body: &str, route: &str| {

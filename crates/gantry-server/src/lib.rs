@@ -2630,6 +2630,11 @@ fn to_chat_request(bytes: &[u8]) -> Result<Bytes, Refusal> {
     Ok(Bytes::from(chat.to_string()))
 }
 
+/// A name as it goes into a provider path segment, every byte but the unreserved ones percent-encoded.
+pub(crate) fn sigv4_encode(name: &str) -> String {
+    sigv4::uri_encode(name, false)
+}
+
 /// A request body as JSON, or the refusal that says it is not.
 fn json_of(bytes: &[u8], what: &str) -> Result<serde_json::Value, Refusal> {
     serde_json::from_slice(bytes).map_err(|_| {
@@ -4241,6 +4246,11 @@ fn text_fields(path: &str, body: &serde_json::Value) -> Result<Vec<String>, Stri
     match path {
         // A provider's own API has no shape Gantry knows: every string in the body is text.
         _ if is_passthrough(path) => strings(body, String::new(), &mut pointers),
+        _ if path.starts_with("/v1/videos") => match &body["prompt"] {
+            Value::String(_) => pointers.push("/prompt".into()),
+            Value::Null => {}
+            _ => return Err("prompt".into()),
+        },
         IMAGES => match &body["prompt"] {
             Value::String(_) => pointers.push("/prompt".into()),
             Value::Null => {}

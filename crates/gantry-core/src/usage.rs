@@ -357,6 +357,14 @@ pub struct Price {
     /// charged this for each image the answer holds, and reserves it for each image it asks for.
     #[serde(default)]
     pub per_image: Option<f64>,
+    /// US dollars per second of video, for a video model (Sora, Veo). A video is charged this for each second it
+    /// holds when it is done, and reserves it for each second it asks for.
+    #[serde(default)]
+    pub per_second: Option<f64>,
+    /// US dollars per object created, for what is billed per use rather than by the token, such as a code
+    /// interpreter container.
+    #[serde(default)]
+    pub per_call: Option<f64>,
     /// Where the price came from, written in each usage record. Never read from a file: a price in one is the policy's.
     #[serde(skip)]
     pub source: PriceSource,
@@ -411,6 +419,8 @@ impl Price {
             max_output: Some(max_output),
             max_context: None,
             per_image: None,
+            per_second: None,
+            per_call: None,
             source: PriceSource::Builtin,
         }
     }
@@ -439,6 +449,8 @@ impl Price {
             self.cache_write,
             self.cache_write_1h,
             self.per_image,
+            self.per_second,
+            self.per_call,
         ];
         if all.into_iter().flatten().any(|p| !p.is_finite() || p < 0.0) {
             return Err(format!(
@@ -469,9 +481,57 @@ pub struct BuiltinPrice {
 const ANTHROPIC_PRICES: &str = "https://platform.claude.com/docs/en/about-claude/pricing";
 const OPENAI_PRICES: &str = "https://developers.openai.com/api/docs/pricing";
 
+const VERTEX_PRICES: &str = "https://cloud.google.com/vertex-ai/generative-ai/pricing";
+
+impl Price {
+    /// A price per second of video or per object created, with no token price.
+    fn per_unit(per_second: Option<f64>, per_call: Option<f64>) -> Self {
+        Self {
+            input: 0.0,
+            output: 0.0,
+            cache_read: None,
+            cache_write: None,
+            cache_write_1h: None,
+            long_context: None,
+            max_output: None,
+            max_context: None,
+            per_image: None,
+            per_second,
+            per_call,
+            source: PriceSource::Builtin,
+        }
+    }
+}
+
 /// Prices of the models named in the README and specs. Standard tier, global routing.
 pub fn builtin_prices() -> Vec<BuiltinPrice> {
     let checked = "2026-11-13";
+    let units = |model: &'static str, per_second: Option<f64>, per_call: Option<f64>, source| {
+        BuiltinPrice {
+            model,
+            price: Price::per_unit(per_second, per_call),
+            source,
+            checked: "2026-11-14",
+        }
+    };
+    let mut table = vec![
+        // Video, per second generated.
+        units("sora-2", Some(0.10), None, OPENAI_PRICES),
+        units("sora-2-pro", Some(0.30), None, OPENAI_PRICES),
+        units("veo-3.0-generate-001", Some(0.40), None, VERTEX_PRICES),
+        units("veo-3.0-fast-generate-001", Some(0.15), None, VERTEX_PRICES),
+        units("veo-2.0-generate-001", Some(0.50), None, VERTEX_PRICES),
+        // Code interpreter containers, per container by memory: what a rule allows as the model of /v1/containers.
+        units("container-1g", None, Some(0.03), OPENAI_PRICES),
+        units("container-4g", None, Some(0.12), OPENAI_PRICES),
+        units("container-16g", None, Some(0.48), OPENAI_PRICES),
+        units("container-64g", None, Some(1.92), OPENAI_PRICES),
+    ];
+    table.extend(token_prices(checked));
+    table
+}
+
+fn token_prices(checked: &'static str) -> Vec<BuiltinPrice> {
     // OpenAI charges nothing extra to write its cache on these models, so writes cost the input price.
     vec![
         BuiltinPrice {
@@ -560,6 +620,8 @@ fn litellm_row(line: &'static str) -> Option<(&'static str, Price)> {
             max_output: whole(max_out),
             max_context: None,
             per_image: None,
+            per_second: None,
+            per_call: None,
             source: PriceSource::Litellm,
         })
     };
