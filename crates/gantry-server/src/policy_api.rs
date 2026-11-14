@@ -142,16 +142,7 @@ async fn allow(state: &AppState, request: Request, call: &mut Call) -> Result<Pl
         ));
     };
     let key = caller_key(&parts.headers)?;
-    let Some(person) = policy.identify(key) else {
-        call.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
-        return Err(refused(
-            StatusCode::UNAUTHORIZED,
-            "unknown_key",
-            "Refused: Gantry does not know this key. It was never issued or it has been removed. Ask a Gantry admin.",
-        ));
-    };
-    call.person = Some(person.clone());
-    call.key = Some(person.key.clone());
+    let person = &crate::admin::caller(state, policy, key, call).await?;
     // The policy governs every organization: its API needs edit_policy, from a role not kept to one of them.
     match policy.role_of(person) {
         Some(role)
@@ -390,16 +381,31 @@ async fn act(state: &AppState, plan: Plan, by: &str) -> Result<Response, Refusal
         }
         Plan::DryRun { text, hours } => {
             let keys = state.version().policy.clone().unwrap_or_default();
-            let run = blocking(move || {
+            let (audit_path, draft) = blocking(move || {
                 let loaded =
                     config::load(&policy_path, Some(&keys_path)).map_err(Refused::Invalid)?;
                 let draft = versions::check(&policy_path, &keys_path, &text, &loaded)
                     .map_err(Refused::Invalid)?;
-                versions::dry_run_log(&loaded.audit_path, hours, &draft, &keys)
-                    .map_err(Refused::Store)
+                Ok::<_, Refused>((loaded.audit_path, draft))
             })
             .await?
             .map_err(|e| refusal(&e))?;
+            // With a store every gateway's requests are in its index; without, only this gateway's log has them.
+            let run = match gantry_core::insights::attached(&audit_path).index {
+                Some(index) => {
+                    let lines = versions::shared_lines(index.as_ref(), hours)
+                        .await
+                        .map_err(|e| refusal(&Refused::Store(e)))?;
+                    blocking(move || {
+                        versions::dry_run_shared(lines, &audit_path, hours, &draft, &keys)
+                    })
+                    .await?
+                    .map_err(|e| refusal(&Refused::Store(e)))?
+                }
+                None => blocking(move || versions::dry_run_log(&audit_path, hours, &draft, &keys))
+                    .await?
+                    .map_err(|e| refusal(&Refused::Store(e)))?,
+            };
             Ok(json_response(StatusCode::OK, &json!({ "dry_run": run })))
         }
     }

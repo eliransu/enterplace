@@ -1244,7 +1244,8 @@ fn dry_run_report(run: &DryRun) -> String {
     let changed = run.now_refused.len() + run.now_allowed.len() + run.other_rule.len();
     format!(
         r#"<div class="g-panel g-stack"><div class="g-pager"><h2 class="t-md" style="margin: 0">Dry run</h2>{}</div>
-<p class="t-body" style="margin: 0">{} replayed from this gateway's audit log since {}, {} changed. {} refused before the policy decided (a key, a budget, a guardrail, a kill switch) and not replayed.</p>
+<p class="t-body" style="margin: 0">{} replayed since {}, {} changed. {} refused before the policy decided (a key, a budget, a guardrail, a kill switch) and not replayed.</p>
+<p class="t-small g-muted" style="margin: 0">{}</p>
 {}{}{}</div>"#,
         if changed == 0 {
             tag("allow", "No change", "")
@@ -1255,6 +1256,7 @@ fn dry_run_report(run: &DryRun) -> String {
         long_time(&run.since),
         changed,
         gantry_core::count(run.skipped, "request"),
+        esc(&run.note),
         table("Now refused", &run.now_refused),
         table("Now allowed", &run.now_allowed),
         table("Allowed by another rule", &run.other_rule),
@@ -1343,18 +1345,43 @@ async fn dry_run(State(console): State<Console>, headers: HeaderMap, body: Strin
     }
     let c = console.config();
     let (policy, keys, draft) = (c.policy.clone(), c.keys.clone(), text.clone());
-    let run = tokio::task::spawn_blocking(move || {
+    let stopped = |err: tokio::task::JoinError| {
+        Refused::Store(format!("the dry run stopped: {err}. Try again."))
+    };
+    let checked = tokio::task::spawn_blocking(move || {
         let loaded = config::load(&policy, Some(&keys)).map_err(Refused::Invalid)?;
         let checked = versions::check(&policy, &keys, &draft, &loaded).map_err(Refused::Invalid)?;
-        versions::dry_run_log(&loaded.audit_path, hours, &checked, &loaded.policy)
-            .map_err(Refused::Store)
+        Ok((loaded, checked))
     })
     .await
-    .unwrap_or_else(|err| {
-        Err(Refused::Store(format!(
-            "the dry run stopped: {err}. Try again."
-        )))
-    });
+    .unwrap_or_else(|err| Err(stopped(err)));
+    // With a store every gateway's requests are in its index; without, only this gateway's log has them.
+    let run = match checked {
+        Err(err) => Err(err),
+        Ok((loaded, checked)) => match gantry_core::insights::attached(&loaded.audit_path).index {
+            Some(index) => match versions::shared_lines(index.as_ref(), hours).await {
+                Err(err) => Err(Refused::Store(err)),
+                Ok(lines) => tokio::task::spawn_blocking(move || {
+                    versions::dry_run_shared(
+                        lines,
+                        &loaded.audit_path,
+                        hours,
+                        &checked,
+                        &loaded.policy,
+                    )
+                    .map_err(Refused::Store)
+                })
+                .await
+                .unwrap_or_else(|err| Err(stopped(err))),
+            },
+            None => tokio::task::spawn_blocking(move || {
+                versions::dry_run_log(&loaded.audit_path, hours, &checked, &loaded.policy)
+                    .map_err(Refused::Store)
+            })
+            .await
+            .unwrap_or_else(|err| Err(stopped(err))),
+        },
+    };
     match run {
         Ok(run) => page(
             StatusCode::OK,

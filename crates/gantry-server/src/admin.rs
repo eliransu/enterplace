@@ -526,6 +526,52 @@ async fn admin(state: &AppState, request: Request, decision: &str) -> Result<Res
     done
 }
 
+/// Who calls an admin route: the person of a Gantry key, or of a JWT from an issuer the policy trusts, with the role
+/// its `role_claim` names. Fills in who the record names. Unknown keys and bad tokens are refused.
+pub(crate) async fn caller(
+    state: &AppState,
+    policy: &Policy,
+    key: &str,
+    call: &mut Call,
+) -> Result<Principal, Refusal> {
+    // Enough of the hash to tell two unknown callers apart in the audit log, and far too little to find the key.
+    call.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
+    let person = match policy.identify(key) {
+        Some(person) => person.clone(),
+        None if !policy.jwt().is_empty() && crate::jwt::looks_like(key) => {
+            crate::jwt::verify_admin(
+                &state.client,
+                &state.jwks,
+                policy.jwt(),
+                policy.roles(),
+                key,
+            )
+            .await
+            .map_err(|refused| {
+                let status = match refused.code {
+                    _ if refused.unavailable => StatusCode::SERVICE_UNAVAILABLE,
+                    "not_admin" => StatusCode::FORBIDDEN,
+                    _ => StatusCode::UNAUTHORIZED,
+                };
+                let mut refusal = Refusal::new(status, refused.code, refused.message);
+                refusal.retry = refused.unavailable;
+                refusal
+            })?
+        }
+        None => {
+            return Err(refused(
+                StatusCode::UNAUTHORIZED,
+                "unknown_key",
+                "Refused: Gantry does not know this key. It was never issued or it has been removed. Ask a Gantry admin.",
+            ));
+        }
+    };
+    call.person = Some(person.clone());
+    // Every admin record names the caller's key by its hash prefix, as request records do.
+    call.key = Some(person.key.clone());
+    Ok(person)
+}
+
 /// Who is calling, whether they may, and what they ask for. Nothing is changed here.
 async fn allow(
     state: &AppState,
@@ -582,19 +628,16 @@ async fn allow(
         ));
     };
     let key = caller_key(&parts.headers)?;
-    let Some(person) = policy.identify(key) else {
-        call.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
-        return Err(refused(
-            StatusCode::UNAUTHORIZED,
-            "unknown_key",
-            "Refused: Gantry does not know this key. It was never issued or it has been removed. Ask a Gantry admin.",
-        ));
-    };
-    call.person = Some(person.clone());
-    // Every admin record names the caller's key by its hash prefix, as request records do.
-    call.key = Some(person.key.clone());
+    let person = &caller(state, policy, key, call).await?;
     // `gantry logout` revokes the key it sends, whoever's it is: no one needs to be an admin to give up their own key.
     if call.action == Some("revoke_own_key") {
+        if person.jwt.is_some() {
+            return Err(refused(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Refused: DELETE /admin/keys/self gives up the Gantry key it is sent with, and this call was signed in with a token from your identity provider. Sign out at the identity provider instead.",
+            ));
+        }
         let hash = id::sha256_hex(key.as_bytes());
         call.target =
             Some(json!({ "name": person.name, "team": person.team, "sha256_prefix": &hash[..8] }));
@@ -1379,6 +1422,12 @@ pub(crate) async fn record(
     );
     record.insert("client".into(), client.into());
     record.insert("key".into(), call.key.clone().into());
+    // A caller signed in with a JWT is named by its issuer and subject; the token itself is never kept.
+    if let Some(jwt) = call.person.as_ref().and_then(|p| p.jwt.as_ref()) {
+        record.insert("auth".into(), "jwt".into());
+        record.insert("jwt_issuer".into(), jwt.issuer.as_str().into());
+        record.insert("jwt_subject".into(), jwt.subject.as_str().into());
+    }
     record.insert("action".into(), call.action.into());
     record.insert("target".into(), call.target.clone().unwrap_or(Value::Null));
     record.insert("verdict".into(), verdict.into());

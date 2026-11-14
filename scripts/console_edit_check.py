@@ -1,15 +1,16 @@
 """Drives the console's editing pages in a real headless Chrome against Postgres, and saves a screenshot of each.
 
-Usage: python3 scripts/console_edit_check.py --database postgres://... [--gantry target/debug/gantry] [--out DIR]
+Usage: python3 scripts/console_edit_check.py --database postgres://... [--fresh] [--gantry target/debug/gantry] [--out DIR]
 
 The policy is kept in the store (`policy_from: store`, `approval: true`). The script issues an admin key and a
 second admin, serves Gantry, signs in through the browser form, adds a model, edits a key, saves a version for
 approval, approves it as the second admin, runs a dry run, and screenshots Models, Teams, the key editor, the
 editor with a dry run, Policy and Policy versions at 1440 wide (and Models at 390). The database must be empty or
-one this script made: it imports its policy as version 1. Uses browser_check.py's Chrome driver, the standard
+one this script made: it imports its policy as version 1. With --fresh it makes its own: psql drops and creates the
+database gantry_console_edit on the server --database names, and the check runs there. Uses browser_check.py's Chrome driver, the standard
 library only. Exits 1 on the first check that fails.
 """
-import argparse, json, os, pathlib, re, subprocess, sys, tempfile, time, urllib.request
+import argparse, json, os, pathlib, re, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from browser_check import CHROME, ROOT, Chrome, check, stop  # noqa: E402
@@ -28,6 +29,16 @@ def key_new(gantry: str, folder: pathlib.Path, env: dict, name: str) -> str:
     return found.group(0)
 
 
+def fresh(url: str) -> str:
+    """Drops and creates gantry_console_edit on the server `url` names, with psql, and returns its URL."""
+    parts = urllib.parse.urlsplit(url)
+    for sql in ("DROP DATABASE IF EXISTS gantry_console_edit", "CREATE DATABASE gantry_console_edit"):
+        out = subprocess.run(["psql", url, "-v", "ON_ERROR_STOP=1", "-q", "-c", sql], capture_output=True, text=True)
+        if out.returncode != 0:
+            raise SystemExit(f"psql could not run {sql}: {out.stderr.strip()}. Check --database and that psql is installed.")
+    return urllib.parse.urlunsplit(parts._replace(path="/gantry_console_edit"))
+
+
 def api(base: str, key: str, method: str, path: str, body: str = "", headers: dict | None = None):
     request = urllib.request.Request(f"{base}{path}", data=body.encode() if body else None, method=method,
                                      headers={"authorization": f"Bearer {key}", **(headers or {})})
@@ -41,11 +52,14 @@ def api(base: str, key: str, method: str, path: str, body: str = "", headers: di
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--database", required=True)
+    parser.add_argument("--fresh", action="store_true", help="run in a new database gantry_console_edit (needs psql)")
     parser.add_argument("--gantry", default=str(ROOT / "target" / "debug" / "gantry"))
     parser.add_argument("--chrome", default=CHROME)
     parser.add_argument("--port", type=int, default=20660)
     parser.add_argument("--out", default=str(ROOT / "target" / "console-edit-screens"))
     args = parser.parse_args()
+    if args.fresh:
+        args.database = fresh(args.database)
     gantry = str(pathlib.Path(args.gantry).resolve())
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -131,6 +145,8 @@ audit: {{ path: gantry-audit.jsonl }}
             document.getElementById('policy-note').value = 'everyone else gets no model'; })()""")
         chrome.js("document.querySelector('button[formaction=\"/console/policy/dry-run\"]').click()")
         chrome.wait("document.body.innerText.includes('Dry run') && document.querySelector('.g-tag')", "the dry run")
+        check("every gateway on the store" in chrome.js("document.body.textContent"),
+              "the dry run replays every gateway's requests from the store")
         chrome.shot(out / "policy-edit-dry-run.png")
         chrome.js("document.querySelector('form[action=\"/console/policy/save\"]').submit()")
         chrome.wait("location.pathname === '/console/policy/versions' && document.readyState === 'complete'", "the saved draft")

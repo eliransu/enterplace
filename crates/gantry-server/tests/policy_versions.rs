@@ -738,3 +738,94 @@ async fn every_policy_field_survives_a_saved_version_and_none_needs_a_restart() 
     assert!(gantry_core::config::needs_restart(&loaded, &start).is_empty());
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_replays_the_requests_of_every_gateway_on_the_store() -> TestResult {
+    let Some(url) = database("dry_run_shared").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let text = policy(port, "file");
+    let one = gateway(&dir("dry-one")?, &url, &text)?;
+    for (name, key, admin) in [("admin", ADMIN, true), ("maya.cohen", MAYA, false)] {
+        gantry_core::keyfile::add_entry(name, "ops", key, admin, &one.loaded.keys_path)?;
+    }
+    one.reloader.check(gantry_server::Trigger::FileChange);
+    let two = gateway(&dir("dry-two")?, &url, &text)?;
+    // Maya's requests all go through the second gateway.
+    within_two_seconds(&two.router, "m", StatusCode::OK).await?;
+    for _ in 0..2 {
+        assert_eq!(chat(&two.router, "m").await?, StatusCode::OK);
+    }
+    let draft = text.replace("principals: { any: true }", "principals: { team: nobody }");
+    // The first gateway saw none of them, and its dry run still finds them, once the index has copied them.
+    let start = Instant::now();
+    let body = loop {
+        let (status, body) =
+            post_json(&one.router, ADMIN, "/admin/policy/dry-run?hours=1", &draft).await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if body["dry_run"]["now_refused"]
+            .as_array()
+            .map_or(0, Vec::len)
+            >= 3
+        {
+            break body;
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            return Err(format!("the other gateway's requests were not replayed: {body}").into());
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    };
+    assert_eq!(body["dry_run"]["source"], "store", "{body}");
+    assert!(
+        body["dry_run"]["now_refused"]
+            .as_array()
+            .is_some_and(|r| r.iter().all(|r| r["person"] == "maya.cohen")),
+        "{body}"
+    );
+    assert_eq!(
+        body["dry_run"]["now_refused"].as_array().map(Vec::len),
+        Some(3),
+        "{body}"
+    );
+    // The second gateway has them in its own log and in the index: each is replayed once.
+    let (_, body) = post_json(&two.router, ADMIN, "/admin/policy/dry-run?hours=1", &draft).await?;
+    assert_eq!(
+        body["dry_run"]["now_refused"].as_array().map(Vec::len),
+        Some(3),
+        "{body}"
+    );
+    let own = std::fs::read_to_string(&one.loaded.audit_path)?;
+    assert!(
+        !own.contains("/v1/chat/completions"),
+        "the first gateway served a request itself"
+    );
+
+    // Without a store, the dry run replays this gateway's own log, and says so.
+    let alone_dir = dir("dry-alone")?;
+    let alone_text = text.replace(
+        "store: { postgres_url_env: GANTRY_STORE_URL, policy_from: file }\n",
+        "",
+    );
+    let alone = gateway(&alone_dir, &url, &alone_text)?;
+    gantry_core::keyfile::add_entry("admin", "ops", ADMIN, true, &alone.loaded.keys_path)?;
+    alone.reloader.check(gantry_server::Trigger::FileChange);
+    let draft = alone_text.replace("principals: { any: true }", "principals: { team: nobody }");
+    let (status, body) = post_json(
+        &alone.router,
+        ADMIN,
+        "/admin/policy/dry-run?hours=1",
+        &draft,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["dry_run"]["source"], "audit_log", "{body}");
+    assert!(
+        body["dry_run"]["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no store"),
+        "{body}"
+    );
+    Ok(())
+}

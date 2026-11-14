@@ -164,6 +164,9 @@ pub struct JwtTrust {
     /// The claim that names the team, or `None` when every caller of this issuer has `team`.
     pub team_claim: Option<String>,
     pub team: Option<String>,
+    /// The claim whose values give a caller of the admin API the first role whose `sso_values` hold one. `None`
+    /// keeps this issuer's tokens off the admin API.
+    pub role_claim: Option<String>,
 }
 
 impl Principal {

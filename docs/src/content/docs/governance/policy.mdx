@@ -449,7 +449,7 @@ Every call takes an admin key and is recorded before anything is done.
 | `POST /admin/policy/versions/<n>/approve` | Puts a pending version live. Refused with `own_version` for the admin who saved it, and with `version_conflict` when another version went live after it was drafted. |
 | `POST /admin/policy/versions/<n>/reject` | Rejects a pending version. |
 | `POST /admin/policy/versions/<n>/rollback` | Saves the text of version `n` as a new version. It goes live, or waits for approval, as any change does. |
-| `POST /admin/policy/dry-run?hours=24` | Replays the last 1 to 720 hours of this gateway's request records against the YAML body and lists the requests it would now refuse, now allow, or allow by another rule. Nothing is saved. |
+| `POST /admin/policy/dry-run?hours=24` | Replays the last 1 to 720 hours of request records (every gateway's with a store, this gateway's audit log without one, named by `dry_run.source`) against the YAML body and lists the requests it would now refuse, now allow, or allow by another rule. Nothing is saved. |
 
 ```bash
 curl -s -D - -H "Authorization: Bearer $GANTRY_ADMIN_KEY" http://127.0.0.1:8080/admin/policy -o gantry.policy.yaml

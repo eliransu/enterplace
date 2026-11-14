@@ -97,6 +97,8 @@ This copies every key of the file, and the kill switches in `gantry.kills.json` 
 | Spend and reservations, per team, person and key, per day and month. | The audit log. Each replica keeps its own hash-chained file. |
 | Provider credentials, sealed with AES-256-GCM under the master key, with their name, vendor, last 4 characters and who added and rotated them. | The master key. It stays in each replica's environment or a file it names. |
 | Rate-limit leases: how much of each `rpm` and `tpm` each replica took, for the last minute. | The answer cache. Each replica keeps its own (see below). |
+| Session pins: the SHA-256 of the person and session, the deployment, and when it last sent. Never the session ID itself. | |
+| Each replica's last 32 times to first byte per alias deployment, for `lowest_latency`. | |
 | Cooldowns of alias deployments that failed, until when. | Requests in flight per deployment, for `least_busy`. Each replica counts its own. |
 | Console sessions: the SHA-256 of the session ID, who it is for, and when it ends. Never the ID itself. | A single sign-on sign-in in progress. Its callback must reach the replica that started it. |
 
@@ -121,6 +123,14 @@ Rate limits are leased, so most requests make no database call. A replica takes 
 ### Cooldowns
 
 When a deployment of an alias fails, the replica passes it over at once and writes until when to the store. The other replicas read the store's cooldowns with keys and kill switches, every 500 ms, and pass the deployment over until then. The replica it failed on probes it when the time is up, as described in [Aliases](/routing/aliases/#behavior); an answer from it on any replica ends the cooldown on all. A normal answer makes no database call.
+
+### Session pins and latency
+
+An alias with `session_affinity: true` keeps a coding agent's session on one deployment. With a store, every replica pins the session to the same deployment, and an alias with `balance: lowest_latency` ranks its deployments on the 90th percentile of every replica's recent answers pooled, so all replicas pick the same one.
+
+Neither costs a database call on the request path. A replica reads the pins and the latency rows from memory, refreshed with the 500 ms poll, and writes what it pinned and measured with the next poll. A pin is written again at most every 5 minutes while its session keeps sending, so other replicas know it is in use. A session pinned on one replica reaches the others within about a second; a coding agent's next request comes after its first answer, so it lands on the same deployment. Two replicas pinning a new session in the same instant settle on one within a poll. Pins idle for an hour and latency rows not written for 10 minutes are deleted. The tables are `gantry_affinity` and `gantry_latency`, in their own migration namespace, `gantry_routing`.
+
+Without a store, each gateway keeps its own pins and measurements, as before.
 
 ### Console sessions
 

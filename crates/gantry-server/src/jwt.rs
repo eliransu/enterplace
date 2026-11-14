@@ -85,6 +85,58 @@ pub(crate) async fn verify(
     trusts: &[JwtTrust],
     token: &str,
 ) -> Result<Principal, Refused> {
+    verified(client, keys, trusts, token)
+        .await
+        .map(|(person, _, _)| person)
+}
+
+/// Checks `token` for the admin API: who it names, with the role the issuer's `role_claim` gives them, the first of
+/// `roles` whose `sso_values` hold one of the claim's values. A token with no such role is refused (`not_admin`).
+pub(crate) async fn verify_admin(
+    client: &Client<HttpsConnector<HttpConnector>, Body>,
+    keys: &Keys,
+    trusts: &[JwtTrust],
+    roles: &[gantry_core::policy::Role],
+    token: &str,
+) -> Result<Principal, Refused> {
+    let (mut person, claims, trust) = verified(client, keys, trusts, token).await?;
+    let Some(claim) = &trust.role_claim else {
+        return Err(refused(
+            "not_admin",
+            format!(
+                "Refused: tokens from \"{}\" are not accepted on the admin API, because its jwt: entry in the policy has no role_claim. Ask a Gantry admin to set role_claim (for example groups) and list your group under a role's sso_values, or use an admin key.",
+                trust.issuer
+            ),
+        ));
+    };
+    let values: Vec<&str> = match claims.get(claim) {
+        Some(Value::String(one)) => vec![one.as_str()],
+        Some(Value::Array(list)) => list.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    let role = roles
+        .iter()
+        .find(|r| r.sso_values.iter().any(|v| values.contains(&v.as_str())))
+        .ok_or_else(|| {
+            refused(
+                "not_admin",
+                format!(
+                    "Refused: the token's \"{claim}\" claim holds none of the values in a role's sso_values, so \"{}\" has no admin role. Ask a Gantry admin to add your group to a role under roles: in the policy.",
+                    person.name
+                ),
+            )
+        })?;
+    person.role = Some(role.name.clone());
+    Ok(person)
+}
+
+/// Checks `token` against the trusted issuers: who it names, its claims, and the issuer that signed it.
+async fn verified<'t>(
+    client: &Client<HttpsConnector<HttpConnector>, Body>,
+    keys: &Keys,
+    trusts: &'t [JwtTrust],
+    token: &str,
+) -> Result<(Principal, Value, &'t JwtTrust), Refused> {
     let bad = |what: &str| {
         refused(
             "jwt_invalid",
@@ -215,7 +267,7 @@ pub(crate) async fn verify(
         (None, None) => return Err(bad("the policy names no team for this issuer")),
     };
     let subject = text("sub").to_string();
-    Ok(Principal {
+    let person = Principal {
         name,
         team,
         admin: false,
@@ -226,7 +278,8 @@ pub(crate) async fn verify(
             subject,
         }),
         ..Principal::default()
-    })
+    };
+    Ok((person, claims, trust))
 }
 
 /// The one key that can check this token: by its kid, or the only key of the right type when it names none.

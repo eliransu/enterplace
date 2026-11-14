@@ -845,6 +845,9 @@ pub trait Index: Send + Sync + std::fmt::Debug {
     /// `dimension` (a request counts under each value it has), summed where the rows are kept. What a budget
     /// forecast reads for its own window.
     fn spent(&self, query: &Query, dimension: &str) -> Pending<Vec<(String, f64)>>;
+    /// The decision records of every gateway since `since` (RFC 3339), as written, oldest first: the newest `max`
+    /// of them when there are more. What a policy dry run replays.
+    fn lines(&self, since: &str, max: usize) -> Pending<Vec<String>>;
 }
 
 /// [`Index::spent`] over rows folded here, from the local chain.

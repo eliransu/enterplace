@@ -556,6 +556,54 @@ pub struct DryRun {
     pub now_allowed: Vec<Replayed>,
     /// Allowed both times, by another rule: its budget, rate limits and guardrails apply now.
     pub other_rule: Vec<Replayed>,
+    /// What was replayed: `store` (the requests of every gateway on the store) or `audit_log` (this gateway's own).
+    pub source: String,
+    /// What that means for the result, in a sentence.
+    pub note: String,
+}
+
+/// How many of the newest requests a dry run reads from the store's request index.
+// ponytail: the rows are held in memory at once; stream them when someone replays more than this.
+pub const DRY_RUN_ROWS: usize = 100_000;
+
+/// The last `hours` of every gateway's decision records, from the store's request index, for [`dry_run_shared`].
+pub async fn shared_lines(
+    index: &dyn crate::insights::Index,
+    hours: u64,
+) -> Result<Vec<String>, String> {
+    index
+        .lines(&hours_ago(hours), DRY_RUN_ROWS)
+        .await
+        .map_err(|err| format!("{err}. Check that Postgres is up, then run the dry run again."))
+}
+
+/// Replays the last `hours` of every gateway's requests against `draft`: `lines` from the store's request index,
+/// and this gateway's own audit log for what the index has not copied yet (each request once).
+pub fn dry_run_shared(
+    lines: Vec<String>,
+    audit_path: &Path,
+    hours: u64,
+    draft: &Loaded,
+    keys: &Policy,
+) -> Result<DryRun, String> {
+    let since = hours_ago(hours);
+    let full = lines.len() >= DRY_RUN_ROWS;
+    let own = crate::audit::chain_reader(audit_path).map_err(|err| {
+        format!(
+            "the audit log at {} cannot be read: {err}. Check its permissions.",
+            audit_path.display()
+        )
+    })?;
+    let shared = std::io::Cursor::new(lines.join("\n") + "\n");
+    let mut run = dry_run(std::io::Read::chain(shared, own), &since, draft, keys);
+    run.source = "store".into();
+    run.note = "Replayed the requests of every gateway on the store, from the shared request index (copied from each gateway every 2 seconds).".into();
+    if full {
+        run.note.push_str(&format!(
+            " There were more than {DRY_RUN_ROWS} requests in that time: only the newest {DRY_RUN_ROWS} were replayed. Ask for fewer hours to see them all."
+        ));
+    }
+    Ok(run)
 }
 
 /// The codes a policy decision refuses with. Other refusals happen before or after it and are not replayed.
@@ -585,6 +633,8 @@ fn decided(draft: &Loaded, who: &Principal, model: &str) -> (String, String) {
 pub fn dry_run(records: impl BufRead, since: &str, draft: &Loaded, keys: &Policy) -> DryRun {
     let mut run = DryRun {
         since: since.to_string(),
+        source: "audit_log".into(),
+        note: "Replayed this gateway's audit log only: there is no store, so requests other gateways served are not in it. Add store: to the policy to replay every gateway's.".into(),
         ..DryRun::default()
     };
     let text = |r: &Value, k: &str| {
@@ -593,11 +643,17 @@ pub fn dry_run(records: impl BufRead, since: &str, draft: &Loaded, keys: &Policy
             .unwrap_or_default()
             .to_string()
     };
+    // A request can be both in the store's index and in this gateway's log: it is replayed once.
+    let mut seen = std::collections::HashSet::new();
     for line in records.lines().map_while(Result::ok) {
         let Ok(record) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
         if record.get("event").is_some() || text(&record, "time").as_str() < since {
+            continue;
+        }
+        let id = text(&record, "id");
+        if !id.is_empty() && !seen.insert(id) {
             continue;
         }
         let (person, model, key) = (

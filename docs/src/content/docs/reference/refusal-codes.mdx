@@ -407,9 +407,9 @@ These come from `/admin/keys`, `/admin/kills` and `/admin/credentials`, in OpenA
 
 ### not_admin
 
-**403.** The key is valid, but its entry does not say `admin: true`.
+**403.** The key is valid, but its entry does not say `admin: true` and gives no role. For a [JWT on the admin API](/governance/access-control/#the-admin-api): its issuer has no `role_claim`, or the claim holds none of the values in a role's `sso_values`.
 
-**Fix:** use an admin key, or ask an admin.
+**Fix:** use an admin key, or ask an admin to give you a role (for a JWT, to add your group to a role's `sso_values`).
 
 ### invalid_request
 

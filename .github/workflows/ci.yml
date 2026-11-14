@@ -52,6 +52,36 @@ jobs:
       - name: The release tarball builds
         run: scripts/release.sh tarball
 
+  console-edit:
+    # The console's editing pages (models, keys, policy versions, approval, dry run) in a real headless Chrome
+    # against Postgres, with a screenshot of each.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: cargo build --locked -p gantry-cli
+      - run: >-
+          python3 scripts/console_edit_check.py --fresh --chrome "$(command -v google-chrome)"
+          --database "postgres://postgres:test@127.0.0.1:5432/postgres?sslmode=disable"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: console-edit-screens
+          path: target/console-edit-screens
+          if-no-files-found: ignore
+
   install:
     strategy:
       matrix:

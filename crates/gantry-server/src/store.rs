@@ -154,6 +154,34 @@ CREATE TABLE gantry_policy_versions (
 INSERT INTO gantry_versions VALUES ('policy', 0) ON CONFLICT (name) DO NOTHING;
 "];
 
+/// Session pins and each gateway's latency samples, in a namespace of their own (`gantry_routing`). Never edit an
+/// entry that has shipped: add one.
+const ROUTING_MIGRATIONS: &[&str] = &["
+CREATE TABLE gantry_affinity (session text PRIMARY KEY, deployment text NOT NULL, seen timestamptz NOT NULL);
+CREATE INDEX gantry_affinity_seen ON gantry_affinity (seen);
+CREATE TABLE gantry_latency (
+    deployment text NOT NULL,
+    gateway text NOT NULL,
+    samples integer[] NOT NULL,
+    updated timestamptz NOT NULL,
+    PRIMARY KEY (deployment, gateway)
+);
+"];
+
+/// A pin written this long ago is written again when its session sends, so the others know it is still in use. A
+/// session that keeps sending costs one write per gateway in this time.
+const PIN_TOUCH: Duration = Duration::from_secs(300);
+
+/// A gateway's latency samples count this long after it last wrote them: one that stopped is forgotten.
+const LATENCY_FOR_SECS: f64 = 600.0;
+
+/// Pins written up to this long before the last read are read again: a write is stamped before it commits, so one
+/// committed late is still picked up.
+const PIN_OVERLAP_SECS: f64 = 5.0;
+
+/// Expired pins and stale latency rows are deleted every this many polls (a minute).
+const CLEAN_EVERY: u64 = 120;
+
 /// The columns of a policy version, in the order `version_of` reads them.
 const VERSION_COLUMNS: &str =
     "id, text, sha256, base, note, created_by, created_at, state, decided_by, decided_at";
@@ -221,7 +249,24 @@ struct Inner {
     policies_seen: Mutex<Option<i64>>,
     /// Set while the database cannot be reached, so the outage is reported once and its end once.
     down: AtomicBool,
+    /// This gateway's name on the latency rows, new at each start.
+    gateway: String,
+    /// Session pins by SHA-256 of the session: the deployment, when the session last sent, and when the pin was
+    /// last written to the database.
+    pins: RwLock<HashMap<String, Pinned>>,
+    /// Pins made here and not written yet. A read does not overwrite them.
+    pins_out: Mutex<HashMap<String, String>>,
+    /// The database's clock at the last read of the pins, in seconds since 1970.
+    pins_read: Mutex<f64>,
+    /// This gateway's last answers by deployment, in milliseconds, and whether a new one came since the last write.
+    samples: Mutex<HashMap<String, (std::collections::VecDeque<u32>, bool)>>,
+    /// Each deployment's 90th percentile over every gateway's samples.
+    latency: RwLock<Arc<HashMap<String, u32>>>,
+    polls: std::sync::atomic::AtomicU64,
 }
+
+/// A session pin: the deployment, when the session last sent, and when the pin was last written.
+type Pinned = (String, Instant, Instant);
 
 /// A credential and its value as sealed.
 type Sealed = (Credential, Vec<u8>);
@@ -271,6 +316,13 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         policies: RwLock::default(),
         policies_seen: Mutex::new(None),
         down: AtomicBool::new(false),
+        gateway: id::random_hex(8),
+        pins: RwLock::default(),
+        pins_out: Mutex::default(),
+        pins_read: Mutex::new(0.0),
+        samples: Mutex::default(),
+        latency: RwLock::default(),
+        polls: std::sync::atomic::AtomicU64::new(0),
     });
     let store = PgStore {
         handle: runtime.handle().clone(),
@@ -285,6 +337,7 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
             .map_err(|err| unreachable(&first.env, &err))?;
         migrate(&mut client).await?;
         migrate_namespace(&mut client, "gantry_policy", POLICY_MIGRATIONS).await?;
+        migrate_namespace(&mut client, "gantry_routing", ROUTING_MIGRATIONS).await?;
         write(&first.client, Some(Arc::new(client)));
         first.refresh().await.map_err(|err| {
             format!("the store's keys and kill switches could not be read: {err}. Check the database and start again.")
@@ -299,6 +352,7 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
             };
             inner.poll().await;
             inner.flush_returns().await;
+            inner.flush_routing().await;
         }
     });
     Ok(Arc::new(store))
@@ -812,7 +866,170 @@ impl Inner {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(policy);
         }
+        self.read_routing(&client).await
+    }
+
+    /// Reads the pins written since the last read (another gateway's sessions) and every gateway's latency.
+    async fn read_routing(&self, client: &Client) -> Result<(), String> {
+        let since = *self
+            .pins_read
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let idle = crate::alias::SESSION_IDLE.as_secs_f64();
+        // The first row is the database's clock, the next read's starting point; the rest are the pins.
+        let rows = client
+            .query(
+                "SELECT NULL::text, NULL::text, extract(epoch FROM clock_timestamp())::float8 \
+                 UNION ALL \
+                 SELECT session, deployment, extract(epoch FROM clock_timestamp() - seen)::float8 FROM gantry_affinity \
+                 WHERE seen > to_timestamp($1) - $2 * interval '1 second' AND seen > clock_timestamp() - $3 * interval '1 second'",
+                &[&since, &PIN_OVERLAP_SECS, &idle],
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+        let now = Instant::now();
+        let pending = self
+            .pins_out
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        {
+            let mut pins = self
+                .pins
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for row in &rows {
+                let field = |err: tokio_postgres::Error| err.to_string();
+                let session: Option<String> = row.try_get(0).map_err(field)?;
+                let seconds: f64 = row.try_get(2).map_err(field)?;
+                let Some(session) = session else {
+                    *self
+                        .pins_read
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = seconds;
+                    continue;
+                };
+                if pending.contains_key(&session) {
+                    continue;
+                }
+                let deployment: String = row.try_get(1).map_err(field)?;
+                let at = now
+                    .checked_sub(Duration::try_from_secs_f64(seconds).unwrap_or_default())
+                    .unwrap_or(now);
+                // A pin this gateway made or saw later stays: the row read is older.
+                if pins
+                    .get(&session)
+                    .is_some_and(|(d, seen, _)| *d == deployment && *seen > at)
+                {
+                    continue;
+                }
+                crate::alias::bounded_insert(&mut pins, session, (deployment, at, at), now, |p| {
+                    p.1
+                });
+            }
+        }
+        let rows = client
+            .query(
+                "SELECT deployment, samples FROM gantry_latency WHERE updated > clock_timestamp() - $1 * interval '1 second'",
+                &[&LATENCY_FOR_SECS],
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+        let mut all: HashMap<String, std::collections::VecDeque<u32>> = HashMap::new();
+        for row in &rows {
+            let field = |err: tokio_postgres::Error| err.to_string();
+            let deployment: String = row.try_get(0).map_err(field)?;
+            let samples: Vec<i32> = row.try_get(1).map_err(field)?;
+            all.entry(deployment)
+                .or_default()
+                .extend(samples.into_iter().map(|ms| u32::try_from(ms).unwrap_or(0)));
+        }
+        let p90 = all
+            .iter()
+            .filter_map(|(d, samples)| Some((d.clone(), crate::alias::percentile(samples, 90)?)))
+            .collect();
+        write(&self.latency, Arc::new(p90));
         Ok(())
+    }
+
+    /// Writes the pins made and the latency measured here since the last poll, and now and then deletes what has
+    /// expired. Lost if the database is away: pins are made again by the next request, samples by the next answer.
+    async fn flush_routing(&self) {
+        let Ok(client) = self.client() else {
+            return;
+        };
+        let pins = std::mem::take(
+            &mut *self
+                .pins_out
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if !pins.is_empty() {
+            let (sessions, deployments): (Vec<String>, Vec<String>) = pins.into_iter().unzip();
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.query_typed(
+                    "INSERT INTO gantry_affinity (session, deployment, seen) \
+                     SELECT s, d, clock_timestamp() FROM unnest($1::text[], $2::text[]) AS t(s, d) \
+                     ON CONFLICT (session) DO UPDATE SET deployment = excluded.deployment, seen = excluded.seen",
+                    &[(&sessions, Type::TEXT_ARRAY), (&deployments, Type::TEXT_ARRAY)],
+                ),
+            )
+            .await;
+        }
+        let changed: Vec<(String, String)> = self
+            .samples
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter_mut()
+            .filter(|(_, (_, dirty))| *dirty)
+            .map(|(d, (samples, dirty))| {
+                *dirty = false;
+                let text: Vec<String> = samples.iter().map(u32::to_string).collect();
+                (d.clone(), text.join(","))
+            })
+            .collect();
+        if !changed.is_empty() {
+            let (deployments, samples): (Vec<String>, Vec<String>) = changed.into_iter().unzip();
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.query_typed(
+                    "INSERT INTO gantry_latency (deployment, gateway, samples, updated) \
+                     SELECT d, $3, string_to_array(s, ',')::integer[], clock_timestamp() FROM unnest($1::text[], $2::text[]) AS t(d, s) \
+                     ON CONFLICT (deployment, gateway) DO UPDATE SET samples = excluded.samples, updated = excluded.updated",
+                    &[
+                        (&deployments, Type::TEXT_ARRAY),
+                        (&samples, Type::TEXT_ARRAY),
+                        (&self.gateway, Type::TEXT),
+                    ],
+                ),
+            )
+            .await;
+        }
+        if self.polls.fetch_add(1, Ordering::Relaxed) % CLEAN_EVERY == 0 {
+            let idle = crate::alias::SESSION_IDLE.as_secs_f64();
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.execute(
+                    "DELETE FROM gantry_affinity WHERE seen < clock_timestamp() - $1 * interval '1 second'",
+                    &[&idle],
+                ),
+            )
+            .await;
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.execute(
+                    "DELETE FROM gantry_latency WHERE updated < clock_timestamp() - $1 * interval '1 second'",
+                    &[&LATENCY_FOR_SECS],
+                ),
+            )
+            .await;
+            let now = Instant::now();
+            self.pins
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain(|_, (_, at, _)| now.duration_since(*at) < crate::alias::SESSION_IDLE);
+        }
     }
 
     /// Runs `work` in a transaction of its own connection, under the policy lock, then reads the versions again so
@@ -1905,6 +2122,70 @@ impl Store for PgStore {
             )
             .await;
         });
+    }
+
+    fn shares_routing(&self) -> bool {
+        true
+    }
+
+    fn pinned(&self, session: &str, idle: Duration) -> Option<String> {
+        let key = id::sha256_hex(session.as_bytes());
+        let now = Instant::now();
+        self.inner
+            .pins
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+            .filter(|(_, at, _)| now.duration_since(*at) < idle)
+            .map(|(deployment, _, _)| deployment.clone())
+    }
+
+    fn pin(&self, session: &str, deployment: &str) {
+        // Sessions are kept by hash: the person and the session ID their client sent stay out of the database.
+        let key = id::sha256_hex(session.as_bytes());
+        let now = Instant::now();
+        let mut pins = self
+            .inner
+            .pins
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((d, at, written)) = pins.get_mut(&key) {
+            if d == deployment && now.duration_since(*written) < PIN_TOUCH {
+                *at = now;
+                return;
+            }
+        }
+        crate::alias::bounded_insert(
+            &mut pins,
+            key.clone(),
+            (deployment.to_string(), now, now),
+            now,
+            |p| p.1,
+        );
+        drop(pins);
+        self.inner
+            .pins_out
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key, deployment.to_string());
+    }
+
+    fn latency(&self) -> Arc<HashMap<String, u32>> {
+        read(&self.inner.latency)
+    }
+
+    fn observed(&self, deployment: &str, ms: u32) {
+        let mut samples = self
+            .inner
+            .samples
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (window, dirty) = samples.entry(deployment.to_string()).or_default();
+        if window.len() == crate::alias::LATENCY_SAMPLES {
+            window.pop_front();
+        }
+        window.push_back(ms);
+        *dirty = true;
     }
 
     fn open_session(&self, id_sha256: String, who: String, ttl: Duration) -> Pending<()> {

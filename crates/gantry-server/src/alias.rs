@@ -53,21 +53,46 @@ pub(crate) struct Ask<'a> {
 
 /// How many answers a deployment's latency is judged on: recent enough to follow a slow region, enough that one
 /// slow answer does not move the 90th percentile.
-const LATENCY_SAMPLES: usize = 32;
+pub(crate) const LATENCY_SAMPLES: usize = 32;
 
-/// A session with no request for this long is forgotten, and its next request is balanced afresh.
-// ponytail: fixed idle time and per gateway; a setting and the store when replicas behind a non-sticky balancer need it.
-const SESSION_IDLE: Duration = Duration::from_secs(3600);
+/// A session with no request for this long is forgotten, and its next request is balanced afresh. With a store
+/// the pins are shared, so replicas behind a balancer that is not sticky keep a session on one deployment.
+// ponytail: fixed idle time; a setting when someone needs another.
+pub(crate) const SESSION_IDLE: Duration = Duration::from_secs(3600);
 
 /// Most sessions remembered at once, about 10 MB at most.
 const MAX_SESSIONS: usize = 100_000;
 
 /// The `p`th percentile of `samples`, by nearest rank. `None` without samples.
-fn percentile(samples: &std::collections::VecDeque<u32>, p: usize) -> Option<u32> {
+pub(crate) fn percentile(samples: &std::collections::VecDeque<u32>, p: usize) -> Option<u32> {
     let mut sorted: Vec<u32> = samples.iter().copied().collect();
     sorted.sort_unstable();
     let rank = (sorted.len() * p).div_ceil(100).max(1);
     sorted.get(rank - 1).copied()
+}
+
+/// Inserts into a session table bounded at [`MAX_SESSIONS`]: past its size, idle sessions are dropped, and if none
+/// is idle the oldest goes. `seen` says when an entry's session last sent.
+pub(crate) fn bounded_insert<V>(
+    map: &mut HashMap<String, V>,
+    key: String,
+    value: V,
+    now: Instant,
+    seen: impl Fn(&V) -> Instant,
+) {
+    if map.len() >= MAX_SESSIONS && !map.contains_key(&key) {
+        map.retain(|_, v| now.duration_since(seen(v)) < SESSION_IDLE);
+        if map.len() >= MAX_SESSIONS {
+            let oldest = map
+                .iter()
+                .min_by_key(|(_, v)| seen(v))
+                .map(|(k, _)| k.clone());
+            if let Some(oldest) = oldest {
+                map.remove(&oldest);
+            }
+        }
+    }
+    map.insert(key, value);
 }
 
 /// How many times the base cooldown a deployment that keeps failing waits at most.
@@ -115,6 +140,8 @@ impl Pool {
         ask: &Ask<'_>,
     ) -> (Vec<usize>, String) {
         let shared = self.store.as_ref().map(|store| store.cooling());
+        // With a store that shares them, pins and latency come from it, so every gateway routes alike.
+        let routing = self.store.as_ref().filter(|store| store.shares_routing());
         let mut deployments = locked(&self.deployments);
         let name_of = |i: usize| {
             alias
@@ -174,10 +201,13 @@ impl Pool {
             .filter(|_| alias.session_affinity)
             .map(|s| format!("{}\n{s}", alias.name));
         if let Some(key) = &session {
-            let pinned = locked(&self.sessions)
-                .get(key)
-                .filter(|(_, at)| now.duration_since(*at) < SESSION_IDLE)
-                .map(|(name, _)| name.clone());
+            let pinned = match routing {
+                Some(store) => store.pinned(key, SESSION_IDLE),
+                None => locked(&self.sessions)
+                    .get(key)
+                    .filter(|(_, at)| now.duration_since(*at) < SESSION_IDLE)
+                    .map(|(name, _)| name.clone()),
+            };
             if let Some(at) = pinned.and_then(|name| warm.iter().position(|i| name_of(*i) == name))
             {
                 let picked = warm.remove(at);
@@ -221,10 +251,12 @@ impl Pool {
             }
             Balance::LowestLatency => {
                 // A deployment with no answer yet counts as fastest, so each is measured before it is judged.
-                let p90 = |i: &usize| {
-                    deployments
+                let latency = routing.map(|store| store.latency());
+                let p90 = |i: &usize| match &latency {
+                    Some(latency) => latency.get(&name_of(*i)).copied(),
+                    None => deployments
                         .get(&name_of(*i))
-                        .and_then(|s| percentile(&s.latency, 90))
+                        .and_then(|s| percentile(&s.latency, 90)),
                 };
                 let first = warm
                     .iter()
@@ -270,23 +302,19 @@ impl Pool {
         (warm, why)
     }
 
-    /// Keeps `session` on `deployment` from `now`. The table is bounded: past its size, idle sessions are dropped,
-    /// and if none is idle the oldest goes.
+    /// Keeps `session` on `deployment` from `now`, on every gateway when the store shares pins.
     fn pin(&self, session: &str, deployment: &str, now: Instant) {
-        let mut sessions = locked(&self.sessions);
-        if sessions.len() >= MAX_SESSIONS && !sessions.contains_key(session) {
-            sessions.retain(|_, (_, at)| now.duration_since(*at) < SESSION_IDLE);
-            if sessions.len() >= MAX_SESSIONS {
-                let oldest = sessions
-                    .iter()
-                    .min_by_key(|(_, (_, at))| *at)
-                    .map(|(k, _)| k.clone());
-                if let Some(oldest) = oldest {
-                    sessions.remove(&oldest);
-                }
-            }
+        if let Some(store) = self.store.as_ref().filter(|store| store.shares_routing()) {
+            store.pin(session, deployment);
+            return;
         }
-        sessions.insert(session.to_string(), (deployment.to_string(), now));
+        bounded_insert(
+            &mut locked(&self.sessions),
+            session.to_string(),
+            (deployment.to_string(), now),
+            now,
+            |(_, at)| *at,
+        );
     }
 
     /// A deployment answered after `took` (its response headers arrived): one sample of its latency.
@@ -299,7 +327,12 @@ impl Pool {
         if samples.len() == LATENCY_SAMPLES {
             samples.pop_front();
         }
-        samples.push_back(u32::try_from(took.as_millis()).unwrap_or(u32::MAX));
+        let ms = u32::try_from(took.as_millis()).unwrap_or(u32::MAX);
+        samples.push_back(ms);
+        drop(deployments);
+        if let Some(store) = self.store.as_ref().filter(|store| store.shares_routing()) {
+            store.observed(deployment, ms);
+        }
     }
 
     /// Counts a request in flight at a deployment until the returned guard is dropped.
