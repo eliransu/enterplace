@@ -237,6 +237,9 @@ What they found is on the decision record (`guardrails`) for the arguments and o
 A rule's `approve_tools` names tools whose calls wait for an admin. The call is held, open, until an admin approves or denies it on the console's **MCP approvals** page (which shows who asked, the rule and the arguments), or until `approval_timeout_seconds` pass. Approved, it runs and its decision record says `approved_by`; denied or timed out, it is refused with `approval_denied` or `approval_timeout`. Each approval and denial is an admin record in the audit log. With a store, any gateway's console can approve a call held on another.
 
 ```yaml
+mcp:
+  - name: github
+    url: https://api.githubcopilot.com/mcp/
 rules:
   - name: platform
     principals: { team: platform }
