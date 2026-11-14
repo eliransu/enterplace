@@ -374,6 +374,10 @@ impl Spend {
             if period_of(text("time"), Period::Month) != month {
                 continue;
             }
+            // Caller-paid spend the rule kept out of its budgets stays out after a restart too.
+            if record["budget"] == "not_counted" {
+                continue;
+            }
             let charged = record["charged_usd"].as_f64().unwrap_or_default();
             self.add(
                 text("person"),
@@ -771,6 +775,8 @@ pub(crate) struct Admitted {
     /// Set while the provider has the request and its answer has not been handed on: a caller who hangs up then
     /// has still made the provider run (and bill) it.
     forwarded: bool,
+    /// Sent with the caller's own provider key, and whether its spend counts against budgets.
+    caller_paid: Option<bool>,
 }
 
 impl Drop for Admitted {
@@ -832,6 +838,8 @@ pub(crate) struct Ask<'a> {
     pub body: &'a Bytes,
     /// Counting tokens is free, so it reserves nothing.
     pub free: bool,
+    /// Sent with the caller's own provider key: `Some(true)` when its spend still counts against budgets.
+    pub caller_paid: Option<bool>,
 }
 
 /// Applies the rule's cache, rate and budget to an allowed request, in that order: a cached answer costs nothing
@@ -870,8 +878,12 @@ pub(crate) async fn admit(
         route: ask.route.to_string(),
         tokens: Vec::new(),
         forwarded: false,
+        caller_paid: ask.caller_paid,
     };
-    let budgeted = limits.budget.is_some() || ask.person.budget.is_some();
+    // The caller pays their provider: unless the rule says otherwise, budgets (what the organization pays) do not
+    // reserve or count it. Rate and token limits still hold.
+    let budgeted =
+        (limits.budget.is_some() || ask.person.budget.is_some()) && ask.caller_paid != Some(false);
     let tpm = limits.tpm.is_some() || ask.person.tpm.is_some();
     if !budgeted && !ask.free {
         admitted.estimate_from = Some((ask.body.clone(), ask.route.to_string()));
@@ -1395,8 +1407,10 @@ impl Admitted {
                 }
             }
         }
-        self.spend
-            .add(&self.person, &self.team, &self.key, charged, &now);
+        if self.caller_paid != Some(false) {
+            self.spend
+                .add(&self.person, &self.team, &self.key, charged, &now);
+        }
         self.spend.metrics.charged(&self.team, &self.model, charged);
         if let (Some((key, ttl)), Some((content_type, body)), true) = (
             self.cache.take(),
@@ -1483,6 +1497,13 @@ impl Admitted {
             reserved.map_or(Value::Null, Value::from),
         );
         record.insert("charged_usd".into(), charged.into());
+        if let Some(counted) = self.caller_paid {
+            record.insert("caller_paid".into(), true.into());
+            record.insert(
+                "budget".into(),
+                if counted { "counted" } else { "not_counted" }.into(),
+            );
+        }
         record.insert("policy_sha256".into(), self.version.0.as_str().into());
         record.insert("keys_sha256".into(), self.version.1.as_str().into());
         Some(record)

@@ -32,6 +32,8 @@ Gantry is much younger than both and does less. It covers fewer providers and AP
 | Developer sign-in for coding tools | `gantry login`: SSO in the browser, personal key named by the email, expiry from policy, recorded; `gantry logout` revokes it | UI login, keys copied by hand | Enterprise |
 | Kill switch | Person, team, key, model or everyone; reason required and shown to the caller; within 1 second on every node sharing the files; recorded | No (block a key or team by API) | No |
 | Metrics | Prometheus `/metrics` on its own address, off by default; audit log as JSONL for any log shipper | Prometheus, many callbacks | Prometheus, OpenTelemetry |
+| Provider keys kept in the database | Store credentials sealed with AES-256-GCM under `GANTRY_MASTER_KEY`, added, rotated and removed in the console or admin API, each change recorded; a rotation reaches every replica within 2 seconds; a wrong master key refused at start | Credentials encrypted with `LITELLM_SALT_KEY`, which must not change after models are added | Not reviewed |
+| Caller's own provider key | Opt-in per rule (`caller_provider_key: allowed`), header refused elsewhere; the caller still needs a Gantry key; recorded by hash prefix, spend marked caller-paid | `api_key` in the request body, accepted on any deployment | Not reviewed |
 | Multi-node | Yes, with a Postgres store: keys, kill switches, budgets, `rpm` and `tpm` (leased, never over the limit), cooldowns and console sessions shared; the answer cache and each audit chain per replica. No Redis. | Yes, Redis for shared limits | Enterprise clustering |
 
 ## What LiteLLM does better
@@ -62,10 +64,11 @@ Gantry is much younger than both and does less. It covers fewer providers and AP
 - **Keys shown once, stored hashed.** Bifrost's list API returns every key's full value on every read.
 - **No prompt text in the log.** Bifrost stores prompts and answers by default for 365 days.
 - **Small footprint.** A single static binary in an image built `FROM scratch`, running as a non-root user, at about 3.4 MiB of memory idle. LiteLLM's image is 1.33 GB and runs as root, using 628 to 922 MiB plus Postgres; Bifrost's is 286 MB, using 219 to 442 MiB.
+- **Provider keys under your key, and caller keys under policy.** Stored provider credentials are sealed under a master key the customer holds, checked at start, never shown after saving, and every add, rotate and remove is in the audit chain. A caller's own provider key is accepted only on rules that opt in, never in place of a Gantry key, and the rest of the policy still applies. LiteLLM's public docs describe a request-body `api_key` accepted on any deployment.
 - **Refusals a person can act on.** Each names the cause, the fix and a decision ID, in the error shape the client already shows.
 
 <Aside type="note">
-No source code of LiteLLM or Bifrost was read for this comparison. Their figures come from the hands-on review and from these public pages: [LiteLLM pricing](https://www.litellm.ai/pricing), [LiteLLM audit logs](https://docs.litellm.ai/docs/proxy/audit_logs), [LiteLLM admin UI SSO](https://docs.litellm.ai/docs/proxy/admin_ui_sso), [Bifrost audit logs](https://docs.getbifrost.ai/enterprise/audit-logs.md), [Bifrost pricing](https://www.getmaxim.ai/bifrost/pricing), [Bifrost MCP filtering](https://docs.getbifrost.ai/mcp/filtering.md).
+No source code of LiteLLM or Bifrost was read for this comparison. Their figures come from the hands-on review and from these public pages: [LiteLLM pricing](https://www.litellm.ai/pricing), [LiteLLM audit logs](https://docs.litellm.ai/docs/proxy/audit_logs), [LiteLLM admin UI SSO](https://docs.litellm.ai/docs/proxy/admin_ui_sso), [LiteLLM clientside credentials](https://docs.litellm.ai/docs/proxy/clientside_auth), [LiteLLM production settings](https://docs.litellm.ai/docs/proxy/prod), [Bifrost audit logs](https://docs.getbifrost.ai/enterprise/audit-logs.md), [Bifrost pricing](https://www.getmaxim.ai/bifrost/pricing), [Bifrost MCP filtering](https://docs.getbifrost.ai/mcp/filtering.md).
 </Aside>
 
 ## Related

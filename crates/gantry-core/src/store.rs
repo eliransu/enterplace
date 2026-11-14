@@ -56,6 +56,26 @@ pub enum Lease {
 /// spent at its last moment is still counted.
 pub const LEASE: Duration = Duration::from_secs(1);
 
+/// A provider credential as anyone may see it: never its value, which is kept sealed under the master key.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Credential {
+    pub name: String,
+    /// The vendor it is a key for, such as openai or anthropic, as the admin gave it.
+    pub provider: String,
+    /// `...` and the last 4 characters of the value, so a person can tell which key it is.
+    pub fingerprint: String,
+    pub created_by: String,
+    pub created_at: String,
+    pub rotated_by: Option<String>,
+    pub rotated_at: Option<String>,
+    /// One more at each rotation, so a gateway knows to read the value again.
+    #[serde(skip)]
+    pub generation: i64,
+}
+
+/// What a store that keeps no credentials answers.
+pub const NO_CREDENTIALS: &str = "this store keeps no provider credentials. Keep the provider key in an environment variable with key_env, or use the Postgres store.";
+
 /// Shared state. Reads come from memory, refreshed in the background, so a request never waits on the database
 /// for a key or a kill switch, and a database that is down leaves the last state in force.
 pub trait Store: Send + Sync + std::fmt::Debug {
@@ -93,6 +113,64 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     fn session(&self, id_sha256: String) -> Pending<Option<String>>;
     /// Ends a console session on every gateway. Does not wait: retried while the database is away.
     fn end_session(&self, id_sha256: String);
+    /// The provider credentials, from memory. `Err` names why there are none to show: the feature is off.
+    fn credentials(&self) -> Result<Arc<Vec<Credential>>, String> {
+        Err(NO_CREDENTIALS.into())
+    }
+    /// Seals `value` and adds it as a new credential. `Ok(None)` when the name is taken. Blocks until written.
+    fn add_credential(
+        &self,
+        _name: &str,
+        _provider: &str,
+        _value: &str,
+        _by: &str,
+    ) -> Result<Option<Credential>, String> {
+        Err(NO_CREDENTIALS.into())
+    }
+    /// Seals `value` in place of the credential's. `Ok(None)` when there is no such credential.
+    fn rotate_credential(
+        &self,
+        _name: &str,
+        _value: &str,
+        _by: &str,
+    ) -> Result<Option<Credential>, String> {
+        Err(NO_CREDENTIALS.into())
+    }
+    /// Removes a credential. `Ok(None)` when there was none.
+    fn remove_credential(&self, _name: &str) -> Result<Option<Credential>, String> {
+        Err(NO_CREDENTIALS.into())
+    }
+    /// The value of a credential, opened with the master key, for the gateway to send. `Ok(None)` when there is
+    /// no such credential.
+    fn credential_value(&self, _name: &str) -> Result<Option<String>, String> {
+        Err(NO_CREDENTIALS.into())
+    }
+}
+
+/// `...` and the last 4 characters of a credential's value: enough to tell keys apart, far too little to use one.
+pub fn fingerprint(value: &str) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    let tail: String = chars[chars.len().saturating_sub(4)..].iter().collect();
+    format!("...{tail}")
+}
+
+/// Why a credential value cannot be kept, or `None` when it can. A value goes in an HTTP header.
+pub fn credential_value_problem(value: &str) -> Option<&'static str> {
+    if value.trim().is_empty() {
+        Some("the value is empty. Paste the provider key.")
+    } else if value.len() > 4096 {
+        Some("the value is longer than 4096 bytes, which no provider key is. Paste the key alone.")
+    } else if value.trim().len() < 8 {
+        Some(
+            "the value is shorter than 8 characters, which no provider key is. Paste the whole key.",
+        )
+    } else if value.trim().chars().any(|c| c.is_control() || c == ' ') {
+        Some(
+            "the value holds a space, a line break or another character a provider key never has. Paste the key alone.",
+        )
+    } else {
+        None
+    }
 }
 
 // Every reader and writer of the keys file (the command line, the admin API, the console) names it by its path, so

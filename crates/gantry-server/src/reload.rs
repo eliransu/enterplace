@@ -67,6 +67,8 @@ struct Current {
     /// Hashes of the providers' key files as last read. A key file's path needs a restart to change, so the list
     /// keeps its order for the life of the process.
     key_prints: Vec<Option<String>>,
+    /// The generation of each credential a provider names, as last read: a rotation shows as a new one.
+    credential_prints: Vec<i64>,
 }
 
 /// Watches the files and swaps the version in use. One per served policy file.
@@ -192,6 +194,24 @@ fn key_prints(loaded: &Loaded) -> Vec<Option<String>> {
         .collect()
 }
 
+/// The generation of each credential the providers name, in their order. -1 for one the store does not hold.
+fn credential_prints(store: Option<&Arc<dyn Store>>, loaded: &Loaded) -> Vec<i64> {
+    let Some(store) = store else {
+        return Vec::new();
+    };
+    let held = store.credentials().unwrap_or_default();
+    loaded
+        .providers
+        .iter()
+        .filter_map(|p| p.credential.as_deref())
+        .map(|name| {
+            held.iter()
+                .find(|c| c.name == name)
+                .map_or(-1, |c| c.generation)
+        })
+        .collect()
+}
+
 /// Connects to the store when the policy has `store:`, and serves the keys file's path from it, so every reader
 /// and writer of the keys (command line, admin API, console) uses the database. `None` without `store:`.
 pub fn open_store(
@@ -223,6 +243,9 @@ fn open_postgres(
         )
     })?;
     let opened = crate::store::open(variable, &url)?;
+    if let Some(master) = crate::MasterKey::from_env(env)? {
+        opened.unlock(master)?;
+    }
     let shared: Arc<dyn Store> = opened.clone();
     store::attach(keys_path, &shared);
     Ok(Some(opened))
@@ -287,6 +310,28 @@ pub fn governed_with(
             (None, Some(credentials))
         } else if let Some(path) = &provider.key_file {
             (Some(read_key_file(&provider.name, path)?), None)
+        } else if let Some(name) = &provider.credential {
+            let store = shared
+                .as_ref()
+                .ok_or("a provider names a credential and the policy has no store: section")?;
+            let value = store
+                .credential_value(name)
+                .map_err(|err| {
+                    format!(
+                        "provider \"{}\" takes its key from credential \"{name}\", and {err}",
+                        provider.name
+                    )
+                })?
+                .ok_or_else(|| {
+                    crate::credentials::unknown(
+                        policy_path,
+                        &loaded.policy_text,
+                        &provider.name,
+                        name,
+                        &store.credentials().unwrap_or_default(),
+                    )
+                })?;
+            (Some(Secret::new(value)), None)
         } else if provider.key_env.is_empty() {
             // `gantry check` allows this only for a model server on this machine or a private network.
             (None, None)
@@ -410,6 +455,7 @@ pub fn governed_with(
             log: log.clone(),
             current: Mutex::new(Current {
                 key_prints: key_prints(&loaded),
+                credential_prints: credential_prints(shared.as_ref(), &loaded),
                 loaded: loaded.clone(),
                 prints,
                 rejected: HashMap::new(),
@@ -493,9 +539,11 @@ impl Reloader {
             Err(poisoned) => poisoned.into_inner(),
         };
         let keys_now = key_prints(&current.loaded);
-        if keys_now != current.key_prints {
+        let credentials_now = credential_prints(self.store.as_ref(), &current.loaded);
+        if keys_now != current.key_prints || credentials_now != current.credential_prints {
             self.rotate(&current.loaded);
             current.key_prints = keys_now;
+            current.credential_prints = credentials_now;
         }
         let keys = match &self.store {
             // From memory: the store's poll keeps it current, and a database that is down keeps the keys known.
@@ -661,7 +709,21 @@ impl Reloader {
         Reload::Loaded
     }
 
-    /// Reads the key files again and puts their keys in place, leaving the rest of the version in use as it is.
+    /// The providers of the version in use that name a credential, with its name.
+    pub(crate) fn credentials_in_use(&self) -> Vec<(String, String)> {
+        let current = match self.current.lock() {
+            Ok(current) => current,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        current
+            .loaded
+            .providers
+            .iter()
+            .filter_map(|p| p.credential.clone().map(|c| (p.name.clone(), c)))
+            .collect()
+    }
+
+    /// Reads the key files and the credentials again and puts their keys in place, leaving the rest of the version in use as it is.
     /// A request already sent keeps the key it was sent with. A file that cannot be used keeps the key in use.
     fn rotate(&self, loaded: &Loaded) {
         let old = match self.live.read() {
@@ -671,24 +733,36 @@ impl Reloader {
         let mut providers = old.providers.clone();
         let mut changed = false;
         for upstream in &mut providers {
-            let Some(path) = loaded
-                .providers
-                .iter()
-                .find(|p| p.name == upstream.name)
-                .and_then(|p| p.key_file.as_deref())
-            else {
+            let Some(provider) = loaded.providers.iter().find(|p| p.name == upstream.name) else {
                 continue;
             };
-            let key = read_key_file(&upstream.name, path)
-                .and_then(|key| key_header(upstream.kind, &key).map_err(|err| err.to_string()));
+            let (key, from) = match (&provider.key_file, &provider.credential, &self.store) {
+                (Some(path), _, _) => (
+                    read_key_file(&upstream.name, path),
+                    path.display().to_string(),
+                ),
+                (None, Some(name), Some(store)) => (
+                    match store.credential_value(name) {
+                        Ok(Some(value)) => Ok(Secret::new(value)),
+                        Ok(None) => Err(format!(
+                            "credential \"{name}\" of provider \"{}\" was removed from the store. Add it again in the console or with POST /admin/credentials; a restart would fail without it.",
+                            upstream.name
+                        )),
+                        Err(err) => Err(err),
+                    },
+                    format!("credential \"{name}\""),
+                ),
+                _ => continue,
+            };
+            let key =
+                key.and_then(|key| key_header(upstream.kind, &key).map_err(|err| err.to_string()));
             match key {
                 Ok(key) if upstream.key.as_ref() != Some(&key) => {
                     upstream.key = Some(key);
                     changed = true;
                     println!(
-                        "gantry: provider \"{}\" now uses the key in {}.",
-                        upstream.name,
-                        path.display()
+                        "gantry: provider \"{}\" now uses the key in {from}.",
+                        upstream.name
                     );
                 }
                 Ok(_) => {}

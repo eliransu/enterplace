@@ -102,6 +102,21 @@ pub struct Limits {
     pub buffer_stream: bool,
     /// Check a streamed answer every this many characters, letting through only what was checked.
     pub check_stream_every: Option<u32>,
+    /// Whether a caller may send their own provider key in `x-gantry-provider-key`.
+    pub caller_provider_key: CallerKey,
+}
+
+/// What a rule does with a provider key the caller sends in `x-gantry-provider-key`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CallerKey {
+    /// The request is refused: never forwarded with the caller's key and never with Gantry's in its place.
+    #[default]
+    Refused,
+    /// The caller's key is sent in place of Gantry's. Its spend is recorded as caller-paid and not counted against
+    /// budgets, which limit what the organization pays: rate and token limits still hold.
+    Allowed,
+    /// As `Allowed`, and its spend counts against budgets as any other.
+    AllowedBudgeted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

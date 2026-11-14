@@ -10,6 +10,7 @@ use axum::{
     http::{HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use gantry_core::store::{self, Store};
 use gantry_core::{
     audit,
     config::{self, valid_name},
@@ -17,12 +18,16 @@ use gantry_core::{
     policy::{Policy, Principal},
 };
 use serde_json::{Map, Value, json};
+use std::sync::Arc;
 
 use crate::{
     AppState, ClientAddr, DECISION, Refusal, Reload, Snapshot, Trigger, caller_key, read_body,
 };
 
-const ROUTES: &str = "GET /admin/keys, POST /admin/keys, DELETE /admin/keys/<first 8 hex characters of the hash>, DELETE /admin/keys/self, and GET, POST and DELETE /admin/kills";
+const ROUTES: &str = "GET /admin/keys, POST /admin/keys, DELETE /admin/keys/<first 8 hex characters of the hash>, DELETE /admin/keys/self, GET, POST and DELETE /admin/kills, GET and POST /admin/credentials, and PUT and DELETE /admin/credentials/<name>";
+
+/// Why there is no credential to add or list on a gateway without a store.
+const NEED_STORE: &str = "Refused: provider credentials are kept in the store, sealed with a master key, and this gateway's policy has no store: section. Keep provider keys in environment variables with key_env (or in files with key_file), or add `store: { postgres_url_env: DATABASE_URL }` to the policy and set GANTRY_MASTER_KEY.";
 
 /// What an admin call asks for, once it is allowed.
 enum Plan {
@@ -42,6 +47,35 @@ enum Plan {
         scope: String,
         value: String,
     },
+    Credentials(Arc<dyn Store>),
+    AddCredential {
+        store: Arc<dyn Store>,
+        name: String,
+        provider: String,
+        value: String,
+        by: String,
+    },
+    RotateCredential {
+        store: Arc<dyn Store>,
+        name: String,
+        value: String,
+        by: String,
+    },
+    RemoveCredential {
+        store: Arc<dyn Store>,
+        name: String,
+    },
+}
+
+/// A credential to add, or the new value of one.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewCredential {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    provider: String,
+    value: String,
 }
 
 /// A kill switch to set (`reason` required) or clear.
@@ -240,7 +274,21 @@ async fn allow(
         .strip_prefix("/admin/keys/")
         .map(str::to_string);
     let kills = parts.uri.path() == "/admin/kills";
+    let credential = parts
+        .uri
+        .path()
+        .strip_prefix("/admin/credentials")
+        .map(|rest| rest.trim_start_matches('/').to_string());
+    call.action = match (&parts.method, credential.as_deref()) {
+        (&Method::GET, Some("")) => Some("list_credentials"),
+        (&Method::POST, Some("")) => Some("add_credential"),
+        (&Method::PUT, Some(name)) if !name.is_empty() => Some("rotate_credential"),
+        (&Method::DELETE, Some(name)) if !name.is_empty() => Some("remove_credential"),
+        (_, Some(_)) => None,
+        _ => call.action,
+    };
     call.action = match (&parts.method, prefix.as_deref(), kills) {
+        _ if credential.is_some() => call.action,
         (&Method::GET, None, false) => Some("list_keys"),
         (&Method::POST, None, false) => Some("issue_key"),
         (&Method::DELETE, Some("self"), _) => Some("revoke_own_key"),
@@ -294,6 +342,97 @@ async fn allow(
         )
     };
     match call.action.ok_or_else(not_here)? {
+        action @ ("list_credentials" | "add_credential" | "rotate_credential"
+        | "remove_credential") => {
+            let keys_path = state
+                .reloader
+                .as_ref()
+                .map(|r| r.keys_path().to_path_buf())
+                .unwrap_or_default();
+            let store = store::attached(&keys_path).ok_or_else(|| {
+                refused(StatusCode::NOT_FOUND, "credentials_need_store", NEED_STORE)
+            })?;
+            if let Err(off) = store.credentials() {
+                return Err(refused(
+                    StatusCode::CONFLICT,
+                    "no_master_key",
+                    format!("Refused: {off}"),
+                ));
+            }
+            let name = credential.unwrap_or_default();
+            let by = person.name.clone();
+            if action == "list_credentials" {
+                return Ok(Plan::Credentials(store));
+            }
+            if action == "remove_credential" {
+                call.target = Some(json!({ "name": name }));
+                let in_use = state
+                    .reloader
+                    .as_ref()
+                    .map(|r| r.credentials_in_use())
+                    .unwrap_or_default();
+                if let Some((provider, _)) = in_use.iter().find(|(_, c)| *c == name) {
+                    return Err(refused(
+                        StatusCode::CONFLICT,
+                        "credential_in_use",
+                        format!(
+                            "Refused: provider \"{provider}\" in the policy in use takes its key from credential \"{name}\", so removing it would leave the provider without a key at the next start. Point the provider at another credential or key_env first, or rotate this one with PUT /admin/credentials/{name}."
+                        ),
+                    ));
+                }
+                return Ok(Plan::RemoveCredential { store, name });
+            }
+            let (bytes, _held) = read_body(Some(&person.name), state, &parts.headers, body).await?;
+            let shape = if action == "add_credential" {
+                "{\"name\": \"openai-prod\", \"provider\": \"openai\", \"value\": \"<the provider key>\"}"
+            } else {
+                "{\"value\": \"<the new provider key>\"}"
+            };
+            // The parser's own error could quote the value: it is never repeated.
+            let new: NewCredential = serde_json::from_slice(&bytes).map_err(|_| {
+                refused(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    format!("Refused: send a JSON object such as {shape}."),
+                )
+            })?;
+            if let Some(problem) = store::credential_value_problem(&new.value) {
+                return Err(refused(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    format!("Refused: {problem}"),
+                ));
+            }
+            let fingerprint = store::fingerprint(new.value.trim());
+            if action == "rotate_credential" {
+                call.target = Some(json!({ "name": name, "fingerprint": fingerprint }));
+                return Ok(Plan::RotateCredential {
+                    store,
+                    name,
+                    value: new.value,
+                    by,
+                });
+            }
+            call.target = Some(
+                json!({ "name": new.name, "provider": new.provider, "fingerprint": fingerprint }),
+            );
+            if !valid_name(&new.name) || !valid_name(&new.provider) {
+                return Err(refused(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    format!(
+                        "Refused: a credential's name and provider use letters, digits, dots, dashes, underscores and @ only, at most 100 characters. Send {shape}."
+                    ),
+                ));
+            }
+            Ok(Plan::AddCredential {
+                store,
+                name: new.name,
+                provider: new.provider,
+                value: new.value,
+                by,
+            })
+        }
         "list_keys" => Ok(Plan::List),
         "list_kills" => Ok(Plan::Kills),
         action @ ("set_kill" | "clear_kill") => {
@@ -609,7 +748,92 @@ async fn act(state: &AppState, version: &Snapshot, plan: Plan) -> Result<Respons
         .unwrap_or_default();
     let file_error =
         |err: String| refused(StatusCode::CONFLICT, "keys_file", format!("Refused: {err}"));
+    let store_error = |err: String| {
+        refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_unavailable",
+            format!("Refused: {err}"),
+        )
+    };
+    let no_such = |name: &str| {
+        refused(
+            StatusCode::NOT_FOUND,
+            "no_such_credential",
+            format!(
+                "Refused: there is no credential named \"{name}\". GET /admin/credentials lists them."
+            ),
+        )
+    };
     match plan {
+        Plan::Credentials(store) => {
+            let list = store.credentials().map_err(store_error)?;
+            Ok(json_response(
+                StatusCode::OK,
+                &json!({ "credentials": *list }),
+            ))
+        }
+        Plan::AddCredential {
+            store,
+            name,
+            provider,
+            value,
+            by,
+        } => {
+            let n = name.clone();
+            match blocking(move || store.add_credential(&n, &provider, &value, &by))
+                .await?
+                .map_err(store_error)?
+            {
+                Some(added) => Ok(json_response(
+                    StatusCode::CREATED,
+                    &json!({
+                        "credential": added,
+                        "message": "The value is sealed in the store and never shown again. A provider names it with credential: in the policy.",
+                    }),
+                )),
+                None => Err(refused(
+                    StatusCode::CONFLICT,
+                    "credential_exists",
+                    format!(
+                        "Refused: a credential named \"{name}\" is already in the store. Rotate it with PUT /admin/credentials/{name}, or choose another name."
+                    ),
+                )),
+            }
+        }
+        Plan::RotateCredential {
+            store,
+            name,
+            value,
+            by,
+        } => {
+            let n = name.clone();
+            match blocking(move || store.rotate_credential(&n, &value, &by))
+                .await?
+                .map_err(store_error)?
+            {
+                Some(rotated) => Ok(json_response(
+                    StatusCode::OK,
+                    &json!({
+                        "credential": rotated,
+                        "message": "Every gateway on this store sends the new value within 2 seconds. Requests already sent finish with the old one.",
+                    }),
+                )),
+                None => Err(no_such(&name)),
+            }
+        }
+        Plan::RemoveCredential { store, name } => {
+            let n = name.clone();
+            match blocking(move || store.remove_credential(&n))
+                .await?
+                .map_err(store_error)?
+            {
+                Some(removed) => Ok(json_response(
+                    StatusCode::OK,
+                    &json!({ "removed": removed }),
+                )),
+                None => Err(no_such(&name)),
+            }
+        }
         Plan::List => {
             let mut keys: Vec<Value> = version
                 .policy

@@ -406,6 +406,8 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .route("/people", get(people_page))
         .route("/people/issue", post(issue))
         .route("/people/revoke", post(revoke))
+        .route("/credentials", get(credentials_page))
+        .route("/credentials/{action}", post(credential_change))
         .route("/policy", get(policy_page))
         .route("/spend", get(spend_page))
         .route("/assets/{file}", get(asset))
@@ -1966,6 +1968,168 @@ async fn revoked(console: &Console, admin: &Admin, entry: &config::KeyEntry) -> 
     };
     let _ = record(console, &act, Some("keys_file"), Some(&error)).await;
     Err(error)
+}
+
+async fn credentials_page(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    let Some(admin) = console.admin(&headers).await else {
+        return redirect("/console/sign-in");
+    };
+    let query = Form::of(&uri);
+    let dialog = if admin.read_only {
+        pages::CredentialDialog::None
+    } else {
+        pages::CredentialDialog::from_query(&query)
+    };
+    page(
+        StatusCode::OK,
+        credentials_body(&console, &admin, &query, dialog),
+    )
+}
+
+fn credentials_body(
+    console: &Console,
+    admin: &Admin,
+    query: &Form,
+    dialog: pages::CredentialDialog,
+) -> String {
+    let config = console.config();
+    let credentials = gantry_core::store::attached(&config.keys)
+        .map(|store| store.credentials().map(|list| list.to_vec()));
+    pages::credentials(&pages::CredentialsView {
+        admin: &admin.label(),
+        query,
+        credentials,
+        named: config::credentials_named(&config.policy),
+        dialog,
+        read_only: admin.read_only,
+    })
+}
+
+/// Adds, rotates or removes a provider credential, recorded first as the admin API records it. The value typed is
+/// in no record and in no page: a refused form comes back empty.
+async fn credential_change(
+    State(console): State<Console>,
+    Path(action): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    let Some(admin) = console.admin(&headers).await else {
+        return redirect("/console/sign-in");
+    };
+    let form = Form::parse(&body);
+    let name = form.get("name").trim().to_string();
+    let provider = form.get("provider").trim().to_string();
+    let value = form.get("value").to_string();
+    let (action, done): (&'static str, &str) = match action.as_str() {
+        "add" => ("add_credential", "added"),
+        "rotate" => ("rotate_credential", "rotated"),
+        "remove" => ("remove_credential", "removed"),
+        _ => return redirect("/console/credentials"),
+    };
+    let back = |error: String| {
+        let dialog = match action {
+            "add_credential" => pages::CredentialDialog::Add {
+                name: name.clone(),
+                provider: provider.clone(),
+                error,
+            },
+            "rotate_credential" => pages::CredentialDialog::Rotate {
+                name: name.clone(),
+                error,
+            },
+            _ => pages::CredentialDialog::Remove {
+                name: name.clone(),
+                error,
+            },
+        };
+        page(
+            StatusCode::BAD_REQUEST,
+            credentials_body(&console, &admin, &Form(Vec::new()), dialog),
+        )
+    };
+    if admin.read_only {
+        read_only(&console, &admin, action).await;
+        return back("You are signed in read only: ask an admin to change credentials.".into());
+    }
+    let Some(store) = gantry_core::store::attached(&console.config().keys) else {
+        return back("Credentials need the store. Keep provider keys in key_env.".into());
+    };
+    let mut act = Act {
+        action,
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target: json!({ "name": name }),
+    };
+    let problem = match action {
+        _ if !config::valid_name(&name) => Some(
+            "A name uses letters, digits, dots, dashes, underscores and @ only, for example openai-prod."
+                .to_string(),
+        ),
+        "add_credential" if !config::valid_name(&provider) => {
+            Some("Name the vendor the key is for, for example openai or anthropic.".to_string())
+        }
+        "remove_credential" if form.get("confirm").trim() != name => {
+            Some(format!("Type {name} exactly, to confirm which credential goes."))
+        }
+        "remove_credential" => config::credentials_named(&console.config().policy)
+            .into_iter()
+            .find(|(_, c)| *c == name)
+            .map(|(p, _)| {
+                format!(
+                    "Provider {p} in the policy takes its key from this credential. Point it at another credential or key_env first, or rotate this one."
+                )
+            }),
+        _ => gantry_core::store::credential_value_problem(&value).map(|p| {
+            let mut p = p.to_string();
+            if let Some(first) = p.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            p
+        }),
+    };
+    if action != "remove_credential" {
+        act.target = json!({ "name": name, "provider": provider, "fingerprint": gantry_core::store::fingerprint(value.trim()) });
+    }
+    if let Some(problem) = problem {
+        let _ = record(&console, &act, Some("invalid_request"), None).await;
+        return back(problem);
+    }
+    if record(&console, &act, None, None).await.is_err() {
+        return back(NOT_RECORDED.into());
+    }
+    let (n, p, by) = (name.clone(), provider.clone(), admin.name.clone());
+    let done_now = tokio::task::spawn_blocking(move || match action {
+        "add_credential" => store
+            .add_credential(&n, &p, &value, &by)
+            .map(|c| c.map(|_| ()).ok_or("A credential with this name is already in the store. Rotate it, or choose another name.")),
+        "rotate_credential" => store
+            .rotate_credential(&n, &value, &by)
+            .map(|c| c.map(|_| ()).ok_or("There is no credential with this name: someone removed it.")),
+        _ => store
+            .remove_credential(&n)
+            .map(|c| c.map(|_| ()).ok_or("There is no credential with this name: someone removed it already.")),
+    })
+    .await
+    .unwrap_or_else(|err| Err(format!("Nothing was changed: {err}. Try again.")));
+    let error = match done_now {
+        Ok(Ok(())) => {
+            return redirect(&format!(
+                "/console/credentials?done={done}&name={}",
+                html::enc(&name)
+            ));
+        }
+        Ok(Err(refused)) => refused.to_string(),
+        Err(error) => error,
+    };
+    let _ = record(&console, &act, Some("store"), Some(&error)).await;
+    back(error)
 }
 
 async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {

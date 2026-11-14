@@ -184,6 +184,8 @@ fn gateway(dir: &Path, url: &str, port: u16) -> Result<Governed, Error> {
     let url = url.to_string();
     let gw = gantry_server::governed(&policy, None, &|variable| match variable {
         "GANTRY_STORE_URL" => Some(url.clone()),
+        // No master key: these gateways keep no provider credentials.
+        "GANTRY_MASTER_KEY" | "GANTRY_MASTER_KEY_FILE" => None,
         _ => Some("provider-secret".into()),
     })?;
     gw.reloader.watch();
@@ -618,6 +620,8 @@ async fn serve_refuses_to_start_without_its_store_or_on_a_newer_schema() -> Test
     );
     let closed = gantry_server::governed(&policy, None, &|variable| match variable {
         "GANTRY_STORE_URL" => Some("host=127.0.0.1 port=9 user=x dbname=x sslmode=disable".into()),
+        // No master key: these gateways keep no provider credentials.
+        "GANTRY_MASTER_KEY" | "GANTRY_MASTER_KEY_FILE" => None,
         _ => Some("provider-secret".into()),
     })
     .err()

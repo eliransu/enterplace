@@ -41,6 +41,10 @@ The admin API exists only when Gantry serves from a keys file. Under `gantry ser
 | `GET` | `/admin/kills` | `list_kills` | Lists the kill switches that are on |
 | `POST` | `/admin/kills` | `set_kill` | Turns a kill switch on |
 | `DELETE` | `/admin/kills` | `clear_kill` | Turns a kill switch off |
+| `GET` | `/admin/credentials` | `list_credentials` | Lists the provider credentials in the store, never their values |
+| `POST` | `/admin/credentials` | `add_credential` | Adds a provider credential |
+| `PUT` | `/admin/credentials/<name>` | `rotate_credential` | Gives a credential a new value |
+| `DELETE` | `/admin/credentials/<name>` | `remove_credential` | Removes a credential |
 
 Any other method or path under `/admin` is refused with 404 `unknown_route` and recorded.
 
@@ -196,6 +200,28 @@ curl -X DELETE http://127.0.0.1:8080/admin/kills \
 ```
 
 No switch on for that scope and value is 404 `no_such_switch`. A kill switch file that cannot be read or written is 409 `kills_file`.
+
+## Provider credentials
+
+Need `store:` in the policy and `GANTRY_MASTER_KEY` on the gateway: without the store each call is 404 `credentials_need_store`, without the master key 409 `no_master_key`. See [Provider credentials](/governance/provider-credentials/).
+
+```bash
+curl -X POST http://127.0.0.1:8080/admin/credentials \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"openai-prod","provider":"openai","value":"sk-..."}'
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes, for `POST` | Letters, digits, `.`, `-`, `_` and `@`. A provider names it with `credential:` |
+| `provider` | string | yes, for `POST` | The vendor the key is for, such as `openai`. Shown in lists |
+| `value` | string | yes | The provider key. 8 to 4096 bytes, no spaces or line breaks. Never shown again |
+
+```json title="201"
+{"credential":{"name":"openai-prod","provider":"openai","fingerprint":"...9f3b","created_by":"noa.bar","created_at":"2026-11-13T10:02:11.482Z","rotated_by":null,"rotated_at":null},"message":"The value is sealed in the store and never shown again. A provider names it with credential: in the policy."}
+```
+
+`PUT /admin/credentials/<name>` takes `{"value": "..."}` and answers 200 with the credential: every gateway on the store sends the new value within 2 seconds. `DELETE /admin/credentials/<name>` answers 200 with `removed`; a credential the policy in use names is 409 `credential_in_use`. `GET /admin/credentials` answers `{"credentials": [...]}`. The record of each call names the credential, its vendor and fingerprint, never the value.
 
 <Aside type="caution">
 An admin key can issue keys and stop all traffic. Keep admin keys in your secret manager, and revoke one the moment it may have leaked.

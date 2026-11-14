@@ -15,6 +15,7 @@ Without a store, each Gantry process keeps its keys in a file, its kill switches
 - A rate limit (`rpm`, `tpm`) is enforced once across all replicas: together they never admit more than the limit in any 60 seconds.
 - A deployment of an alias that fails on one replica is passed over by all within about a second.
 - A console sign-in on one replica is good on all. Signing out, or removing the person, ends it on all.
+- With `GANTRY_MASTER_KEY` set, provider keys can be kept here too, sealed with AES-256-GCM, and a rotation reaches all within 2 seconds. See [Provider credentials](/governance/provider-credentials/).
 
 ## When to use it
 
@@ -94,6 +95,7 @@ This copies every key of the file, and the kill switches in `gantry.kills.json` 
 | Keys: name, team, the SHA-256 of the key, admin, expiry, budget, models, tpm. Never a key itself. | The policy. It stays a file, reviewed in git, and every replica reads its own copy. |
 | Kill switches, with their reason, who set them and when. | Prompts and answers. Gantry never stores them, here or anywhere. |
 | Spend and reservations, per team, person and key, per day and month. | The audit log. Each replica keeps its own hash-chained file. |
+| Provider credentials, sealed with AES-256-GCM under the master key, with their name, vendor, last 4 characters and who added and rotated them. | The master key. It stays in each replica's environment or a file it names. |
 | Rate-limit leases: how much of each `rpm` and `tpm` each replica took, for the last minute. | The answer cache. Each replica keeps its own (see below). |
 | Cooldowns of alias deployments that failed, until when. | Requests in flight per deployment, for `least_busy`. Each replica counts its own. |
 | Console sessions: the SHA-256 of the session ID, who it is for, and when it ends. Never the ID itself. | A single sign-on sign-in in progress. Its callback must reach the replica that started it. |

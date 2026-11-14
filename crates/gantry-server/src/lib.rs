@@ -26,12 +26,13 @@ use gantry_core::{
     eventstream, gemini,
     guard::{self, Guardrail},
     id,
-    policy::{Decision, Models, Policy, Principal, Rule},
+    policy::{CallerKey, Decision, Models, Policy, Principal, Rule},
     sigv4, translate,
 };
 
 mod admin;
 mod alias;
+mod credentials;
 mod mcp;
 mod metrics;
 mod reload;
@@ -41,6 +42,7 @@ mod traces;
 pub use mcp::McpRoute;
 pub use traces::TraceExport;
 
+pub use credentials::{MasterKey, credential_problems};
 use http_body_util::BodyExt;
 use hyper_rustls::HttpsConnector;
 use hyper_util::{
@@ -131,6 +133,8 @@ fn allowed_query(path: &str) -> &'static [Param] {
     }
 }
 const DECISION: HeaderName = HeaderName::from_static("x-gantry-decision");
+/// Where a caller sends their own provider key, on a rule with `caller_provider_key: allowed`.
+const CALLER_PROVIDER_KEY: &str = "x-gantry-provider-key";
 
 /// How long the gateway waits at each point where the other side could stall it forever.
 #[derive(Clone, Debug)]
@@ -544,7 +548,9 @@ fn build(
         router = router
             .route("/admin/keys", any(admin::handle))
             .route("/admin/keys/{prefix}", any(admin::handle))
-            .route("/admin/kills", any(admin::handle));
+            .route("/admin/kills", any(admin::handle))
+            .route("/admin/credentials", any(admin::handle))
+            .route("/admin/credentials/{name}", any(admin::handle));
     }
     let mcp = mcp::router(&state, config.mcp)?;
     let router = router.fallback(handle).with_state(state);
@@ -966,6 +972,8 @@ struct Seen<'a> {
     cache: Option<&'static str>,
     /// The cached answer's request, settled once the decision is recorded.
     hit: Option<Box<spend::Admitted>>,
+    /// The first 8 hex characters of the SHA-256 of a provider key the caller sent, never the key.
+    caller_key: Option<String>,
 }
 
 /// On the messages routes the caller is most likely Claude Code asking for its default model: the fix is the
@@ -985,6 +993,65 @@ fn allowed_models(rule: &Rule) -> String {
     }
 }
 
+/// The provider key the caller sent in `x-gantry-provider-key`, if any. Sent twice it is refused: checking one and
+/// sending the other is how a proxy gets bypassed.
+fn caller_provider_key(headers: &HeaderMap) -> Result<Option<String>, Refusal> {
+    let mut values = headers.get_all(CALLER_PROVIDER_KEY).iter();
+    let Some(first) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            "ambiguous_key",
+            "Refused: this request carries x-gantry-provider-key more than once. Send your provider key once, or not at all to use Gantry's.",
+        ));
+    }
+    let key = first.to_str().map(str::trim).unwrap_or_default();
+    if key.is_empty() {
+        return Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            "caller_provider_key_invalid",
+            "Refused: x-gantry-provider-key is empty or holds characters a provider key never has. Send your provider key alone, or leave the header out to use Gantry's.",
+        ));
+    }
+    Ok(Some(key.to_string()))
+}
+
+/// Whether `rule` lets the caller's own provider key go to a provider of `kind`. Without the rule's opt-in the request
+/// is refused: a key that is ignored would have the caller pay nothing they expected, or Gantry pay what they did.
+fn caller_paid(rule: Option<&Rule>, kind: Option<Kind>, key: Option<&str>) -> Result<(), Refusal> {
+    let Some(key) = key else {
+        return Ok(());
+    };
+    let allowed = rule.is_some_and(|r| r.limits.caller_provider_key != CallerKey::Refused);
+    if !allowed {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "caller_provider_key_not_allowed",
+            format!(
+                "Refused: {} does not take a caller's own provider key, and this request carries one in x-gantry-provider-key. Send it without that header to use Gantry's key, or ask a Gantry admin to set `caller_provider_key: allowed` on the rule.",
+                rule.map_or_else(|| "no rule".to_string(), |r| format!("rule \"{}\"", r.name))
+            ),
+        ));
+    }
+    match kind {
+        Some(Kind::Bedrock) => Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            "caller_provider_key_unsupported",
+            "Refused: this model is served on Amazon Bedrock, whose requests Gantry signs with AWS keys, so a provider key in x-gantry-provider-key cannot be used for it. Send it without that header.",
+        )),
+        Some(kind) => key_header(kind, &Secret::new(key)).map(|_| ()).map_err(|_| {
+            Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "caller_provider_key_invalid",
+                "Refused: x-gantry-provider-key holds a character that cannot go in an HTTP header. Send your provider key alone.",
+            )
+        }),
+        None => Ok(()),
+    }
+}
+
 /// What happens to a request that passed its check: it goes to a provider, or Gantry answers it itself.
 enum Next {
     Forward(Parts, Bytes, Held),
@@ -1001,6 +1068,10 @@ async fn check<'a>(
 ) -> Result<Next, Refusal> {
     let (parts, body) = request.into_parts();
     let key = caller_key(&parts.headers)?;
+    let provider_key = caller_provider_key(&parts.headers)?;
+    seen.caller_key = provider_key
+        .as_deref()
+        .map(|k| id::sha256_hex(k.as_bytes())[..8].to_string());
     // Read before the key's header is removed below: Anthropic's clients send their key in x-api-key.
     let anthropic_client =
         parts.headers.contains_key("x-api-key") || parts.headers.contains_key("anthropic-version");
@@ -1040,6 +1111,8 @@ async fn check<'a>(
     killed(state, person, &key_sha256, None)?;
     // The key must not travel on in any other header either, under whatever name the caller chose for it.
     let (key, mut parts) = (key.to_string(), parts);
+    // Taken out at once: nothing after this (guardrail webhooks, traces, the provider) can see it in the headers.
+    parts.headers.remove(CALLER_PROVIDER_KEY);
     // Compared without regard to case, and on the random part alone as well, so a key that was upper-cased
     // or sent without its prefix is caught too. A key that was split or encoded is beyond a text match.
     let key = key.to_ascii_lowercase();
@@ -1074,6 +1147,7 @@ async fn check<'a>(
     if parts.method == Method::GET && parts.uri.path() == MODELS {
         check_query(&parts.uri)?;
         seen.rule = policy.rule_for(person);
+        caller_paid(seen.rule, None, provider_key.as_deref())?;
         return Ok(Next::Answer(model_list(
             version,
             seen.rule,
@@ -1092,6 +1166,7 @@ async fn check<'a>(
             parts,
             body,
             query_carries_key,
+            provider_key,
             seen,
         )
         .await;
@@ -1171,6 +1246,11 @@ async fn check<'a>(
             }
             let model = model.clone();
             seen.provider = Some(chosen);
+            caller_paid(
+                Some(rule),
+                version.providers.get(chosen).map(|p| p.kind),
+                provider_key.as_deref(),
+            )?;
             check_query(&parts.uri)?;
             // Translated here, before the record is written, so a field that cannot be carried across is a
             // recorded refusal and never a request sent with that field missing.
@@ -1202,6 +1282,7 @@ async fn check<'a>(
                 context,
                 content,
                 passthrough: None,
+                caller_key: provider_key.map(Secret::new),
             });
             Ok(Next::Forward(parts, bytes, permit))
         }
@@ -1299,6 +1380,7 @@ async fn passthrough<'a>(
     mut parts: Parts,
     body: Body,
     query_carries_key: bool,
+    provider_key: Option<String>,
     seen: &mut Seen<'a>,
 ) -> Result<Next, Refusal> {
     let rest = parts
@@ -1345,6 +1427,11 @@ async fn passthrough<'a>(
             ),
         ));
     }
+    caller_paid(
+        Some(rule),
+        version.providers.get(index).map(|p| p.kind),
+        provider_key.as_deref(),
+    )?;
     if query_carries_key {
         return Err(Refusal::new(
             StatusCode::BAD_REQUEST,
@@ -1387,6 +1474,7 @@ async fn passthrough<'a>(
         context: Vec::new(),
         content: Vec::new(),
         passthrough: Some(target),
+        caller_key: provider_key.map(Secret::new),
     });
     Ok(Next::Forward(parts, bytes, permit))
 }
@@ -1421,6 +1509,8 @@ struct Plan {
     content: Vec<(usize, String)>,
     /// For a passthrough request: the native path and query it is sent to, as sent.
     passthrough: Option<String>,
+    /// The caller's own provider key, sent in place of Gantry's, on a rule that allows it.
+    caller_key: Option<Secret>,
 }
 
 /// The model of a multipart form (an audio transcription), read as `Peek` reads a JSON body's.
@@ -1858,6 +1948,12 @@ async fn unchecked(state: &AppState, request: Request) -> Result<Next, Refusal> 
     if request.method() != Method::POST || request.uri().path() != CHAT {
         return Err(unknown_route());
     }
+    // Without a policy no rule allows it, and it is never forwarded.
+    if request.headers().contains_key(CALLER_PROVIDER_KEY) {
+        return Err(caller_paid(None, None, Some("-"))
+            .err()
+            .unwrap_or_else(unknown_route));
+    }
     // The body is read here too, so a slow client is cut off as a slow client and not reported as a slow provider.
     let (parts, body) = request.into_parts();
     let (bytes, permit) = read_body(None, state, &parts.headers, body).await?;
@@ -1992,6 +2088,11 @@ async fn decide(
         {
             record.extend(extra.clone());
         }
+        if let Some(prefix) = &seen.caller_key {
+            // That the caller's own key was sent, and which: never the key.
+            record.insert("caller_provider_key".into(), true.into());
+            record.insert("caller_provider_key_sha256".into(), prefix.as_str().into());
+        }
         if let Some(deployment) = &seen.deployment {
             // The model on the record is the alias the caller sent and the rule decided on; this is where it went first.
             record.insert(
@@ -2064,6 +2165,9 @@ async fn limit(
         route: parts.uri.path_and_query().map_or("/", |pq| pq.as_str()),
         body: bytes,
         free: parts.uri.path() == COUNT_TOKENS,
+        caller_paid: plan
+            .and_then(|p| p.caller_key.as_ref())
+            .map(|_| rule.limits.caller_provider_key == CallerKey::AllowedBudgeted),
     };
     match spend::admit(&state.spend, state.audit.as_ref().map(|a| &a.log), ask).await? {
         spend::Admit::Hit(response, admitted) => {
@@ -3125,7 +3229,15 @@ impl Tries<'_> {
     ) -> Result<Tried, Refusal> {
         let cooldown = self.plan.and_then(|p| p.cooldown);
         let mut tried: Tried = (None, chain.first().cloned().unwrap_or_default(), None);
+        let caller = self
+            .plan
+            .filter(|p| p.caller_key.is_some())
+            .map(|p| p.provider);
         'providers: for (index, model) in chain {
+            // The caller's key is theirs for the provider they asked for: it never goes to a fallback elsewhere.
+            if caller.is_some_and(|first| first != *index) {
+                continue;
+            }
             let provider = &self.version.providers[*index];
             let label = alias::label(&provider.name, model);
             for retry in 0..=provider.retries {
@@ -3357,8 +3469,18 @@ fn outbound(
             .entry(HeaderName::from_static("anthropic-version"))
             .or_insert(HeaderValue::from_static("2023-06-01"));
     }
-    if let Some((name, value)) = &provider.key {
-        headers.insert(name.clone(), value.clone());
+    let key = match plan.and_then(|p| p.caller_key.as_ref()) {
+        Some(caller) => Some(key_header(provider.kind, caller).map_err(|_| {
+            Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "caller_provider_key_invalid",
+                "Refused: x-gantry-provider-key holds a character that cannot go in an HTTP header. Send your provider key alone.",
+            )
+        })?),
+        None => provider.key.clone(),
+    };
+    if let Some((name, value)) = key {
+        headers.insert(name, value);
     }
     if provider.kind == Kind::Bedrock {
         sign_for_bedrock(provider, &uri, &body, &mut headers)?;

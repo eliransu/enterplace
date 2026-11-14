@@ -51,6 +51,15 @@ Rules for `key_env`:
 
 If `client_secret_env` is not set, Gantry starts with a warning, and every single sign-on fails until it is set and Gantry restarted. Signing in to the console with an admin key still works.
 
+## Provider credentials
+
+| Variable | Default | Holds |
+|---|---|---|
+| `GANTRY_MASTER_KEY` | none | 64 hex characters (`openssl rand -hex 32`): the key provider credentials in the store are sealed with. The same on every gateway on one store. Without it (or the file), credentials are off |
+| `GANTRY_MASTER_KEY_FILE` | none | Instead of `GANTRY_MASTER_KEY`: a file that holds it. Setting both stops the start |
+
+Read once, at start, by `gantry serve`, and by `gantry check` to check credential names. See [Provider credentials](/governance/provider-credentials/).
+
 ## AWS credentials
 
 Read for every `bedrock` provider and every guardrail of the `bedrock` vendor. Gantry signs requests with AWS Signature Version 4 itself; it never calls the AWS CLI.

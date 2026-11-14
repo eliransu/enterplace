@@ -31,8 +31,10 @@ use gantry_core::{
     keyfile::{self, Revoked},
     kill::Kill,
     policy::{Budget, Period},
-    store::{Bucket, Change, LEASE, Lease, Pending, Reserve, Store},
+    store::{Bucket, Change, Credential, LEASE, Lease, Pending, Reserve, Store},
 };
+
+use crate::credentials::{MasterKey, NO_MASTER};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::{
     Client, NoTls,
@@ -59,7 +61,8 @@ const SETTLE_FOR: Duration = Duration::from_secs(600);
 
 /// The schema, one migration per entry, applied in order. `gantry_schema` holds the number of each one applied.
 /// Never edit an entry that has shipped: add one.
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
 CREATE TABLE gantry_keys (
     id bigserial PRIMARY KEY,
     sha256 text NOT NULL UNIQUE,
@@ -102,7 +105,31 @@ CREATE INDEX gantry_rate_grants_scope ON gantry_rate_grants (scope, until);
 CREATE TABLE gantry_cooldowns (deployment text PRIMARY KEY, until timestamptz NOT NULL);
 CREATE TABLE gantry_sessions (sha256 text PRIMARY KEY, who text NOT NULL, expires timestamptz NOT NULL);
 INSERT INTO gantry_versions VALUES ('cooldowns', 0);
-"];
+",
+    "
+CREATE TABLE gantry_credentials (
+    name text PRIMARY KEY,
+    provider text NOT NULL,
+    sealed bytea NOT NULL,
+    fingerprint text NOT NULL,
+    created_by text NOT NULL,
+    created_at text NOT NULL,
+    rotated_by text,
+    rotated_at text,
+    generation bigint NOT NULL DEFAULT 1
+);
+CREATE TABLE gantry_master (id integer PRIMARY KEY CHECK (id = 1), sealed bytea NOT NULL);
+INSERT INTO gantry_versions VALUES ('credentials', 0);
+",
+];
+
+/// What the master key seals once per database, so a gateway with another master key is refused at start rather
+/// than at the first credential it cannot open.
+const MASTER_CHECK: (&str, &[u8]) = ("gantry master key check", b"gantry");
+
+/// The columns of a credential anyone may see, in the order `credential_of` reads them.
+const SHOWN: &str =
+    "name, provider, fingerprint, created_by, created_at, rotated_by, rotated_at, generation";
 
 /// How much longer than its [`LEASE`] the store counts a grant in the minute, in milliseconds: a gateway's clock
 /// and the database's may drift apart a little within one second, and a lease is spent by the gateway's.
@@ -138,8 +165,8 @@ struct Inner {
     /// The variable that holds the connection string, for messages.
     env: String,
     client: RwLock<Option<Arc<Client>>>,
-    /// The versions of keys, kill switches and cooldowns last read.
-    seen: Mutex<Option<(i64, i64, i64)>>,
+    /// The versions of keys, kill switches, cooldowns and credentials last read.
+    seen: Mutex<Option<(i64, i64, i64, i64)>>,
     /// One refresh at a time: a slow one finishing after a newer one would put older keys back for a poll.
     refreshing: tokio::sync::Mutex<()>,
     keys: RwLock<String>,
@@ -147,9 +174,16 @@ struct Inner {
     cooling: RwLock<Arc<HashMap<String, Instant>>>,
     /// What gateways give back of their rate-limit grants, by grant, until the next poll writes it.
     returns: Mutex<HashMap<i64, i64>>,
+    /// Each credential with its value as sealed. Opened only when a gateway sends it.
+    credentials: RwLock<Arc<Vec<Sealed>>>,
+    /// Set once, at start, after it opened the database's check value.
+    master: std::sync::OnceLock<MasterKey>,
     /// Set while the database cannot be reached, so the outage is reported once and its end once.
     down: AtomicBool,
 }
+
+/// A credential and its value as sealed.
+type Sealed = (Credential, Vec<u8>);
 
 fn read<T: Clone>(lock: &RwLock<T>) -> T {
     lock.read()
@@ -191,6 +225,8 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         kills: RwLock::new(Arc::new(Vec::new())),
         cooling: RwLock::default(),
         returns: Mutex::default(),
+        credentials: RwLock::new(Arc::new(Vec::new())),
+        master: std::sync::OnceLock::new(),
         down: AtomicBool::new(false),
     });
     let store = PgStore {
@@ -667,22 +703,42 @@ impl Inner {
                 .and_then(|row| row.try_get::<_, i64>(1).ok())
                 .unwrap_or(0)
         };
-        let now = (version("keys"), version("kills"), version("cooldowns"));
+        let now = (
+            version("keys"),
+            version("kills"),
+            version("cooldowns"),
+            version("credentials"),
+        );
         let seen = *self
             .seen
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if seen.is_none_or(|(keys, _, _)| keys != now.0) {
+        if seen.is_none_or(|(keys, _, _, _)| keys != now.0) {
             write(
                 &self.keys,
                 keyfile::keys_text(&self.read_keys(&client).await?),
             );
         }
-        if seen.is_none_or(|(_, kills, _)| kills != now.1) {
+        if seen.is_none_or(|(_, kills, _, _)| kills != now.1) {
             write(&self.kills, Arc::new(self.read_kills(&client).await?));
         }
-        if seen.is_none_or(|(_, _, cooldowns)| cooldowns != now.2) {
+        if seen.is_none_or(|(_, _, cooldowns, _)| cooldowns != now.2) {
             write(&self.cooling, Arc::new(self.read_cooling(&client).await?));
+        }
+        if seen.is_none_or(|(_, _, _, credentials)| credentials != now.3) {
+            let rows = client
+                .query(
+                    &format!("SELECT {SHOWN}, sealed FROM gantry_credentials ORDER BY name"),
+                    &[],
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+            let mut all = Vec::with_capacity(rows.len());
+            for row in &rows {
+                let sealed: Vec<u8> = row.try_get(8).map_err(|err| err.to_string())?;
+                all.push((credential_of(row)?, sealed));
+            }
+            write(&self.credentials, Arc::new(all));
         }
         *self
             .seen
@@ -917,6 +973,20 @@ impl Inner {
     }
 }
 
+fn credential_of(row: &tokio_postgres::Row) -> Result<Credential, String> {
+    let field = |err: tokio_postgres::Error| err.to_string();
+    Ok(Credential {
+        name: row.try_get(0).map_err(field)?,
+        provider: row.try_get(1).map_err(field)?,
+        fingerprint: row.try_get(2).map_err(field)?,
+        created_by: row.try_get(3).map_err(field)?,
+        created_at: row.try_get(4).map_err(field)?,
+        rotated_by: row.try_get(5).map_err(field)?,
+        rotated_at: row.try_get(6).map_err(field)?,
+        generation: row.try_get(7).map_err(field)?,
+    })
+}
+
 fn kill_of(row: &tokio_postgres::Row) -> Result<Kill, String> {
     let field = |err: tokio_postgres::Error| err.to_string();
     Ok(Kill {
@@ -1010,6 +1080,79 @@ impl PgStore {
                 .await
                 .map_err(|err| unreachable(&inner.env, &err))?;
             migrate_namespace(&mut client, &namespace, migrations).await
+        })
+    }
+}
+
+impl PgStore {
+    /// Turns provider credentials on with the customer's master key. The first gateway seals a check value with it;
+    /// every later one must open that value, so a wrong key is refused here, at start, with the fix.
+    pub fn unlock(&self, master: MasterKey) -> Result<(), String> {
+        let check = master.seal(MASTER_CHECK.0, MASTER_CHECK.1)?;
+        let inner = self.inner.clone();
+        let stored = self
+            .wait(async move {
+                let client = inner.ensure().await?;
+                client
+                    .execute(
+                        "INSERT INTO gantry_master (id, sealed) VALUES (1, $1) ON CONFLICT (id) DO NOTHING",
+                        &[&check],
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+                let row = client
+                    .query_one("SELECT sealed FROM gantry_master WHERE id = 1", &[])
+                    .await
+                    .map_err(|err| err.to_string())?;
+                row.try_get::<_, Vec<u8>>(0).map_err(|err| err.to_string())
+            })
+            .map_err(|err| {
+                format!(
+                    "the master key could not be checked against the store: {err}. Check that Postgres is up and {} is right, then start again.",
+                    self.inner.env
+                )
+            })?;
+        if master.open(MASTER_CHECK.0, &stored).ok().as_deref() != Some(MASTER_CHECK.1) {
+            return Err(format!(
+                "{} is not the key the provider credentials in this store were sealed with: it does not open the store's check value. Set the master key the other gateways on this database use, and start again. A master key that is lost cannot be recovered: then remove the credentials (DELETE FROM gantry_credentials; DELETE FROM gantry_master;) and add them again under a new one.",
+                crate::credentials::MASTER_ENV
+            ));
+        }
+        let _ = self.inner.master.set(master);
+        Ok(())
+    }
+
+    fn master(&self) -> Result<&MasterKey, String> {
+        self.inner.master.get().ok_or_else(|| NO_MASTER.to_string())
+    }
+
+    /// One credential statement: `sql` with `params`, returning the credential it touched, if any. The version
+    /// of credentials goes up with it, so every gateway reads the change at its next poll.
+    fn credential_change(
+        &self,
+        sql: String,
+        params: Vec<Box<dyn tokio_postgres::types::ToSql + Send + Sync>>,
+    ) -> Result<Option<Credential>, String> {
+        self.change("credential", move |client| {
+            Box::pin(async move {
+                let refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+                    .iter()
+                    .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+                    .collect();
+                let rows = client
+                    .query(
+                        &format!(
+                            "WITH touched AS ({sql} RETURNING {SHOWN}), \
+                             bumped AS (UPDATE gantry_versions SET version = version + 1 \
+                               WHERE name = 'credentials' AND EXISTS (SELECT 1 FROM touched)) \
+                             SELECT * FROM touched"
+                        ),
+                        &refs,
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+                rows.first().map(credential_of).transpose()
+            })
         })
     }
 }
@@ -1228,6 +1371,80 @@ impl Store for PgStore {
     fn reserve(&self, bucket: Bucket, usd: f64, limit: f64) -> Pending<Reserve> {
         let inner = self.inner.clone();
         self.ask(async move { inner.reserve(&bucket, usd, limit).await })
+    }
+
+    fn credentials(&self) -> Result<Arc<Vec<Credential>>, String> {
+        self.master()?;
+        Ok(Arc::new(
+            read(&self.inner.credentials)
+                .iter()
+                .map(|(c, _)| c.clone())
+                .collect(),
+        ))
+    }
+
+    fn add_credential(
+        &self,
+        name: &str,
+        provider: &str,
+        value: &str,
+        by: &str,
+    ) -> Result<Option<Credential>, String> {
+        let sealed = self.master()?.seal(name, value.trim().as_bytes())?;
+        self.credential_change(
+            "INSERT INTO gantry_credentials (name, provider, sealed, fingerprint, created_by, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (name) DO NOTHING"
+                .into(),
+            vec![
+                Box::new(name.to_string()),
+                Box::new(provider.to_string()),
+                Box::new(sealed),
+                Box::new(gantry_core::store::fingerprint(value.trim())),
+                Box::new(by.to_string()),
+                Box::new(gantry_core::audit::timestamp()),
+            ],
+        )
+    }
+
+    fn rotate_credential(
+        &self,
+        name: &str,
+        value: &str,
+        by: &str,
+    ) -> Result<Option<Credential>, String> {
+        let sealed = self.master()?.seal(name, value.trim().as_bytes())?;
+        self.credential_change(
+            "UPDATE gantry_credentials SET sealed = $2, fingerprint = $3, rotated_by = $4, rotated_at = $5, \
+             generation = generation + 1 WHERE name = $1"
+                .into(),
+            vec![
+                Box::new(name.to_string()),
+                Box::new(sealed),
+                Box::new(gantry_core::store::fingerprint(value.trim())),
+                Box::new(by.to_string()),
+                Box::new(gantry_core::audit::timestamp()),
+            ],
+        )
+    }
+
+    fn remove_credential(&self, name: &str) -> Result<Option<Credential>, String> {
+        self.master()?;
+        self.credential_change(
+            "DELETE FROM gantry_credentials WHERE name = $1".into(),
+            vec![Box::new(name.to_string())],
+        )
+    }
+
+    fn credential_value(&self, name: &str) -> Result<Option<String>, String> {
+        let master = self.master()?;
+        let all = read(&self.inner.credentials);
+        let Some((_, sealed)) = all.iter().find(|(c, _)| c.name == name) else {
+            return Ok(None);
+        };
+        let value = master.open(name, sealed)?;
+        String::from_utf8(value).map(Some).map_err(|_| {
+            format!("credential \"{name}\" is not text. Rotate it with the key's value.")
+        })
     }
 
     fn settle(&self, changes: Vec<Change>) {
