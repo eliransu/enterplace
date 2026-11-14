@@ -9,7 +9,10 @@
 use std::{
     io::{BufRead, BufReader, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -96,6 +99,8 @@ pub struct PgIndex {
     hint: Mutex<Hint>,
     /// One copy pass at a time.
     copying: tokio::sync::Mutex<()>,
+    /// The number of the last record of this replica the index holds: 0 until the first pass has read the cursor.
+    copied: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for PgIndex {
@@ -358,6 +363,7 @@ impl PgIndex {
             queue: Mutex::default(),
             hint: Mutex::default(),
             copying: tokio::sync::Mutex::const_new(()),
+            copied: Arc::new(AtomicU64::new(0)),
         });
         if copy {
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
@@ -387,6 +393,13 @@ impl PgIndex {
         &self.replica
     }
 
+    /// The number of the last record of this replica the index has copied, kept up to date by every pass. Whatever
+    /// removes records from the disk (a binary that ships sealed segments elsewhere) waits until this has passed
+    /// them, or their rows are never copied: the copier reads the chain from the disk.
+    pub fn copied(&self) -> Arc<AtomicU64> {
+        self.copied.clone()
+    }
+
     /// Copies this replica's records written since the last pass, writes the bodies kept since, and deletes the
     /// bodies that expired. Returns how many records it read.
     pub async fn copy(&self) -> Result<usize, String> {
@@ -414,6 +427,7 @@ impl PgIndex {
             ),
             None => (0, None),
         };
+        self.copied.fetch_max(after, Ordering::SeqCst);
         let path = self.path.clone();
         let mut hint = *self
             .hint
@@ -514,6 +528,7 @@ impl PgIndex {
         .await
         .map_err(db)?;
         tx.commit().await.map_err(db)?;
+        self.copied.fetch_max(last, Ordering::SeqCst);
         Ok(lines.len())
     }
 

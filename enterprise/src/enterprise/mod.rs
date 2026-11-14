@@ -87,7 +87,7 @@ pub fn extend_with(
         alerts::locked(&mut extension, status);
     }
     // Retired on disk only through what the audit export has read, when it runs (for export or for alerting, which
-    // reads the same table); through anything otherwise.
+    // reads the same table); through anything otherwise. With a store the request index must have copied it too.
     let export_reads = (siem_on || alerts_on) && host.postgres.is_some();
     let limit = Arc::new(AtomicU64::new(if export_reads { 0 } else { u64::MAX }));
     // Not behind the license: it is what keeps the audit chain whole where the disk does not last, a property the
@@ -99,6 +99,7 @@ pub fn extend_with(
             host.audit_path.to_path_buf(),
             &env,
             limit.clone(),
+            host.request_index.clone(),
         ));
         if let Some(token) = env(segments::READ_TOKEN_ENV).filter(|t| !t.trim().is_empty()) {
             extension.routes = std::mem::take(&mut extension.routes)

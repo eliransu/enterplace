@@ -344,6 +344,9 @@ pub struct Shipper {
     bytes: u64,
     /// Segments are retired only through this record: the audit export lowers it to what it has read.
     limit: Arc<AtomicU64>,
+    /// With a store, the last record the request index has copied: the console's request log reads the chain from
+    /// the disk, so a segment is retired only once that has passed it too.
+    index: Option<Arc<AtomicU64>>,
     state: Mutex<State>,
 }
 
@@ -364,6 +367,7 @@ impl Shipper {
         path: PathBuf,
         env: &Env,
         limit: Arc<AtomicU64>,
+        index: Option<Arc<AtomicU64>>,
     ) -> Self {
         let number = |name: &str, default: u64| {
             env(name)
@@ -377,6 +381,7 @@ impl Shipper {
             every: Duration::from_secs(number("GANTRY_AUDIT_SEAL_SECONDS", 60)),
             bytes: number("GANTRY_AUDIT_SEAL_BYTES", 1024 * 1024),
             limit,
+            index,
             state: Mutex::new(State {
                 sealed_at: Instant::now(),
                 written: HashSet::new(),
@@ -413,7 +418,11 @@ impl Shipper {
         let segments = audit::segments(&self.path).map_err(|err| err.to_string())?;
         let mut wrote = 0;
         let mut through = None;
-        let limit = self.limit.load(Ordering::SeqCst);
+        let limit = self.limit.load(Ordering::SeqCst).min(
+            self.index
+                .as_ref()
+                .map_or(u64::MAX, |copied| copied.load(Ordering::SeqCst)),
+        );
         for segment in &segments {
             let name = segment
                 .path
@@ -634,6 +643,7 @@ mod tests {
             path.to_path_buf(),
             &env(url),
             Arc::new(AtomicU64::new(u64::MAX)),
+            None,
         ))
     }
 
@@ -789,6 +799,7 @@ mod tests {
             path.clone(),
             &env(&url),
             limit.clone(),
+            None,
         );
         write(&log, 2)?;
         assert_eq!(ship.pass(true)?, 1);
@@ -802,6 +813,42 @@ mod tests {
         limit.store(2, Ordering::SeqCst);
         ship.pass(false)?;
         assert!(audit::segments(&path)?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn segments_stay_on_disk_until_the_request_index_has_copied_them() -> Result<(), Error> {
+        // The console's request log copies the chain from the disk every two seconds: a segment retired before it
+        // got there would never have its rows, though the export (here: none) has nothing left to read.
+        let (bucket, url) = bucket().await?;
+        let path = disk("index")?;
+        let log = Arc::new(AuditLog::open(&path)?);
+        let copied = Arc::new(AtomicU64::new(0));
+        let ship = Shipper::new(
+            store(&url)?,
+            log.clone(),
+            path.clone(),
+            &env(&url),
+            Arc::new(AtomicU64::new(u64::MAX)),
+            Some(copied.clone()),
+        );
+        write(&log, 2)?;
+        assert_eq!(ship.pass(true)?, 1);
+        assert_eq!(bucket.lock().map_err(|_| "lock")?.len(), 1);
+        let last = audit::segments(&path)?
+            .first()
+            .map(|s| s.last)
+            .ok_or("no segment on disk")?;
+        copied.store(last - 1, Ordering::SeqCst);
+        ship.pass(false)?;
+        assert_eq!(
+            audit::segments(&path)?.len(),
+            1,
+            "kept while its last record is not copied"
+        );
+        copied.store(last, Ordering::SeqCst);
+        ship.pass(false)?;
+        assert!(audit::segments(&path)?.is_empty(), "retired once it is");
         Ok(())
     }
 

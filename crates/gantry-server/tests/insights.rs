@@ -346,6 +346,17 @@ async fn the_index_holds_every_replica_and_answers_as_the_local_chain_does() -> 
         log.flush();
         assert_eq!(index.copy().await?, 2);
         assert_eq!(index.copy().await?, 0, "nothing new");
+        // How far it has copied, for whatever removes records from the disk: the chain's last record.
+        let last = std::fs::read_to_string(&path)?
+            .lines()
+            .last()
+            .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .and_then(|record| record["n"].as_u64())
+            .ok_or("no last record")?;
+        assert_eq!(
+            index.copied().load(std::sync::atomic::Ordering::SeqCst),
+            last
+        );
         replicas.push((index, path));
     }
     assert_ne!(replicas[0].0.replica(), replicas[1].0.replica());

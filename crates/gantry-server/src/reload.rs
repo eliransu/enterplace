@@ -424,6 +424,10 @@ pub struct Host<'a> {
     /// retires old segments (`gantry_core::audit::{chain_reader, retire}`).
     pub audit: &'a Arc<AuditLog>,
     pub audit_path: &'a Path,
+    /// With a store: the number of the last record of this audit log the request index has copied (the console's
+    /// request log). A binary that removes records from the disk, as one shipping sealed segments elsewhere does,
+    /// removes none past it: the copier reads them from the disk, so their rows would never be copied.
+    pub request_index: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 /// The request index of every gateway on the store, and where bodies are kept, when there are.
@@ -561,10 +565,12 @@ pub fn governed_with(
     }
     let seal = master
         .map(|m| -> Arc<dyn gantry_core::insights::Seal> { Arc::new(crate::insights::Sealer(m)) });
+    let mut request_index = None;
     let (index, bodies): Served = match &postgres {
         Some(pg) => {
             let index =
                 crate::insights::PgIndex::open(pg.clone(), &loaded.audit_path, seal.clone(), true)?;
+            request_index = Some(index.copied());
             let bodies = seal
                 .is_some()
                 .then(|| -> Arc<dyn gantry_core::insights::Bodies> { index.clone() });
@@ -590,6 +596,7 @@ pub fn governed_with(
         policy: policy_path,
         audit: &log,
         audit_path: &loaded.audit_path,
+        request_index,
     })?;
     let config = Config {
         providers,
