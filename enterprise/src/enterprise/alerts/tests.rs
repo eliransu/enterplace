@@ -266,6 +266,36 @@ fn working_hours_and_weekends() {
     assert!(parse_hours("19-08").is_none() && parse_hours("08-19+2").is_none());
 }
 
+#[test]
+fn the_digest_is_due_once_the_local_day_reaches_its_time() {
+    let at = |text: &str| parse_time(text).unwrap_or(SystemTime::UNIX_EPOCH);
+    assert_eq!(parse_at(""), Some((9 * 60, 0)), "09:00 UTC by default");
+    assert_eq!(parse_at("07:30+0200"), Some((7 * 60 + 30, 120)));
+    assert_eq!(parse_at("18:00-0500"), Some((18 * 60, -300)));
+    for wrong in ["25:00", "9", "09:60", "09:00+2", "09:00+1500", "nine"] {
+        assert!(parse_at(wrong).is_none(), "{wrong}");
+    }
+    let nine = parse_at("09:00").unwrap_or_default();
+    assert_eq!(digest_due(at("2026-11-14T08:59:00.000Z"), nine), None);
+    assert_eq!(
+        digest_due(at("2026-11-14T09:00:00.000Z"), nine).as_deref(),
+        Some("2026-11-14")
+    );
+    // 23:30 UTC is already 01:30 the next day at +0200, before its 07:30.
+    let israel = parse_at("07:30+0200").unwrap_or_default();
+    assert_eq!(digest_due(at("2026-11-14T23:30:00.000Z"), israel), None);
+    assert_eq!(
+        digest_due(at("2026-11-15T05:30:00.000Z"), israel).as_deref(),
+        Some("2026-11-15")
+    );
+    // 02:00 UTC is still the day before at -0500.
+    let ny = parse_at("18:00-0500").unwrap_or_default();
+    assert_eq!(
+        digest_due(at("2026-11-15T02:00:00.000Z"), ny).as_deref(),
+        Some("2026-11-14")
+    );
+}
+
 // ---------------------------------------------------------------- against Postgres
 
 fn write(gw: &Gateway, fields: Value) -> Result<(), Error> {
@@ -990,5 +1020,446 @@ async fn provider_errors_count_failures_that_were_not_retried() -> Result<(), Er
     let summary = hits[0]["summary"].as_str().unwrap_or_default();
     assert!(summary.starts_with("3 in the last 10 minutes"), "{summary}");
     assert!(summary.contains("upstream_timeout"), "{summary}");
+    Ok(())
+}
+async fn admin_call(
+    gw: &Gateway,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> Result<(StatusCode, Value, String), Error> {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("authorization", format!("Bearer {ADMIN_KEY}"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(if body.is_null() {
+            String::new()
+        } else {
+            body.to_string()
+        }))?;
+    let response = gw.app.clone().oneshot(request).await?;
+    let status = response.status();
+    let decision = response
+        .headers()
+        .get("x-gantry-decision")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let bytes = response.into_body().collect().await?.to_bytes();
+    Ok((
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        decision,
+    ))
+}
+
+#[tokio::test]
+async fn the_new_kinds_fire_on_anomalies_failures_expiring_keys_and_a_lagging_export()
+-> Result<(), Error> {
+    let Some(url) = database("alerts_kinds").await? else {
+        return Ok(());
+    };
+    let (gw, ex) = quiet("alerts_kinds", &url, &["alerts"])?;
+    let rules = [
+        json!({"name": "Volume", "kind": "unusual_requests", "params": {"count": "3", "factor": "2"}}),
+        json!({"name": "Errors", "kind": "unusual_errors", "params": {"count": "1", "by": "provider"}}),
+        json!({"name": "Latency", "kind": "unusual_latency", "params": {"count": "1", "factor": "2"}}),
+        json!({"name": "Down", "kind": "deployment_down", "params": {"count": "2", "minutes": "10"}}),
+        json!({"name": "Credential", "kind": "credential_failing", "params": {"count": "1"}}),
+        json!({"name": "Vendor", "kind": "guardrail_vendor_failing", "params": {"count": "1"}}),
+        json!({"name": "Expiring", "kind": "key_expiring", "params": {"days": "7"}}),
+        json!({"name": "Export", "kind": "export_lagging", "params": {"minutes": "30"}}),
+    ];
+    for rule in &rules {
+        let (status, body, _) =
+            admin_call(&gw, "POST", "/admin/alerts/rules", rule.clone()).await?;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+    let (status, body, _) = admin_call(
+        &gw,
+        "POST",
+        "/admin/alerts/rules",
+        json!({"name": "Bad", "kind": "unusual_requests", "params": {"by": "person"}}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.to_string().contains("team, key or provider"), "{body}");
+
+    // A 14-day latency baseline of 100 ms a request for team payments.
+    let yesterday =
+        audit::rfc3339(std::time::SystemTime::now() - std::time::Duration::from_secs(86_400));
+    rows(
+        &url,
+        &format!(
+            "INSERT INTO enterprise_alert_daily (scope, day, requests, errors, latency_ms, timed) VALUES ('team:payments', '{}', 10, 0, 1000, 10)",
+            &yesterday[..10]
+        ),
+    )
+    .await?;
+    for i in 0..4 {
+        request(&gw, &format!("v{i}"), "alice", "aaaa1111", "10.0.0.1", None)?;
+    }
+    for (id, provider, status) in [
+        ("e1", "gone", 503),
+        ("e2", "gone", 503),
+        ("c1", "openai", 401),
+    ] {
+        write(
+            &gw,
+            json!({"event": "usage", "id": id, "person": "alice", "team": "payments", "key": "aaaa1111", "provider": provider, "status": status, "latency_ms": 900}),
+        )?;
+    }
+    let mut vendor = audit::record(&audit::Entry {
+        id: "g1",
+        person: Some("alice"),
+        team: Some("payments"),
+        key: Some("aaaa1111"),
+        method: "POST",
+        path: "/v1/chat/completions",
+        model: Some("m"),
+        allowed: true,
+        provider: "openai",
+        ..Default::default()
+    });
+    vendor.insert(
+        "guardrails".into(),
+        json!([{"guardrail": "vendor-x", "detector": "lakera", "kind": "unavailable", "action": "skipped", "count": 1}]),
+    );
+    gw.log.append_record(&vendor)?;
+    // A key that expires in three days.
+    let soon =
+        audit::rfc3339(std::time::SystemTime::now() + std::time::Duration::from_secs(3 * 86_400));
+    gantry_core::keyfile::issue_with(
+        "soon",
+        "ops",
+        &gantry_core::keyfile::Attributes {
+            expires: Some(soon[..10].to_string()),
+            ..Default::default()
+        },
+        &gw.keys,
+    )?;
+    run(&ex).await?;
+    // An export destination that has sent nothing of records two hours old.
+    rows(
+        &url,
+        "INSERT INTO enterprise_export_destinations (kind, url, created_by) VALUES ('webhook', 'https://siem.example.com/in', 'test')",
+    )
+    .await?;
+    rows(
+        &url,
+        "UPDATE enterprise_audit SET time = now() - interval '2 hours'",
+    )
+    .await?;
+    let engine = ex.alerts.get().ok_or("no engine")?.clone();
+    engine.checks().await?;
+    engine.checks().await?;
+
+    let fired = rows(
+        &url,
+        "SELECT kind, key, summary FROM enterprise_alerts ORDER BY id",
+    )
+    .await?;
+    let fired: Vec<(String, String, String)> = fired
+        .iter()
+        .map(|r| Ok((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?)))
+        .collect::<Result<_, gantry_server::store::tokio_postgres::Error>>()?;
+    let of = |kind: &str| {
+        fired
+            .iter()
+            .filter(|f| f.0 == kind)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let day = &audit::timestamp()[..10];
+    assert_eq!(
+        of("unusual_requests").first().map(|f| f.1.clone()),
+        Some(format!("team:payments:{day}")),
+        "{fired:?}"
+    );
+    assert!(
+        of("unusual_errors")
+            .iter()
+            .any(|f| f.1 == format!("provider:gone:{day}")),
+        "{fired:?}"
+    );
+    assert!(
+        of("unusual_latency")
+            .first()
+            .is_some_and(|f| f.2.contains("100 ms")),
+        "{fired:?}"
+    );
+    assert_eq!(
+        of("deployment_down").first().map(|f| f.1.clone()),
+        Some("deployment:gone".into()),
+        "{fired:?}"
+    );
+    assert!(
+        of("deployment_down")
+            .iter()
+            .all(|f| f.1 != "deployment:openai"),
+        "a provider that answers is not down"
+    );
+    assert_eq!(
+        of("credential_failing").first().map(|f| f.1.clone()),
+        Some("provider:openai".into()),
+        "{fired:?}"
+    );
+    assert!(
+        of("guardrail_vendor_failing")
+            .first()
+            .is_some_and(|f| f.2.contains("vendor-x")),
+        "{fired:?}"
+    );
+    let expiring = of("key_expiring");
+    assert_eq!(expiring.len(), 1, "once per key and expiry: {fired:?}");
+    assert!(expiring[0].2.contains("soon"), "{fired:?}");
+    let lagging = of("export_lagging");
+    assert_eq!(lagging.len(), 1, "once per quiet period: {fired:?}");
+    assert!(lagging[0].2.contains("minutes behind"), "{fired:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn alert_rules_are_in_the_admin_api_with_records_and_the_license_gate() -> Result<(), Error> {
+    let Some(url) = database("alerts_api").await? else {
+        return Ok(());
+    };
+    let (gw, _ex) = quiet("alerts_api", &url, &["alerts"])?;
+    let (status, doc, _) = admin_call(&gw, "GET", "/admin/openapi.json", Value::Null).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        doc["paths"]["/admin/alerts/rules/{id}"]["put"]["operationId"],
+        "update_alert_rule"
+    );
+
+    let (status, body, decision) = admin_call(
+        &gw,
+        "POST",
+        "/admin/alerts/rules",
+        json!({"name": "Spend", "kind": "budget", "params": {"scope": "team", "name": "payments", "period": "month", "usd": "100"}}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let id = body["rule"]["id"].as_i64().ok_or("no id")?;
+    let lines: Vec<Value> = chain_lines(&gw)?
+        .iter()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let record = lines
+        .iter()
+        .find(|r| r["id"] == decision.as_str())
+        .ok_or("no admin record")?;
+    assert_eq!(
+        (record["event"].clone(), record["action"].clone()),
+        (json!("admin"), json!("add_alert_rule"))
+    );
+    assert_eq!(record["target"]["body"]["name"], "Spend");
+
+    let (status, body, _) = admin_call(
+        &gw,
+        "PUT",
+        &format!("/admin/alerts/rules/{id}"),
+        json!({"name": "Spend", "kind": "budget", "enabled": false, "params": {"scope": "team", "name": "payments", "period": "day", "usd": "10"}}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, body, _) = admin_call(&gw, "GET", "/admin/alerts/rules", Value::Null).await?;
+    assert_eq!(body["rules"][0]["enabled"], false, "{body}");
+    assert_eq!(body["rules"][0]["params"]["period"], "day");
+    let (status, _, _) = admin_call(
+        &gw,
+        "DELETE",
+        &format!("/admin/alerts/rules/{id}"),
+        Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body, decision) = admin_call(
+        &gw,
+        "DELETE",
+        &format!("/admin/alerts/rules/{id}"),
+        Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let lines: Vec<Value> = chain_lines(&gw)?
+        .iter()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let refused = lines
+        .iter()
+        .filter(|r| r["id"] == decision.as_str())
+        .next_back()
+        .ok_or("no record")?;
+    assert_eq!(refused["code"], "no_such_rule");
+
+    // Without the feature the routes are listed and each says why it is off.
+    let Some(other) = database("alerts_api_gate").await? else {
+        return Ok(());
+    };
+    let locked = gateway("alerts_api_gate", &other, &licensed(&["members"]))?;
+    let (status, body, _) = admin_call(&locked, "GET", "/admin/alerts/rules", Value::Null).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "license_required");
+    Ok(())
+}
+
+#[tokio::test]
+async fn digests_regions_rejected_changes_cleared_kills_and_open_circuits_alert()
+-> Result<(), Error> {
+    let Some(url) = database("alerts_ops").await? else {
+        return Ok(());
+    };
+    let (gw, ex) = quiet("alerts_ops", &url, &["alerts"])?;
+    // Two eu deployments and one in us behind one alias.
+    std::fs::write(
+        gw.dir.join("gantry.policy.yaml"),
+        "version: 1\nstore: { postgres_url_env: GANTRY_STORE_URL }\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\n  - name: mock-b\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m2]\n  - name: mock-us\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m3]\naliases:\n  - name: smart\n    deployments:\n      - { provider: mock, model: m, region: eu }\n      - { provider: mock-b, model: m2, region: eu }\n      - { provider: mock-us, model: m3, region: us }\nrules:\n  - name: all\n    principals: { any: true }\n    models: [m, m2, m3, smart]\n",
+    )?;
+    let rules = [
+        json!({"name": "Digest", "kind": "daily_digest", "params": {"at": "00:00"}}),
+        json!({"name": "Region", "kind": "region_outage", "params": {"count": "1", "minutes": "10"}}),
+        json!({"name": "Rejected", "kind": "config_rejected"}),
+        json!({"name": "Cleared", "kind": "kill_cleared"}),
+        json!({"name": "Circuit", "kind": "circuit_open"}),
+    ];
+    for rule in &rules {
+        let (status, body, _) =
+            admin_call(&gw, "POST", "/admin/alerts/rules", rule.clone()).await?;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+    for (params, says) in [
+        (json!({"at": "25:00"}), "09:00+0200"),
+        (json!({"region": "e u"}), "region: gives"),
+    ] {
+        let kind = if params.get("at").is_some() {
+            "daily_digest"
+        } else {
+            "region_outage"
+        };
+        let (status, body, _) = admin_call(
+            &gw,
+            "POST",
+            "/admin/alerts/rules",
+            json!({"name": "Bad", "kind": kind, "params": params}),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.to_string().contains(says), "{body}");
+    }
+
+    // Both eu deployments fail and us answers; then us fails once but has answered, so it is not out.
+    write(
+        &gw,
+        json!({"event": "attempts", "id": "a1", "attempts": [
+            {"provider": "mock/m", "outcome": "503"},
+            {"provider": "mock-b/m2", "outcome": "upstream_timeout"},
+            {"provider": "mock-us/m3", "outcome": "200"}]}),
+    )?;
+    write(
+        &gw,
+        json!({"event": "usage", "id": "a1", "person": "alice", "team": "payments", "alias": "smart",
+            "provider": "mock-us", "model": "m3", "status": 200, "charged_usd": 2.5}),
+    )?;
+    write(
+        &gw,
+        json!({"event": "attempts", "id": "a2", "attempts": [
+            {"provider": "mock-us/m3", "outcome": "502"}, {"provider": "mock/m", "outcome": "503"}]}),
+    )?;
+    write(
+        &gw,
+        json!({"event": "config_rejected", "trigger": "file_change", "policy_sha256_before": "aaaaaaaaaaaaaaaa",
+            "keys_sha256_before": "bbbbbbbbbbbbbbbb", "policy_sha256": "cccccccccccccccc", "keys_sha256": "bbbbbbbbbbbbbbbb",
+            "problem_count": 1, "problems": ["gantry.policy.yaml line 3: unknown field colour"]}),
+    )?;
+    for (id, action, verdict, code) in [
+        ("p1", "approve_policy", "refused", Some("invalid_policy")),
+        ("p2", "propose_policy", "allow", None),
+        ("p3", "approve_policy", "refused", Some("not_permitted")),
+        ("k1", "clear_kill", "allow", None),
+        ("k2", "clear_kill", "refused", Some("not_permitted")),
+    ] {
+        write(
+            &gw,
+            json!({"event": "admin", "id": id, "person": "noa", "action": action, "verdict": verdict, "code": code,
+                "target": {"scope": "team", "value": "payments"}}),
+        )?;
+    }
+    run(&ex).await?;
+    let engine = ex.alerts.get().ok_or("no engine")?.clone();
+    engine.checks().await?;
+    engine.checks().await?;
+
+    let fired = rows(
+        &url,
+        "SELECT kind, key, summary FROM enterprise_alerts ORDER BY id",
+    )
+    .await?;
+    let fired: Vec<(String, String, String)> = fired
+        .iter()
+        .map(|r| Ok((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?)))
+        .collect::<Result<_, gantry_server::store::tokio_postgres::Error>>()?;
+    let of = |kind: &str| {
+        fired
+            .iter()
+            .filter(|f| f.0 == kind)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let region = of("region_outage");
+    assert_eq!(
+        region.iter().map(|f| f.1.as_str()).collect::<Vec<_>>(),
+        ["region:eu"],
+        "us answered, so only eu is out: {fired:?}"
+    );
+    assert!(
+        region[0].2.contains("mock/m (2)") && region[0].2.contains("mock-b/m2 (1)"),
+        "{fired:?}"
+    );
+    let mut circuits: Vec<String> = of("circuit_open").into_iter().map(|f| f.1).collect();
+    circuits.sort();
+    assert_eq!(
+        circuits,
+        [
+            "deployment:mock-b/m2",
+            "deployment:mock-us/m3",
+            "deployment:mock/m"
+        ],
+        "once per deployment within the quiet period: {fired:?}"
+    );
+    let rejected = of("config_rejected");
+    assert_eq!(rejected.len(), 2, "{fired:?}");
+    assert!(
+        rejected[0].1 == "config:cccccccccccc:bbbbbbbbbbbb"
+            && rejected[0].2.contains("unknown field colour")
+            && rejected[0].2.contains("aaaaaaaaaaaa"),
+        "{fired:?}"
+    );
+    assert_eq!(rejected[1].1, "p1", "{fired:?}");
+    let cleared = of("kill_cleared");
+    assert_eq!(cleared.len(), 1, "{fired:?}");
+    assert!(
+        cleared[0].1 == "k1"
+            && cleared[0]
+                .2
+                .contains("noa cleared the kill switch on team payments"),
+        "{fired:?}"
+    );
+    let digest = of("daily_digest");
+    assert_eq!(digest.len(), 1, "once a day: {fired:?}");
+    let day = &audit::timestamp()[..10];
+    assert_eq!(digest[0].1, format!("digest:{day}"));
+    let text = &digest[0].2;
+    assert!(
+        text.contains("$2.50 spent") && text.contains("alice $2.50"),
+        "{text}"
+    );
+    assert!(
+        text.contains("kill_cleared 1") && text.contains("region_outage 1"),
+        "{text}"
+    );
     Ok(())
 }

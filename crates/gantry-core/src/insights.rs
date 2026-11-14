@@ -199,7 +199,8 @@ fn text(record: &Value, field: &str) -> String {
         .to_string()
 }
 
-fn kinds(guardrails: Option<&Value>) -> Vec<String> {
+/// The kinds a request record's `guardrails` found.
+pub fn kinds(guardrails: Option<&Value>) -> Vec<String> {
     guardrails
         .and_then(Value::as_array)
         .into_iter()

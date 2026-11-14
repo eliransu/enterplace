@@ -32,7 +32,6 @@ Metrics: http://127.0.0.1:9464/metrics
 | `gantry_requests_total` | counter | `route`, `verdict`, `code`, `provider` | Every decision, as the audit log records it |
 | `gantry_upstream_responses_total` | counter | `provider`, `outcome` | Every attempt at a provider, retries and fallbacks included |
 | `gantry_provider_key_switches_total` | counter | `provider`, `status` | A [key pool](/routing/key-pools/) key set aside after a 401, 403 or 429 |
-| `gantry_deployment_up` | gauge | `deployment` | 1 when the last [health probe](/routing/health-probes/) of the deployment got an answer, 0 when not |
 | `gantry_upstream_seconds` | histogram | `provider` | Time from sending to a provider to its answer's headers |
 | `gantry_overhead_seconds` | histogram | none | Gantry's own time on a forwarded request: identify, decide, guardrails, record, and handing the answer back. The same figure as the `Server-Timing: gantry;dur=` header |
 | `gantry_audit_write_seconds` | histogram | none | Time of each write to the audit log. Under load one write carries many records |
@@ -41,13 +40,34 @@ Metrics: http://127.0.0.1:9464/metrics
 | `gantry_spend_usd_total` | counter | `team`, `model` | US dollars charged since Gantry started, as usage records write them |
 | `gantry_secret_rotations_total` | counter | `source` | Gantry Enterprise: secrets a refresh found changed in their [secret manager](/operations/secret-managers/), by manager (`vault`, `aws-sm`, `gcp-sm`, `azure-kv`) |
 | `gantry_secret_refresh_failures_total` | counter | `source` | Gantry Enterprise: secrets a refresh could not read from their manager, by manager. The value read before stays in use |
+| `gantry_cache_saved_usd` | gauge | `team`, `kind` | US dollars caching saved since start: `answer` (Gantry's answer cache) or `prompt` (a provider's prompt cache, net of cache writes) |
+| `gantry_refusals_total` | counter | `code` | Requests refused, by refusal code: the refused part of `gantry_requests_total`, summed over route and provider |
+| `gantry_tokens_total` | counter | `team`, `model`, `kind` | Tokens providers reported: `input`, `output`, `cached` (read from a prompt cache) or `cache_write`. Answers from Gantry's cache add none |
+| `gantry_request_seconds` | histogram | `model` | Time from a request reaching Gantry to the end of its answer, streamed or not |
+| `gantry_first_byte_seconds` | histogram | `provider` | Time from a request reaching Gantry to its answer's headers leaving for the caller |
+| `gantry_guardrail_findings_total` | counter | `kind` | What guardrails found on requests, by detector kind, such as `email_address`; `unavailable` when a guardrail service could not be reached |
+| `gantry_cache_lookups_total` | counter | `outcome` | Answer cache lookups of rules with `cache:`: `hit` or `miss` |
+| `gantry_deployment_up` | gauge | `deployment` | `1` while a deployment of an alias (`provider/model`) takes requests and its last [health probe](/routing/health-probes/), if it has one, got an answer; `0` while it cools down after failures or its probe fails |
+| `gantry_deployment_cooldowns_total` | counter | `deployment` | Times a deployment was put to cool down after a failure (no answer, a 429 or a 5xx) |
+| `gantry_budget_limit_usd` | gauge | `scope`, `name`, `per` | A budget of `limits:` in the policy |
+| `gantry_budget_remaining_usd` | gauge | `scope`, `name`, `per` | What that budget has left this period: its limit less what was spent and what requests in flight hold. Counted by the store when the policy has one |
+| `gantry_store_up` | gauge | none | With a store: `1` when it answers, `0` when requests under a budget or rate limit would be refused |
 
 | Label | Values |
 |---|---|
 | `route` | `chat_completions`, `messages`, `count_tokens`, `responses`, `embeddings`, `models`, or `other` for every other path |
 | `verdict` | `allow` or `refused` |
 | `code` | The [refusal code](/reference/refusal-codes/), empty when allowed |
-| `outcome` | The provider's HTTP status, or the Gantry code when it gave none, such as `upstream_timeout` |
+| `outcome` | The provider's HTTP status, or the Gantry code when it gave none, such as `upstream_timeout`. On `gantry_cache_lookups_total`, `hit` or `miss` |
+| `scope` | The scope kind of a `limits:` entry: `global`, `org`, `team`, `person`, `key`, `customer`, `tag` or `model` |
+| `name` | The entry's name, `org/name` when it is kept to an organization; empty for `global` |
+| `per` | The budget's period, as the policy writes it: `day`, `month`, `6h`, `month@America/New_York` |
+
+### Label cardinality
+
+Every label value comes from the policy (routes, codes, providers, models, teams, deployments, detector kinds), never from what a caller sends, so the number of series is bounded by the policy. Budget gauges are the one family that could grow with people: by default they cover the `global`, `org`, `team` and `model` entries of `limits:`, and leave out entries for `*` (each member counted apart). Choose the scope kinds with `GANTRY_METRICS_BUDGET_SCOPES`, a comma-separated list such as `team,person`, or `none` for no budget gauges.
+
+LiteLLM's Prometheus metrics, for orientation: requests (`gantry_requests_total`), tokens (`gantry_tokens_total`), spend (`gantry_spend_usd_total`), total latency (`gantry_request_seconds`), provider latency (`gantry_upstream_seconds`), time to first byte (`gantry_first_byte_seconds`), deployment state and cooldowns (`gantry_deployment_up`, `gantry_deployment_cooldowns_total`), remaining budgets (`gantry_budget_remaining_usd`), cache hits (`gantry_cache_lookups_total`), guardrail findings and errors (`gantry_guardrail_findings_total`). Key switches in a provider's key pool: `gantry_provider_key_switches_total`.
 
 Histogram buckets run from 100 microseconds to 60 seconds: `0.0001`, `0.00025`, `0.0005`, `0.001`, `0.0025`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5`, `10`, `30`, `60` and `+Inf`.
 

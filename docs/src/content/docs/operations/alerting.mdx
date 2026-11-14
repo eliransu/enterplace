@@ -57,9 +57,22 @@ Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and
 | `new_ip` | A key is used from an address it has not used before. A key's first addresses are learned, not alerted on | none | key and address: once each |
 | `after_hours` | A key is used outside working hours or on a weekend | hours, such as `08-19` or `08-19+0200` | key and day: once a day |
 | `unusual_spend` | A person's spend today is `factor` times their daily average of the last 14 days, and at least the amount | factor (3), amount in USD (5) | person and day: once a day |
+| `unusual_requests` | A scope's requests today are `factor` times its daily average of the last 14 days, and at least `count` | by (`team`, `key`, `provider`; default team), factor (3), count (100) | scope and day: once a day |
+| `unusual_errors` | A scope's error rate today (answers with status 5xx or 429, and requests no provider answered) is `factor` times its rate over the last 14 days, with at least `count` errors | by, factor (3), count (10) | scope and day: once a day |
+| `unusual_latency` | A scope's average latency today is `factor` times its average over the last 14 days, over at least `count` requests | by, factor (2), count (20) | scope and day: once a day |
+| `deployment_down` | `count` failures of a provider within `minutes` and not one answer from it in that time | count, minutes | the provider |
+| `credential_failing` | `count` answers with status 401 or 403 from a provider within `minutes`: it refuses Gantry's credential | count, minutes | the provider |
+| `guardrail_vendor_failing` | `count` requests or answers whose guardrail service could not be reached within `minutes`, whether it failed open or closed | count, minutes | the guardrail |
+| `key_expiring` | A key expires within `days`. Checked once a minute against the keys | days (7) | key and expiry: once each |
+| `export_lagging` | An audit export destination has records older than `minutes` that it has not sent. Checked once a minute | minutes (15) | replica and destination |
+| `daily_digest` | Every day once the local time reaches `at`: the last 24 hours of every replica, with spend, requests, refusals and their commonest codes, the five top users by spend, and the alerts fired by kind. Sent to each of the rule's channels. A rule added after that time sends today's digest at once | at, such as `09:00` or `09:00+0200` (default `09:00` UTC) | the local day: once a day |
+| `region_outage` | Every [alias deployment](/routing/aliases/) whose `region:` is the region has `count` failures within `minutes`, and not one of them answered in that time. A region with one deployment still answering does not fire | region (empty: each region), count (1), minutes (5) | the region |
+| `config_rejected` | A reload refuses a change to the policy or keys file (a `config_rejected` record, with the first problem), or a policy version sent through the admin API is refused as `invalid_policy` | none | the refused change, or the record: once each |
+| `kill_cleared` | A kill switch is cleared (an `admin` record with action `clear_kill`) | none | the record: once each |
+| `circuit_open` | An alias deployment fails (no answer, a 429 or a 5xx) and is passed over for its alias's `cooldown_seconds` | none | the deployment (`provider/model`), once per quiet period |
 | `system` | The audit log cannot be written, this replica's records cannot be read into Postgres, the alert tables cannot be read, or requests are refused with `store_unavailable` or `kills_unreadable`, or a refresh cannot read a [secret manager](/operations/secret-managers/) (`secret_refresh_failed`) | none | replica and problem (for a secret, the variable) |
 
-Group by is `all` (default), `person`, `team` or `key`.
+Group by is `all` (default), `person`, `team` or `key`. The unusual kinds compare by `team` (default), `key` or `provider`: their requests, errors and latency are kept per scope and day in Postgres from the first record read, so the baseline is there when a rule is added. A replica new to alerting reads the records of the last 14 days before the month began, so the baseline is whole from the start.
 
 Each failure counts once: a try that was retried is in the attempts record, and the last try is in the usage record when the provider answered (a 5xx or 429 passed on) or in the upstream error record when none did. A failure Gantry made itself, such as a model with no deployment (`unknown_model`), is not a provider's and does not count.
 
@@ -81,14 +94,25 @@ It fires once per budget and period (subject `team:payments|month|2026-11`). A s
 {"kind":"budget","subject":"team:payments|month|2026-11","summary":"team:payments has spent $81.20 of its $100.00 budget per month in 2026-11 (81%), reaching 80%."}
 ```
 
+`region_outage` and `circuit_open` read alias deployments by `provider/model`, as attempts records name them, and the answer of each usage record that carries an `alias`. Region labels come from the policy in force, read when a region rule has something to check.
+
 ## Deduplication and rate limits
 
 - After an alert, the same rule and subject stay quiet for the rule's **quiet period** (60 minutes by default). Matching records are counted, not sent.
-- Kinds whose subject names a period or an event (budget, kill switch, new address, after hours, unusual spend) fire once per subject.
+- Kinds whose subject names a period or an event (budget, kill switch set or cleared, new address, after hours, the unusual kinds, key expiring, daily digest, config rejected) fire once per subject.
 - A rule sends at most **At most per hour** alerts an hour (10 by default). The rest are counted as suppressed.
 - Each replica evaluates its own records once, and counts, spend and known addresses live in Postgres. A rule therefore sees every replica, and one alert goes out however many replicas there are.
 - Records older than an hour when first read (a new install, a replica catching up) count toward spend and the baseline but never fire.
 - When Postgres cannot be reached, `system` rules still fire from the last rules and channels read, once per quiet period per replica.
+
+## In the admin API
+
+Alert rules are in the [admin API](/reference/admin-api/#alert-rules) too, with the same checks as this page: `GET /admin/alerts/rules`, `POST /admin/alerts/rules`, `PUT` and `DELETE /admin/alerts/rules/<id>`, `GET /admin/alerts/channels` (never their secrets) and `GET /admin/alerts` (what fired lately). Reading needs `see_records`, changing `edit_policy`.
+
+```bash
+curl -X POST http://127.0.0.1:8080/admin/alerts/rules -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+  -d '{"name": "Payments volume", "kind": "unusual_requests", "params": {"by": "team", "factor": "3", "count": "200"}, "channels": [1]}'
+```
 
 ## What is recorded
 

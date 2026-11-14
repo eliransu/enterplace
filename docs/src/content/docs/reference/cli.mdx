@@ -358,6 +358,22 @@ gantry import litellm litellm_config.yaml --keys-from keys.csv --out gantry.poli
 
 The exit code is that of the `gantry check` it runs on the result.
 
+### From a running proxy
+
+```text
+gantry import litellm --url <proxy> --master-key-env <VAR> [<config.yaml>] [--out <policy file>] [--keys-out <keys file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--url <proxy>` | required | The LiteLLM proxy. https, or plain http only for `127.0.0.1` or `localhost` (use a port forward) |
+| `--master-key-env <VAR>` | required | The environment variable that holds the proxy's master key, sent as `Authorization: Bearer`. Never printed |
+| `<config.yaml>` | none | The proxy's config, read for its models and settings in place of `GET /model/info` |
+| `--out <file>` | `gantry.policy.yaml` | The policy to write. An existing file is never replaced |
+| `--keys-out <file>` | `gantry.keys.yaml` | The keys file to write, one new Gantry key per LiteLLM key. An existing file is never changed |
+
+It reads `GET /model/info`, `GET /key/list?return_full_object=true` page by page (a key listed by its token alone is read with `GET /key/info`), and `GET /team/list`. Team budgets per day or month become `limits:` entries. Each LiteLLM key is issued again with its alias as name, its team's alias as team, and its models, budget, expiry and tokens-per-minute limit; the new key is printed once beside the LiteLLM key it replaces. See [Migrate from LiteLLM](/migrate/from-litellm/#import-a-running-proxy).
+
 ## login
 
 Signs in through the console's single sign-on and gets a personal key, named by your email, that expires (30 days unless the policy says otherwise).

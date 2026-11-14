@@ -30,6 +30,32 @@ import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components'
 
 The import never replaces an existing file. If `--out` exists, it stops with an error and writes nothing. After writing, it runs `gantry check` on the result.
 
+## Import a running proxy
+
+With the proxy's address and its master key in an environment variable, the import reads the proxy's management API instead of files: its model list, every virtual key and every team.
+
+```bash
+export LITELLM_MASTER_KEY=sk-...
+gantry import litellm --url https://litellm.internal.example.com --master-key-env LITELLM_MASTER_KEY \
+  --out gantry.policy.yaml --keys-out gantry.keys.yaml
+```
+
+```text
+Read 2 models from the proxy, 2 keys and 2 teams.
+Wrote gantry.policy.yaml.
+Issued 2 keys in gantry.keys.yaml for the LiteLLM keys. Each is shown once: hand it to its owner.
+  maya (token 88dc28d0f030...) -> maya (team payments): gantry_3f9a...
+  dana (token a1b2c3d4e5f6...) -> dana (team search): gantry_8a41...
+Not mapped, or needs a hand (1 item):
+  - team search: max_budget 10 per 7d has no Gantry period (day or month); not mapped.
+```
+
+- Models come from `GET /model/info`; give the `config.yaml` as well to carry its router and general settings across.
+- Keys come from `GET /key/list` page by page, or `GET /key/info` for a key listed by its token. LiteLLM keeps only key hashes, so every key is issued again: the mapping prints each LiteLLM key's alias and token prefix beside the Gantry key that replaces it, shown once. The new keys file holds only their hashes.
+- Team budgets per day or month become `limits: [{ team: payments, budget: { usd: 500, per: month } }]`. A team's `rpm_limit` is reported for a rule's `rate:`.
+- A route the proxy does not serve is reported and skipped; a wrong master key stops the import with the proxy's answer.
+- The master key is read from the variable, sent only to `--url`, and never printed. Plain http is refused except to `127.0.0.1` or `localhost`.
+
 ## Example
 
 This LiteLLM config serves one OpenAI model and one Anthropic model under its own name:

@@ -1867,7 +1867,7 @@ async fn act(state: &AppState, version: &Snapshot, plan: Plan) -> Result<Respons
 }
 
 /// What a confined role is kept to, for messages: "organization \"acme\", teams payments, web".
-fn reach(role: &Role) -> String {
+pub(crate) fn reach(role: &Role) -> String {
     let mut parts = Vec::new();
     if let Some(org) = &role.org {
         parts.push(format!("organization \"{org}\""));

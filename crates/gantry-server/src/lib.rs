@@ -39,6 +39,7 @@ mod cors;
 mod credentials;
 pub mod insights;
 mod jwt;
+mod manage;
 mod mcp;
 mod metrics;
 mod policy_api;
@@ -48,6 +49,7 @@ mod spend;
 pub mod store;
 mod teams_api;
 mod traces;
+pub use manage::{AdminApi, AdminCall, AdminRoute};
 pub use mcp::{McpRoute, McpSetup};
 pub use traces::TraceExport;
 
@@ -371,6 +373,8 @@ pub struct Extension {
     /// and before any request can be recorded in it: the binary exports, retains and ships it as it does those of
     /// [`Host::org_chains`].
     pub on_org: Option<Arc<dyn Fn(OrgChain) + Send + Sync>>,
+    /// Routes added to the admin API, under `/admin`. The gateway checks the caller and writes the admin record.
+    pub admin: Option<Arc<dyn AdminApi>>,
 }
 
 /// Prompt and answer text handed to a binary that embeds the gateway, for an operator who opted in to sending it
@@ -558,6 +562,8 @@ struct AppState {
     jwks: Arc<jwt::Keys>,
     // Who owns each file, batch and fine-tuning job created through this gateway (batch.rs).
     owned: Arc<batch::Registry>,
+    // Admin routes an embedding binary adds (manage.rs).
+    admin_api: Option<Arc<dyn AdminApi>>,
 }
 
 impl AppState {
@@ -927,6 +933,7 @@ fn build(
         health: config.extension.health.clone(),
         jwks: Arc::default(),
         owned,
+        admin_api: config.extension.admin.clone(),
     };
     let keep = Arc::new(state.clone());
     batch::spawn_poller(Arc::downgrade(&keep));
@@ -948,18 +955,8 @@ fn build(
     // The admin API changes the keys file, so it exists only when Gantry serves from one.
     if reloader.is_some() {
         router = router
-            .route("/admin/keys", any(admin::handle))
-            .route("/admin/keys/{prefix}", any(admin::handle))
-            .route("/admin/keys/{prefix}/rotate", any(admin::handle))
-            .route("/admin/kills", any(admin::handle))
-            .route("/admin/explain", any(admin::handle))
-            .route("/admin/credentials", any(admin::handle))
-            .route("/admin/credentials/{name}", any(admin::handle))
-            .route("/admin/guardrails/test", any(admin::handle))
-            .route("/admin/policy", any(policy_api::handle))
-            .route("/admin/policy/{*rest}", any(policy_api::handle))
-            .route("/admin/teams", any(teams_api::handle))
-            .route("/admin/teams/{name}", any(teams_api::handle));
+            .route("/admin", any(manage::dispatch))
+            .route("/admin/{*rest}", any(manage::dispatch));
     }
     let mcp = mcp::router(&state, config.mcp, config.mcp_setup)?;
     let cors_state = state.clone();
@@ -3776,6 +3773,7 @@ async fn decide(
         outcome.as_ref().err().map(|refusal| refusal.code),
         provider_name,
     );
+    state.metrics.inspected(&[], seen.cache);
     if let Some(audit) = &state.audit {
         let entry = Entry {
             id: decision,
@@ -3800,10 +3798,11 @@ async fn decide(
         // The record is written before anything is forwarded. A request that cannot be recorded does not happen.
         let mut record = gantry_core::audit::record(&entry);
         if let Some(found) = &found {
-            record.insert(
-                "guardrails".into(),
-                serde_json::to_value(found).unwrap_or_default(),
-            );
+            let found = serde_json::to_value(found).unwrap_or_default();
+            state
+                .metrics
+                .inspected(&gantry_core::insights::kinds(Some(&found)), None);
+            record.insert("guardrails".into(), found);
         } else if not_text && outcome.is_ok() {
             let why = if path.starts_with(PASSTHROUGH) {
                 "not_run: the request has no body"
@@ -5314,6 +5313,9 @@ async fn send(
     // streaming the answer, so the bench reads it as a breakdown and gates on what the client sees.
     let own = (sent.unwrap_or(answered) - arrived) + answered.elapsed();
     state.metrics.overhead(own);
+    state
+        .metrics
+        .first_byte(&version.providers[served].name, arrived.elapsed());
     if let Ok(value) =
         HeaderValue::from_str(&format!("gantry;dur={:.3}", own.as_secs_f64() * 1000.0))
     {

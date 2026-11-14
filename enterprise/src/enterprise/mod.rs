@@ -36,7 +36,7 @@ const SIEM: &[&str] = &[siem::MIGRATION, capture::MIGRATION];
 /// Enrolment tokens, device profiles, and what the device agents report.
 const DEVICES: &[&str] = &[devices::MIGRATION, devices::MIGRATION_2];
 /// Alert channels, rules and what fired. Runs after `SIEM`: alerting reads the records it ingests.
-const ALERTS: &[&str] = &[alerts::MIGRATION];
+const ALERTS: &[&str] = &[alerts::MIGRATION, alerts::DAILY];
 
 /// Before each feature had its namespace, every enterprise table was one list under `enterprise`: members, scim,
 /// siem. On a database a binary of then wrote, this records the per-feature version that list's version implies, so
@@ -215,7 +215,14 @@ pub fn extend_with(
         let registered = siem::register(&mut extension, setup(host.audit, host.audit_path, &limit));
         match registered {
             Ok(exporter) if alerts_on => {
-                alerts::register(&mut extension, &exporter, &env, host.policy_now.clone());
+                alerts::register(
+                    &mut extension,
+                    &exporter,
+                    &env,
+                    host.policy_now.clone(),
+                    host.keys.to_path_buf(),
+                    host.policy.to_path_buf(),
+                );
             }
             Ok(_) => {}
             Err(err) => eprintln!("warning: audit export, retention and alerts are off: {err}"),
@@ -229,11 +236,20 @@ pub fn extend_with(
             alerts: alerts_on,
             captures: captures.clone(),
             policy_now: host.policy_now.clone(),
+            keys: host.keys.to_path_buf(),
+            policy: host.policy.to_path_buf(),
         })));
         for (chain, read_through) in &orgs {
             match siem::chain(setup(&chain.log, &chain.path, read_through)) {
                 Ok(exporter) if alerts_on => {
-                    alerts::engine(&exporter, &env, host.policy_now.clone(), true);
+                    alerts::engine(
+                        &exporter,
+                        &env,
+                        host.policy_now.clone(),
+                        host.keys.to_path_buf(),
+                        host.policy.to_path_buf(),
+                        true,
+                    );
                 }
                 Ok(_) => {}
                 Err(err) => eprintln!(
@@ -259,6 +275,9 @@ struct OrgSiem {
     alerts: bool,
     captures: Option<Arc<capture::Captures>>,
     policy_now: gantry_server::PolicyNow,
+    /// The keys and policy files, for the rules on expiring keys and on regions.
+    keys: std::path::PathBuf,
+    policy: std::path::PathBuf,
 }
 
 /// The chain of an organization a policy reload added: shipped, exported, retained and alerted on as the chains
@@ -304,7 +323,14 @@ fn new_org(
     };
     match siem::chain(setup) {
         Ok(exporter) if o.alerts => {
-            alerts::engine(&exporter, &o.env, o.policy_now.clone(), true);
+            alerts::engine(
+                &exporter,
+                &o.env,
+                o.policy_now.clone(),
+                o.keys.clone(),
+                o.policy.clone(),
+                true,
+            );
         }
         Ok(_) => {}
         Err(err) => eprintln!(
@@ -555,6 +581,8 @@ pub(crate) mod testing {
         })?;
         let keys = gw.loaded.keys_path.clone();
         gantry_core::keyfile::add_entry("noa", "platform", ADMIN_KEY, true, &keys)?;
+        // In effect at once, so the admin API knows the key too, not only the console.
+        gw.reloader.check(gantry_server::Trigger::FileChange);
         Ok(Gateway {
             app: gw.router.clone(),
             keys,
@@ -793,7 +821,8 @@ mod migration_tests {
         assert_eq!(
             versions(&client).await?,
             [
-                ("enterprise.alerts".to_string(), 1),
+                // Entry 2 is the daily baseline of the unusual request, error and latency rules.
+                ("enterprise.alerts".to_string(), 2),
                 ("enterprise.members".to_string(), 1),
                 ("enterprise.scim".to_string(), 1),
                 ("enterprise.siem".to_string(), 2),

@@ -1,13 +1,21 @@
 ---
 title: Admin API
-description: Issue, list and revoke keys and set kill switches over HTTP while Gantry runs, with the request and response shape of every /admin route.
+description: Keys, kill switches, credentials, usage, the policy by part (providers, models, rules, guardrails, MCP servers, aliases, budgets) and alert rules over HTTP while Gantry runs, with the OpenAPI document and the shape of every /admin route.
 sidebar:
   order: 4
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-The admin API issues and revokes keys and sets kill switches while Gantry runs, on the gateway's own address. The keys file stays the one source of truth: every change is a change to that file, reloaded as a hand edit would be.
+The admin API does over HTTP what the console does, with the same permissions and the same audit records: keys, kill switches, provider credentials, usage, the policy and its parts, and (Gantry Enterprise) alert rules. It is on the gateway's own address. The keys file stays the one source of truth for keys, and a change to the policy is a new [policy version](/governance/policy/), checked as `gantry check` checks a file.
+
+## OpenAPI document
+
+`GET /admin/openapi.json` answers an OpenAPI 3.1 document of every admin route this gateway serves, with the permission each needs (`x-gantry-permission`) and the `action` of its record (`operationId`). It needs no key and is not recorded. The document and the routes come from one table, so a route that is not in it is refused with `unknown_route`, and CI calls every route in it to check that it is served with that action, and fails when the router serves an `/admin` path of its own outside the table.
+
+```bash
+curl -s http://127.0.0.1:8080/admin/openapi.json | jq '.paths | keys'
+```
 
 ## Authentication
 
@@ -25,7 +33,7 @@ gantry key new noa.bar --team platform --admin
 | Key whose [role](/governance/policy/#console-roles) lacks the route's permission | 403 `not_permitted` |
 | Admin key, or a key whose role has the permission | Allowed |
 
-Each route needs one permission: `see_keys` to list keys, `issue_keys`, `revoke_keys`, `kill` for kill switches, `credentials` for provider credentials, `edit_policy` for a guardrail backtest and `see_spend` for the explanation. A role kept to an organization lists, issues, revokes and explains only that organization's keys, and has no kill switches or credentials.
+Each route needs one permission, named in the table below and in the OpenAPI document: `see_keys` to list keys, `issue_keys`, `revoke_keys`, `kill` for kill switches, `credentials` for provider credentials, `edit_policy` to change the policy or back test a guardrail, `see_spend` for usage and the explanation, `see_records` to read alert rules. Routes that only read the policy (providers, models, rules, teams) need any role. A role kept to an organization lists, issues, revokes and explains only that organization's keys, sees only that organization's usage and teams, and has no kill switches, credentials or policy changes. A role kept to teams or end customers (its `teams:` and `customers:`) sees the usage and the people of those only, and changes no policy either.
 
 `DELETE /admin/keys/self` is the one exception: any valid key may revoke itself.
 
@@ -53,11 +61,24 @@ The admin API exists only when Gantry serves from a keys file. Under `gantry ser
 | `PUT` | `/admin/credentials/<name>` | `rotate_credential` | Gives a credential a new value |
 | `DELETE` | `/admin/credentials/<name>` | `remove_credential` | Removes a credential |
 | `POST` | `/admin/guardrails/test` | `test_guardrail` | Backtests a guardrail over a corpus. See [Guardrails](/governance/guardrails/) |
+| `GET`, `PUT` | `/admin/policy` | `get_policy`, `propose_policy` | The live policy as YAML; a new version. See [Policy](/governance/policy/) |
+| `GET` | `/admin/policy/versions[/<n>]` | `list_policy_versions`, `show_policy_version` | The versions, and one with its diff |
+| `POST` | `/admin/policy/versions/<n>/approve`, `/reject`, `/rollback` | `approve_policy`, `reject_policy`, `rollback_policy` | Decides a pending version, or makes an earlier one live |
+| `POST` | `/admin/policy/dry-run?hours=<n>` | `dry_run_policy` | The recent requests a draft decides differently |
+| `GET` | `/admin/usage` | `usage` | Spend, tokens and requests grouped by a dimension, day or hour ([below](#get-adminusage)) |
 | `GET` | `/admin/teams` | `list_teams` | Lists the teams, from `teams:` and from keys, with their keys |
 | `GET` | `/admin/teams/<name>` | `show_team` | One team |
 | `POST` | `/admin/teams` | `create_team` | Adds a team to `teams:`, as a new policy version |
 | `PUT` | `/admin/teams/<name>` | `update_team` | Replaces a team's owner, members, groups and metadata, as a new policy version |
 | `DELETE` | `/admin/teams/<name>` | `delete_team` | Takes a team out of `teams:`, as a new policy version |
+| `GET`, `POST` | `/admin/models` | `list_models`, `add_model` | The models served with prices and aliases; adds a model to a provider |
+| `PUT` | `/admin/models/<model>/price` | `price_model` | Sets a model's price |
+| `GET`, `PUT` | `/admin/budgets` | `list_budgets`, `put_budgets` | The policy's `limits:`; replaces them |
+| `GET` | `/admin/providers`, `/rules`, `/guardrails`, `/mcp`, `/aliases` | `list_providers`, ... | A part of the policy ([below](#the-policy-by-part)) |
+| `GET`, `PUT`, `DELETE` | `/admin/providers/<name>`, and the same for each part | `show_provider`, `put_provider`, `remove_provider`, ... | One entry: read, add or replace, remove |
+| `GET` | `/admin/alerts`, `/admin/alerts/channels`, `/admin/alerts/rules` | `list_alerts`, `list_alert_channels`, `list_alert_rules` | Enterprise: what fired, the channels (no secrets), the rules |
+| `POST`, `PUT`, `DELETE` | `/admin/alerts/rules[/<id>]` | `add_alert_rule`, `update_alert_rule`, `remove_alert_rule` | Enterprise: changes an alert rule ([below](#alert-rules)) |
+| `GET` | `/admin/openapi.json` | none | The OpenAPI 3.1 document. No key, no record |
 
 Any other method or path under `/admin` is refused with 404 `unknown_route` and recorded.
 
@@ -298,6 +319,70 @@ Reading needs `see_keys`; a role [kept to teams](/governance/teams/#roles-kept-t
 | `metadata` | map | no | Your own notes |
 
 A change answers 201 (`POST`) or 200 with the policy version it saved, `in_effect` and a message, as a policy change does. A team already listed is 409 `team_exists`; a team the policy does not list is 404 `no_such_team`.
+
+## GET /admin/usage
+
+Spend, tokens and requests of the requests that match, summed by one dimension, by day or by hour. With a store the request index sums them in SQL across every gateway (`counted_by: store`); without one, this gateway folds its own audit log (`this gateway`, at most 200,000 requests).
+
+| Parameter | Description |
+|---|---|
+| `group_by` | `day` (default), `hour`, or a dimension: `org`, `team`, `person`, `key`, `customer`, `tag`, `model`, `provider`, `agent`. A request with several tags counts under each |
+| `from`, `to` | A date (`2026-11-01`, `to` takes the whole day) or a time (`2026-11-14T09:30:00Z`), UTC |
+| `team`, `model`, ... | Any dimension as a filter, as the request log takes it, and `outcome`, `code`, `min_cost`, `max_cost`, `min_ms`, `max_ms` |
+| `format` | `csv` for CSV; or send `Accept: text/csv`. JSON otherwise |
+
+```bash
+curl "http://127.0.0.1:8080/admin/usage?group_by=team&from=2026-11-01&to=2026-11-30" -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+```
+
+```json title="200"
+{"group_by":"team","from":"2026-11-01","to":"2026-11-30","filters":{},"counted_by":"store",
+ "totals":{"requests":1840,"refused":12,"errors":3,"input_tokens":5120400,"output_tokens":822100,"total_tokens":5942500,"spend_usd":41.27,"latency_p50_ms":820,"latency_p95_ms":4100},
+ "groups":[{"team":"payments","requests":1203,"refused":4,"errors":1,"input_tokens":3900100,"output_tokens":610300,"total_tokens":4510400,"spend_usd":30.11,"latency_p50_ms":790,"latency_p95_ms":3900}]}
+```
+
+`spend_usd` is what the provider's answers cost at the policy's prices. Groups are ordered by spend, then requests; `day` and `hour` groups oldest first. The CSV has a header row, `<group>,requests,refused,errors,input_tokens,output_tokens,total_tokens,spend_usd,latency_p50_ms,latency_p95_ms`, and every group value quoted. A role kept to an organization, teams or customers sees usage within them only (within each, when it is kept to more than one kind): `org=`, `team=` or `customer=` outside them is 403 `not_permitted`, never an empty answer.
+
+## The policy by part
+
+Each part of the policy file has its routes: `providers`, `rules`, `guardrails`, `mcp` (MCP servers) and `aliases` are lists of entries named by `name`; `budgets` is the `limits:` list whole. An entry is the JSON of what the policy file holds for it, with the same fields.
+
+```bash
+curl -X PUT http://127.0.0.1:8080/admin/rules/payments -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+  -d '{"principals": {"team": "payments"}, "models": ["gpt-4o-mini"], "budget": {"usd": 200, "per": "month"}}'
+curl -X PUT http://127.0.0.1:8080/admin/budgets -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+  -d '[{"team": "payments", "budget": {"usd": 500, "per": "month"}}]'
+curl -X POST http://127.0.0.1:8080/admin/models -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+  -d '{"provider": "openai", "model": "gpt-4o-mini", "input": 0.15, "output": 0.60, "aliases": ["fast"]}'
+curl -X PUT http://127.0.0.1:8080/admin/models/gpt-4o-mini/price -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -d '{"input": 0.15, "output": 0.60}'
+```
+
+- A change is a new policy version on the live one, exactly as `PUT /admin/policy` saves it: 201 with the version, its state (`live`, or `pending` when the live version asks for approval) and `in_effect`. Every gateway on the store uses it within 2 seconds.
+- `If-Match: "<version>"` is optional: send it to be refused with 409 `version_conflict` when someone saved meanwhile. Without it the change is made on the version live now.
+- A version `gantry check` refuses is 400 `invalid_policy` with each problem; a missing entry is 404 `no_such_entry`.
+- Changes need `edit_policy` in a role not kept to an organization, teams or customers, and the policy kept in the store (`store.policy_from: store`). A policy kept in its file is read through these routes, and a change is 409 `policy_in_file`.
+- The record's `target` names the part, the entry and what was sent. The policy holds no secrets: provider keys are named by `key_env` or `credential:`, and credentials are added write-only with `POST /admin/credentials`.
+- Comments of the policy file are not kept by a change through these routes, as in the console's forms; `PUT /admin/policy` keeps them.
+
+`GET /admin/models` answers each model with its provider and price, and the aliases.
+
+## Alert rules
+
+Gantry Enterprise with the `alerts` feature adds these routes; without it each answers 403 `license_required`. Reading needs `see_records`; changing `edit_policy`. See [Alerting](/operations/alerting/) for the kinds and their parameters.
+
+```bash
+curl -X POST http://127.0.0.1:8080/admin/alerts/rules -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+  -d '{"name": "Payments spend", "kind": "budget", "params": {"scope": "team", "name": "payments", "period": "month", "usd": "500"}, "channels": [1], "cooldown_minutes": 60, "max_per_hour": 10, "enabled": true}'
+```
+
+| Field | Description |
+|---|---|
+| `name`, `kind` | Required. `kind` as the Alerting page lists it |
+| `params` | The kind's parameters as text, as the page's form takes them |
+| `channels` | Channel numbers, as `GET /admin/alerts/channels` lists them. Channels are added on the page, where a signing secret is shown once |
+| `cooldown_minutes`, `max_per_hour`, `enabled` | 0 to 10080 (60), 1 to 1000 (10), `true` |
+
+`PUT /admin/alerts/rules/<id>` takes the same body and replaces the rule; `DELETE` removes it (its past alerts stay). A wrong body is 400 `invalid_rule`, an unknown rule 404 `no_such_rule`.
 
 <Aside type="caution">
 An admin key can issue keys and stop all traffic. Keep admin keys in your secret manager, and revoke one the moment it may have leaked.

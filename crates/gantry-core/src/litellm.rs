@@ -792,6 +792,237 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
     })
 }
 
+/// A field of a key row as text: a string, or a number written out.
+fn field(row: &BTreeMap<String, Value>, key: &str) -> Option<String> {
+    match row.get(key)? {
+        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// A name Gantry accepts: letters, digits and `._-@`, anything else a dash, at most 100 characters.
+fn gantry_name(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._-@".contains(c) {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(100)
+        .collect()
+}
+
+/// The Gantry team of a LiteLLM key: its team's alias, else its team ID, else `default`.
+fn team_of(row: &BTreeMap<String, Value>) -> String {
+    gantry_name(
+        &field(row, "team_alias")
+            .or_else(|| field(row, "team_id"))
+            .unwrap_or_else(|| "default".into()),
+    )
+}
+
+/// The Gantry name of a LiteLLM key: its alias, else its user's email or ID, else its name.
+fn person_of(row: &BTreeMap<String, Value>) -> String {
+    field(row, "key_alias")
+        .or_else(|| field(row, "user_email"))
+        .or_else(|| field(row, "user_id"))
+        .or_else(|| field(row, "key_name"))
+        .unwrap_or_else(|| "unnamed".into())
+}
+
+/// A LiteLLM `budget_duration` as a Gantry period, when it has one.
+fn period_of(duration: Option<&str>) -> Option<&'static str> {
+    match duration? {
+        "1d" | "24h" => Some("day"),
+        "30d" | "1mo" | "1m" => Some("month"),
+        _ => None,
+    }
+}
+
+/// What a running LiteLLM proxy's management API answered (`GET /model/info`, the keys of `GET /key/list`, the
+/// teams of `GET /team/list`), made into what `import` reads: a config holding its model list, a key export with
+/// each key's team alias, and a `limits:` entry per team budget. Read tolerantly: a list, or one under `data`,
+/// `keys` or `teams`.
+#[derive(Debug, Default)]
+pub struct FromProxy {
+    pub config: String,
+    pub export: String,
+    pub limits: Vec<Value>,
+    pub report: Vec<String>,
+}
+
+/// The list in a management API answer: the answer itself, or the list under one of `names`.
+pub fn listed(answer: &Value, names: &[&str]) -> Vec<Value> {
+    answer
+        .as_array()
+        .or_else(|| names.iter().find_map(|n| answer[*n].as_array()))
+        .cloned()
+        .unwrap_or_default()
+}
+
+pub fn from_proxy(models: &Value, keys: &[Value], teams: &[Value]) -> FromProxy {
+    let mut report = Vec::new();
+    let model_list: Vec<Value> = listed(models, &["data"])
+        .into_iter()
+        .filter_map(|m| {
+            let mut entry = Map::new();
+            entry.insert("model_name".into(), m.get("model_name")?.clone());
+            entry.insert(
+                "litellm_params".into(),
+                m.get("litellm_params").cloned().unwrap_or(Value::Null),
+            );
+            Some(Value::Object(entry))
+        })
+        .collect();
+    let alias_of: BTreeMap<String, String> = teams
+        .iter()
+        .filter_map(|t| {
+            Some((
+                t["team_id"].as_str()?.to_string(),
+                t["team_alias"]
+                    .as_str()
+                    .unwrap_or(t["team_id"].as_str()?)
+                    .to_string(),
+            ))
+        })
+        .collect();
+    let keys: Vec<Value> = keys
+        .iter()
+        .filter(|k| k.is_object())
+        .map(|k| {
+            let mut k = k.clone();
+            if k["team_alias"].as_str().is_none_or(str::is_empty) {
+                if let Some(alias) = k["team_id"].as_str().and_then(|id| alias_of.get(id)) {
+                    k["team_alias"] = alias.clone().into();
+                }
+            }
+            k
+        })
+        .collect();
+    let mut limits = Vec::new();
+    for team in teams {
+        let row: BTreeMap<String, Value> = team
+            .as_object()
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+        let name = team_of(&row);
+        if let Some(usd) = team["max_budget"].as_f64().filter(|u| *u > 0.0) {
+            match period_of(team["budget_duration"].as_str()) {
+                Some(per) => limits.push(map(vec![
+                    ("team", name.clone().into()),
+                    ("budget", map(vec![("usd", usd.into()), ("per", per.into())])),
+                ])),
+                None => report.push(format!(
+                    "team {name}: max_budget {usd} per {} has no Gantry period (day or month); not mapped.",
+                    team["budget_duration"].as_str().unwrap_or("lifetime")
+                )),
+            }
+        }
+        if let Some(rpm) = team["rpm_limit"].as_u64() {
+            report.push(format!("team {name}: rpm_limit {rpm} is a rule's rate: {{ rpm: {rpm} }} in Gantry; add it to rule team-{name} by hand."));
+        }
+    }
+    let mut config = Map::new();
+    config.insert("model_list".into(), Value::Array(model_list));
+    let mut export = Map::new();
+    export.insert("keys".into(), Value::Array(keys));
+    FromProxy {
+        config: Value::Object(config).to_string(),
+        export: Value::Object(export).to_string(),
+        limits,
+        report,
+    }
+}
+
+/// A key to issue in place of a LiteLLM one.
+#[derive(Debug)]
+pub struct Reissue {
+    /// How LiteLLM named the key: its alias and the first characters of its token (a hash: LiteLLM keeps no keys).
+    pub was: String,
+    pub name: String,
+    pub team: String,
+    pub attributes: crate::keyfile::Attributes,
+}
+
+/// The keys of an export to issue again, each with the settings Gantry can carry: models it serves (`served`), a
+/// budget per day or month, an expiry, a tokens-per-minute limit. A key past its expiry is left out and reported.
+pub fn reissue(export: &str, served: &[String]) -> Result<(Vec<Reissue>, Vec<String>), String> {
+    let mut report = Vec::new();
+    let mut out: Vec<Reissue> = Vec::new();
+    for row in key_rows(export)? {
+        let (mut name, team) = (gantry_name(&person_of(&row)), team_of(&row));
+        if out.iter().any(|r| r.name == name) {
+            let n = (2..)
+                .find(|n| !out.iter().any(|r| r.name == format!("{name}-{n}")))
+                .unwrap_or(2);
+            name = format!("{name}-{n}");
+        }
+        let token = field(&row, "token")
+            .or_else(|| field(&row, "key"))
+            .unwrap_or_default();
+        let was = format!(
+            "{} ({})",
+            person_of(&row),
+            token
+                .get(..12)
+                .map_or_else(|| "no token".to_string(), |t| format!("token {t}..."))
+        );
+        let expires = field(&row, "expires").and_then(|e| e.get(..10).map(str::to_string));
+        if let Some(day) = &expires {
+            if crate::policy::expiry_passed(day, &crate::audit::timestamp()) {
+                report.push(format!(
+                    "key {was}: expired on {day} in LiteLLM; not reissued."
+                ));
+                continue;
+            }
+        }
+        let budget = field(&row, "max_budget")
+            .and_then(|u| u.parse::<f64>().ok())
+            .filter(|u| u.is_finite() && *u > 0.0)
+            .and_then(|usd| {
+                let per = period_of(field(&row, "budget_duration").as_deref());
+                if per.is_none() {
+                    report.push(format!("key {was}: max_budget {usd} has no Gantry period (day or month); not carried over."));
+                }
+                let per = crate::policy::Period::parse(per?, None).ok()?;
+                Some(crate::policy::Budget { usd, per })
+            });
+        let models: Vec<String> = match row.get("models") {
+            Some(Value::Array(m)) => m
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let kept: Vec<String> = models
+            .iter()
+            .filter(|m| served.contains(m))
+            .cloned()
+            .collect();
+        if kept.len() < models.len() {
+            report.push(format!(
+                "key {was}: models this proxy does not serve were left out of its list."
+            ));
+        }
+        out.push(Reissue {
+            was,
+            name,
+            team,
+            attributes: crate::keyfile::Attributes {
+                expires,
+                budget,
+                models: (!kept.is_empty()).then_some(kept),
+                tpm: field(&row, "tpm_limit").and_then(|t| t.parse().ok()),
+                ..Default::default()
+            },
+        });
+    }
+    Ok((out, report))
+}
+
 /// Rows of a key export: JSON (a list, or `{"keys": [...]}`, or `{"data": [...]}`) or CSV with a header row.
 fn key_rows(export: &str) -> Result<Vec<BTreeMap<String, serde_json::Value>>, String> {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(export) {
@@ -856,24 +1087,8 @@ fn key_rules(
     };
     let mut teams: BTreeMap<String, Option<BTreeSet<String>>> = BTreeMap::new();
     for row in &rows {
-        let team = s(row, "team_alias")
-            .or_else(|| s(row, "team_id"))
-            .unwrap_or_else(|| "default".into());
-        let team: String = team
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || "._-@".contains(c) {
-                    c
-                } else {
-                    '-'
-                }
-            })
-            .collect();
-        let person = s(row, "key_alias")
-            .or_else(|| s(row, "user_email"))
-            .or_else(|| s(row, "user_id"))
-            .or_else(|| s(row, "key_name"))
-            .unwrap_or_else(|| "unnamed".into());
+        let team = team_of(row);
+        let person = person_of(row);
         let models: Vec<String> = match row.get("models") {
             Some(serde_json::Value::Array(m)) => m
                 .iter()
