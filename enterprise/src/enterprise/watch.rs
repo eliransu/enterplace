@@ -33,6 +33,7 @@ use super::Db;
 use super::devices::{Json, bearer, fail, key_holder, not_admin};
 use super::siem::{Role, db_error, random_hex, role_of};
 use crate::license::Status;
+use gantry_server::store::tokio_postgres::Client;
 
 pub const FEATURE: &str = "watch";
 
@@ -68,6 +69,11 @@ CREATE TABLE enterprise_watch_daily (
     value double precision NOT NULL,
     PRIMARY KEY (day, person, metric, label)
 );
+";
+
+/// The organization a token's records belong to, for installs with `orgs:`. Empty for none.
+pub const MIGRATION_2: &str = "
+ALTER TABLE enterprise_watch_tokens ADD COLUMN org text NOT NULL DEFAULT '';
 ";
 
 pub const PREFIX: &str = "gantry_watch_";
@@ -106,6 +112,7 @@ struct Watch {
     db: Arc<Db>,
     keys: PathBuf,
     log: Arc<audit::AuditLog>,
+    policy: gantry_server::PolicyNow,
     pruned: Arc<Mutex<Option<Instant>>>,
 }
 
@@ -115,11 +122,13 @@ pub fn register(
     db: Arc<Db>,
     keys: PathBuf,
     log: Arc<audit::AuditLog>,
+    policy: gantry_server::PolicyNow,
 ) {
     let watch = Watch {
         db,
         keys,
         log,
+        policy,
         pruned: Arc::default(),
     };
     let receiver = Router::new()
@@ -173,6 +182,38 @@ struct Token {
     id: String,
     person: String,
     team: String,
+    org: String,
+}
+
+/// Who the install knows, to give the email Claude Code reports the name that person's gateway traffic has.
+#[derive(Default)]
+struct People {
+    /// Each key's name, and the `email` of its `metadata:` in lower case.
+    keys: Vec<(String, Option<String>)>,
+    /// Lower case: the policy's team owners and members (the people single sign-on lets in), and the members
+    /// feature's people, SCIM's among them.
+    emails: std::collections::HashSet<String>,
+}
+
+impl People {
+    /// The name `reported` goes by and whether the install knows them: the holder of a key whose metadata has that
+    /// email, else of a key named by it (as single sign-on names keys), else the email itself.
+    fn name(&self, reported: &str) -> (String, bool) {
+        let lower = reported.to_lowercase();
+        let by_email = self
+            .keys
+            .iter()
+            .find(|(_, email)| email.as_deref() == Some(lower.as_str()));
+        let by_name = || {
+            self.keys
+                .iter()
+                .find(|(name, _)| name.to_lowercase() == lower)
+        };
+        match by_email.or_else(by_name) {
+            Some((name, _)) => (name.clone(), true),
+            None => (reported.to_string(), self.emails.contains(&lower)),
+        }
+    }
 }
 
 // ---------------------------------------------------------------- reading an export
@@ -211,7 +252,7 @@ fn at(time_ns: u64) -> String {
 impl Token {
     /// The person an export is about: the token's when it is one person's, else the address Claude Code signed in
     /// with. Without either (an API key and no `OTEL_RESOURCE_ATTRIBUTES=user.email=...`) it is `unknown`.
-    fn person(&self, attrs: &Attrs) -> String {
+    fn reported(&self, attrs: &Attrs) -> String {
         if !self.person.is_empty() {
             return self.person.clone();
         }
@@ -314,6 +355,10 @@ fn record(
             .filter(|t| !t.is_empty())
             .map_or(Value::Null, |t| t.as_str().into()),
     );
+    // With `audit: { per_org: true }` the audit log sends a record that names its organization to that chain.
+    if !token.org.is_empty() {
+        r.insert("org".into(), token.org.as_str().into());
+    }
     r.insert("token".into(), token.id.as_str().into());
     r.insert("session".into(), text(attrs, "session.id", 80).into());
     r.insert(
@@ -420,7 +465,7 @@ impl Watch {
                 &format!(
                     "UPDATE enterprise_watch_tokens SET last_used = CASE WHEN expires_at < now() THEN last_used ELSE now() END \
                      WHERE token_sha256 = $1 AND revoked_at IS NULL \
-                     RETURNING id, person, team, expires_at < now(), to_char(expires_at AT TIME ZONE 'UTC', {TIME})"
+                     RETURNING id, person, team, expires_at < now(), to_char(expires_at AT TIME ZONE 'UTC', {TIME}), org"
                 ),
                 &[&sha256_hex(token.as_bytes())],
             )
@@ -442,7 +487,46 @@ impl Watch {
             id: get(0),
             person: get(1),
             team: get(2),
+            org: get(5),
         })
+    }
+
+    /// The people the install knows now: key holders, the policy's teams, and members.
+    async fn people(&self, client: &Client) -> Result<People, String> {
+        let mut people = People::default();
+        if let Ok(Some(text)) = config::read_keys(&self.keys) {
+            for entry in config::key_entries(&self.keys, &text).unwrap_or_default() {
+                let email = entry
+                    .options
+                    .metadata
+                    .get("email")
+                    .map(|e| e.to_lowercase());
+                people.keys.push((entry.name, email));
+            }
+        }
+        self.policy.with(|policy| {
+            for team in policy.teams() {
+                people
+                    .emails
+                    .extend(team.owner.iter().chain(&team.members).cloned());
+            }
+        });
+        // The members feature's table, when the install has it.
+        let has: bool = client
+            .query_one("SELECT to_regclass('enterprise_people') IS NOT NULL", &[])
+            .await
+            .and_then(|r| r.try_get(0))
+            .map_err(db_error)?;
+        if has {
+            let rows = client
+                .query("SELECT lower(email) FROM enterprise_people", &[])
+                .await
+                .map_err(db_error)?;
+            people
+                .emails
+                .extend(rows.iter().filter_map(|r| r.try_get(0).ok()));
+        }
+        Ok(people)
     }
 
     /// Stores what an export adds and writes its records, all or nothing: on an error Claude Code sends it again,
@@ -456,6 +540,16 @@ impl Watch {
         let failed = |e| unavailable(db_error(e));
         let mut added = Added::default();
         let mut client = self.db.client().await.map_err(unavailable)?;
+        let people = self.people(&client).await.map_err(unavailable)?;
+        // A token of one person names them itself. Otherwise the email Claude Code reports becomes the name the
+        // install knows that person by, so their watched and gateway traffic are one person's.
+        let named = |reported: &str| {
+            if token.person.is_empty() {
+                people.name(reported).0
+            } else {
+                reported.to_string()
+            }
+        };
         let tx = client.transaction().await.map_err(failed)?;
 
         // Events: each taken once. The key is who and when, with the sequence Claude Code numbers its events by.
@@ -467,13 +561,15 @@ impl Watch {
                 .strip_prefix("claude_code.")
                 .unwrap_or(&name)
                 .to_string();
-            let person = token.person(a);
+            // Repeats are told apart by who Claude Code said it was: a name given later does not make one new.
+            let reported = token.reported(a);
+            let person = named(&reported);
             let said = CONTENT
                 .iter()
                 .any(|c| text(a, c, 20).is_some_and(|v| v != "<REDACTED>"));
             let key = sha256_hex(
                 format!(
-                    "{person}\0{}\0{name}\0{}\0{}\0{}",
+                    "{reported}\0{}\0{name}\0{}\0{}\0{}",
                     text(a, "session.id", 80).unwrap_or_default(),
                     text(a, "event.sequence", 20).unwrap_or_default(),
                     text(a, "event.timestamp", 40).unwrap_or_default(),
@@ -482,7 +578,7 @@ impl Watch {
                 .as_bytes(),
             );
             if said || KEPT.contains(&name.as_str()) {
-                candidates.push((key, event, name, person, said));
+                candidates.push((key, event, name, person, reported, said));
             }
         }
         let keys: Vec<&str> = candidates.iter().map(|c| c.0.as_str()).collect();
@@ -496,12 +592,17 @@ impl Watch {
             .iter()
             .filter_map(|r| r.try_get(0).ok())
             .collect();
-        for (key, event, name, person, said) in &candidates {
+        for (key, event, name, person, reported, said) in &candidates {
             if !fresh.contains(key) {
                 continue;
             }
             let day = at(event.time_ns).get(..10).unwrap_or_default().to_string();
-            let record = event_record(token, event, name, person, &mut added);
+            let record = event_record(token, event, name, person, &mut added).map(|mut r| {
+                if reported != person {
+                    r.insert("email".into(), reported.as_str().into());
+                }
+                r
+            });
             if *said {
                 // Text was sent (OTEL_LOG_USER_PROMPTS or OTEL_LOG_TOOL_DETAILS is on). It stops here.
                 added.add(&day, person, &token.team, "content_dropped", "", 1.0);
@@ -521,12 +622,13 @@ impl Watch {
             let Some((metric, label)) = metric_of(point) else {
                 continue;
             };
-            let person = token.person(&point.attrs);
+            let reported = token.reported(&point.attrs);
+            let person = named(&reported);
             let attrs = serde_json::to_string(&point.attrs).unwrap_or_default();
             // A cumulative series starts again with its process, so its start is part of what it is.
             let start = if point.cumulative { point.start_ns } else { 0 };
             let key =
-                sha256_hex(format!("{person}\0{}\0{start}\0{attrs}", point.metric).as_bytes());
+                sha256_hex(format!("{reported}\0{}\0{start}\0{attrs}", point.metric).as_bytes());
             let time = i64::try_from(point.time_ns).unwrap_or(i64::MAX);
             let before: Option<f64> = if point.cumulative {
                 tx.query_opt(
@@ -558,10 +660,11 @@ impl Watch {
             let [_, totals] = by_session
                 .entry((person.clone(), session))
                 .or_insert_with(|| {
-                    [
-                        record(token, "metrics", &person, &point.attrs, point.time_ns),
-                        Map::new(),
-                    ]
+                    let mut r = record(token, "metrics", &person, &point.attrs, point.time_ns);
+                    if reported != person {
+                        r.insert("email".into(), reported.as_str().into());
+                    }
+                    [r, Map::new()]
                 });
             let name = if label.is_empty() {
                 metric.to_string()
@@ -703,6 +806,19 @@ async fn logs(Ext(w): Ext<Watch>, headers: HeaderMap, body: Bytes) -> Response {
     receive(w, headers, body, Signal::Logs).await
 }
 
+const TOO_LARGE: &str = "Send at most 4 MB per export, counted uncompressed. Lower OTEL_METRIC_EXPORT_INTERVAL and OTEL_LOGS_EXPORT_INTERVAL so each export is smaller.";
+
+/// A gzip body unpacked, reading no more than one byte past the limit: a small body that unpacks to gigabytes is
+/// refused as any export too large, not held in memory.
+fn gunzip(body: &[u8]) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    flate2::read::MultiGzDecoder::new(body)
+        .take(MAX_BODY as u64 + 1)
+        .read_to_end(&mut out)?;
+    Ok(out)
+}
+
 async fn receive(w: Watch, headers: HeaderMap, body: Bytes, signal: Signal) -> Response {
     let token = match w.token(&headers).await {
         Ok(token) => token,
@@ -720,23 +836,40 @@ async fn receive(w: Watch, headers: HeaderMap, body: Bytes, signal: Signal) -> R
         return fail(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "unsupported_protocol",
-            "Gantry receives OTLP over HTTP as protobuf or JSON, not gRPC. Set OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf in Claude Code's managed settings.",
-        );
-    }
-    if !matches!(header(header::CONTENT_ENCODING), "" | "identity") {
-        return fail(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "unsupported_encoding",
-            "Gantry receives OTLP exports uncompressed. Remove OTEL_EXPORTER_OTLP_COMPRESSION from Claude Code's settings.",
+            "Gantry receives OTLP over HTTP as protobuf or JSON. OTLP over gRPC is not supported. Set OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf in Claude Code's managed settings.",
         );
     }
     if body.len() > MAX_BODY {
-        return fail(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "too_large",
-            "Send at most 4 MB per export. Lower OTEL_METRIC_EXPORT_INTERVAL and OTEL_LOGS_EXPORT_INTERVAL so each export is smaller.",
-        );
+        return fail(StatusCode::PAYLOAD_TOO_LARGE, "too_large", TOO_LARGE);
     }
+    let body = match header(header::CONTENT_ENCODING)
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "" | "identity" => body,
+        "gzip" => match gunzip(&body) {
+            Ok(plain) if plain.len() > MAX_BODY => {
+                return fail(StatusCode::PAYLOAD_TOO_LARGE, "too_large", TOO_LARGE);
+            }
+            Ok(plain) => plain.into(),
+            Err(err) => {
+                return fail(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_export",
+                    &format!(
+                        "The export says Content-Encoding: gzip and is not readable as gzip ({err}). Send it as Claude Code does with OTEL_EXPORTER_OTLP_COMPRESSION=gzip, or leave that setting out."
+                    ),
+                );
+            }
+        },
+        _ => {
+            return fail(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_encoding",
+                "Gantry receives OTLP exports uncompressed or as gzip. Set OTEL_EXPORTER_OTLP_COMPRESSION=gzip in Claude Code's settings, or remove it.",
+            );
+        }
+    };
     let read = match (&signal, json) {
         (Signal::Metrics, true) => otlp::metrics_json(&body).map(|p| (p, Vec::new())),
         (Signal::Metrics, false) => otlp::metrics_proto(&body).map(|p| (p, Vec::new())),
@@ -783,7 +916,8 @@ async fn api_admin(console: &Console, w: &Watch, headers: &HeaderMap) -> Option<
 }
 
 impl Watch {
-    async fn tokens(&self) -> Result<Vec<Value>, String> {
+    /// The tokens `admin` may see: every one, or their organization's when their role keeps them to one.
+    async fn tokens(&self, admin: &Admin) -> Result<Vec<Value>, String> {
         let client = self.db.client().await?;
         let rows = client
             .query(
@@ -792,9 +926,9 @@ impl Watch {
                      coalesce(to_char(last_used AT TIME ZONE 'UTC', {TIME}), ''), \
                      CASE WHEN revoked_at IS NOT NULL THEN 'revoked' WHEN expires_at < now() THEN 'expired' \
                      WHEN last_used IS NULL THEN 'waiting for the first export' ELSE 'receiving' END \
-                     FROM enterprise_watch_tokens ORDER BY created_at"
+                     , org FROM enterprise_watch_tokens WHERE $1 = '' OR org = $1 ORDER BY created_at"
                 ),
-                &[],
+                &[&admin.org.as_deref().unwrap_or("")],
             )
             .await
             .map_err(db_error)?;
@@ -802,7 +936,7 @@ impl Watch {
             .iter()
             .map(|r| {
                 let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
-                json!({ "id": get(0), "label": get(1), "person": get(2), "team": get(3), "created_by": get(4),
+                json!({ "id": get(0), "label": get(1), "person": get(2), "team": get(3), "org": get(9), "created_by": get(4),
                         "created_at": get(5), "expires_at": get(6), "last_export": get(7), "status": get(8) })
             })
             .collect())
@@ -818,6 +952,12 @@ impl Watch {
         let action = "watch_token_created";
         let field = |name: &str| body[name].as_str().unwrap_or("").trim().to_string();
         let (label, team, person) = (field("label"), field("team"), field("person"));
+        // Someone kept to one organization creates tokens for it alone.
+        let org = Some(field("org"))
+            .filter(|o| !o.is_empty())
+            .or_else(|| admin.org.clone())
+            .unwrap_or_default();
+        let orgs = self.policy.with(|p| p.orgs().to_vec()).unwrap_or_default();
         let days = body["days"]
             .as_i64()
             .map_or(DEFAULT_DAYS, |n| i32::try_from(n).unwrap_or(i32::MAX));
@@ -843,6 +983,28 @@ impl Watch {
             ))
         } else if person.chars().count() > 200 || person.contains(char::is_whitespace) {
             Some((StatusCode::BAD_REQUEST, "invalid_request", "A person is a name or an email address of at most 200 characters without spaces, as their Gantry key names them.".to_string()))
+        } else if admin.org.as_ref().is_some_and(|o| *o != org) {
+            Some((
+                StatusCode::FORBIDDEN,
+                "other_org",
+                format!(
+                    "Your role is kept to organization {}. Leave org out, or ask an owner for a token of {org:?}.",
+                    admin.org.as_deref().unwrap_or_default()
+                ),
+            ))
+        } else if !org.is_empty() && !orgs.contains(&org) {
+            Some((
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                format!(
+                    "{org:?} is not an organization of this gateway. Leave org out, or use one the policy lists under orgs: {}.",
+                    if orgs.is_empty() {
+                        "none".to_string()
+                    } else {
+                        orgs.join(", ")
+                    }
+                ),
+            ))
         } else if !(1..=MAX_DAYS).contains(&days) {
             Some((
                 StatusCode::BAD_REQUEST,
@@ -869,7 +1031,7 @@ impl Watch {
             .audit(
                 Some(admin),
                 action,
-                json!({ "id": id, "label": label, "team": team, "person": person, "days": days }),
+                json!({ "id": id, "label": label, "team": team, "person": person, "org": org, "days": days }),
                 None,
             )
             .await
@@ -878,10 +1040,10 @@ impl Watch {
         let row = client
             .query_one(
                 &format!(
-                    "INSERT INTO enterprise_watch_tokens (id, label, person, team, token_sha256, created_by, expires_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(days => $7)) RETURNING to_char(expires_at AT TIME ZONE 'UTC', {TIME})"
+                    "INSERT INTO enterprise_watch_tokens (id, label, person, team, token_sha256, created_by, expires_at, org) \
+                     VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(days => $7), $8) RETURNING to_char(expires_at AT TIME ZONE 'UTC', {TIME})"
                 ),
-                &[&id, &label, &person, &team, &sha256_hex(token.as_bytes()), &admin.name, &days],
+                &[&id, &label, &person, &team, &sha256_hex(token.as_bytes()), &admin.name, &days, &org],
             )
             .await
             .map_err(|e| unavailable(db_error(e)))?;
@@ -907,7 +1069,10 @@ impl Watch {
             .map_err(|e| unavailable(e.to_string()))?;
         let client = self.db.client().await.map_err(unavailable)?;
         let changed = client
-            .execute("UPDATE enterprise_watch_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL", &[&id])
+            .execute(
+                "UPDATE enterprise_watch_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL AND ($2 = '' OR org = $2)",
+                &[&id, &admin.org.as_deref().unwrap_or("")],
+            )
             .await
             .map_err(|e| unavailable(db_error(e)))?;
         Ok(changed > 0)
@@ -917,6 +1082,7 @@ impl Watch {
     /// where the five steps stand for watched people.
     async fn summary(&self, days: i32) -> Result<Value, String> {
         let client = self.db.client().await?;
+        let known = self.people(&client).await?;
         let rows = client
             .query(
                 "SELECT person, max(team), metric, label, sum(value)::float8, to_char(max(day), 'YYYY-MM-DD') FROM enterprise_watch_daily \
@@ -958,10 +1124,17 @@ impl Watch {
         } else {
             "on"
         };
+        // Someone no key, team or member list has: their email stays their name, and they are listed.
+        let strangers: Vec<&String> = people
+            .keys()
+            .filter(|person| !known.name(person).1)
+            .collect();
         Ok(json!({
             "days": days,
             "totals": totals,
-            "people": people.into_iter().map(|(person, (team, last, sums))| json!({ "person": person, "team": team, "last_day": last, "metrics": sums })).collect::<Vec<_>>(),
+            "not_known_members": strangers,
+            "not_known_members_note": "Not a known member: no key, team or member has this email, so this person's watched use joins no gateway traffic. Give their key `metadata: { email: ... }`, or add them to a team or to Members.",
+            "people": people.iter().map(|(person, (team, last, sums))| json!({ "person": person, "team": team, "known": !strangers.contains(&person), "last_day": last, "metrics": sums })).collect::<Vec<_>>(),
             "models": list("model", models),
             "tools": list("tool", tools),
             "note": "Costs are Claude Code's own estimates at list price. Seat usage within a Claude plan is not billed per dollar.",
@@ -981,10 +1154,10 @@ async fn list_tokens(
     Ext(w): Ext<Watch>,
     headers: HeaderMap,
 ) -> Response {
-    if api_admin(&console, &w, &headers).await.is_none() {
+    let Some(admin) = api_admin(&console, &w, &headers).await else {
         return not_admin();
-    }
-    match w.tokens().await {
+    };
+    match w.tokens(&admin).await {
         Ok(tokens) => Json(json!({ "tokens": tokens })).into_response(),
         Err(e) => fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     }
@@ -1079,13 +1252,18 @@ pub fn settings(gateway: &str, token: &str) -> Value {
     })
 }
 
-pub const SETUP_USAGE: &str = "usage: gantry watch setup --gateway <url> (--team <team> | --person <name>) [--label <text>] [--days <n>] [--token <watch token>]
+pub const SETUP_USAGE: &str = "usage: gantry watch setup --gateway <url> (--team <team> | --person <name>) [--org <org>] [--label <text>] [--days <n>] [--token <watch token>]
       Print the Claude Code managed settings that send its telemetry to the gateway's watch receiver (license feature
       watch), for a team on Claude Team or Enterprise seats or for one developer. Creates a watch token through the
       gateway's admin API with the admin key in GANTRY_ADMIN_KEY (90 days unless --days, 1 to 365), or uses --token.";
 
 /// `gantry watch setup`: what it prints.
 pub fn setup(args: &[String]) -> Result<String, String> {
+    setup_with(args, std::env::var("GANTRY_ADMIN_KEY").ok())
+}
+
+/// `setup`, with the admin key the environment gave.
+fn setup_with(args: &[String], admin_key: Option<String>) -> Result<String, String> {
     let flag = |name: &str| {
         args.iter()
             .position(|a| a == name)
@@ -1118,10 +1296,10 @@ pub fn setup(args: &[String]) -> Result<String, String> {
             ));
         }
         None => {
-            let key = std::env::var("GANTRY_ADMIN_KEY").ok().filter(|k| !k.trim().is_empty()).ok_or(
+            let key = admin_key.filter(|k| !k.trim().is_empty()).ok_or(
                 "no admin key: set GANTRY_ADMIN_KEY to an admin key of the gateway so a watch token can be created, or pass one you have with --token.",
             )?;
-            let mut body = json!({ "label": flag("--label").unwrap_or_else(|| format!("watch-{}", team.as_deref().or(person.as_deref()).unwrap_or_default())), "team": team, "person": person });
+            let mut body = json!({ "label": flag("--label").unwrap_or_else(|| format!("watch-{}", team.as_deref().or(person.as_deref()).unwrap_or_default())), "team": team, "person": person, "org": flag("--org") });
             if let Some(days) = flag("--days") {
                 body["days"] = days
                     .parse::<i64>()

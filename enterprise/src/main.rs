@@ -32,7 +32,7 @@ const USAGE: &str = "usage:
       (license feature devices). The enrolment token goes in GANTRY_DEVICE_TOKEN, or in the file
       GANTRY_DEVICE_TOKEN_FILE names (default /Library/Application Support/Gantry/device-token on macOS, which the MDM
       profile installs; /etc/gantry/device-token on Linux; C:\\ProgramData\\Gantry\\device-token on Windows).
-  gantry watch setup --gateway <url> (--team <team> | --person <name>) [--label <text>] [--days <n>] [--token <token>]
+  gantry watch setup --gateway <url> (--team <team> | --person <name>) [--org <org>] [--label <text>] [--days <n>] [--token <token>]
       Print the Claude Code managed settings that send its telemetry to the gateway's watch receiver (license feature
       watch): for people on Claude Team or Enterprise seats, whose requests cannot go through a gateway. Creates a
       watch token through the admin API with the admin key in GANTRY_ADMIN_KEY, or uses the one --token gives.

@@ -53,7 +53,7 @@ People on Claude subscriptions cannot be routed through the gateway; watch mode 
 Claude Code's own telemetry instead. Docs: https://gantry-docs.eliran.me/integrations/claude-team/
 
 1. `GANTRY_ADMIN_KEY=gantry_... gantry watch setup --gateway https://gantry.example.com --team engineering` creates
-   a watch token and prints the settings. `claude-code-watch.managed-settings.json` here is the same block with
+   a watch token and prints the settings (`--org <org>` for one organization's token). `claude-code-watch.managed-settings.json` here is the same block with
    placeholders.
 2. Claude Team and Enterprise: paste the block at claude.ai, Organization settings, Claude Code, Managed settings.
    Nothing is deployed to machines.

@@ -2263,7 +2263,9 @@ impl Engine {
             .query_one(
                 "SELECT coalesce(sum(CASE WHEN j->>'event' = 'usage' THEN (j->>'charged_usd')::float8 END), 0)::float8, \
                  count(*) FILTER (WHERE j->>'event' IS NULL), \
-                 count(*) FILTER (WHERE j->>'event' IS NULL AND j->>'verdict' IS DISTINCT FROM 'allow') \
+                 count(*) FILTER (WHERE j->>'event' IS NULL AND j->>'verdict' IS DISTINCT FROM 'allow'), \
+                 coalesce(sum(CASE WHEN j->>'event' = 'watch' AND j->>'kind' = 'api_request' THEN (j->>'cost_usd')::float8 END), 0)::float8, \
+                 count(*) FILTER (WHERE j->>'event' = 'watch' AND j->>'kind' = 'api_request') \
                  FROM (SELECT line::jsonb AS j FROM enterprise_audit WHERE time > now() - interval '24 hours') a",
                 &[],
             )
@@ -2272,6 +2274,10 @@ impl Engine {
         let spent: f64 = totals.try_get(0).map_err(db_error)?;
         let requests: i64 = totals.try_get(1).map_err(db_error)?;
         let refused: i64 = totals.try_get(2).map_err(db_error)?;
+        // What Claude Code reported for people on Claude seats (watch records): part of the spend, as `charged`
+        // counts it for the rules, and said apart because it is an estimate that never passed the gateway.
+        let watched: f64 = totals.try_get(3).map_err(db_error)?;
+        let watched_requests: i64 = totals.try_get(4).map_err(db_error)?;
         let codes = client
             .query(
                 "SELECT j->>'code', count(*) FROM (SELECT line::jsonb AS j FROM enterprise_audit WHERE time > now() - interval '24 hours') a \
@@ -2283,9 +2289,11 @@ impl Engine {
             .map_err(db_error)?;
         let users = client
             .query(
-                "SELECT coalesce(j->>'person', 'unknown'), sum((j->>'charged_usd')::float8)::float8 AS usd \
-                 FROM (SELECT line::jsonb AS j FROM enterprise_audit WHERE time > now() - interval '24 hours') a \
-                 WHERE j->>'event' = 'usage' AND (j->>'charged_usd')::float8 > 0 GROUP BY 1 ORDER BY usd DESC, 1 LIMIT 5",
+                "SELECT coalesce(j->>'person', 'unknown'), sum(usd)::float8 AS usd FROM (\
+                 SELECT j, CASE WHEN j->>'event' = 'usage' THEN (j->>'charged_usd')::float8 \
+                 WHEN j->>'event' = 'watch' AND j->>'kind' = 'api_request' THEN (j->>'cost_usd')::float8 END AS usd \
+                 FROM (SELECT line::jsonb AS j FROM enterprise_audit WHERE time > now() - interval '24 hours') a) b \
+                 WHERE usd > 0 GROUP BY 1 ORDER BY usd DESC, 1 LIMIT 5",
                 &[],
             )
             .await
@@ -2316,8 +2324,16 @@ impl Engine {
                 out.join(", ")
             })
         };
+        let watched_line = if watched_requests > 0 {
+            format!(
+                "\nWatched: ${watched:.2} of the spend is what Claude Code reported for {watched_requests} requests on Claude seats, an estimate at list price that did not pass through Gantry."
+            )
+        } else {
+            String::new()
+        };
         Ok(format!(
-            "The last 24 hours: ${spent:.2} spent over {requests} requests; {refused} refused (most: {}). Top users by spend: {}. Alerts fired: {}.",
+            "The last 24 hours: ${:.2} spent over {requests} requests; {refused} refused (most: {}). Top users by spend: {}. Alerts fired: {}.{watched_line}",
+            spent + watched,
             list(&codes, false)?,
             list(&users, true)?,
             list(&alerts, false)?

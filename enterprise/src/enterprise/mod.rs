@@ -41,7 +41,7 @@ const DEVICES: &[&str] = &[
     devices::MIGRATION_3,
 ];
 /// Watch tokens, what tells a repeated export apart, and the daily sums of what Claude Code reported.
-const WATCH: &[&str] = &[watch::MIGRATION];
+const WATCH: &[&str] = &[watch::MIGRATION, watch::MIGRATION_2];
 /// Alert channels, rules and what fired. Runs after `SIEM`: alerting reads the records it ingests.
 const ALERTS: &[&str] = &[alerts::MIGRATION, alerts::DAILY];
 
@@ -204,6 +204,7 @@ pub fn extend_with(
             db.clone(),
             host.keys.to_path_buf(),
             host.audit.clone(),
+            host.policy_now.clone(),
         );
     }
     if devices_on {

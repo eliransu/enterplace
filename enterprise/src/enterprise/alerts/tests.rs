@@ -900,6 +900,128 @@ async fn watched_spend_sets_off_budget_and_unusual_spend_rules() -> Result<(), E
     Ok(())
 }
 
+/// The whole way: Claude Code's export arrives at the OTLP receiver with a watch token, becomes a watch record,
+/// is read by the alert engine, and a budget rule fires on it. The daily digest counts it in the spend and says
+/// how much of the spend was watched on a line of its own.
+#[tokio::test]
+async fn an_export_received_over_otlp_sets_off_a_budget_rule_and_is_in_the_digest()
+-> Result<(), Error> {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let Some(url) = database("alerts_otlp").await? else {
+        return Ok(());
+    };
+    let sink = Sink::start().await?;
+    let (gw, ex) = quiet("alerts_otlp", &url, &["alerts", "watch"])?;
+    let mut owner = Browser::admin(&gw.app).await?;
+    webhook(&mut owner, &gw, &sink).await?;
+    let added = add_rule(
+        &mut owner,
+        &gw,
+        &[
+            ("kind", "budget"),
+            ("name_rule", "Seat spend"),
+            ("scope", "person"),
+            ("name", "maya@acme.co"),
+            ("period", "month"),
+            ("usd", "3"),
+        ],
+    )
+    .await?;
+    assert!(added.contains("Added rule"), "{added}");
+    let (status, body, _) = admin_call(
+        &gw,
+        "POST",
+        "/admin/alerts/rules",
+        json!({"name": "Digest", "kind": "daily_digest", "params": {"at": "00:00"}}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, made, _) = admin_call(
+        &gw,
+        "POST",
+        "/console/watch/tokens",
+        json!({ "label": "claude-team", "team": "payments" }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let token = made["token"].as_str().ok_or("no token")?;
+    let attr = |key: &str, value: Value| json!({ "key": key, "value": value });
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let request = |sequence: u64, cost: f64| {
+        json!({ "timeUnixNano": now.to_string(), "body": { "stringValue": "claude_code.api_request" }, "attributes": [
+            attr("event.name", json!({ "stringValue": "api_request" })),
+            attr("event.sequence", json!({ "intValue": sequence })),
+            attr("model", json!({ "stringValue": "claude-sonnet-5-5" })),
+            attr("cost_usd", json!({ "doubleValue": cost })),
+        ] })
+    };
+    let export = json!({ "resourceLogs": [{
+        "resource": { "attributes": [
+            attr("user.email", json!({ "stringValue": "maya@acme.co" })),
+            attr("session.id", json!({ "stringValue": "s-1" })),
+        ] },
+        "scopeLogs": [{ "logRecords": [request(1, 2.0), request(2, 1.5)] }],
+    }] });
+    let sent = gw
+        .app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/otlp/v1/logs")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(export.to_string()))?,
+        )
+        .await?;
+    let status = sent.status();
+    let answer = sent.into_body().collect().await?.to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&answer)
+    );
+    // Gateway spend beside it: alice's $1.00.
+    usage(&gw, "u1")?;
+
+    run(&ex).await?;
+    let hits = sink.deliveries();
+    let budget = hits
+        .iter()
+        .find(|h| h.json()["rule"] == "Seat spend")
+        .ok_or("no budget alert")?
+        .json();
+    assert!(budget.to_string().contains("3.50"), "{budget}");
+    assert_eq!(
+        budget["records"].as_array().map(Vec::len),
+        Some(2),
+        "the two watch records behind it: {budget}"
+    );
+
+    let engine = ex.alerts.get().ok_or("no alert engine")?;
+    engine.checks().await?;
+    let fired = rows(
+        &url,
+        "SELECT summary FROM enterprise_alerts WHERE kind = 'daily_digest'",
+    )
+    .await?;
+    assert_eq!(fired.len(), 1);
+    let text: String = fired[0].try_get(0)?;
+    let (first, watched) = text.split_once('\n').ok_or_else(|| text.clone())?;
+    assert!(first.contains("$4.50 spent"), "{text}");
+    assert!(first.contains("maya@acme.co $3.50, alice $1.00"), "{text}");
+    assert!(
+        watched.starts_with("Watched: $3.50 of the spend") && watched.contains("2 requests"),
+        "{text}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_percent_rule_fires_at_its_share_of_each_policy_budget_for_its_period()
 -> Result<(), Error> {

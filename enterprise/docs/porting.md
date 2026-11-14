@@ -101,7 +101,9 @@ GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55433/postgres cargo
   evaluated on the exporter's tick, budget rules by amount or by percent of each policy budget, per organization.
 
 - Watch mode (`watch.rs`, `watch/otlp.rs`, feature `watch`): the OTLP receiver for Claude Code's own telemetry at
-  `/otlp/v1/metrics` and `/otlp/v1/logs`, as protobuf or JSON, with watch tokens per team or person. Unlike the
+  `/otlp/v1/metrics` and `/otlp/v1/logs`, as protobuf or JSON, plain or gzip (`flate2`, the one decompressor in the build), with watch tokens per team or
+  person, of an organization or of the install. A team token's email becomes the name the install knows the person
+  by (`People`: keys, the policy's `teams:`, `enterprise_people`). Unlike the
   Cloudflare app it writes each kept event to the audit chain (`event: watch`), which is how the request index,
   coverage, alerting and audit export see it: the open crates read that record type (`insights::fact`,
   `coverage::traffic`) and know nothing of the license. No console page until one is designed: an API at

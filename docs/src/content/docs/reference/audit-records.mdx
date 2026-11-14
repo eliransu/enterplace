@@ -318,8 +318,10 @@ Gantry Enterprise, [watch mode](/integrations/claude-team/). Written for what a 
 | `kind` | string | `api_request`, `api_error`, `api_refusal`, `tool_decision`, `tool_result`, `user_prompt` or `metrics` |
 | `id` | string | An ID of the record's own, in the decision ID layout |
 | `time`, `at` | string | When Gantry received it, and when Claude Code says it happened |
-| `person` | string | The watch token's person, or the email address Claude Code signed in with; `unknown` without either |
+| `person` | string | The watch token's person. On a team token, the name of the key holder with the email address Claude Code signed in with, else that address ([one name per person](/integrations/claude-team/#one-name-per-person)); `unknown` without either |
+| `email` | string | The address Claude Code reported, when `person` is a key holder's name instead. Absent otherwise |
 | `team` | string or null | The watch token's team |
+| `org` | string | The watch token's organization, which with `audit: { per_org: true }` is the chain the record is in. Absent on a token without one |
 | `token` | string | The watch token's ID, never the token |
 | `session` | string or null | Claude Code's session ID |
 | `user_agent` | string | `claude-code/<version>` |

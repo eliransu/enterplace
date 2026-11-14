@@ -25,6 +25,16 @@ one repository. How a release is made: RELEASING.md.
 - `GET /console/watch/summary.json`: sums per person, model and tool. Tables in namespace `enterprise.watch`
   (`enterprise_watch_tokens`, `enterprise_watch_seen`, `enterprise_watch_series`, `enterprise_watch_daily`), which
   follow the retention period and legal hold.
+- The receiver takes gzip exports (`Content-Encoding: gzip`, Claude Code's `OTEL_EXPORTER_OTLP_COMPRESSION=gzip`).
+  The 4 MB limit is counted on the unpacked export, and unpacking stops there. Another compression is refused with
+  `unsupported_encoding`. OTLP over gRPC and traces are not supported.
+- On a team token, the email Claude Code reports becomes the name that person's gateway traffic has: the holder of
+  a key whose `metadata` has that `email`, or of a key named by it. An email of the policy's `teams:` or of Members
+  (SCIM's people among them) stays the email. Anyone else is listed in `summary.json` under `not_known_members`.
+  A record whose `person` is a key holder's name keeps the reported address in `email`.
+- Watch tokens can belong to an organization (`"org"`, `gantry watch setup --org`): their records carry `org`, and
+  with `audit: { per_org: true }` go to that organization's chain. Tables: `enterprise_watch_tokens.org`.
+- The daily digest's spend and top users include watched cost, and a `Watched:` line says how much of it was.
 - The hosted app's watch page is not carried over: a console page waits for a design.
 
 ### Fixed: a parallel place comes back with the answer

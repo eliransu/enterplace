@@ -812,7 +812,8 @@ async fn a_missing_wrong_revoked_or_expired_token_and_a_bad_export_are_refused()
         "{}",
         large.text
     );
-    let gzip = gw
+    // gzip is taken (a_gzip_export_is_read_and_one_that_unpacks_too_large_is_refused); another encoding is not.
+    let brotli = gw
         .app
         .clone()
         .oneshot(
@@ -821,11 +822,11 @@ async fn a_missing_wrong_revoked_or_expired_token_and_a_bad_export_are_refused()
                 .uri("/otlp/v1/logs")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .header(header::CONTENT_TYPE, PROTOBUF)
-                .header(header::CONTENT_ENCODING, "gzip")
+                .header(header::CONTENT_ENCODING, "br")
                 .body(Body::from(LOGS_PB.to_vec()))?,
         )
         .await?;
-    assert_eq!(gzip.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(brotli.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert!(watch_records(&gw)?.is_empty(), "nothing refused was kept");
 
     // Revoked: refused from then on. Revoking it again, or an unknown one, is not found.
@@ -1261,5 +1262,607 @@ fn setup_prints_the_managed_settings_anthropic_documents() -> Result<(), Error> 
     ] {
         assert!(super::setup(&bad).is_err(), "{bad:?}");
     }
+    Ok(())
+}
+
+/// A call with headers of its own: an encoding, or a browser's cookie and origin.
+async fn call(
+    app: &Router,
+    method: &str,
+    path: &str,
+    headers: &[(header::HeaderName, &str)],
+    body: Vec<u8>,
+) -> Result<Reply, Error> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::HOST, HOST);
+    for (name, value) in headers {
+        request = request.header(name, *value);
+    }
+    let response = app.clone().oneshot(request.body(Body::from(body))?).await?;
+    let status = response.status();
+    let bytes = response.into_body().collect().await?.to_bytes();
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(Reply {
+        status,
+        body: serde_json::from_str(&text).unwrap_or(Value::Null),
+        text,
+    })
+}
+
+fn gzip(plain: &[u8]) -> Result<Vec<u8>, Error> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(plain)?;
+    Ok(encoder.finish()?)
+}
+
+/// One model request Claude Code reports, costing `cost`.
+fn request_event(sequence: u64, cost: f64) -> Value {
+    event(
+        "api_request",
+        sequence,
+        now_ns(),
+        vec![
+            kv("model", json!("claude-sonnet-5-5")),
+            kv("input_tokens", json!(100)),
+            kv("output_tokens", json!(10)),
+            kv("cost_usd", json!(cost)),
+        ],
+    )
+}
+
+#[tokio::test]
+async fn a_gzip_export_is_read_and_one_that_unpacks_too_large_is_refused() -> Result<(), Error> {
+    let Some(url) = database("watch_gzip").await? else {
+        return Ok(());
+    };
+    let gw = gateway("watch_gzip", &url, &licensed(&["watch"]))?;
+    let (_, token) = new_token(&gw.app, json!({ "label": "team", "team": "payments" })).await?;
+    let bearer = format!("Bearer {token}");
+    let post = |path: &'static str, kind: &'static str, body: Vec<u8>| {
+        let (app, bearer) = (gw.app.clone(), bearer.clone());
+        async move {
+            let headers = [
+                (header::AUTHORIZATION, bearer.as_str()),
+                (header::CONTENT_TYPE, kind),
+                (header::CONTENT_ENCODING, "gzip"),
+            ];
+            call(&app, "POST", path, &headers, body).await
+        }
+    };
+
+    // As Claude Code sends with OTEL_EXPORTER_OTLP_COMPRESSION=gzip: both signals, protobuf and JSON.
+    let sent = post("/otlp/v1/metrics", PROTOBUF, gzip(METRICS_PB)?).await?;
+    assert_eq!((sent.status, sent.text.as_str()), (StatusCode::OK, ""));
+    let sent = post("/otlp/v1/logs", JSON, gzip(LOGS_JSON)?).await?;
+    assert_eq!(sent.status, StatusCode::OK, "{}", sent.text);
+    let seen = summary(&gw.app).await?;
+    assert_eq!(seen.body["totals"]["tokens_input"], json!(1200.0));
+    assert_eq!(seen.body["totals"]["api_requests"], json!(1.0));
+    let kept = watch_records(&gw)?.len();
+    assert!(kept > 0);
+
+    // A few kilobytes that unpack past the limit: refused as too large, read no further than the limit.
+    let bomb = gzip(&vec![b' '; super::MAX_BODY + 1])?;
+    assert!(bomb.len() < 64 * 1024, "{}", bomb.len());
+    let refused = post("/otlp/v1/logs", JSON, bomb).await?;
+    assert_eq!(
+        (refused.status, refused.body["error"]["code"].as_str()),
+        (StatusCode::PAYLOAD_TOO_LARGE, Some("too_large")),
+        "{}",
+        refused.text
+    );
+    assert!(refused.text.contains("uncompressed"), "{}", refused.text);
+    // Exactly the limit is taken as far as the reader: it is not an export, so it is refused as one.
+    let full = post("/otlp/v1/logs", JSON, gzip(&vec![b' '; super::MAX_BODY])?).await?;
+    assert_eq!(full.status, StatusCode::BAD_REQUEST, "{}", full.text);
+
+    // Not gzip, and gzip cut short: refused with the fix, nothing kept.
+    let cut = gzip(LOGS_PB)?;
+    for body in [LOGS_PB.to_vec(), cut[..cut.len() - 9].to_vec()] {
+        let refused = post("/otlp/v1/logs", PROTOBUF, body).await?;
+        assert_eq!(
+            (refused.status, refused.body["error"]["code"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("invalid_export")),
+            "{}",
+            refused.text
+        );
+        assert!(
+            refused.text.contains("OTEL_EXPORTER_OTLP_COMPRESSION"),
+            "{}",
+            refused.text
+        );
+    }
+    assert_eq!(watch_records(&gw)?.len(), kept, "nothing refused was kept");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_email_becomes_the_name_the_install_knows_and_a_stranger_is_listed() -> Result<(), Error>
+{
+    let Some(url) = database("watch_names").await? else {
+        return Ok(());
+    };
+    let policy = format!(
+        "{POLICY}teams:\n  - name: payments\n    owner: lead@acme.co\n    members: [omer@acme.co]\n"
+    );
+    let gw = gateway_policy(
+        "watch_names",
+        &url,
+        &licensed(&["watch", "members"]),
+        &[],
+        &policy,
+    )?;
+    // maya's key says her email; dana's key is named by hers, as single sign-on names keys.
+    let mut attributes = gantry_core::keyfile::Attributes::default();
+    attributes
+        .options
+        .metadata
+        .insert("email".into(), "Maya.Cohen@acme.co".into());
+    gantry_core::keyfile::issue_with("maya", "payments", &attributes, &gw.keys)?;
+    gantry_core::keyfile::issue("Dana@acme.co", "payments", &gw.keys)?;
+    gw.governed
+        .reloader
+        .check(gantry_server::Trigger::FileChange);
+    // sam is a member (as an invite or SCIM makes one) without a key.
+    let mut owner = Browser::admin(&gw.app).await?;
+    let invited = owner
+        .go(
+            &gw.app,
+            "POST",
+            "/console/members/invite",
+            &[
+                ("email", "sam@acme.co"),
+                ("role", "viewer"),
+                ("team", "ops"),
+            ],
+        )
+        .await?;
+    let invite: String = invited
+        .text
+        .split("/console/invite/")
+        .nth(1)
+        .ok_or("no invite")?
+        .chars()
+        .take_while(char::is_ascii_hexdigit)
+        .collect();
+    Browser::default()
+        .go(
+            &gw.app,
+            "POST",
+            &format!("/console/invite/{invite}"),
+            &[("name", "Sam"), ("password", "second-password-123")],
+        )
+        .await?;
+
+    let (_, token) = new_token(&gw.app, json!({ "label": "team", "team": "payments" })).await?;
+    let mut last = Vec::new();
+    for (i, email) in [
+        "maya.cohen@acme.co",
+        "dana@acme.co",
+        "omer@acme.co",
+        "lead@acme.co",
+        "sam@acme.co",
+        "stranger@else.co",
+    ]
+    .iter()
+    .enumerate()
+    {
+        last = logs_body(email, &format!("s-{i}"), vec![request_event(1, 0.5)]);
+        let sent = send(&gw.app, "POST", "/otlp/v1/logs", &token, JSON, last.clone()).await?;
+        assert_eq!(sent.status, StatusCode::OK, "{}", sent.text);
+    }
+    let seen = summary(&gw.app).await?;
+    let people: Vec<(&str, bool)> = seen.body["people"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| (p["person"].as_str().unwrap_or_default(), p["known"] == true))
+        .collect();
+    assert_eq!(
+        people,
+        [
+            ("Dana@acme.co", true),
+            ("lead@acme.co", true),
+            ("maya", true),
+            ("omer@acme.co", true),
+            ("sam@acme.co", true),
+            ("stranger@else.co", false),
+        ],
+        "{}",
+        seen.text
+    );
+    assert_eq!(
+        seen.body["not_known_members"],
+        json!(["stranger@else.co"]),
+        "{}",
+        seen.text
+    );
+    assert!(
+        seen.body["not_known_members_note"]
+            .as_str()
+            .is_some_and(|n| n.starts_with("Not a known member")),
+        "{}",
+        seen.text
+    );
+
+    // The record has the name gateway traffic has, and the email Claude Code reported beside it.
+    let records = watch_records(&gw)?;
+    let of = |session: &str| records.iter().find(|r| r["session"] == session);
+    let maya = of("s-0").ok_or("no record of maya")?;
+    assert_eq!(
+        (&maya["person"], &maya["email"]),
+        (&json!("maya"), &json!("maya.cohen@acme.co"))
+    );
+    let stranger = of("s-5").ok_or("no record of the stranger")?;
+    assert_eq!(stranger["person"], "stranger@else.co");
+    assert!(stranger.get("email").is_none(), "{stranger}");
+
+    // A key given after an export names the person from then on, and does not make a repeat of that export new.
+    let mut attributes = gantry_core::keyfile::Attributes::default();
+    attributes
+        .options
+        .metadata
+        .insert("email".into(), "stranger@else.co".into());
+    gantry_core::keyfile::issue_with("pat", "payments", &attributes, &gw.keys)?;
+    gw.governed
+        .reloader
+        .check(gantry_server::Trigger::FileChange);
+    send(&gw.app, "POST", "/otlp/v1/logs", &token, JSON, last).await?;
+    let again = summary(&gw.app).await?;
+    assert_eq!(again.body["totals"]["api_requests"], json!(6.0));
+    assert_eq!(again.body["not_known_members"], json!([]));
+
+    // One person's token names them whatever Claude Code says: no lookup.
+    let (_, own) = new_token(&gw.app, json!({ "label": "one", "person": "noa" })).await?;
+    let logs = logs_body("maya.cohen@acme.co", "s-9", vec![request_event(1, 0.5)]);
+    send(&gw.app, "POST", "/otlp/v1/logs", &own, JSON, logs).await?;
+    let noa = watch_records(&gw)?
+        .into_iter()
+        .find(|r| r["session"] == "s-9")
+        .ok_or("no record of noa")?;
+    assert_eq!(noa["person"], "noa");
+    Ok(())
+}
+
+#[tokio::test]
+async fn with_a_chain_per_organization_watch_records_go_to_the_tokens_organization()
+-> Result<(), Error> {
+    let Some(url) = database("watch_orgs").await? else {
+        return Ok(());
+    };
+    let policy = format!("{POLICY}orgs: [acme, globex]\naudit: {{ per_org: true }}\n");
+    let gw = gateway_policy("watch_orgs", &url, &licensed(&["watch"]), &[], &policy)?;
+
+    let refused = admin(
+        &gw.app,
+        "POST",
+        "/console/watch/tokens",
+        json!({ "label": "x", "org": "initech" }),
+    )
+    .await?;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{}", refused.text);
+    assert!(refused.text.contains("acme, globex"), "{}", refused.text);
+
+    let (id, acme) = new_token(
+        &gw.app,
+        json!({ "label": "acme", "team": "payments", "org": "acme" }),
+    )
+    .await?;
+    let (_, install) = new_token(&gw.app, json!({ "label": "install", "team": "ops" })).await?;
+    let listed = admin(&gw.app, "GET", "/console/watch/tokens", Value::Null).await?;
+    assert_eq!(listed.body["tokens"][0]["org"], "acme", "{}", listed.text);
+    assert_eq!(listed.body["tokens"][1]["org"], "", "{}", listed.text);
+
+    for (token, email) in [(&acme, "dana@acme.co"), (&install, "omer@ops.co")] {
+        let logs = logs_body(email, "s-1", vec![request_event(1, 0.5)]);
+        let sent = send(&gw.app, "POST", "/otlp/v1/logs", token, JSON, logs).await?;
+        assert_eq!(sent.status, StatusCode::OK, "{}", sent.text);
+        let metrics = metrics_body(
+            email,
+            "s-1",
+            vec![sum(
+                "claude_code.session.count",
+                1,
+                now_ns() - 1_000_000_000,
+                now_ns(),
+                &[(1.0, json!([]))],
+            )],
+        );
+        let sent = send(&gw.app, "POST", "/otlp/v1/metrics", token, JSON, metrics).await?;
+        assert_eq!(sent.status, StatusCode::OK, "{}", sent.text);
+    }
+
+    let read = |path: &std::path::Path| -> Result<Vec<Value>, Error> {
+        Ok(std::fs::read_to_string(path)?
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|r| r["event"] == "watch")
+            .collect())
+    };
+    gw.log.flush();
+    let chain = gantry_core::audit::org_path(&gw.audit, "acme");
+    let of_acme = read(&chain)?;
+    assert_eq!(of_acme.len(), 2, "the request and the metrics: {of_acme:?}");
+    for record in &of_acme {
+        assert_eq!(
+            (&record["org"], &record["person"], &record["token"]),
+            (&json!("acme"), &json!("dana@acme.co"), &json!(id)),
+            "{record}"
+        );
+    }
+    let of_install = read(&gw.audit)?;
+    assert_eq!(of_install.len(), 2, "{of_install:?}");
+    for record in &of_install {
+        assert_eq!(record["person"], "omer@ops.co", "{record}");
+        assert!(record.get("org").is_none(), "{record}");
+    }
+    assert!(gantry_core::audit::verify(&chain).is_ok());
+    assert!(gantry_core::audit::verify(&gw.audit).is_ok());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_viewer_lists_watch_tokens_and_only_an_owner_or_admin_issues_and_revokes()
+-> Result<(), Error> {
+    let Some(url) = database("watch_roles").await? else {
+        return Ok(());
+    };
+    let gw = gateway("watch_roles", &url, &licensed(&["watch", "members"]))?;
+    let mut owner = Browser::admin(&gw.app).await?;
+    let mut join = async |role: &str, email: &str| -> Result<Browser, Error> {
+        let invited = owner
+            .go(
+                &gw.app,
+                "POST",
+                "/console/members/invite",
+                &[("email", email), ("role", role), ("team", "ops")],
+            )
+            .await?;
+        let invite: String = invited
+            .text
+            .split("/console/invite/")
+            .nth(1)
+            .ok_or("no invite")?
+            .chars()
+            .take_while(char::is_ascii_hexdigit)
+            .collect();
+        let mut person = Browser::default();
+        person
+            .go(
+                &gw.app,
+                "POST",
+                &format!("/console/invite/{invite}"),
+                &[("name", "Sam"), ("password", "second-password-123")],
+            )
+            .await?;
+        Ok(person)
+    };
+    let viewer = join("viewer", "viewer@example.com").await?;
+    let member = join("admin", "admin@example.com").await?;
+    let origin = format!("http://{HOST}");
+    let as_person = |who: &Browser, method: &'static str, path: String, body: Value| {
+        let (app, cookie, origin) = (gw.app.clone(), who.cookie.clone(), origin.clone());
+        async move {
+            let headers = [
+                (header::COOKIE, cookie.as_str()),
+                (header::ORIGIN, origin.as_str()),
+                (header::CONTENT_TYPE, JSON),
+            ];
+            let body = if body.is_null() {
+                Vec::new()
+            } else {
+                body.to_string().into_bytes()
+            };
+            call(&app, method, &path, &headers, body).await
+        }
+    };
+    let tokens = "/console/watch/tokens".to_string();
+    let (id, token) = new_token(&gw.app, json!({ "label": "team", "team": "payments" })).await?;
+
+    // A viewer reads: the list (never a token itself) and the summary.
+    let listed = as_person(&viewer, "GET", tokens.clone(), Value::Null).await?;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
+    assert_eq!(listed.body["tokens"][0]["id"], json!(id), "{}", listed.text);
+    assert!(!listed.text.contains("gantry_watch_"), "{}", listed.text);
+    let looked = as_person(
+        &viewer,
+        "GET",
+        "/console/watch/summary.json".into(),
+        Value::Null,
+    )
+    .await?;
+    assert_eq!(looked.status, StatusCode::OK, "{}", looked.text);
+
+    // A viewer changes nothing, and each try is recorded with its code.
+    let made = as_person(&viewer, "POST", tokens.clone(), json!({ "label": "mine" })).await?;
+    assert_eq!(
+        (made.status, made.body["error"]["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("read_only")),
+        "{}",
+        made.text
+    );
+    assert!(made.text.contains("Your role is viewer"), "{}", made.text);
+    let revoked = as_person(&viewer, "DELETE", format!("{tokens}/{id}"), Value::Null).await?;
+    assert_eq!(
+        (revoked.status, revoked.body["error"]["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("read_only")),
+        "{}",
+        revoked.text
+    );
+    let still = send(
+        &gw.app,
+        "POST",
+        "/otlp/v1/logs",
+        &token,
+        PROTOBUF,
+        LOGS_PB.to_vec(),
+    )
+    .await?;
+    assert_eq!(
+        still.status,
+        StatusCode::OK,
+        "the token a viewer tried to revoke works"
+    );
+    // Nobody signed in reads or changes anything.
+    let nobody = Browser::default();
+    for method in ["GET", "POST"] {
+        let refused = as_person(&nobody, method, tokens.clone(), json!({ "label": "x" })).await?;
+        assert_eq!(
+            refused.status,
+            StatusCode::UNAUTHORIZED,
+            "{method}: {}",
+            refused.text
+        );
+    }
+
+    // A member with the admin role issues and revokes.
+    let made = as_person(
+        &member,
+        "POST",
+        tokens.clone(),
+        json!({ "label": "by-admin" }),
+    )
+    .await?;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.text);
+    let theirs = made.body["id"].as_str().unwrap_or_default().to_string();
+    let revoked = as_person(&member, "DELETE", format!("{tokens}/{theirs}"), Value::Null).await?;
+    assert_eq!(revoked.status, StatusCode::OK, "{}", revoked.text);
+    let listed = as_person(&viewer, "GET", tokens.clone(), Value::Null).await?;
+    let status = |of: &str| {
+        listed.body["tokens"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|t| t["id"] == of)
+            .and_then(|t| t["status"].as_str())
+            .map(str::to_string)
+    };
+    assert_eq!(status(&id).as_deref(), Some("receiving"), "{}", listed.text);
+    assert_eq!(
+        status(&theirs).as_deref(),
+        Some("revoked"),
+        "{}",
+        listed.text
+    );
+
+    gw.log.flush();
+    let chain = std::fs::read_to_string(&gw.audit)?;
+    let records: Vec<Value> = chain
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let count = |action: &str, code: Option<&str>| {
+        records
+            .iter()
+            .filter(|r| {
+                r["event"] == "admin" && r["action"] == action && r["code"].as_str() == code
+            })
+            .count()
+    };
+    assert_eq!(
+        count("watch_token_created", Some("read_only")),
+        1,
+        "{chain}"
+    );
+    assert_eq!(
+        count("watch_token_revoked", Some("read_only")),
+        1,
+        "{chain}"
+    );
+    assert_eq!(count("watch_token_created", None), 2, "{chain}");
+    assert_eq!(count("watch_token_revoked", None), 1, "{chain}");
+    Ok(())
+}
+
+/// `gantry watch setup` without `--token`: the token is created over the network, by a gateway that listens.
+#[tokio::test(flavor = "multi_thread")]
+async fn setup_creates_its_token_through_a_gateway_that_listens() -> Result<(), Error> {
+    let Some(url) = database("watch_setup").await? else {
+        return Ok(());
+    };
+    let gw = gateway("watch_setup", &url, &licensed(&["watch"]))?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let gateway = format!("http://{}", listener.local_addr()?);
+    let app = gw.app.clone();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+
+    let run = |list: &[&str], key: Option<&str>| {
+        let args: Vec<String> = std::iter::once("setup")
+            .chain(list.iter().copied())
+            .map(str::to_string)
+            .collect();
+        let key = key.map(str::to_string);
+        tokio::task::spawn_blocking(move || super::setup_with(&args, key))
+    };
+    let out = run(
+        &["--gateway", &gateway, "--team", "payments", "--days", "30"],
+        Some(ADMIN_KEY),
+    )
+    .await??;
+    let token = out
+        .split("Authorization=Bearer ")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or("no token in the settings")?
+        .to_string();
+    assert!(
+        token.starts_with("gantry_watch_") && token.len() == 13 + 64,
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "\"OTEL_EXPORTER_OTLP_ENDPOINT\": \"{gateway}/otlp\""
+        )),
+        "{out}"
+    );
+    assert!(!out.contains(ADMIN_KEY), "the admin key is not printed");
+
+    // The token is the gateway's: listed with what setup asked for, and an export sent with it over the network
+    // is taken.
+    let listed = admin(&gw.app, "GET", "/console/watch/tokens", Value::Null).await?;
+    let made = &listed.body["tokens"][0];
+    assert_eq!(
+        (&made["label"], &made["team"], &made["created_by"]),
+        (&json!("watch-payments"), &json!("payments"), &json!("noa")),
+        "{}",
+        listed.text
+    );
+    let (endpoint, bearer) = (format!("{gateway}/otlp/v1/logs"), format!("Bearer {token}"));
+    let status = tokio::task::spawn_blocking(move || {
+        ureq::post(&endpoint)
+            .set("authorization", &bearer)
+            .set("content-type", PROTOBUF)
+            .send_bytes(LOGS_PB)
+            .map(|r| r.status())
+            .map_err(|e| e.to_string())
+    })
+    .await??;
+    assert_eq!(status, 200);
+    assert_eq!(summary(&gw.app).await?.body["people"][0]["person"], MAYA);
+
+    // What the gateway refuses, and no gateway at all, are said with the fix.
+    let wrong = run(
+        &["--gateway", &gateway, "--team", "payments"],
+        Some("gantry_admin_wrong"),
+    )
+    .await?;
+    assert!(wrong.is_err_and(|e| e.contains("answered 401")));
+    let long = run(
+        &["--gateway", &gateway, "--team", "payments", "--days", "999"],
+        Some(ADMIN_KEY),
+    )
+    .await?;
+    assert!(long.is_err_and(|e| e.contains("answered 400") && e.contains("1 to 365 days")));
+    let none = run(&["--gateway", &gateway, "--team", "payments"], None).await?;
+    assert!(none.is_err_and(|e| e.contains("GANTRY_ADMIN_KEY")));
+    let closed = run(
+        &["--gateway", "http://127.0.0.1:9", "--team", "payments"],
+        Some(ADMIN_KEY),
+    )
+    .await?;
+    assert!(closed.is_err_and(|e| e.contains("could not be reached")));
     Ok(())
 }

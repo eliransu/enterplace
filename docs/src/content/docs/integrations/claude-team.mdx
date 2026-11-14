@@ -118,7 +118,8 @@ A token made with `--person` counts everything it sends under that name, whateve
 | [`gantry audit coverage`](/governance/coverage/) | Tool `claude-code (watch)` per person, beside the tools that reach Gantry |
 | [Alerts](/operations/alerting/) | `budget` rules by amount and `unusual_spend` count watched cost |
 | [Audit export](/operations/siem-export/) and [retention](/operations/retention/) | `watch` records ship and expire as every audit record does |
-| `GET /console/watch/summary.json?days=30` | Sums per person, model and tool: sessions, tokens by type, cost, lines, commits, pull requests, prompts, tool calls accepted, rejected and failed, and where the five steps stand |
+| The [daily digest](/operations/alerting/) | Watched cost is part of the spend and of the top users, and a `Watched:` line says how much of the spend it was |
+| `GET /console/watch/summary.json?days=30` | Sums per person, model and tool: sessions, tokens by type, cost, lines, commits, pull requests, prompts, tool calls accepted, rejected and failed, who is not a known member, and where the five steps stand |
 
 Watched requests never count against a budget and are never refused: Gantry did not forward them.
 
@@ -128,11 +129,26 @@ Each model request, API error, refusal, tool decision, tool result and prompt Cl
 
 Gantry keeps numbers and names: person, team, session, model, tokens, estimated cost, tool name, decision, error name, prompt length. It never keeps prompt, answer or tool text. If someone turns on `OTEL_LOG_USER_PROMPTS` or `OTEL_LOG_TOOL_DETAILS` in Claude Code, Gantry drops that text when it arrives and counts the event under `content_dropped`. Every other event Claude Code sends (plugins, hooks, settings) is dropped.
 
+## One name per person
+
+On a team token the person is the email address Claude Code reports. Gantry gives it the name that person's gateway traffic has, so both are one person on the Requests and Analytics pages, in `/admin/usage`, in coverage and in alerts:
+
+| The email is | The person is |
+|---|---|
+| The `email` in a key's [`metadata`](/governance/keys/), such as `metadata: { email: maya.cohen@example.com }` on the key of `maya.cohen` | That key's name. The record keeps the reported address in `email` |
+| A key's name, as [`gantry login`](/governance/teams/) names keys | That key's name |
+| An owner or member of a team in the policy's [`teams:`](/governance/teams/), or a person in **Members** (invited, or provisioned by SCIM) | The email, which is the name a key issued to them at sign-in gets |
+| None of these | The email, listed in `summary.json` under `not_known_members`, with `"known": false` on the person |
+
+Letter case does not matter. The lookup is made when an export arrives, so a key added later names what arrives from then on; what was already recorded keeps the name it had. A token of one person (`--person`) names that person whatever Claude Code reports.
+
 The daily sums follow the [retention](/operations/retention/) period and legal hold, 365 days on an install without the retention feature.
 
 ## Tokens
 
-A watch token starts with `gantry_watch_`, lasts 1 to 365 days (90 unless `--days` says otherwise) and belongs to a team or to one person. Owners and admins manage them with an admin key, and every change is an [admin record](/reference/audit-records/#admin).
+A watch token starts with `gantry_watch_`, lasts 1 to 365 days (90 unless `--days` says otherwise) and belongs to a team or to one person. Owners and admins create and revoke them, with an admin key or signed in to the console; a viewer can list them and read the summary. Every change is an [admin record](/reference/audit-records/#admin), a refused one with its code.
+
+In an install with organizations (`orgs:` in the policy), `"org": "acme"` (`gantry watch setup --org acme`) makes a token that organization's: its records carry `org`, and with [`audit: { per_org: true }`](/governance/audit-log/) they go to that organization's chain. The organization must be one the policy lists under `orgs:`. Someone whose role is kept to one organization creates, lists and revokes that organization's tokens only.
 
 ```sh
 # List: label, team or person, expiry, last export, status
@@ -151,7 +167,9 @@ Replace a token before it expires: create a new one, put its settings in place o
 | | |
 |---|---|
 | Routes | `POST /otlp/v1/metrics`, `POST /otlp/v1/logs` on the gateway's address |
-| Encoding | OTLP over HTTP as protobuf (`http/protobuf`) or JSON (`http/json`), uncompressed, at most 4 MB an export. Not gRPC |
+| Encoding | OTLP over HTTP as protobuf (`http/protobuf`) or JSON (`http/json`), at most 4 MB an export |
+| Compression | None, or gzip (`Content-Encoding: gzip`, which Claude Code sends with `OTEL_EXPORTER_OTLP_COMPRESSION=gzip`). The 4 MB limit is counted on the unpacked export |
+| Not supported | OTLP over gRPC, and traces (`/otlp/v1/traces`, Claude Code's `OTEL_TRACES_EXPORTER`): leave the traces exporter unset |
 | Sign-in | `Authorization: Bearer gantry_watch_...` |
 | Claude Code | Tested with 2.1.325 |
 
@@ -160,9 +178,9 @@ Replace a token before it expires: create a new one, put its settings in place o
 | 401 | `invalid_token` | No token, an unknown one or a revoked one |
 | 401 | `token_expired` | The token's days are over |
 | 403 | `license_required` | The license does not have `watch` |
-| 415 | `unsupported_protocol`, `unsupported_encoding` | gRPC or another content type; a compressed body |
-| 413 | `too_large` | More than 4 MB |
-| 400 | `invalid_export` | Not an OTLP export |
+| 415 | `unsupported_protocol`, `unsupported_encoding` | gRPC or another content type; a compression other than gzip |
+| 413 | `too_large` | More than 4 MB, as sent or once unpacked |
+| 400 | `invalid_export` | Not an OTLP export, or marked gzip and not readable as gzip |
 | 503 | `store_unavailable`, `audit_unavailable` | Nothing was kept; Claude Code sends the export again |
 
 If nothing arrives, run `claude --debug-file /tmp/claude-debug.log` and search the file for `[3P telemetry]`: Claude Code logs its export errors there.
@@ -170,6 +188,6 @@ If nothing arrives, run `claude --debug-file /tmp/claude-debug.log` and search t
 ## Limits
 
 - No console page yet: read `summary.json`, the Requests and Analytics pages, and coverage.
-- A person on a team token is the email address Claude Code reports. It is not matched to a Gantry key holder's name; use a token per person for that.
+- No gRPC and no traces: see [the receiver](#the-receiver).
 - Metrics need `session.id` on each point, which Claude Code sends unless `OTEL_METRICS_INCLUDE_SESSION_ID=false`.
-- With `audit: { per_org: true }`, watch records go to the install's chain.
+- A token without `org` writes to the install's chain, also with `audit: { per_org: true }`.
