@@ -596,6 +596,8 @@ enum Then {
     Delete(String),
     /// Passed on as it comes: file content, batch results, job events.
     Stream,
+    /// Batch results read whole and passed through the owner's answer guardrails line by line.
+    Guard(Box<GuardResults>),
 }
 
 struct Ready {
@@ -1053,12 +1055,16 @@ async fn prepare<'a>(
         }
         Op::File(id) | Op::FileContent(id) | Op::FileDelete(id) => {
             let id = id.clone();
-            let (_, provider) = owned(state, version, person, &id, Item::File, seen).await?;
+            let (file, provider) = owned(state, version, person, &id, Item::File, seen).await?;
             extra.insert("object_id".into(), id.as_str().into());
             let (method, target, then) = match op {
                 Op::File(_) => (Method::GET, format!("/v1/files/{id}"), Then::Read(id)),
                 Op::FileContent(_) => {
-                    (Method::GET, format!("/v1/files/{id}/content"), Then::Stream)
+                    let then = (file.purpose == "batch_output")
+                        .then(|| result_guards(policy, &file, &id, Results::OpenAi))
+                        .flatten()
+                        .map_or(Then::Stream, Then::Guard);
+                    (Method::GET, format!("/v1/files/{id}/content"), then)
                 }
                 _ => (Method::DELETE, format!("/v1/files/{id}"), Then::Delete(id)),
             };
@@ -1085,7 +1091,7 @@ async fn prepare<'a>(
         | Op::MessageBatchCancel(id)
         | Op::MessageBatchDelete(id) => {
             let id = id.clone();
-            let (_, provider) =
+            let (batch, provider) =
                 owned(state, version, person, &id, Item::MessageBatch, seen).await?;
             extra.insert("object_id".into(), id.as_str().into());
             anthropic_headers(&mut headers);
@@ -1093,7 +1099,9 @@ async fn prepare<'a>(
             let (method, target, then) = match op {
                 Op::MessageBatch(_) => (Method::GET, base, Then::Read(id)),
                 Op::MessageBatchResults(_) => {
-                    (Method::GET, format!("{base}/results"), Then::Stream)
+                    let then = result_guards(policy, &batch, &id, Results::Anthropic)
+                        .map_or(Then::Stream, Then::Guard);
+                    (Method::GET, format!("{base}/results"), then)
                 }
                 Op::MessageBatchCancel(_) => {
                     (Method::POST, format!("{base}/cancel"), Then::Read(id))
@@ -1590,17 +1598,7 @@ fn counted(
     let Some(policy) = &version.policy else {
         return Vec::new();
     };
-    let who = policy
-        .entries()
-        .find(|(_, p)| p.key == owned.key)
-        .map(|(_, p)| p.clone())
-        .unwrap_or_else(|| Principal {
-            name: owned.person.clone(),
-            team: owned.team.clone(),
-            key: owned.key.clone(),
-            org: owned.org.clone(),
-            ..Principal::default()
-        });
+    let who = owner_of(policy, owned);
     let Some(rule) = policy.rule_for(&who) else {
         return Vec::new();
     };
@@ -1613,6 +1611,164 @@ fn counted(
         owned.customer.as_deref(),
         &owned.tags,
     )
+}
+
+/// The owner of a file or batch as the policy in force knows them: their key's entry, else who the record names.
+fn owner_of(policy: &Policy, owned: &Owned) -> Principal {
+    policy
+        .entries()
+        .find(|(_, p)| p.key == owned.key)
+        .map(|(_, p)| p.clone())
+        .unwrap_or_else(|| Principal {
+            name: owned.person.clone(),
+            team: owned.team.clone(),
+            key: owned.key.clone(),
+            org: owned.org.clone(),
+            ..Principal::default()
+        })
+}
+
+/// What checks a batch's results on the way to the caller: the `on: [answer]` guardrails of the owner's rule
+/// (as observe mode runs them), and whose results they are. None when that rule runs none on answers.
+fn result_guards(
+    policy: &Policy,
+    owned: &Owned,
+    object_id: &str,
+    api: Results,
+) -> Option<Box<GuardResults>> {
+    let who = owner_of(policy, owned);
+    let rule = policy.rule_for(&who)?;
+    let guards: Vec<_> = crate::observed_guards(policy, &rule.guardrails)
+        .unwrap_or_else(|| rule.guardrails.clone())
+        .into_iter()
+        .filter(|g| g.on.answer)
+        .collect();
+    (!guards.is_empty()).then(|| {
+        Box::new(GuardResults {
+            object_id: object_id.to_string(),
+            guards,
+            person: who.name,
+            team: who.team,
+            api,
+        })
+    })
+}
+
+/// Which batch API's result lines a file holds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Results {
+    /// `{"custom_id", "response": {"status_code", "body"}, "error"}`, as OpenAI's output files (and Gantry's own
+    /// for Bedrock and Vertex AI batches) hold them.
+    OpenAi,
+    /// `{"custom_id", "result": {"type": "succeeded", "message"}}`, as Anthropic's results stream holds them.
+    Anthropic,
+}
+
+struct GuardResults {
+    object_id: String,
+    guards: Vec<gantry_core::guard::Guardrail>,
+    person: String,
+    team: String,
+    api: Results,
+}
+
+/// Runs the answer guardrails on every result line: a blocked line's answer is replaced with an error object, a
+/// masked one is masked, and each line they found something in gets a `batch_result_guardrails` record. The
+/// caller gets the processed lines; a line Gantry cannot read is passed on as it is.
+async fn guard_results(
+    state: &AppState,
+    check: &GuardResults,
+    decision: &str,
+    body: &[u8],
+) -> Result<Bytes, Refusal> {
+    let mut out = Vec::with_capacity(body.len());
+    for (i, raw) in body.split(|b| *b == b'\n').enumerate() {
+        if raw.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let Ok(mut line) = serde_json::from_slice::<Value>(raw) else {
+            out.extend_from_slice(raw);
+            out.push(b'\n');
+            continue;
+        };
+        let pointer = match check.api {
+            Results::OpenAi => "/response/body",
+            Results::Anthropic => "/result/message",
+        };
+        let ok = match check.api {
+            Results::OpenAi => line["response"]["status_code"]
+                .as_u64()
+                .is_some_and(|s| (200..300).contains(&s)),
+            Results::Anthropic => line["result"]["type"] == "succeeded",
+        };
+        let Some(answer) = line.pointer(pointer).filter(|_| ok).cloned() else {
+            out.extend_from_slice(raw);
+            out.push(b'\n');
+            continue;
+        };
+        let path = match check.api {
+            Results::OpenAi => "/v1/batches",
+            Results::Anthropic => "/v1/messages/batches",
+        };
+        let (verdict, found) = crate::check_answer(
+            state,
+            &check.guards,
+            &check.person,
+            &check.team,
+            path,
+            decision,
+            &answer,
+        )
+        .await;
+        let word = match &verdict {
+            Err(_) => "block",
+            Ok(after) if *after != answer => "mask",
+            Ok(_) => "pass",
+        };
+        match verdict {
+            Err(message) => match check.api {
+                Results::OpenAi => {
+                    line["response"] = Value::Null;
+                    line["error"] = json!({ "code": guard::BLOCKED_CODE, "message": message });
+                }
+                Results::Anthropic => {
+                    line["result"] = json!({
+                        "type": "errored",
+                        "error": { "type": "error", "error": { "type": "permission_error", "message": message } }
+                    });
+                }
+            },
+            Ok(after) => {
+                if let Some(slot) = line.pointer_mut(pointer) {
+                    *slot = after;
+                }
+            }
+        }
+        if !found.is_empty() {
+            let mut record = Map::new();
+            record.insert("event".into(), "batch_result_guardrails".into());
+            record.insert("id".into(), decision.into());
+            record.insert("time".into(), audit::timestamp().into());
+            record.insert("object_id".into(), check.object_id.as_str().into());
+            record.insert("line".into(), (i + 1).into());
+            record.insert("custom_id".into(), line["custom_id"].clone());
+            record.insert("verdict".into(), word.into());
+            record.insert(
+                "guardrails".into(),
+                serde_json::to_value(&found).unwrap_or_default(),
+            );
+            if !write(state, record).await {
+                return Err(Refusal::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "audit_unavailable",
+                    "Refused: Gantry could not write the guardrails' check of these batch results to its audit log, and it does not pass on what it cannot record. Tell your Gantry admin.",
+                ));
+            }
+        }
+        out.extend_from_slice(line.to_string().as_bytes());
+        out.push(b'\n');
+    }
+    Ok(Bytes::from(out))
 }
 
 /// The lines of a batch after their checks.
@@ -2156,6 +2312,21 @@ async fn after(
         }
         return Ok(response);
     }
+    if let Then::Guard(check) = &ready.then {
+        let body = collect(answer.into_body(), MAX_RESULTS)
+            .await
+            .map_err(|why| {
+                Refusal::new(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_failed",
+                    format!("{why}. Try again."),
+                )
+            })?;
+        if !status.is_success() {
+            return Ok(respond(body));
+        }
+        return Ok(respond(guard_results(state, check, decision, &body).await?));
+    }
     let body = collect(answer.into_body(), crate::MAX_BODY_BYTES)
         .await
         .map_err(|why| {
@@ -2221,7 +2392,7 @@ async fn after(
             state.owned.remove(&id).await;
             Ok(respond(body))
         }
-        Then::Stream => Ok(respond(body)),
+        Then::Stream | Then::Guard(_) => Ok(respond(body)),
     }
 }
 

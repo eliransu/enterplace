@@ -3576,6 +3576,61 @@ async fn answer_guarded(
     Ok(Response::from_parts(parts, Body::from(masked)))
 }
 
+/// One whole answer checked by `on: [answer]` guardrails away from a live request (a batch result line, read when
+/// the caller downloads the results): the answer to pass on, masked where they masked it, or the message of the
+/// guardrail that blocked it; and what they found.
+pub(crate) async fn check_answer(
+    state: &AppState,
+    guards: &[Guardrail],
+    person: &str,
+    team: &str,
+    path: &str,
+    decision: &str,
+    answer: &serde_json::Value,
+) -> (Result<serde_json::Value, String>, Vec<guard::AuditEntry>) {
+    let check = AnswerCheck {
+        guards: guards.to_vec(),
+        person: person.to_string(),
+        team: team.to_string(),
+        path: path.to_string(),
+        buffer_stream: false,
+        stream_every: None,
+        gate: None,
+    };
+    let pointers = answer_texts(answer);
+    let texts: Vec<serde_json::Value> = pointers
+        .iter()
+        .map(|p| answer.pointer(p).cloned().unwrap_or_default())
+        .collect();
+    let verdict = answer_verdict(state, &check, decision, &texts).await;
+    if let Some(blocked) = &verdict.blocked {
+        let kinds: Vec<String> = verdict
+            .audit
+            .iter()
+            .filter(|e| e.guardrail == blocked.guardrail && e.action == "block")
+            .map(|e| format!("{} ({})", e.kind, e.count))
+            .collect();
+        let message = format!(
+            "guardrail \"{}\" withheld the model's answer, which contained {}. The answer was produced and is counted in usage.",
+            blocked.guardrail,
+            kinds.join(", ")
+        );
+        return (Err(message), verdict.audit);
+    }
+    let mut out = answer.clone();
+    if verdict.changed {
+        for (i, pointer) in pointers.iter().enumerate() {
+            if let (Some(slot), Some(masked)) = (
+                out.pointer_mut(pointer),
+                verdict.body.pointer(&format!("/messages/{i}/content")),
+            ) {
+                *slot = masked.clone();
+            }
+        }
+    }
+    (Ok(out), verdict.audit)
+}
+
 /// The answer guardrails' verdict on the model's texts: the built-in detectors, then each webhook in order until one
 /// blocks.
 async fn answer_verdict(
