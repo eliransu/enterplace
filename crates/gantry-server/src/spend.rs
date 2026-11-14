@@ -71,6 +71,8 @@ pub(crate) struct Spend {
     next_hold: std::sync::atomic::AtomicU64,
     /// Where the redacted bodies of rules with `capture:` are kept. `None` when no master key seals them.
     pub(crate) bodies: Option<Arc<dyn gantry_core::insights::Bodies>>,
+    /// Takes the text of requests an embedding binary keeps (`Extension::capture`).
+    pub(crate) capture: Option<Arc<dyn crate::Capture>>,
 }
 
 /// A request's place under one `parallel:` limit, given back when its answer ends.
@@ -1166,6 +1168,10 @@ pub(crate) struct Admitted {
     started: Instant,
     /// What its rule's `capture:` keeps, until the answer ends.
     capture: Option<Capture>,
+    /// The body sent, by reference, when `Spend::capture` wants this request's text.
+    captured: Option<Bytes>,
+    /// A streamed answer's frames, kept only for a captured request.
+    stream_copy: Option<Vec<Bytes>>,
 }
 
 /// A request body to keep with its answer, per its rule's `capture:`.
@@ -1313,6 +1319,12 @@ pub(crate) async fn admit(
             request: ask.body.clone(),
             answer: None,
         }),
+        captured: spend
+            .capture
+            .as_ref()
+            .filter(|c| c.wanted(&ask.person.team))
+            .map(|_| ask.body.clone()),
+        stream_copy: None,
     };
     // The caller pays their provider: unless the rule says otherwise, budgets (what the organization pays) do not
     // reserve or count it. Rate and token limits still hold.
@@ -2013,6 +2025,25 @@ impl Admitted {
         self.forwarded = false;
         let left = ended == Ended::CallerLeft;
         let now = audit::timestamp();
+        if let (Some(capture), Some(request), false) =
+            (self.spend.capture.clone(), self.captured.take(), hit)
+        {
+            let stream = self.stream_copy.take();
+            capture.take(crate::Captured {
+                decision: self.decision.clone(),
+                person: self.person.clone(),
+                team: self.team.clone(),
+                model: self.model.clone(),
+                provider: self.provider.clone(),
+                route: self.route.clone(),
+                request,
+                streamed: stream.is_some(),
+                answer: match stream {
+                    Some(frames) => Some(Bytes::from(frames.concat())),
+                    None => answer.as_ref().map(|(_, body)| body.clone()),
+                },
+            });
+        }
         let complete = !matches!(ended, Ended::CutOff | Ended::CallerLeft);
         // An image model priced by the image is charged for each image the answer holds.
         let images = self
@@ -2377,7 +2408,7 @@ impl Metered {
             .as_ref()
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.starts_with("text/event-stream"));
-        let keep = !stream || admitted.capture.is_some();
+        let keep = !stream || admitted.capture.is_some() || admitted.captured.is_some();
         response.map(|inner| {
             Body::new(Metered {
                 inner,
@@ -2402,8 +2433,12 @@ impl Metered {
         match (self.scanner.take(), self.frames.take()) {
             (Some(scanner), frames) => {
                 let mut admitted = admitted;
-                if let (Some(capture), Some(frames)) = (admitted.capture.as_mut(), frames) {
+                if let (Some(capture), Some(frames)) = (admitted.capture.as_mut(), &frames) {
                     capture.answer = Some(Bytes::from(frames.concat()));
+                }
+                // Handed to the embedder's capture only when it wants this request's text.
+                if admitted.captured.is_some() {
+                    admitted.stream_copy = frames;
                 }
                 admitted.streamed = scanner.streamed_output();
                 let (usage, done) = scanner.finish_final();

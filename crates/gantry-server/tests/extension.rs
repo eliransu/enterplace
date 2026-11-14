@@ -251,3 +251,164 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
     );
     Ok(())
 }
+
+/// Takes what the gateway hands over, for teams in `teams`.
+struct Keeper {
+    teams: Vec<&'static str>,
+    taken: Mutex<Vec<gantry_server::Captured>>,
+    /// Whether the usage record was already in the log when the text was handed over (it must not be).
+    audit: std::path::PathBuf,
+    usage_before: Mutex<bool>,
+}
+
+impl gantry_server::Capture for Keeper {
+    fn wanted(&self, team: &str) -> bool {
+        self.teams.contains(&team)
+    }
+    fn take(&self, captured: gantry_server::Captured) {
+        let written = std::fs::read_to_string(&self.audit).unwrap_or_default();
+        if written.contains(&format!(
+            "\"event\":\"usage\",\"id\":\"{}\"",
+            captured.decision
+        )) && let Ok(mut before) = self.usage_before.lock()
+        {
+            *before = true;
+        }
+        if let Ok(mut taken) = self.taken.lock() {
+            taken.push(captured);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_capture_gets_prompt_and_answer_text_only_for_teams_it_wants_and_before_the_usage_record()
+-> TestResult {
+    use axum::http::header;
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
+    let provider = Router::new().route(
+        "/v1/chat/completions",
+        axum::routing::post(|body: axum::body::Bytes| async move {
+            let streamed = body.windows(13).any(|w| w == b"\"stream\":true");
+            let (content_type, answer) = if streamed {
+                (
+                    "text/event-stream",
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"stre\"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"amed\"}}]}\n\ndata: [DONE]\n\n",
+                )
+            } else {
+                (
+                    "application/json",
+                    r#"{"id":"c1","choices":[{"index":0,"message":{"role":"assistant","content":"whole answer"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#,
+                )
+            };
+            axum::response::Response::builder()
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from(answer))
+                .unwrap_or_default()
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, provider).await });
+    let dir = std::env::temp_dir().join(format!("gantry-capture-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let policy = dir.join("gantry.policy.yaml");
+    std::fs::write(
+        &policy,
+        format!(
+            "version: 1\nproviders:\n  - name: p\n    kind: openai\n    url: http://127.0.0.1:{port}\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\nrules:\n  - name: all\n    principals: {{ any: true }}\n    models: [m]\n"
+        ),
+    )?;
+    let (pat, rita) = (
+        "gantry_pat_0123456789abcdef0123456789ab",
+        "gantry_rita_0123456789abcdef0123456789a",
+    );
+    let entry = |name: &str, team: &str, key: &str| {
+        format!(
+            "  - name: {name}\n    team: {team}\n    sha256: {}\n",
+            gantry_core::id::sha256_hex(key.as_bytes())
+        )
+    };
+    std::fs::write(
+        dir.join("gantry.keys.yaml"),
+        format!(
+            "keys:\n{}{}",
+            entry("pat", "payments", pat),
+            entry("rita", "ops", rita)
+        ),
+    )?;
+    let keeper = Arc::new(Keeper {
+        teams: vec!["payments"],
+        taken: Mutex::new(Vec::new()),
+        audit: dir.join("gantry-audit.jsonl"),
+        usage_before: Mutex::new(false),
+    });
+    let kept = keeper.clone();
+    let gw = gantry_server::governed_with(&policy, None, &|_| Some("secret".into()), &move |_| {
+        Ok(Extension {
+            capture: Some(kept.clone()),
+            ..Extension::default()
+        })
+    })?;
+    let send = |key: &str, body: &str| {
+        Request::post("/v1/chat/completions")
+            .header(header::AUTHORIZATION, format!("Bearer {key}"))
+            .body(Body::from(body.to_string()))
+    };
+    for (key, body) in [
+        (
+            pat,
+            r#"{"model":"m","messages":[{"role":"user","content":"hello whole"}]}"#,
+        ),
+        (
+            pat,
+            r#"{"model":"m","stream":true,"messages":[{"role":"user","content":"hello stream"}]}"#,
+        ),
+        (
+            rita,
+            r#"{"model":"m","messages":[{"role":"user","content":"not mine"}]}"#,
+        ),
+    ] {
+        let response = gw.router.clone().oneshot(send(key, body)?).await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        response.into_body().collect().await?;
+    }
+    let start = std::time::Instant::now();
+    while keeper.taken.lock().map(|t| t.len()).unwrap_or(0) < 2
+        && start.elapsed() < std::time::Duration::from_secs(3)
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    gw.log.flush();
+    let taken = keeper.taken.lock().map(|t| t.clone()).unwrap_or_default();
+    assert_eq!(taken.len(), 2, "only the payments team's two requests");
+    let whole = taken
+        .iter()
+        .find(|c| !c.streamed)
+        .ok_or("no whole answer")?;
+    assert_eq!(
+        whole.prompt(),
+        vec![("user".to_string(), "hello whole".to_string())]
+    );
+    assert_eq!(whole.answer_text(), vec!["whole answer".to_string()]);
+    assert_eq!(
+        (whole.person.as_str(), whole.team.as_str()),
+        ("pat", "payments")
+    );
+    let stream = taken.iter().find(|c| c.streamed).ok_or("no stream")?;
+    assert_eq!(stream.prompt()[0].1, "hello stream");
+    assert_eq!(stream.answer_text(), vec!["streamed".to_string()]);
+    assert!(
+        !*keeper.usage_before.lock().map_err(|_| "lock")?,
+        "the text is handed over before the usage record is written"
+    );
+    let log = std::fs::read_to_string(dir.join("gantry-audit.jsonl"))?;
+    assert!(log.contains(&format!(
+        "\"event\":\"usage\",\"id\":\"{}\"",
+        whole.decision
+    )));
+    assert!(
+        !log.contains("hello whole") && !log.contains("whole answer"),
+        "no text in the log"
+    );
+    Ok(())
+}

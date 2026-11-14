@@ -283,6 +283,76 @@ pub struct Extension {
     pub console: gantry_console::Extension,
     /// Fields added to `GET /healthz`. They never replace the gateway's own (`status` and the versions).
     pub health: Option<Health>,
+    /// Takes the prompt and answer of requests the binary was told to keep. `None` keeps no text, as the open
+    /// source gateway never does.
+    pub capture: Option<Arc<dyn Capture>>,
+}
+
+/// Prompt and answer text handed to a binary that embeds the gateway, for an operator who opted in to sending it
+/// somewhere. The audit log never holds text; this is the only way text leaves the request path.
+pub trait Capture: Send + Sync {
+    /// Whether to keep the text of a request by someone of this team. Asked once per admitted request: keep it cheap.
+    fn wanted(&self, team: &str) -> bool;
+    /// Called on the audit writer's thread, before the request's usage record is written, so a reader of the log
+    /// finds the text already handed over. Pass it on and return at once.
+    fn take(&self, captured: Captured);
+}
+
+/// One request's text as sent to the provider (after the rule's guardrails masked it) and its answer as the
+/// provider gave it, by reference.
+#[derive(Clone, Debug)]
+pub struct Captured {
+    pub decision: String,
+    pub person: String,
+    pub team: String,
+    pub model: String,
+    pub provider: String,
+    pub route: String,
+    pub request: Bytes,
+    /// The answer's bytes; `None` when it was not kept (larger than the gateway keeps, or no answer came).
+    pub answer: Option<Bytes>,
+    /// Whether `answer` is an event stream.
+    pub streamed: bool,
+}
+
+impl Captured {
+    /// Each text part of the request as (role, text): system prompt, messages, inputs.
+    pub fn prompt(&self) -> Vec<(String, String)> {
+        serde_json::from_slice(&self.request)
+            .map(|body| {
+                gantry_core::guard::text_parts(&body)
+                    .into_iter()
+                    .map(|part| (part.role, part.text))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Each text of the answer: message contents and tool call arguments, a stream's deltas joined.
+    pub fn answer_text(&self) -> Vec<String> {
+        let Some(answer) = &self.answer else {
+            return Vec::new();
+        };
+        if self.streamed {
+            return stream_texts(answer)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect();
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(answer) else {
+            return Vec::new();
+        };
+        answer_texts(&value)
+            .iter()
+            .filter_map(|p| {
+                value
+                    .pointer(p)
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .collect()
+    }
 }
 
 impl std::fmt::Debug for Extension {
@@ -547,6 +617,7 @@ fn build(
     let mut spend = spend::Spend::default();
     spend.store = config.store.clone();
     spend.bodies = config.bodies.clone();
+    spend.capture = config.extension.capture.clone();
     let spend = Arc::new(spend);
     // Holds on parallel limits still in flight at the turn of the hour move to the new hour's counter, also on a
     // gateway that admits nothing meanwhile.

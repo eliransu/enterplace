@@ -1,0 +1,94 @@
+---
+title: Alerting
+description: Send alerts on spend, rate limits, provider errors, latency and security events to Slack, Teams, PagerDuty, email or a signed webhook. Enterprise feature alerts.
+sidebar:
+  order: 11
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+With a license that includes `alerts` (see [License key](/operations/license/)), `gantry-enterprise` adds an **Alerts** page to the console. You define rules there; Gantry evaluates them against the audit records of every replica and sends each alert to the channels you pick. Every alert names the audit records behind it and is written to the audit chain itself.
+
+## Before you start
+
+- The policy needs a `store:` section: rules, channels and alert history live in the same Postgres as the [store](/operations/store/).
+- Set `GANTRY_EXPORT_KEY` on every replica to the same 64 hex characters (`openssl rand -hex 32`). Channel credentials (webhook URLs, routing keys, SMTP passwords, signing secrets) are kept encrypted with it.
+- Optional: set `GANTRY_CONSOLE_URL` to the console's address as people reach it, such as `https://gantry.example.com`. Links in alerts then open the alert and its audit records directly. Without it, links are relative to the console.
+
+<Steps>
+
+1. Open **Alerts** in the console and add a channel. **Send a test alert** checks it end to end.
+2. Add a rule, pick its kind, set its parameters, and list the channel numbers it sends to.
+3. Watch **Recent alerts**: each one lists its records, each a link to that decision in the audit page, and how delivery went.
+
+</Steps>
+
+## Channels
+
+| Kind | URL | Secret | Sent as |
+|---|---|---|---|
+| Slack | The incoming webhook URL | None: the URL is the credential, kept encrypted | A message with the summary, links to each record and to the alert |
+| Microsoft Teams | The workflow's "when a webhook request is received" URL, or an incoming webhook URL | None: the URL is kept encrypted | An Adaptive Card 1.4 in a `message`, with facts, record links and an **Open in Gantry** button |
+| PagerDuty | Empty (`https://events.pagerduty.com/v2/enqueue`) | The integration's routing key | Events API v2 `trigger`, `dedup_key` `gantry-<rule>-<subject>` so repeats group into one incident, the alert as `custom_details` |
+| Email | `smtps://host:465` (TLS from the start) or `smtp://host:587` (STARTTLS) | The SMTP password, with a username | A plain text message to every To address, with the records and links |
+| Webhook | Your HTTPS endpoint | Made by Gantry (`whsec_...`), shown once | A JSON POST signed the [Standard Webhooks](https://www.standardwebhooks.com/) way |
+
+STARTTLS is required unless the SMTP server is this machine. Webhook URLs must be `https://`, or `http://` to this machine only.
+
+### Webhook body and signature
+
+```json
+{"type":"gantry.alert","alert":42,"rule":"Payments budget","kind":"budget","severity":"warning","subject":"team:payments:2026-11","summary":"team:payments has spent $81.20 in 2026-11, reaching $80.00.","time":"2026-11-14T10:02:11.120Z","link":"https://gantry.example.com/console/alerts#alert-42","records":[{"replica":"pod-0-84347ac2b1f0","n":1204,"hash":"9c1f...","id":"01M7969SBMMKV7S7HFP6Q99SPJ"}]}
+```
+
+Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and `webhook-signature: v1,<base64>`, the HMAC-SHA256 of `<webhook-id>.<webhook-timestamp>.<raw body>` under the base64-decoded part of the secret after `whsec_`. Any Standard Webhooks library verifies it. Reject a timestamp more than five minutes old.
+
+## Rules
+
+| Kind | Fires when | Parameters | Subject |
+|---|---|---|---|
+| `budget` | Spend of a scope reaches an amount this day or month; with **Forecast**, when spend at the current rate would reach it by the period's end (checked once a tenth of the period has passed) | scope (`all`, `team`, `person`, `key`), name (empty: each one), period, amount in USD | scope, name and period: once per period |
+| `rate_limit` | `count` requests refused with `rate_limited` within `minutes` | count, minutes, group by | the group |
+| `refusals` | `count` refusals with any of the codes within `minutes`, such as `budget_exceeded,key_budget_exceeded` | codes, count, minutes, group by | the group |
+| `provider_errors` | `count` provider failures within `minutes`: answers with status 5xx or 429, and failed tries in [attempts records](/reference/audit-records/#attempts) | count, minutes, provider | the provider |
+| `latency` | `count` requests slower than `ms` within `minutes`, timed from the decision record to the usage record (the answer's end) | ms, count, minutes, provider | the provider |
+| `guardrail_block` | `count` requests refused with `guardrail_blocked`, or answers a guardrail withheld, within `minutes` | count, minutes, group by | the group |
+| `kill_switch` | A kill switch is set (an `admin` record with action `set_kill`) | none | the record: once each |
+| `new_ip` | A key is used from an address it has not used before. A key's first addresses are learned, not alerted on | none | key and address: once each |
+| `after_hours` | A key is used outside working hours or on a weekend | hours, such as `08-19` or `08-19+0200` | key and day: once a day |
+| `unusual_spend` | A person's spend today is `factor` times their daily average of the last 14 days, and at least the amount | factor (3), amount in USD (5) | person and day: once a day |
+| `system` | The audit log cannot be written, this replica's records cannot be read into Postgres, the alert tables cannot be read, or requests are refused with `store_unavailable` or `kills_unreadable` | none | replica and problem |
+
+Group by is `all` (default), `person`, `team` or `key`.
+
+<Aside type="note">
+An upstream failure that was not retried leaves no record of its own (see [refusal codes](/reference/refusal-codes/#upstream_failed)). Give providers `retries: 1` or a `fallback` so failed tries are in attempts records and count toward `provider_errors`.
+</Aside>
+
+## Deduplication and rate limits
+
+- After an alert, the same rule and subject stay quiet for the rule's **quiet period** (60 minutes by default). Matching records are counted, not sent.
+- Kinds whose subject names a period or an event (budget, kill switch, new address, after hours, unusual spend) fire once per subject.
+- A rule sends at most **At most per hour** alerts an hour (10 by default). The rest are counted as suppressed.
+- Each replica evaluates its own records once, and counts, spend and known addresses live in Postgres. A rule therefore sees every replica, and one alert goes out however many replicas there are.
+- Records older than an hour when first read (a new install, a replica catching up) count toward spend and the baseline but never fire.
+- When Postgres cannot be reached, `system` rules still fire from the last rules and channels read, once per quiet period per replica.
+
+## What is recorded
+
+- Every change to a channel or rule is an `admin` record written before the change: `alert_channel_saved`, `alert_channel_tested`, `alert_channel_removed`, `alert_rule_saved`, `alert_rule_enabled`, `alert_rule_disabled`, `alert_rule_removed`. A refused change is recorded with its code (`read_only`, `invalid_url`, `invalid_rule`). Credentials never appear in records.
+- Every alert is an `alert` record in the replica's chain:
+
+```json
+{"n":1290,"event":"alert","id":"01M79B2Q8V3K0N7Z5X4R1T9WD0","time":"2026-11-14T10:02:11.140Z","alert":42,"rule":"Payments budget","rule_id":3,"kind":"budget","subject":"team:payments:2026-11","summary":"team:payments has spent $81.20 in 2026-11, reaching $80.00.","records":[{"replica":"pod-0-84347ac2b1f0","n":1204,"hash":"9c1f...","id":"01M7969SBMMKV7S7HFP6Q99SPJ"}],"prev":"...","hash":"..."}
+```
+
+- The console keeps the last alerts with their delivery outcome per channel.
+
+Viewers see the page and change nothing. Without the license feature the page answers `license_required` and the nav does not offer it.
+
+<CardGrid>
+	<LinkCard title="Observability integrations" href="/operations/observability-integrations/" description="Langfuse, Phoenix, Datadog and OTLP traces, and the HTTP callback." />
+	<LinkCard title="Audit records" href="/reference/audit-records/" description="The records rules read." />
+	<LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" description="What refuses a request before an alert says so." />
+</CardGrid>

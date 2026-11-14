@@ -1,0 +1,66 @@
+---
+title: Observability integrations
+description: Send every request's cost, tokens and timing to Langfuse, Arize Phoenix, Datadog or any OTLP or HTTP endpoint, with prompt text only on opt-in and redacted.
+sidebar:
+  order: 12
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+With a license that includes `siem`, the **Audit export** page offers three destinations made for LLM observability tools, beside the SIEM ones. They get one entry per finished request: its decision and usage records joined, with model, provider, tokens, cost and duration. By default they never get prompt or answer text.
+
+## Destinations
+
+| Kind | URL | Secret | Sent as |
+|---|---|---|---|
+| LLM traces (OTLP) | An OTLP/HTTP traces endpoint: `https://phoenix:6006/v1/traces`, a collector's `/v1/traces`, or `http://localhost:4318/v1/traces` for a Datadog Agent | Optional; `Authorization: Bearer`, or the header you name (`dd-api-key`, `api_key`) | OTLP/HTTP JSON, one span per request |
+| Langfuse | Your Langfuse host, `https://cloud.langfuse.com` (EU), `https://us.cloud.langfuse.com` or your own | The project's secret key `sk-lf-...`, with its public key `pk-lf-...` | The same spans to `/api/public/otel/v1/traces`, Basic auth, `x-langfuse-ingestion-version: 4` |
+| HTTP callback | Your HTTPS endpoint | Made by Gantry, shown once | One JSON POST per batch with an entry per request, signed `x-gantry-signature: sha256=<HMAC-SHA256 of the raw body>` |
+
+Datadog: the Agent's OTLP receiver feeds LLM Observability and APM, so point an LLM traces destination at it. Audit records go to Datadog Logs through the [SIEM export](/operations/siem-export/) as before.
+
+### Span attributes
+
+Each span is named `chat <model>` (or `embeddings`, `text_completion`), kind client, from the decision to the answer's end, with status error for a 4xx or 5xx answer. It carries three naming conventions, so each tool shows it without mapping:
+
+| Convention | Attributes |
+|---|---|
+| OpenTelemetry GenAI | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, `gen_ai.usage.cost`; with text, `gen_ai.input.messages` and `gen_ai.output.messages` |
+| OpenInference (Arize Phoenix) | `openinference.span.kind` `LLM`, `llm.model_name`, `llm.provider`, `llm.token_count.prompt`, `llm.token_count.completion`, `llm.token_count.total`, `user.id`; with text, `input.value` and `output.value` |
+| Langfuse | `langfuse.observation.type` `generation`, `langfuse.user.id`, `langfuse.trace.name`, `langfuse.observation.usage_details`, `langfuse.observation.cost_details` (`{"total": cost}`); with text, `langfuse.observation.input` and `langfuse.observation.output` |
+| Gantry | `gantry.decision`, `gantry.team`, `gantry.key`, `gantry.rule`, `gantry.client`, `gantry.status`, `gantry.ended`, `gantry.charged_usd`, and the usage record's `gantry.n`, `gantry.hash`, `gantry.prev` |
+
+### The hash range
+
+Every batch is one replica's records in chain order, as for the SIEM destinations. The span resource carries `gantry.replica`, `gantry.batch.first_n`, `gantry.batch.last_n`, `gantry.batch.prev`, `gantry.batch.first_hash` and `gantry.batch.last_hash`; the callback body carries the same fields at the top. Each span or entry names its usage record's number and hash, so you can trace any figure back to the audit chain. A batch without a finished request moves the cursor and sends nothing to a trace tool; the callback gets it with an empty `requests` list, so the ranges it sees stay contiguous.
+
+### Callback body
+
+```json
+{"replica":"pod-0-84347ac2b1f0","count":2,"first_n":1,"last_n":2,"prev":"0000...","first_hash":"84347ac2...","last_hash":"5b2e...","requests":[{"decision":"01M7969SBMMKV7S7HFP6Q99SPJ","start":"2026-11-13T09:14:02.120Z","end":"2026-11-13T09:14:03.620Z","duration_ms":1500,"person":"maya.cohen","team":"payments","key":"5d1e4a07","client":"10.0.0.1","path":"/v1/chat/completions","rule":"payments-team","model":"claude-sonnet-5-5","provider":"anthropic","status":200,"ended":"complete","input_tokens":100,"output_tokens":20,"cache_read_tokens":5,"cache_write_tokens":0,"cost_usd":0.0012,"charged_usd":0.0012,"n":2,"hash":"5b2e...","prev":"84347ac2..."}]}
+```
+
+With the text opt-in, each entry adds `prompt` (`[{"role","text"}]`) and `answer` (a list of texts).
+
+## Prompt and answer text
+
+The audit log never holds prompt or answer text, so the text cannot come from it. A destination gets text only when you tick **Send prompt and answer text, redacted** on it, optionally for named teams only. Then:
+
+1. **Captured at request time.** While at least one destination has opted in, the gateway hands each request's body (as sent to the provider, after the rule's own guardrails masked it) and its answer (whole or streamed, up to 32 MiB) to the export, for the teams that destination named. Before any opt-in nothing is captured, and requests made before it are never sent with text.
+2. **Redacted before it is stored.** Gantry's own secrets and PII detectors (the ones behind the `secrets` and `pii` [guardrails](/governance/guardrails/)) replace every finding with `[MASKED <kind>]`, such as `[MASKED aws_access_key]` or `[MASKED email_address]`. Text the detectors cannot check is dropped, not kept. This cannot be turned off.
+3. **Kept encrypted, apart from the audit log, for a limited time.** The redacted text is stored encrypted with `GANTRY_EXPORT_KEY` in its own table, keyed by decision ID, and deleted after the hours set under **Captured text** (24 by default, 1 to 168), whether it was sent or not. Nothing about it enters the hash chain.
+4. **Sent only where opted in.** When a batch goes to a destination that opted in, each request's text is joined by decision ID. Other destinations, including SIEM ones, never get it.
+
+Opting in, the teams named, and the retention hours are `admin` records (`export_destination_saved` with `text` and `text_teams`, `export_capture_hours_set`), so who turned text on is in the chain.
+
+<Aside type="caution">
+Redaction catches the secret and PII kinds the detectors know, not everything a person may consider private. Opt in only for teams and tools where that is acceptable, and keep the retention short.
+</Aside>
+
+Capture never slows or refuses a request: if the export falls behind, text of some requests is dropped and the log says so once.
+
+<CardGrid>
+	<LinkCard title="SIEM export" href="/operations/siem-export/" description="Destinations, cursors, backfill and the pull API." />
+	<LinkCard title="Alerting" href="/operations/alerting/" description="Rules and channels on the same records." />
+	<LinkCard title="Guardrails" href="/governance/guardrails/" description="The detectors that redact captured text." />
+</CardGrid>
