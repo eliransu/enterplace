@@ -1984,16 +1984,22 @@ mod tests {
         let path = temp("rollout");
         let old = AuditLog::open_as(&path, TEST_BEAT, &elsewhere("old"))?;
         old.append(&entry("A"))?;
+        let started = Instant::now();
         let new = std::thread::spawn({
             let path = path.clone();
             move || AuditLog::open_as(&path, TEST_BEAT, &elsewhere("new"))
         });
-        // Longer than a stale lock takes: the old one beats, so the new one keeps waiting.
-        std::thread::sleep(TEST_BEAT * 7);
-        assert!(!new.is_finished(), "the new Gantry did not wait");
-        assert!(!old.is_broken(), "the old Gantry lost its lock");
+        // The record is written while the new one waits, well before its deadline: a flush to disk on a busy
+        // machine can take longer than the one beat between the end of the sleep below and that deadline, which
+        // made the old Gantry stop too late about once in five runs under load.
+        std::thread::sleep(TEST_BEAT * 3);
         old.append(&entry("B"))?;
         old.flush();
+        // Longer than a stale lock takes, counted from the start of the wait: the old one beats, so the new one
+        // keeps waiting.
+        std::thread::sleep((TEST_BEAT * 7).saturating_sub(started.elapsed()));
+        assert!(!new.is_finished(), "the new Gantry did not wait");
+        assert!(!old.is_broken(), "the old Gantry lost its lock");
         drop(old);
         let new = new.join().map_err(|_| "the new Gantry panicked")??;
         assert_eq!(
