@@ -35,7 +35,7 @@ async fn openai_session(mut socket: WebSocket) {
                 .await;
             let _ = socket
                 .send(ServerMessage::Text(
-                    r#"{"serverContent":{"turnComplete":true},"usageMetadata":{"promptTokenCount":100,"responseTokenCount":50,"totalTokenCount":150}}"#.into(),
+                    r#"{"serverContent":{"turnComplete":true},"usageMetadata":{"promptTokenCount":100,"responseTokenCount":50,"totalTokenCount":150,"promptTokensDetails":[{"modality":"TEXT","tokenCount":60},{"modality":"AUDIO","tokenCount":40}],"responseTokensDetails":[{"modality":"AUDIO","tokenCount":30},{"modality":"TEXT","tokenCount":20}]}}"#.into(),
                 ))
                 .await;
             continue;
@@ -45,11 +45,12 @@ async fn openai_session(mut socket: WebSocket) {
                 r#"{"type":"response.output_audio.delta","delta":"AAAA"}"#.into(),
             ))
             .await;
-        let _ = socket
-            .send(ServerMessage::Text(
-                r#"{"type":"response.done","response":{"id":"resp_1","usage":{"total_tokens":150,"input_tokens":100,"output_tokens":50,"input_token_details":{"cached_tokens":0}}}}"#.into(),
-            ))
-            .await;
+        let done = if text.contains("audio") {
+            r#"{"type":"response.done","response":{"id":"resp_2","usage":{"total_tokens":1500,"input_tokens":1000,"output_tokens":500,"input_token_details":{"text_tokens":400,"audio_tokens":600,"cached_tokens":300,"cached_tokens_details":{"text_tokens":100,"audio_tokens":200}},"output_token_details":{"text_tokens":100,"audio_tokens":400}}}}"#
+        } else {
+            r#"{"type":"response.done","response":{"id":"resp_1","usage":{"total_tokens":150,"input_tokens":100,"output_tokens":50,"input_token_details":{"cached_tokens":0}}}}"#
+        };
+        let _ = socket.send(ServerMessage::Text(done.into())).await;
     }
 }
 
@@ -97,7 +98,7 @@ providers:
     key_env: MOCK_KEY
     models: [live-model]
 prices:
-  rt-model: {{ input: 1000, output: 2000 }}
+  rt-model: {{ input: 1000, output: 2000, cache_read: 100, input_audio: 10000, output_audio: 20000, cache_read_audio: 500 }}
   live-model: {{ input: 1000, output: 2000 }}
 rules:
   - name: data
@@ -341,7 +342,44 @@ async fn a_gemini_live_session_is_decided_on_its_setup_and_metered() -> Result<(
         r["event"] == "usage" && r["model"] == "live-model"
     })
     .await?;
-    assert_eq!(usage["input_tokens"], 100);
-    assert_eq!(usage["output_tokens"], 50);
+    // The details split prompt and answer by modality: audio is counted apart, at the model's audio price when set.
+    assert_eq!(usage["input_tokens"], 60);
+    assert_eq!(usage["input_audio_tokens"], 40);
+    assert_eq!(usage["output_tokens"], 20);
+    assert_eq!(usage["output_audio_tokens"], 30);
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_audio_and_text_tokens_are_priced_apart_and_recorded_apart() -> Result<(), Error> {
+    let gw = gateway("audio", "").await?;
+    let mut socket = connect(gw.port, "/v1/realtime?model=rt-model", DANA).await?;
+    socket
+        .send(Message::Text(
+            r#"{"type":"response.create","response":{"modalities":["audio"]}}"#.into(),
+        ))
+        .await?;
+    next_text(&mut socket).await?.ok_or("no delta")?;
+    next_text(&mut socket).await?.ok_or("no done")?;
+    let usage = wait_for(&gw.audit, |r| {
+        r["event"] == "usage" && r["response"] == "resp_2"
+    })
+    .await?;
+    // 1000 prompt tokens: 300 cached (200 of them audio), 600 audio of which 400 not cached, 300 text not cached.
+    assert_eq!(usage["input_tokens"], 300, "{usage}");
+    assert_eq!(usage["cache_read_tokens"], 100);
+    assert_eq!(usage["input_audio_tokens"], 400);
+    assert_eq!(usage["cache_read_audio_tokens"], 200);
+    assert_eq!(usage["output_tokens"], 100);
+    assert_eq!(usage["output_audio_tokens"], 400);
+    let want = (300.0 * 1000.0
+        + 100.0 * 100.0
+        + 400.0 * 10000.0
+        + 200.0 * 500.0
+        + 100.0 * 2000.0
+        + 400.0 * 20000.0)
+        / 1e6;
+    let charged = usage["charged_usd"].as_f64().ok_or("no charge")?;
+    assert!((charged - want).abs() < 1e-9, "{charged} != {want}");
     Ok(())
 }

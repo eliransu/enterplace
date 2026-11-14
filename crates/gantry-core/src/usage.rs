@@ -37,12 +37,22 @@ pub struct Usage {
     pub cache_write: u64,
     /// Prompt tokens written to Anthropic's 1 hour cache, which costs more than the 5 minute one.
     pub cache_write_1h: u64,
+    /// Audio tokens, counted apart from the text ones above because audio is priced apart (realtime sessions):
+    /// prompt audio, generated audio, and prompt audio read from the cache.
+    pub input_audio: u64,
+    pub output_audio: u64,
+    pub cache_read_audio: u64,
 }
 
 impl Usage {
     /// The whole prompt, however each part was priced.
     pub fn prompt(&self) -> u64 {
-        self.input + self.cache_read + self.cache_write + self.cache_write_1h
+        self.input
+            + self.cache_read
+            + self.cache_write
+            + self.cache_write_1h
+            + self.input_audio
+            + self.cache_read_audio
     }
 
     /// Usage from a whole (not streamed) answer of either format. None if the body carries no usage.
@@ -79,6 +89,7 @@ impl Usage {
             cache_read,
             cache_write,
             cache_write_1h: 0,
+            ..Self::default()
         }
     }
 
@@ -94,6 +105,7 @@ impl Usage {
             cache_read,
             cache_write,
             cache_write_1h: 0,
+            ..Self::default()
         }
     }
 
@@ -108,6 +120,7 @@ impl Usage {
             cache_read,
             cache_write: 0,
             cache_write_1h: 0,
+            ..Self::default()
         }
     }
 
@@ -297,7 +310,7 @@ impl UsageScanner {
 
 /// Prices in US dollars per million tokens, for one model. The policy file sets these by model name in a
 /// [`PriceOverrides`] map; a price it does not set comes from [`builtin_prices`].
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Price {
     pub input: f64,
@@ -326,6 +339,22 @@ pub struct Price {
     /// charged this for each image the answer holds, and reserves it for each image it asks for.
     #[serde(default)]
     pub per_image: Option<f64>,
+    /// Audio tokens, per million: prompt audio, generated audio, and cached prompt audio. Each defaults to the text
+    /// price of the same kind, which under-counts audio on most models: set them for a realtime model.
+    #[serde(default)]
+    pub input_audio: Option<f64>,
+    #[serde(default)]
+    pub output_audio: Option<f64>,
+    #[serde(default)]
+    pub cache_read_audio: Option<f64>,
+    /// The batch API's own prices, per million: a batch line is charged these where they are set, and half the
+    /// price above where they are not.
+    #[serde(default)]
+    pub batch_input: Option<f64>,
+    #[serde(default)]
+    pub batch_output: Option<f64>,
+    #[serde(default)]
+    pub batch_cache_read: Option<f64>,
     /// Where the price came from, written in each usage record. Never read from a file: a price in one is the policy's.
     #[serde(skip)]
     pub source: PriceSource,
@@ -380,7 +409,49 @@ impl Price {
             max_output: Some(max_output),
             max_context: None,
             per_image: None,
+            input_audio: None,
+            output_audio: None,
+            cache_read_audio: None,
+            batch_input: None,
+            batch_output: None,
+            batch_cache_read: None,
             source: PriceSource::Builtin,
+        }
+    }
+
+    /// The price a batch line pays, and the share of it charged: the batch prices where both are set (share 1),
+    /// else this price at `half` (OpenAI, Anthropic, Bedrock and Vertex AI bill batches at half price).
+    pub fn for_batch(&self, half: f64) -> (Self, f64) {
+        match (self.batch_input, self.batch_output) {
+            (Some(input), Some(output)) => {
+                // What the map does not price for batches keeps the ratio of the batch input price to the input price.
+                let ratio = if self.input > 0.0 {
+                    input / self.input
+                } else {
+                    half
+                };
+                let out_ratio = if self.output > 0.0 {
+                    output / self.output
+                } else {
+                    half
+                };
+                let scaled = |p: Option<f64>| p.map(|p| p * ratio);
+                let price = Self {
+                    input,
+                    output,
+                    cache_read: self.batch_cache_read.or(scaled(self.cache_read)),
+                    cache_write: scaled(self.cache_write),
+                    cache_write_1h: scaled(self.cache_write_1h),
+                    // ponytail: no long context tier for batches; the map prices few, add it when one matters.
+                    long_context: None,
+                    input_audio: scaled(self.input_audio),
+                    output_audio: self.output_audio.map(|p| p * out_ratio),
+                    cache_read_audio: scaled(self.cache_read_audio),
+                    ..self.clone()
+                };
+                (price, 1.0)
+            }
+            _ => (self.clone(), half),
         }
     }
 
@@ -395,7 +466,11 @@ impl Price {
             + usage.output as f64 * p.output
             + usage.cache_read as f64 * p.cache_read.unwrap_or(p.input)
             + usage.cache_write as f64 * cache_write
-            + usage.cache_write_1h as f64 * p.cache_write_1h.unwrap_or(cache_write);
+            + usage.cache_write_1h as f64 * p.cache_write_1h.unwrap_or(cache_write)
+            + usage.input_audio as f64 * p.input_audio.unwrap_or(p.input)
+            + usage.output_audio as f64 * p.output_audio.unwrap_or(p.output)
+            + usage.cache_read_audio as f64
+                * p.cache_read_audio.or(p.cache_read).unwrap_or(p.input);
         dollars_per_mtok / 1_000_000.0
     }
 
@@ -408,6 +483,12 @@ impl Price {
             self.cache_write,
             self.cache_write_1h,
             self.per_image,
+            self.input_audio,
+            self.output_audio,
+            self.cache_read_audio,
+            self.batch_input,
+            self.batch_output,
+            self.batch_cache_read,
         ];
         if all.into_iter().flatten().any(|p| !p.is_finite() || p < 0.0) {
             return Err(format!(
@@ -512,6 +593,12 @@ fn litellm_row(line: &'static str) -> Option<(&'static str, Price)> {
         l_out,
         l_read,
         l_write,
+        a_in,
+        a_out,
+        a_read,
+        b_in,
+        b_out,
+        b_read,
     ] = cells[..]
     else {
         return None;
@@ -529,6 +616,12 @@ fn litellm_row(line: &'static str) -> Option<(&'static str, Price)> {
             max_output: whole(max_out),
             max_context: None,
             per_image: None,
+            input_audio: None,
+            output_audio: None,
+            cache_read_audio: None,
+            batch_input: None,
+            batch_output: None,
+            batch_cache_read: None,
             source: PriceSource::Litellm,
         })
     };
@@ -536,6 +629,12 @@ fn litellm_row(line: &'static str) -> Option<(&'static str, Price)> {
     price.cache_write_1h = float(write_1h);
     price.per_image = float(image);
     price.max_context = whole(max_ctx);
+    price.input_audio = float(a_in);
+    price.output_audio = float(a_out);
+    price.cache_read_audio = float(a_read);
+    price.batch_input = float(b_in);
+    price.batch_output = float(b_out);
+    price.batch_cache_read = float(b_read);
     if let Some(above) = whole(above) {
         price.long_context = Some(Box::new(LongContext {
             above_prompt_tokens: above,
@@ -611,7 +710,8 @@ mod tests {
                 output: 503,
                 cache_read: 2051,
                 cache_write: 2000,
-                cache_write_1h: 51
+                cache_write_1h: 51,
+                ..Usage::default()
             })
         );
     }
@@ -627,7 +727,8 @@ mod tests {
                 output: 30,
                 cache_read: 1000,
                 cache_write: 150,
-                cache_write_1h: 0
+                cache_write_1h: 0,
+                ..Usage::default()
             })
         );
         assert_eq!(usage.map(|u| u.prompt()), Some(1200));
@@ -666,7 +767,8 @@ mod tests {
                 output: 89,
                 cache_read: 100,
                 cache_write: 20,
-                cache_write_1h: 0
+                cache_write_1h: 0,
+                ..Usage::default()
             })
         );
     }
@@ -685,7 +787,8 @@ mod tests {
                 output: 5,
                 cache_read: 4,
                 cache_write: 0,
-                cache_write_1h: 0
+                cache_write_1h: 0,
+                ..Usage::default()
             })
         );
     }
@@ -774,6 +877,7 @@ mod tests {
             cache_read: 2_000_000,
             cache_write: 400_000,
             cache_write_1h: 250_000,
+            ..Usage::default()
         };
         // 2.00 + 1.00 + 0.20 + 1.00 + 1.00
         assert!(
@@ -815,6 +919,7 @@ mod tests {
             cache_read: 1_000_000,
             cache_write: 1_000_000,
             cache_write_1h: 1_000_000,
+            ..Usage::default()
         };
         assert!(close(mini.cost_usd(&usage), 1.0 + 2.0 + 1.0 + 1.0 + 1.0));
         let local = price_for("my-local-model", &overrides).ok_or("no price")?;

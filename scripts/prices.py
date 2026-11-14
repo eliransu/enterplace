@@ -25,7 +25,8 @@ FIRST = ["openai", "anthropic", "gemini", "vertex_ai", "mistral", "groq", "deeps
 LONG = re.compile(r"^input_cost_per_token_above_(\d+)k_tokens$")
 COLUMNS = ["model", "input", "output", "cache_read", "cache_write", "cache_write_1h", "per_image",
            "max_output", "max_context", "long_above", "long_input", "long_output", "long_cache_read",
-           "long_cache_write"]
+           "long_cache_write", "input_audio", "output_audio", "cache_read_audio", "batch_input", "batch_output",
+           "batch_cache_read"]
 
 
 def per_mtok(value):
@@ -68,6 +69,15 @@ def row(name, entry):
         ]
     else:
         cells += [""] * 5
+    # Audio tokens (realtime and audio models) and the batch API's own prices, where the map gives them.
+    cells += [
+        per_mtok(entry.get("input_cost_per_audio_token")),
+        per_mtok(entry.get("output_cost_per_audio_token")),
+        per_mtok(entry.get("cache_read_input_audio_token_cost")),
+        per_mtok(entry.get("input_cost_per_token_batches")),
+        per_mtok(entry.get("output_cost_per_token_batches")),
+        per_mtok(entry.get("cache_read_input_token_cost_batches")),
+    ]
     if "" in cells[1:3] or any("\t" in c or "\n" in c for c in cells):
         return None
     return cells

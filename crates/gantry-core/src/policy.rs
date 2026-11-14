@@ -653,6 +653,10 @@ pub struct Limits {
     /// Days a file uploaded through Gantry (a batch input, a fine-tuning set) is kept before it is deleted at the
     /// provider. None keeps the provider's default.
     pub file_retention_days: Option<u32>,
+    /// The most lines one batch (a batch file or a message batch) may hold under this rule.
+    pub batch_max_lines: Option<u32>,
+    /// The most batches a person under this rule may have open (not yet ended) at once.
+    pub batch_max_open: Option<u32>,
 }
 
 /// Whose requests share a rule's cached answers.

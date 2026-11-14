@@ -252,6 +252,7 @@ fn price() -> PriceOverrides {
             max_context: None,
             per_image: None,
             source: Default::default(),
+            ..Price::default()
         },
     );
     prices

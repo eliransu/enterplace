@@ -60,6 +60,7 @@ const KNOWN: &[&str] = &[
     "usd",
     "per",
     "rate",
+    "batch",
     "rpm",
     "cache",
     "ttl_seconds",
@@ -83,6 +84,16 @@ const KNOWN: &[&str] = &[
     "max_output",
     "max_context",
     "per_image",
+    "input_audio",
+    "output_audio",
+    "cache_read_audio",
+    "batch_input",
+    "batch_output",
+    "batch_cache_read",
+    "max_lines",
+    "max_open",
+    "bucket",
+    "storage_url",
     "above_prompt_tokens",
     "price",
     "console",
@@ -758,6 +769,20 @@ struct ProviderFile {
     keys: Vec<PoolKeyFile>,
     #[serde(default)]
     key_balance: Option<String>,
+    #[serde(default)]
+    batch: Option<ProviderBatchFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderBatchFile {
+    bucket: String,
+    #[serde(default)]
+    role_arn: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    storage_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -815,7 +840,18 @@ struct RuleFile {
     #[serde(default)]
     file_retention_days: Option<i64>,
     #[serde(default)]
+    batch: Option<RuleBatchFile>,
+    #[serde(default)]
     shadow_until: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleBatchFile {
+    #[serde(default)]
+    max_lines: Option<i64>,
+    #[serde(default)]
+    max_open: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -1612,6 +1648,33 @@ pub struct Provider {
     pub keys: Vec<KeySource>,
     /// Picks the key with the fewest requests sent, not the next in turn.
     pub least_used_key: bool,
+    /// Where the provider's own batch jobs keep their files: Bedrock batch inference and Vertex AI batch prediction.
+    pub batch: Option<ProviderBatch>,
+}
+
+/// How a Bedrock or Vertex AI provider runs batches through `/v1/batches`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderBatch {
+    /// The bucket and prefix batch inputs and outputs are kept under: `s3://bucket/prefix/` for Bedrock,
+    /// `gs://bucket/prefix/` for Vertex AI. Always ends in `/`.
+    pub bucket: String,
+    /// Bedrock: the service role Bedrock assumes to read and write the bucket.
+    pub role_arn: Option<String>,
+    /// The provider's batch API, when it is not the one the provider's URL implies.
+    pub url: Option<String>,
+    /// The S3 or Cloud Storage endpoint, when it is not the public one (a private endpoint or a test).
+    pub storage_url: Option<String>,
+}
+
+impl ProviderBatch {
+    /// The bucket and the prefix inside it, without the scheme.
+    pub fn bucket_and_prefix(&self) -> (&str, &str) {
+        let rest = self
+            .bucket
+            .split_once("://")
+            .map_or(self.bucket.as_str(), |(_, rest)| rest);
+        rest.split_once('/').unwrap_or((rest, ""))
+    }
 }
 
 /// Everything `gantry serve` needs from the two files.
@@ -2951,6 +3014,29 @@ fn limits(
             )),
         }
     }
+    if let Some(batch) = &rule.batch {
+        let mut count = |value: Option<i64>, name: &str, example: &str| match value
+            .map(u32::try_from)
+        {
+            None => None,
+            Some(Ok(n @ 1..)) => Some(n),
+            Some(_) => {
+                errors.push(format!(
+                    "{}: batch.{name} is a whole number, 1 or more, for example batch: {{ {name}: {example} }}. To set no limit, remove it.",
+                    at("batch")
+                ));
+                None
+            }
+        };
+        limits.batch_max_lines = count(batch.max_lines, "max_lines", "50000");
+        limits.batch_max_open = count(batch.max_open, "max_open", "5");
+        if batch.max_lines.is_none() && batch.max_open.is_none() {
+            errors.push(format!(
+                "{}: batch sets max_lines, max_open or both, for example batch: {{ max_lines: 50000, max_open: 5 }}. To set no batch limit, remove it.",
+                at("batch")
+            ));
+        }
+    }
     if let Some(every) = rule.check_stream_every {
         match u32::try_from(every) {
             Ok(every @ 50..=100_000) => limits.check_stream_every = Some(every),
@@ -3334,6 +3420,62 @@ fn provider_options(
     }
     if entry.role_arn.is_some() && kind != Some(Kind::Bedrock) {
         only("role_arn", "bedrock", errors);
+    }
+    if let Some(batch) = &entry.batch {
+        let scheme = match kind {
+            Some(Kind::Bedrock) => Some("s3"),
+            Some(Kind::Vertex | Kind::VertexAnthropic) => Some("gs"),
+            _ => None,
+        };
+        match scheme {
+            None => errors.push(format!(
+                "{}: batch is for a provider of kind bedrock, vertex or vertex_anthropic, whose batch jobs read and write a bucket. OpenAI and Anthropic batches need no batch: section. Remove it.",
+                at("batch")
+            )),
+            Some(scheme) => {
+                let rest = batch.bucket.strip_prefix(&format!("{scheme}://"));
+                let bucket = rest.map(|r| r.split('/').next().unwrap_or_default());
+                let plain = |text: &str| {
+                    text.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-_./".contains(&b))
+                };
+                if !bucket.is_some_and(|b| !b.is_empty() && plain(b))
+                    || !rest.is_some_and(plain)
+                {
+                    errors.push(format!(
+                        "{}: batch.bucket is where batch files are kept, as {scheme}://<bucket>/<prefix>/, for example {scheme}://my-bucket/gantry-batches/, in letters, digits and -_./ only.",
+                        at("batch")
+                    ));
+                }
+                if scheme == "s3" {
+                    match &batch.role_arn {
+                        Some(role) if role.starts_with("arn:aws") && role.contains(":role/") => {}
+                        _ => errors.push(format!(
+                            "{}: a bedrock provider's batch needs role_arn, the service role Bedrock assumes to read and write the bucket, for example role_arn: arn:aws:iam::123456789012:role/bedrock-batch.",
+                            at("batch")
+                        )),
+                    }
+                } else if batch.role_arn.is_some() {
+                    errors.push(format!(
+                        "{}: batch.role_arn is for a bedrock provider. Vertex AI batch jobs run as the project's service agent. Remove it.",
+                        at("batch")
+                    ));
+                }
+                for url in [&batch.url, &batch.storage_url].into_iter().flatten() {
+                    if !(url.starts_with("https://") || url.starts_with("http://")) {
+                        errors.push(format!(
+                            "{}: batch.url and batch.storage_url are base URLs, for example https://bedrock.us-east-1.amazonaws.com. Write the scheme.",
+                            at("batch")
+                        ));
+                    } else if is_private(url) && !entry.allow_private {
+                        errors.push(format!(
+                            "{}: batch.url or batch.storage_url points at this machine or a private network. If that is intended, for example a private endpoint, add `allow_private: true` to the provider.",
+                            at("batch")
+                        ));
+                    }
+                }
+            }
+        }
     }
     if let Some(role) = &entry.role_arn
         && !(role.starts_with("arn:aws") && role.contains(":role/"))
@@ -3912,6 +4054,19 @@ fn providers(
                 timeouts,
                 keys,
                 least_used_key,
+                batch: entry.batch.as_ref().map(|b| ProviderBatch {
+                    bucket: if b.bucket.ends_with('/') {
+                        b.bucket.clone()
+                    } else {
+                        format!("{}/", b.bucket)
+                    },
+                    role_arn: b.role_arn.clone(),
+                    url: b.url.as_ref().map(|u| u.trim_end_matches('/').to_string()),
+                    storage_url: b
+                        .storage_url
+                        .as_ref()
+                        .map(|u| u.trim_end_matches('/').to_string()),
+                }),
             });
         }
     }
@@ -4459,6 +4614,7 @@ pub fn same_connection(a: &Provider, b: &Provider) -> bool {
         && a.region == b.region
         && a.role_arn == b.role_arn
         && a.allow_private == b.allow_private
+        && a.batch == b.batch
 }
 
 /// What `gantry check` warns about in a policy that loads: observe mode, and models no provider serves.
@@ -5544,6 +5700,88 @@ guardrails:
                 refused.contains("file_retention_days") && refused.contains("1 to 30"),
                 "{days}: {refused}"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_provider_batch_section_loads_for_bedrock_and_vertex_only() -> TestResult {
+        let bedrock = |batch: &str| {
+            GOOD.replace(
+                "rules:\n",
+                &format!("  - name: bedrock\n    kind: bedrock\n    region: us-east-1\n    models: [claude-b]\n    model_ids: {{ claude-b: anthropic.claude-b }}\n    batch: {batch}\nrules:\n"),
+            )
+        };
+        let loaded = check(
+            "provider-batch",
+            &bedrock("{ bucket: s3://bkt/pre, role_arn: arn:aws:iam::123456789012:role/b }"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        let batch = loaded
+            .providers
+            .iter()
+            .find_map(|p| p.batch.clone())
+            .ok_or("no batch")?;
+        assert_eq!(batch.bucket, "s3://bkt/pre/");
+        assert_eq!(batch.bucket_and_prefix(), ("bkt", "pre/"));
+        for (bad, says) in [
+            ("{ bucket: s3://bkt/ }", "role_arn"),
+            (
+                "{ bucket: gs://bkt/, role_arn: arn:aws:iam::1:role/b }",
+                "s3://",
+            ),
+            (
+                "{ bucket: s3://b k/, role_arn: arn:aws:iam::1:role/b }",
+                "s3://",
+            ),
+        ] {
+            let refused = check("provider-batch-bad", &bedrock(bad), None)?
+                .err()
+                .ok_or("a bad batch section loaded")?
+                .join("\n");
+            assert!(refused.contains(says), "{bad}: {refused}");
+        }
+        let openai = GOOD.replace(
+            "    models: [gpt-4o-mini, gpt-4o]\n",
+            "    models: [gpt-4o-mini, gpt-4o]\n    batch: { bucket: s3://bkt/ }\n",
+        );
+        let refused = check("provider-batch-openai", &openai, None)?
+            .err()
+            .ok_or("an openai batch section loaded")?
+            .join("\n");
+        assert!(
+            refused.contains("bedrock, vertex or vertex_anthropic"),
+            "{refused}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_rule_batch_limit_loads_and_a_bad_one_says_the_fix() -> TestResult {
+        let with = |extra: &str| {
+            GOOD.replace(
+                "    models: [gpt-4o-mini]\n",
+                &format!("    models: [gpt-4o-mini]\n{extra}"),
+            )
+        };
+        let loaded = check(
+            "batch-limits",
+            &with("    batch: { max_lines: 100, max_open: 2 }\n"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        let limits = &loaded.policy.rule_list()[0].limits;
+        assert_eq!(
+            (limits.batch_max_lines, limits.batch_max_open),
+            (Some(100), Some(2))
+        );
+        for bad in ["{ max_lines: 0 }", "{ max_open: -1 }", "{}"] {
+            let refused = check("batch-bad", &with(&format!("    batch: {bad}\n")), None)?
+                .err()
+                .ok_or("a bad batch limit loaded")?
+                .join("\n");
+            assert!(refused.contains("batch"), "{bad}: {refused}");
         }
         Ok(())
     }

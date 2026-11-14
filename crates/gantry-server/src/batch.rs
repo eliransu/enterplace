@@ -147,6 +147,9 @@ struct Owned {
     retention_days: Option<u32>,
     decision: String,
     settled: bool,
+    /// For a file or batch Gantry keeps for a Bedrock or Vertex AI provider: the object key, the job, the region
+    /// and the model the provider knows. Null for OpenAI and Anthropic objects, which the provider keeps.
+    cloud: Value,
 }
 
 impl Owned {
@@ -176,6 +179,7 @@ impl Owned {
             retention_days: None,
             decision: decision.to_string(),
             settled: false,
+            cloud: Value::Null,
         }
     }
 
@@ -216,6 +220,9 @@ impl Owned {
             "retention_days".into(),
             self.retention_days.map_or(Value::Null, Value::from),
         );
+        if !self.cloud.is_null() {
+            record.insert("cloud".into(), self.cloud.clone());
+        }
         record
     }
 
@@ -242,6 +249,7 @@ impl Owned {
                 .and_then(|d| u32::try_from(d).ok()),
             decision: text("id"),
             settled: false,
+            cloud: record["cloud"].clone(),
         };
         Some((record["object_id"].as_str()?.to_string(), owned))
     }
@@ -596,6 +604,29 @@ enum Then {
     Delete(String),
     /// Passed on as it comes: file content, batch results, job events.
     Stream,
+    /// Batch results read whole and passed through the owner's answer guardrails line by line.
+    Guard(Box<GuardResults>),
+    /// Served by Gantry for a file or batch it keeps for a Bedrock or Vertex AI provider.
+    Cloud(Cloud),
+}
+
+/// What Gantry does itself for a file or batch it keeps for a Bedrock or Vertex AI provider.
+enum Cloud {
+    /// Writes the translated lines (the request body) to the bucket and records the file.
+    Upload(Box<Owned>),
+    /// Starts the provider's job on a file and records the batch.
+    Create {
+        batch: Box<Owned>,
+        file: Box<Owned>,
+        file_id: String,
+    },
+    Batch(String),
+    Cancel(String),
+    File(String),
+    Content(String, Option<Box<GuardResults>>),
+    Delete(String),
+    /// A list of the caller's own files or batches Gantry keeps, without asking any provider.
+    List(Item),
 }
 
 struct Ready {
@@ -667,6 +698,9 @@ async fn serve(
         release(state, &ready.reserved);
         return Err(refusal);
     }
+    if matches!(ready.then, Then::Cloud(_)) {
+        return run_cloud(state, version, decision, ready).await;
+    }
     let provider = &version.providers[ready.provider];
     let answer = match fetch(
         state,
@@ -714,7 +748,7 @@ fn release(state: &AppState, reserved: &[Value]) {
     );
 }
 
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
@@ -737,9 +771,11 @@ fn not_yours(word: &str, id: &str) -> Refusal {
 }
 
 /// The caller's own file, batch or job, and its provider by position.
+#[allow(clippy::too_many_arguments)]
 async fn owned(
     state: &AppState,
     version: &Snapshot,
+    policy: &Policy,
     person: &Principal,
     id: &str,
     item: Item,
@@ -776,6 +812,28 @@ async fn owned(
             )
         })?;
     seen.provider = Some(index);
+    if let Some(rule) = seen.rule
+        && let Some(regions) = &rule.limits.regions
+        && !found.cloud["region"]
+            .as_str()
+            .is_some_and(|r| regions.iter().any(|x| x == r))
+    {
+        // Only a file or batch Gantry keeps for a deployment labelled with one of the rule's regions shows where
+        // it is.
+        crate::enforce(
+            seen,
+            Refusal::new(
+                StatusCode::FORBIDDEN,
+                "region_not_allowed",
+                format!(
+                    "Refused: rule \"{}\" keeps requests in {}, and {word} \"{id}\" is not kept for a deployment labelled with one of them. Send it under a rule without regions:.",
+                    rule.name,
+                    regions.join(", ")
+                ),
+            ),
+            policy.observing(rule.shadow_until.as_deref()),
+        )?;
+    }
     Ok((found, index))
 }
 
@@ -927,8 +985,25 @@ async fn prepare<'a>(
     let by = policy.observing(rule.shadow_until.as_deref());
     // The end customer and tags the objects are charged to, as on the model routes.
     crate::customer_and_tags(&mut parts.headers, person, rule, seen, by)?;
-    if let Some(regions) = &rule.limits.regions {
-        // Files, batches and jobs are kept at one provider account, which has no region Gantry can show.
+    let op = op(&parts.method, parts.uri.path()).ok_or_else(unknown_batch_route)?;
+    // A file or batch Gantry keeps for a region-labelled Bedrock or Vertex AI deployment shows its region, and is
+    // checked where it is resolved. The rest are kept at one provider account, with no region Gantry can show.
+    let kept_lists = version
+        .providers
+        .iter()
+        .any(|p| crate::cloud_batch::is_cloud(p) && p.batch.is_some());
+    let cloud_capable = (kept_lists && matches!(op, Op::FileList | Op::BatchList))
+        || matches!(
+            op,
+            Op::FileUpload
+                | Op::File(_)
+                | Op::FileContent(_)
+                | Op::FileDelete(_)
+                | Op::BatchCreate
+                | Op::Batch(_)
+                | Op::BatchCancel(_)
+        );
+    if let Some(regions) = rule.limits.regions.as_ref().filter(|_| !cloud_capable) {
         crate::enforce(
             seen,
             Refusal::new(
@@ -943,7 +1018,6 @@ async fn prepare<'a>(
             by,
         )?;
     }
-    let op = op(&parts.method, parts.uri.path()).ok_or_else(unknown_batch_route)?;
     let query = checked_query(&parts.uri, &key)?;
     let mut headers = HeaderMap::new();
     let ready = |provider: usize, method: Method, target: String, body: Bytes, then: Then| Ready {
@@ -995,6 +1069,18 @@ async fn prepare<'a>(
                 &bytes,
             )
             .await?;
+            if upload.owned.purpose == "batch" {
+                check_max_lines(policy, rule, upload.owned.lines, seen)?;
+            }
+            count_creation(
+                state,
+                policy,
+                person,
+                rule,
+                upload.owned.models.first().map(String::as_str),
+                seen,
+            )
+            .await?;
             extra.insert("object".into(), "file".into());
             extra.insert("purpose".into(), upload.owned.purpose.as_str().into());
             extra.insert("lines".into(), upload.owned.lines.into());
@@ -1002,6 +1088,15 @@ async fn prepare<'a>(
                 extra.insert("guardrails".into(), Value::Array(upload.found));
             }
             seen.would_refuse.extend(upload.would_refuse);
+            if upload.cloud {
+                return Ok(ready(
+                    upload.provider,
+                    Method::POST,
+                    String::new(),
+                    upload.body,
+                    Then::Cloud(Cloud::Upload(Box::new(upload.owned))),
+                ));
+            }
             if let Ok(value) = HeaderValue::from_str(&content_type) {
                 headers.insert(header::CONTENT_TYPE, value);
             }
@@ -1019,6 +1114,24 @@ async fn prepare<'a>(
                 Op::BatchList => "/v1/batches",
                 _ => "/v1/fine_tuning/jobs",
             };
+            let openai = version.providers.iter().any(|p| p.kind == Kind::OpenAi);
+            let kept = match op {
+                Op::FileList => Some(Item::File),
+                Op::BatchList => Some(Item::Batch),
+                _ => None,
+            };
+            // A rule with regions reaches only what Gantry keeps; so does a gateway with no OpenAI provider.
+            if let Some(item) =
+                kept.filter(|_| (rule.limits.regions.is_some() && kept_lists) || !openai)
+            {
+                return Ok(ready(
+                    0,
+                    Method::GET,
+                    String::new(),
+                    Bytes::new(),
+                    Then::Cloud(Cloud::List(item)),
+                ));
+            }
             let provider = pick(version, Kind::OpenAi, &parts.headers, None)?;
             Ok(ready(
                 provider,
@@ -1041,12 +1154,36 @@ async fn prepare<'a>(
         }
         Op::File(id) | Op::FileContent(id) | Op::FileDelete(id) => {
             let id = id.clone();
-            let (_, provider) = owned(state, version, person, &id, Item::File, seen).await?;
+            let (file, provider) =
+                owned(state, version, policy, person, &id, Item::File, seen).await?;
             extra.insert("object_id".into(), id.as_str().into());
+            if !file.cloud.is_null() {
+                let cloud = match op {
+                    Op::File(_) => Cloud::File(id),
+                    Op::FileContent(_) => {
+                        let guard = (file.purpose == "batch_output")
+                            .then(|| result_guards(policy, &file, &id, Results::OpenAi))
+                            .flatten();
+                        Cloud::Content(id, guard)
+                    }
+                    _ => Cloud::Delete(id),
+                };
+                return Ok(ready(
+                    provider,
+                    Method::GET,
+                    String::new(),
+                    Bytes::new(),
+                    Then::Cloud(cloud),
+                ));
+            }
             let (method, target, then) = match op {
                 Op::File(_) => (Method::GET, format!("/v1/files/{id}"), Then::Read(id)),
                 Op::FileContent(_) => {
-                    (Method::GET, format!("/v1/files/{id}/content"), Then::Stream)
+                    let then = (file.purpose == "batch_output")
+                        .then(|| result_guards(policy, &file, &id, Results::OpenAi))
+                        .flatten()
+                        .map_or(Then::Stream, Then::Guard);
+                    (Method::GET, format!("/v1/files/{id}/content"), then)
                 }
                 _ => (Method::DELETE, format!("/v1/files/{id}"), Then::Delete(id)),
             };
@@ -1054,8 +1191,22 @@ async fn prepare<'a>(
         }
         Op::Batch(id) | Op::BatchCancel(id) => {
             let id = id.clone();
-            let (_, provider) = owned(state, version, person, &id, Item::Batch, seen).await?;
+            let (batch, provider) =
+                owned(state, version, policy, person, &id, Item::Batch, seen).await?;
             extra.insert("object_id".into(), id.as_str().into());
+            if !batch.cloud.is_null() {
+                let cloud = match op {
+                    Op::Batch(_) => Cloud::Batch(id),
+                    _ => Cloud::Cancel(id),
+                };
+                return Ok(ready(
+                    provider,
+                    Method::GET,
+                    String::new(),
+                    Bytes::new(),
+                    Then::Cloud(cloud),
+                ));
+            }
             let (method, target) = match op {
                 Op::Batch(_) => (Method::GET, format!("/v1/batches/{id}")),
                 _ => (Method::POST, format!("/v1/batches/{id}/cancel")),
@@ -1073,15 +1224,25 @@ async fn prepare<'a>(
         | Op::MessageBatchCancel(id)
         | Op::MessageBatchDelete(id) => {
             let id = id.clone();
-            let (_, provider) =
-                owned(state, version, person, &id, Item::MessageBatch, seen).await?;
+            let (batch, provider) = owned(
+                state,
+                version,
+                policy,
+                person,
+                &id,
+                Item::MessageBatch,
+                seen,
+            )
+            .await?;
             extra.insert("object_id".into(), id.as_str().into());
             anthropic_headers(&mut headers);
             let base = format!("/v1/messages/batches/{id}");
             let (method, target, then) = match op {
                 Op::MessageBatch(_) => (Method::GET, base, Then::Read(id)),
                 Op::MessageBatchResults(_) => {
-                    (Method::GET, format!("{base}/results"), Then::Stream)
+                    let then = result_guards(policy, &batch, &id, Results::Anthropic)
+                        .map_or(Then::Stream, Then::Guard);
+                    (Method::GET, format!("{base}/results"), then)
                 }
                 Op::MessageBatchCancel(_) => {
                     (Method::POST, format!("{base}/cancel"), Then::Read(id))
@@ -1092,7 +1253,8 @@ async fn prepare<'a>(
         }
         Op::Tune(id, what) => {
             let id = id.clone();
-            let (_, provider) = owned(state, version, person, &id, Item::FineTune, seen).await?;
+            let (_, provider) =
+                owned(state, version, policy, person, &id, Item::FineTune, seen).await?;
             extra.insert("object_id".into(), id.as_str().into());
             let mut target = format!("/v1/fine_tuning/jobs/{id}");
             let (method, then) = match what.as_str() {
@@ -1118,7 +1280,8 @@ async fn prepare<'a>(
                     "Refused: a batch names its input file in \"input_file_id\", a string. Upload the file to /v1/files through Gantry first and send its ID.".into(),
                 )
             })?;
-            let (file, provider) = owned(state, version, person, file_id, Item::File, seen).await?;
+            let (file, provider) =
+                owned(state, version, policy, person, file_id, Item::File, seen).await?;
             if file.purpose != "batch" || file.person != person.name {
                 return Err(bad(
                     "not_a_batch_file",
@@ -1152,6 +1315,18 @@ async fn prepare<'a>(
                 crate::killed(state, person, &key_sha256, Some(model))?;
             }
             seen.model = file.models.first().cloned();
+            // The policy may have changed since the upload: its batch limits hold now too.
+            check_max_lines(policy, rule, file.lines, seen)?;
+            check_max_open(state, policy, person, rule, seen).await?;
+            count_creation(
+                state,
+                policy,
+                person,
+                rule,
+                seen.model.clone().as_deref(),
+                seen,
+            )
+            .await?;
             let reserved = reserve(state, policy, person, rule, &file, file_id, seen).await?;
             let mut created = Owned::new(Item::Batch, &file.provider, person, seen, decision);
             created.purpose = file.model_of.get("").cloned().unwrap_or_default();
@@ -1163,6 +1338,21 @@ async fn prepare<'a>(
             extra.insert("object".into(), "batch".into());
             extra.insert("input_file_id".into(), file_id.into());
             extra.insert("lines".into(), file.lines.into());
+            if !file.cloud.is_null() {
+                let mut ready = ready(
+                    provider,
+                    Method::POST,
+                    String::new(),
+                    Bytes::new(),
+                    Then::Cloud(Cloud::Create {
+                        batch: Box::new(created),
+                        file: Box::new(file.clone()),
+                        file_id: file_id.to_string(),
+                    }),
+                );
+                ready.reserved = reserved;
+                return Ok(ready);
+            }
             headers.insert(header::CONTENT_TYPE, json_type);
             let mut ready = ready(
                 provider,
@@ -1201,6 +1391,8 @@ async fn prepare<'a>(
                 }
                 items.push((i + 1, custom_id, "/v1/messages", request["params"].clone()));
             }
+            check_max_lines(policy, rule, items.len(), seen)?;
+            check_max_open(state, policy, person, rule, seen).await?;
             let checked = check_lines(
                 state,
                 policy,
@@ -1216,6 +1408,7 @@ async fn prepare<'a>(
             seen.would_refuse
                 .extend(checked.would_refuse.iter().cloned());
             let first = checked.models.first().cloned().unwrap_or_default();
+            count_creation(state, policy, person, rule, Some(&first), seen).await?;
             let provider = pick(version, Kind::Anthropic, &parts.headers, Some(&first))?;
             if let Some(other) = checked
                 .models
@@ -1315,10 +1508,10 @@ async fn prepare<'a>(
                 )
             })?;
             let (file, provider) =
-                owned(state, version, person, training, Item::File, seen).await?;
+                owned(state, version, policy, person, training, Item::File, seen).await?;
             if let Some(validation) = body["validation_file"].as_str() {
                 let (other, _) =
-                    owned(state, version, person, validation, Item::File, seen).await?;
+                    owned(state, version, policy, person, validation, Item::File, seen).await?;
                 if other.provider != file.provider {
                     return Err(bad(
                         "mixed_providers",
@@ -1342,6 +1535,99 @@ async fn prepare<'a>(
     }?;
     out.headers = headers;
     Ok(out)
+}
+
+/// A file or batch creation is one request against every rpm limit that applies (the rule's, the key's and the
+/// `limits:` list's), as a model request is.
+async fn count_creation(
+    state: &AppState,
+    policy: &Policy,
+    person: &Principal,
+    rule: &Rule,
+    model: Option<&str>,
+    seen: &mut Seen<'_>,
+) -> Result<(), Refusal> {
+    let model = model.unwrap_or_default();
+    let applied = policy.applied(
+        person,
+        rule,
+        gantry_core::policy::Context {
+            sent: model,
+            model,
+            customer: seen.customer.as_deref(),
+            tags: &seen.tags,
+        },
+    );
+    let mut observed = Vec::new();
+    spend::count_rpm(&state.spend, &applied, rule, &mut observed).await?;
+    for (refusal, by) in observed {
+        crate::observed(seen, refusal, by);
+    }
+    Ok(())
+}
+
+/// The rule's `batch: { max_lines }`: a batch of more lines is refused before the provider sees it.
+fn check_max_lines(
+    policy: &Policy,
+    rule: &Rule,
+    lines: usize,
+    seen: &mut Seen<'_>,
+) -> Result<(), Refusal> {
+    let Some(most) = rule.limits.batch_max_lines else {
+        return Ok(());
+    };
+    if lines <= most as usize {
+        return Ok(());
+    }
+    crate::enforce(
+        seen,
+        bad(
+            "batch_too_many_lines",
+            format!(
+                "Refused: the batch holds {lines} lines, and rule \"{}\" allows at most {most} in one batch (batch.max_lines). Split it into batches of {most} lines or fewer.",
+                rule.name
+            ),
+        ),
+        policy.observing(rule.shadow_until.as_deref()),
+    )
+}
+
+/// The rule's `batch: { max_open }`: a person with that many batches not yet ended is refused another.
+async fn check_max_open(
+    state: &AppState,
+    policy: &Policy,
+    person: &Principal,
+    rule: &Rule,
+    seen: &mut Seen<'_>,
+) -> Result<(), Refusal> {
+    let Some(most) = rule.limits.batch_max_open else {
+        return Ok(());
+    };
+    let me = person.within(&person.name);
+    let open = state
+        .owned
+        .all()
+        .await
+        .into_iter()
+        .filter(|(_, o)| {
+            matches!(o.item, Item::Batch | Item::MessageBatch) && !o.settled && o.owner() == me
+        })
+        .count();
+    if open < most as usize {
+        return Ok(());
+    }
+    crate::enforce(
+        seen,
+        Refusal::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "batch_too_many_open",
+            format!(
+                "Refused: you have {open} batches that have not ended, and rule \"{}\" allows at most {most} open at once (batch.max_open). Wait for one to end, or cancel one, and send this again.",
+                rule.name
+            ),
+        ),
+        policy.observing(rule.shadow_until.as_deref()),
+    )
 }
 
 fn masked_unwritable() -> Refusal {
@@ -1470,17 +1756,7 @@ fn counted(
     let Some(policy) = &version.policy else {
         return Vec::new();
     };
-    let who = policy
-        .entries()
-        .find(|(_, p)| p.key == owned.key)
-        .map(|(_, p)| p.clone())
-        .unwrap_or_else(|| Principal {
-            name: owned.person.clone(),
-            team: owned.team.clone(),
-            key: owned.key.clone(),
-            org: owned.org.clone(),
-            ..Principal::default()
-        });
+    let who = owner_of(policy, owned);
     let Some(rule) = policy.rule_for(&who) else {
         return Vec::new();
     };
@@ -1493,6 +1769,164 @@ fn counted(
         owned.customer.as_deref(),
         &owned.tags,
     )
+}
+
+/// The owner of a file or batch as the policy in force knows them: their key's entry, else who the record names.
+fn owner_of(policy: &Policy, owned: &Owned) -> Principal {
+    policy
+        .entries()
+        .find(|(_, p)| p.key == owned.key)
+        .map(|(_, p)| p.clone())
+        .unwrap_or_else(|| Principal {
+            name: owned.person.clone(),
+            team: owned.team.clone(),
+            key: owned.key.clone(),
+            org: owned.org.clone(),
+            ..Principal::default()
+        })
+}
+
+/// What checks a batch's results on the way to the caller: the `on: [answer]` guardrails of the owner's rule
+/// (as observe mode runs them), and whose results they are. None when that rule runs none on answers.
+fn result_guards(
+    policy: &Policy,
+    owned: &Owned,
+    object_id: &str,
+    api: Results,
+) -> Option<Box<GuardResults>> {
+    let who = owner_of(policy, owned);
+    let rule = policy.rule_for(&who)?;
+    let guards: Vec<_> = crate::observed_guards(policy, &rule.guardrails)
+        .unwrap_or_else(|| rule.guardrails.clone())
+        .into_iter()
+        .filter(|g| g.on.answer)
+        .collect();
+    (!guards.is_empty()).then(|| {
+        Box::new(GuardResults {
+            object_id: object_id.to_string(),
+            guards,
+            person: who.name,
+            team: who.team,
+            api,
+        })
+    })
+}
+
+/// Which batch API's result lines a file holds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Results {
+    /// `{"custom_id", "response": {"status_code", "body"}, "error"}`, as OpenAI's output files (and Gantry's own
+    /// for Bedrock and Vertex AI batches) hold them.
+    OpenAi,
+    /// `{"custom_id", "result": {"type": "succeeded", "message"}}`, as Anthropic's results stream holds them.
+    Anthropic,
+}
+
+struct GuardResults {
+    object_id: String,
+    guards: Vec<gantry_core::guard::Guardrail>,
+    person: String,
+    team: String,
+    api: Results,
+}
+
+/// Runs the answer guardrails on every result line: a blocked line's answer is replaced with an error object, a
+/// masked one is masked, and each line they found something in gets a `batch_result_guardrails` record. The
+/// caller gets the processed lines; a line Gantry cannot read is passed on as it is.
+async fn guard_results(
+    state: &AppState,
+    check: &GuardResults,
+    decision: &str,
+    body: &[u8],
+) -> Result<Bytes, Refusal> {
+    let mut out = Vec::with_capacity(body.len());
+    for (i, raw) in body.split(|b| *b == b'\n').enumerate() {
+        if raw.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let Ok(mut line) = serde_json::from_slice::<Value>(raw) else {
+            out.extend_from_slice(raw);
+            out.push(b'\n');
+            continue;
+        };
+        let pointer = match check.api {
+            Results::OpenAi => "/response/body",
+            Results::Anthropic => "/result/message",
+        };
+        let ok = match check.api {
+            Results::OpenAi => line["response"]["status_code"]
+                .as_u64()
+                .is_some_and(|s| (200..300).contains(&s)),
+            Results::Anthropic => line["result"]["type"] == "succeeded",
+        };
+        let Some(answer) = line.pointer(pointer).filter(|_| ok).cloned() else {
+            out.extend_from_slice(raw);
+            out.push(b'\n');
+            continue;
+        };
+        let path = match check.api {
+            Results::OpenAi => "/v1/batches",
+            Results::Anthropic => "/v1/messages/batches",
+        };
+        let (verdict, found) = crate::check_answer(
+            state,
+            &check.guards,
+            &check.person,
+            &check.team,
+            path,
+            decision,
+            &answer,
+        )
+        .await;
+        let word = match &verdict {
+            Err(_) => "block",
+            Ok(after) if *after != answer => "mask",
+            Ok(_) => "pass",
+        };
+        match verdict {
+            Err(message) => match check.api {
+                Results::OpenAi => {
+                    line["response"] = Value::Null;
+                    line["error"] = json!({ "code": guard::BLOCKED_CODE, "message": message });
+                }
+                Results::Anthropic => {
+                    line["result"] = json!({
+                        "type": "errored",
+                        "error": { "type": "error", "error": { "type": "permission_error", "message": message } }
+                    });
+                }
+            },
+            Ok(after) => {
+                if let Some(slot) = line.pointer_mut(pointer) {
+                    *slot = after;
+                }
+            }
+        }
+        if !found.is_empty() {
+            let mut record = Map::new();
+            record.insert("event".into(), "batch_result_guardrails".into());
+            record.insert("id".into(), decision.into());
+            record.insert("time".into(), audit::timestamp().into());
+            record.insert("object_id".into(), check.object_id.as_str().into());
+            record.insert("line".into(), (i + 1).into());
+            record.insert("custom_id".into(), line["custom_id"].clone());
+            record.insert("verdict".into(), word.into());
+            record.insert(
+                "guardrails".into(),
+                serde_json::to_value(&found).unwrap_or_default(),
+            );
+            if !write(state, record).await {
+                return Err(Refusal::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "audit_unavailable",
+                    "Refused: Gantry could not write the guardrails' check of these batch results to its audit log, and it does not pass on what it cannot record. Tell your Gantry admin.",
+                ));
+            }
+        }
+        out.extend_from_slice(line.to_string().as_bytes());
+        out.push(b'\n');
+    }
+    Ok(Bytes::from(out))
 }
 
 /// The lines of a batch after their checks.
@@ -1620,7 +2054,15 @@ async fn check_lines(
         } else {
             checked.masked.push(None);
         }
-        let price = price_for(&model, policy.prices());
+        // An alias is estimated at its first deployment's price; its batch is charged at the one that ran it.
+        let priced = state
+            .version()
+            .aliases
+            .iter()
+            .find(|a| a.name == model)
+            .and_then(|a| a.deployments.first())
+            .map_or_else(|| model.clone(), |d| d.model.clone());
+        let price = price_for(&priced, policy.prices());
         let most = match &price {
             Some(price) => spend::most_for(&bytes, route, price).map_err(|why| {
                 at(
@@ -1660,6 +2102,8 @@ async fn check_lines(
 struct Upload {
     provider: usize,
     body: Bytes,
+    /// The file is kept by Gantry in a Bedrock or Vertex AI provider's bucket, `body` being its translated lines.
+    cloud: bool,
     owned: Owned,
     found: Vec<Value>,
     would_refuse: Vec<Value>,
@@ -1795,10 +2239,108 @@ async fn upload(
         owned_file.estimate = checked.estimate;
         owned_file.models = checked.models.clone();
         // The endpoint the lines were checked for, kept under the empty custom_id.
-        owned_file.model_of.insert(String::new(), endpoint);
+        owned_file.model_of.insert(String::new(), endpoint.clone());
         found = checked.found;
         would_refuse = checked.would_refuse;
         model = checked.models.first().cloned();
+        let observing = policy.observing(rule.shadow_until.as_deref());
+        let target = match &model {
+            Some(model) => {
+                match crate::cloud_batch::target(version, model, rule.limits.regions.as_deref()) {
+                    Ok(target) => target,
+                    // Observed: recorded as what would have refused it, and the batch goes where it would without regions.
+                    Err(refusal) => match observing {
+                        Some(by) => {
+                            would_refuse.push(crate::would_refuse_entry(refusal, by));
+                            crate::cloud_batch::target(version, model, None)?
+                        }
+                        None => return Err(refusal),
+                    },
+                }
+            }
+            None => None,
+        };
+        if let Some(target) = target {
+            let provider = &version.providers[target.provider];
+            crate::cloud_batch::settings(provider)?;
+            if endpoint != "/v1/chat/completions" {
+                return Err(bad(
+                    "wrong_endpoint",
+                    format!(
+                        "Refused: the batch's model runs on provider \"{}\" of kind {}, whose batch jobs Gantry runs for /v1/chat/completions lines only, and the lines name {endpoint}. Write chat completions lines.",
+                        provider.name,
+                        provider.kind.word()
+                    ),
+                ));
+            }
+            let id = format!("file-gantry-{}", decision.to_ascii_lowercase());
+            let mut out = String::new();
+            let mut ids = Map::new();
+            for ((n, line), masked) in lines.iter().zip(&checked.masked) {
+                let custom_id = line["custom_id"].as_str().unwrap_or_default();
+                let body = masked.as_ref().unwrap_or(&line["body"]);
+                let translated = crate::cloud_batch::input_line(provider.kind, custom_id, body)
+                    .map_err(|why| {
+                        bad(
+                            "untranslatable",
+                            format!("Refused: line {n} of the batch file: {why}"),
+                        )
+                    })?;
+                if provider.kind == Kind::Vertex {
+                    ids.insert(
+                        crate::cloud_batch::request_key(&translated["request"]),
+                        custom_id.into(),
+                    );
+                }
+                out.push_str(&translated.to_string());
+                out.push('\n');
+            }
+            let filename = file_name(bytes, content_type);
+            owned_file.provider = provider.name.clone();
+            owned_file.retention_days = rule.limits.file_retention_days;
+            owned_file.expires_at = rule
+                .limits
+                .file_retention_days
+                .map(|days| now_secs() + u64::from(days) * 86_400);
+            owned_file.cloud = json!({
+                "key": crate::cloud_batch::key(provider, &format!("input/{id}.jsonl")),
+                "name": format!("{id}.jsonl"),
+                "filename": filename,
+                "bytes": out.len(),
+                "created_at": now_secs(),
+                "region": target.region,
+                "model": target.model,
+                "ids": ids,
+                "id": id,
+            });
+            return Ok(Upload {
+                provider: target.provider,
+                body: Bytes::from(out),
+                cloud: true,
+                owned: owned_file,
+                found,
+                would_refuse,
+            });
+        }
+    }
+    if let Some(regions) = rule
+        .limits
+        .regions
+        .as_ref()
+        .filter(|_| !would_refuse_region(&would_refuse))
+    {
+        let refusal = bad(
+            "region_not_allowed",
+            format!(
+                "Refused: rule \"{}\" keeps requests in {}, and only a batch file for a Bedrock or Vertex AI deployment labelled with one of them is kept where its region shows. Upload a batch file whose model is such an alias, or send it under a rule without regions:.",
+                rule.name,
+                regions.join(", ")
+            ),
+        );
+        match policy.observing(rule.shadow_until.as_deref()) {
+            Some(by) => would_refuse.push(crate::would_refuse_entry(refusal, by)),
+            None => return Err(refusal),
+        }
     }
     let provider = pick(version, Kind::OpenAi, headers, model.as_deref())?;
     owned_file.provider = version.providers[provider].name.clone();
@@ -1853,10 +2395,32 @@ async fn upload(
     Ok(Upload {
         provider,
         body,
+        cloud: false,
         owned: owned_file,
         found,
         would_refuse,
     })
+}
+
+/// Whether residency already went on the record as what would have refused this upload.
+fn would_refuse_region(would_refuse: &[Value]) -> bool {
+    would_refuse
+        .iter()
+        .any(|w| w["code"] == "region_not_allowed")
+}
+
+/// The file part's filename, for the file object Gantry answers with when it keeps the file.
+fn file_name(bytes: &[u8], content_type: &str) -> String {
+    let Some(boundary) = crate::alias::boundary(content_type) else {
+        return String::new();
+    };
+    let text = String::from_utf8_lossy(bytes);
+    text.split(&format!("--{boundary}"))
+        .find(|part| part.contains("name=\"file\""))
+        .and_then(|part| part.split("filename=\"").nth(1))
+        .and_then(|rest| rest.split('"').next())
+        .map(|name| name.chars().take(200).collect())
+        .unwrap_or_default()
 }
 
 /// The form with its file part's content replaced, and fields added before the closing delimiter.
@@ -2036,6 +2600,21 @@ async fn after(
         }
         return Ok(response);
     }
+    if let Then::Guard(check) = &ready.then {
+        let body = collect(answer.into_body(), MAX_RESULTS)
+            .await
+            .map_err(|why| {
+                Refusal::new(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_failed",
+                    format!("{why}. Try again."),
+                )
+            })?;
+        if !status.is_success() {
+            return Ok(respond(body));
+        }
+        return Ok(respond(guard_results(state, check, decision, &body).await?));
+    }
     let body = collect(answer.into_body(), crate::MAX_BODY_BYTES)
         .await
         .map_err(|why| {
@@ -2082,9 +2661,19 @@ async fn after(
                     .map(|(id, _)| id)
                     .collect();
                 data.retain(|item| item["id"].as_str().is_some_and(|id| mine.contains(id)));
-                return Ok(respond(Bytes::from(value.to_string())));
             }
-            Ok(respond(body))
+            // What Gantry keeps for Bedrock and Vertex AI providers is listed beside the provider's own.
+            let item = if ready.target.starts_with("/v1/batches") {
+                Some(Item::Batch)
+            } else if ready.target.starts_with("/v1/files") {
+                Some(Item::File)
+            } else {
+                None
+            };
+            if let (Some(item), Some(data)) = (item, value["data"].as_array_mut()) {
+                data.extend(kept_list(state, &ready.person, ready.admin, item).await);
+            }
+            Ok(respond(Bytes::from(value.to_string())))
         }
         Then::Read(id) => {
             settle(state, version, &id, &value).await;
@@ -2101,7 +2690,7 @@ async fn after(
             state.owned.remove(&id).await;
             Ok(respond(body))
         }
-        Then::Stream => Ok(respond(body)),
+        Then::Stream | Then::Guard(_) | Then::Cloud(_) => Ok(respond(body)),
     }
 }
 
@@ -2157,6 +2746,9 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
         return;
     }
     let results = match item {
+        Item::Batch if !owned.cloud.is_null() => {
+            cloud_results(state, provider, &owned, id, object).await
+        }
         Item::Batch => openai_results(state, provider, object).await,
         _ => anthropic_results(state, provider, id).await,
     };
@@ -2174,17 +2766,30 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
     let per_line = owned.estimate.unwrap_or_default() * BATCH_SHARE / owned.lines.max(1) as f64;
     let (mut charged, mut succeeded) = (0.0, 0usize);
     for (n, (custom_id, ok, usage)) in results.iter().enumerate() {
-        let model = owned
-            .model_of
-            .get(custom_id)
-            .or(owned.models.first())
-            .cloned()
+        // A batch Gantry runs at Bedrock or Vertex AI is priced as the model its deployment runs.
+        let model = owned.cloud["model"]
+            .as_str()
+            .map(String::from)
+            .or_else(|| {
+                owned
+                    .model_of
+                    .get(custom_id)
+                    .or(owned.models.first())
+                    .cloned()
+            })
             .unwrap_or_default();
         let mut extra = Map::new();
         extra.insert("batch".into(), id.into());
         extra.insert("custom_id".into(), custom_id.as_str().into());
         extra.insert("line".into(), (n + 1).into());
         let counted = counted(version, &owned, &model);
+        let (price, share) =
+            prices
+                .and_then(|p| price_for(&model, p))
+                .map_or((None, BATCH_SHARE), |p| {
+                    let (price, share) = p.for_batch(BATCH_SHARE);
+                    (Some(price), share)
+                });
         let (cost, record) = spend::charge(
             &state.spend,
             spend::Line {
@@ -2199,9 +2804,9 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
                 model: &model,
                 provider: &owned.provider,
                 version: (&version.policy_sha256, &version.keys_sha256),
-                price: prices.and_then(|p| price_for(&model, p)),
+                price,
                 usage: *usage,
-                share: BATCH_SHARE,
+                share,
                 unreported: per_line,
                 succeeded: *ok,
                 extra,
@@ -2340,6 +2945,22 @@ async fn poll(state: &AppState) {
             Item::MessageBatch => format!("/v1/messages/batches/{id}"),
             Item::FineTune => format!("/v1/fine_tuning/jobs/{id}"),
         };
+        if !owned.cloud.is_null() {
+            if owned.item == Item::Batch && !owned.settled {
+                if let Ok(object) = cloud_batch_object(state, provider, &id, &owned).await {
+                    settle(state, &version, &id, &object).await;
+                }
+            } else if owned.item == Item::File
+                && owned.expires_at.is_some_and(|at| at <= now)
+                && let Some(key) = owned.cloud["key"].as_str()
+                && crate::cloud_batch::delete(state, provider, key)
+                    .await
+                    .is_ok()
+            {
+                forget(state, &owned.decision, &id, "retention").await;
+            }
+            continue;
+        }
         if !owned.settled && owned.item != Item::File {
             if let Ok(answer) = fetch(
                 state,
@@ -2380,6 +3001,354 @@ async fn poll(state: &AppState) {
             write(state, record).await;
             state.owned.remove(&id).await;
         }
+    }
+}
+
+/// Writes that Gantry no longer holds a file or batch, and forgets it.
+async fn forget(state: &AppState, decision: &str, id: &str, why: &str) {
+    let mut record = Map::new();
+    record.insert("event".into(), "owned_deleted".into());
+    record.insert("id".into(), decision.into());
+    record.insert("time".into(), audit::timestamp().into());
+    record.insert("object_id".into(), id.into());
+    record.insert("why".into(), why.into());
+    write(state, record).await;
+    state.owned.remove(id).await;
+}
+
+/// A file Gantry keeps, as OpenAI's file object.
+fn file_object(id: &str, owned: &Owned) -> Value {
+    let cloud = &owned.cloud;
+    json!({
+        "id": id,
+        "object": "file",
+        "bytes": cloud["bytes"],
+        "created_at": cloud["created_at"],
+        "filename": cloud["filename"],
+        "purpose": owned.purpose,
+        "status": "processed",
+        "expires_at": owned.expires_at,
+    })
+}
+
+/// A batch Gantry runs at Bedrock or Vertex AI, as OpenAI's batch object, with the status last seen.
+fn batch_object(id: &str, owned: &Owned, status: &str) -> Value {
+    let cloud = &owned.cloud;
+    json!({
+        "id": id,
+        "object": "batch",
+        "endpoint": owned.purpose,
+        "errors": null,
+        "input_file_id": cloud["input"],
+        "completion_window": "24h",
+        "status": status,
+        "output_file_id": cloud["output_file_id"],
+        "error_file_id": cloud["error_file_id"],
+        "created_at": cloud["created_at"],
+        "request_counts": {
+            "total": owned.lines,
+            "completed": cloud["completed"].as_u64().unwrap_or_default(),
+            "failed": cloud["failed"].as_u64().unwrap_or_default(),
+        },
+        "metadata": { "provider": owned.provider },
+    })
+}
+
+/// Asks the provider how a batch's job stands, as OpenAI's batch object (without output files until it is settled).
+async fn cloud_batch_object(
+    state: &AppState,
+    provider: &Upstream,
+    id: &str,
+    owned: &Owned,
+) -> Result<Value, crate::cloud_batch::Failed> {
+    let job = crate::cloud_batch::job(
+        state,
+        provider,
+        owned.cloud["job"].as_str().unwrap_or_default(),
+    )
+    .await?;
+    let status = crate::cloud_batch::status(provider.kind, &job);
+    let mut object = batch_object(id, owned, status);
+    // The job's own answer, for settling: Bedrock names its output after the job's ID.
+    object["job"] = job;
+    Ok(object)
+}
+
+/// The caller's own files or batches that Gantry keeps (every one for an admin), as OpenAI objects.
+async fn kept_list(state: &AppState, person: &str, admin: bool, item: Item) -> Vec<Value> {
+    state
+        .owned
+        .all()
+        .await
+        .into_iter()
+        .filter(|(_, o)| o.item == item && !o.cloud.is_null() && (admin || o.owner() == person))
+        .map(|(id, o)| match item {
+            Item::Batch => {
+                let status = o.cloud["status"]
+                    .as_str()
+                    .unwrap_or("validating")
+                    .to_string();
+                batch_object(&id, &o, &status)
+            }
+            _ => file_object(&id, &o),
+        })
+        .collect()
+}
+
+/// Reads a Bedrock or Vertex AI batch's results, writes them as OpenAI output and error files in the bucket, and
+/// records those files as the batch owner's.
+async fn cloud_results(
+    state: &AppState,
+    provider: &Upstream,
+    owned: &Owned,
+    id: &str,
+    object: &Value,
+) -> Result<Vec<Outcome>, String> {
+    let cloud = &owned.cloud;
+    let ids = cloud["ids"].as_object().cloned().unwrap_or_default();
+    let model = owned.models.first().map_or("", String::as_str);
+    let lines = crate::cloud_batch::results(
+        state,
+        provider,
+        &object["job"],
+        cloud["output_key"].as_str().unwrap_or_default(),
+        cloud["input_name"].as_str().unwrap_or_default(),
+        &ids,
+        model,
+    )
+    .await
+    .map_err(|f| f.detail)?;
+    let (mut output, mut errors) = (String::new(), String::new());
+    for line in &lines {
+        let to = if line.ok { &mut output } else { &mut errors };
+        to.push_str(&line.openai.to_string());
+        to.push('\n');
+    }
+    let mut batch = owned.clone();
+    for (field, name, text) in [
+        ("output_file_id", "output", &output),
+        ("error_file_id", "errors", &errors),
+    ] {
+        if text.is_empty() {
+            continue;
+        }
+        let file_id = format!("file-{name}-{id}");
+        let key = crate::cloud_batch::key(provider, &format!("results/{id}.{name}.jsonl"));
+        crate::cloud_batch::put(state, provider, &key, Bytes::from(text.clone()))
+            .await
+            .map_err(|f| f.detail)?;
+        let mut out = owned.clone();
+        out.item = Item::File;
+        out.purpose = "batch_output".into();
+        out.reserved = Vec::new();
+        out.settled = false;
+        out.expires_at = owned
+            .retention_days
+            .map(|d| now_secs() + u64::from(d) * 86_400);
+        out.cloud = json!({
+            "key": key,
+            "bytes": text.len(),
+            "filename": format!("{id}.{name}.jsonl"),
+            "created_at": now_secs(),
+            "region": cloud["region"],
+        });
+        write(state, out.record(&file_id)).await;
+        state.owned.put(&file_id, out).await;
+        batch.cloud[field] = file_id.into();
+    }
+    batch.cloud["status"] = object["status"].clone();
+    batch.cloud["completed"] = lines.iter().filter(|l| l.ok).count().into();
+    batch.cloud["failed"] = lines.iter().filter(|l| !l.ok).count().into();
+    batch.settled = true;
+    state.owned.put(id, batch).await;
+    Ok(lines
+        .into_iter()
+        .map(|l| (l.custom_id, l.ok, l.usage))
+        .collect())
+}
+
+/// Serves a request for a file or batch Gantry keeps for a Bedrock or Vertex AI provider, once its decision is
+/// recorded.
+async fn run_cloud(
+    state: &AppState,
+    version: &Snapshot,
+    decision: &str,
+    ready: Ready,
+) -> Result<Response, Refusal> {
+    let Then::Cloud(op) = ready.then else {
+        return Err(unknown_batch_route());
+    };
+    let reply = |status: StatusCode, value: Value| {
+        let mut response = (status, value.to_string()).into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        response
+    };
+    let found = |id: &str| {
+        let id = id.to_string();
+        async move {
+            state
+                .owned
+                .get(&id)
+                .await
+                .ok_or_else(|| not_yours("object", &id))
+        }
+    };
+    if let Cloud::List(item) = op {
+        let data = kept_list(state, &ready.person, ready.admin, item).await;
+        return Ok(reply(
+            StatusCode::OK,
+            json!({ "object": "list", "data": data, "has_more": false }),
+        ));
+    }
+    let provider = version
+        .providers
+        .get(ready.provider)
+        .ok_or_else(unknown_batch_route)?;
+    let cancel = matches!(op, Cloud::Cancel(_));
+    match op {
+        Cloud::Upload(owned) => {
+            let mut owned = *owned;
+            let id = owned.cloud["id"].as_str().unwrap_or_default().to_string();
+            let key = owned.cloud["key"].as_str().unwrap_or_default().to_string();
+            crate::cloud_batch::put(state, provider, &key, ready.body)
+                .await
+                .map_err(|f| f.refusal(provider, "keep the batch file in its bucket"))?;
+            if let Some(map) = owned.cloud.as_object_mut() {
+                map.remove("id");
+            }
+            if !write(state, owned.record(&id)).await {
+                eprintln!(
+                    "gantry: decision {decision}: the owner of {id} could not be written to the audit log"
+                );
+            }
+            let object = file_object(&id, &owned);
+            state.owned.put(&id, owned).await;
+            Ok(reply(StatusCode::OK, object))
+        }
+        Cloud::Create {
+            batch,
+            file,
+            file_id,
+        } => {
+            let mut batch = *batch;
+            let id = format!("batch_gantry_{}", decision.to_ascii_lowercase());
+            let model = file.cloud["model"].as_str().unwrap_or_default();
+            let output_key = crate::cloud_batch::key(provider, &format!("output/{id}/"));
+            let input_key = file.cloud["key"].as_str().unwrap_or_default();
+            let job = match crate::cloud_batch::create_job(
+                state,
+                provider,
+                &format!("gantry-{}", decision.to_ascii_lowercase()),
+                model,
+                input_key,
+                &output_key,
+            )
+            .await
+            {
+                Ok(job) => job,
+                Err(failed) => {
+                    release(state, &ready.reserved);
+                    return Err(failed.refusal(provider, "start the batch job"));
+                }
+            };
+            batch.cloud = json!({
+                "job": job,
+                "input": file_id,
+                "input_name": file.cloud["name"],
+                "output_key": output_key,
+                "created_at": now_secs(),
+                "region": file.cloud["region"],
+                "model": model,
+                "ids": file.cloud["ids"],
+                "status": "validating",
+            });
+            if !write(state, batch.record(&id)).await {
+                eprintln!(
+                    "gantry: decision {decision}: the owner of {id} could not be written to the audit log"
+                );
+            }
+            let object = batch_object(&id, &batch, "validating");
+            state.owned.put(&id, batch).await;
+            Ok(reply(StatusCode::OK, object))
+        }
+        Cloud::Batch(id) | Cloud::Cancel(id) => {
+            let owned = found(&id).await?;
+            if cancel {
+                crate::cloud_batch::cancel(
+                    state,
+                    provider,
+                    owned.cloud["job"].as_str().unwrap_or_default(),
+                )
+                .await
+                .map_err(|f| f.refusal(provider, "cancel the batch job"))?;
+            }
+            let mut object = cloud_batch_object(state, provider, &id, &owned)
+                .await
+                .map_err(|f| f.refusal(provider, "describe the batch job"))?;
+            if !owned.settled {
+                let mut seen = owned.clone();
+                seen.cloud["status"] = object["status"].clone();
+                state.owned.put(&id, seen).await;
+            }
+            settle(state, version, &id, &object).await;
+            if let Some(owned) = state.owned.get(&id).await {
+                let status = object["status"].as_str().unwrap_or_default().to_string();
+                object = batch_object(&id, &owned, &status);
+            }
+            if let Some(map) = object.as_object_mut() {
+                map.remove("job");
+            }
+            Ok(reply(StatusCode::OK, object))
+        }
+        Cloud::File(id) => {
+            let owned = found(&id).await?;
+            Ok(reply(StatusCode::OK, file_object(&id, &owned)))
+        }
+        Cloud::Content(id, guard) => {
+            let owned = found(&id).await?;
+            let bytes = crate::cloud_batch::get(
+                state,
+                provider,
+                owned.cloud["key"].as_str().unwrap_or_default(),
+            )
+            .await
+            .map_err(|f| f.refusal(provider, "read the file from its bucket"))?;
+            let bytes = match guard {
+                Some(check) => guard_results(state, &check, decision, &bytes).await?,
+                None => bytes,
+            };
+            let mut response = (StatusCode::OK, bytes).into_response();
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"),
+            );
+            Ok(response)
+        }
+        Cloud::Delete(id) => {
+            let owned = found(&id).await?;
+            crate::cloud_batch::delete(
+                state,
+                provider,
+                owned.cloud["key"].as_str().unwrap_or_default(),
+            )
+            .await
+            .map_err(|f| f.refusal(provider, "delete the file from its bucket"))?;
+            forget(
+                state,
+                decision,
+                &id,
+                &format!("deleted by {}", ready.person),
+            )
+            .await;
+            Ok(reply(
+                StatusCode::OK,
+                json!({ "id": id, "object": "file", "deleted": true }),
+            ))
+        }
+        Cloud::List(_) => Err(unknown_batch_route()),
     }
 }
 

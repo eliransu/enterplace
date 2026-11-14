@@ -41,8 +41,8 @@ async fn provider() -> Result<(u16, Seen), Error> {
         .route("/v1/files/file-in", get(|| async { json(r#"{"id":"file-in","object":"file","purpose":"batch"}"#) }))
         .route("/v1/files/file-out/content", get(|| async {
             concat!(
-                r#"{"id":"r1","custom_id":"a","response":{"status_code":200,"body":{"model":"model-a","usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}},"error":null}"#, "\n",
-                r#"{"id":"r2","custom_id":"b","response":{"status_code":200,"body":{"model":"model-a","usage":{"prompt_tokens":200,"completion_tokens":10,"total_tokens":210}}},"error":null}"#, "\n",
+                r#"{"id":"r1","custom_id":"a","response":{"status_code":200,"body":{"model":"model-a","choices":[{"index":0,"message":{"role":"assistant","content":"write to maya@example.com"}}],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}},"error":null}"#, "\n",
+                r#"{"id":"r2","custom_id":"b","response":{"status_code":200,"body":{"model":"model-a","choices":[{"index":0,"message":{"role":"assistant","content":"the key is AKIAIOSFODNN7EXAMPLE"}}],"usage":{"prompt_tokens":200,"completion_tokens":10,"total_tokens":210}}},"error":null}"#, "\n",
             )
         }))
         .route("/v1/batches", post(|| async { json(r#"{"id":"batch_1","object":"batch","status":"validating","input_file_id":"file-in","endpoint":"/v1/chat/completions"}"#) }))
@@ -52,7 +52,7 @@ async fn provider() -> Result<(u16, Seen), Error> {
         .route("/v1/messages/batches/msgbatch_1", get(|| async { json(r#"{"id":"msgbatch_1","type":"message_batch","processing_status":"ended"}"#) }))
         .route("/v1/messages/batches/msgbatch_1/results", get(|| async {
             concat!(
-                r#"{"custom_id":"x","result":{"type":"succeeded","message":{"id":"m","type":"message","role":"assistant","model":"claude-a","content":[],"usage":{"input_tokens":1000,"output_tokens":100}}}}"#, "\n",
+                r#"{"custom_id":"x","result":{"type":"succeeded","message":{"id":"m","type":"message","role":"assistant","model":"claude-a","content":[{"type":"text","text":"the key is AKIAIOSFODNN7EXAMPLE"}],"usage":{"input_tokens":1000,"output_tokens":100}}}}"#, "\n",
                 r#"{"custom_id":"y","result":{"type":"errored","error":{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}}}"#, "\n",
             )
         }))
@@ -811,5 +811,273 @@ async fn residency_and_a_keys_routes_govern_the_batch_routes_too() -> Result<(),
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
+    Ok(())
+}
+
+#[tokio::test]
+async fn file_and_batch_creations_count_against_rpm_and_the_rules_batch_limits() -> Result<(), Error>
+{
+    let (port, seen) = provider().await?;
+    let (policy, audit) = files("rpm", port, "    rate: { rpm: 2 }\n")?;
+    let gw = gantry_server::governed(&policy, None, &|_| Some("provider-secret".into()))?;
+    let app = gw.router.clone();
+    let one = || upload(&[&line("a", "model-a", "hi")]);
+    let (status, body) = call(&app, "POST", "/v1/files", DANA, &form(), one()).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let create = br#"{"input_file_id":"file-in","endpoint":"/v1/chat/completions","completion_window":"24h"}"#;
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/batches",
+        DANA,
+        "application/json",
+        create.to_vec(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // A third creation in the minute is over the rule's rpm, and the provider never sees it.
+    let (status, body) = call(&app, "POST", "/v1/files", DANA, &form(), one()).await?;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert!(body.contains("rate_limited"), "{body}");
+    assert_eq!(uploads(&seen)?.len(), 1);
+    // Reads do not count.
+    let (status, _) = call(&app, "GET", "/v1/files", DANA, "application/json", vec![]).await?;
+    assert_eq!(status, StatusCode::OK);
+
+    let (policy, _) = files("limits", port, "    batch: { max_lines: 2, max_open: 1 }\n")?;
+    let gw = gantry_server::governed(&policy, None, &|_| Some("provider-secret".into()))?;
+    let app = gw.router.clone();
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/files",
+        DANA,
+        &form(),
+        upload(&[
+            &line("a", "model-a", "hi"),
+            &line("b", "model-a", "hi"),
+            &line("c", "model-a", "hi"),
+        ]),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body.contains("batch_too_many_lines") && body.contains("max_lines"),
+        "{body}"
+    );
+    let (status, body) = call(&app, "POST", "/v1/files", DANA, &form(), one()).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/batches",
+        DANA,
+        "application/json",
+        create.to_vec(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // One batch is open, the most the rule allows: a second (of either API) is refused until it ends.
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/batches",
+        DANA,
+        "application/json",
+        create.to_vec(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert!(body.contains("batch_too_many_open"), "{body}");
+    let message_batch = r#"{"requests":[{"custom_id":"x","params":{"model":"claude-a","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}}]}"#;
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/messages/batches",
+        DANA,
+        "application/json",
+        message_batch.into(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    // Another person has their own count.
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/messages/batches",
+        OMER,
+        "application/json",
+        message_batch.into(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Once the batch ended (read and settled), there is room again.
+    let (status, _) = call(
+        &app,
+        "GET",
+        "/v1/batches/batch_1",
+        DANA,
+        "application/json",
+        vec![],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let mut room = StatusCode::TOO_MANY_REQUESTS;
+    for _ in 0..50 {
+        let (status, _) = call(
+            &app,
+            "POST",
+            "/v1/batches",
+            DANA,
+            "application/json",
+            create.to_vec(),
+        )
+        .await?;
+        room = status;
+        if status == StatusCode::OK {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(room, StatusCode::OK);
+    let refused = records(&audit)?
+        .into_iter()
+        .filter(|r| r["code"] == "rate_limited")
+        .count();
+    assert_eq!(refused, 1, "the refusal is recorded");
+    Ok(())
+}
+
+#[tokio::test]
+async fn batch_results_pass_the_answer_guardrails_line_by_line_on_download() -> Result<(), Error> {
+    let (port, _) = provider().await?;
+    let (policy, audit) = files("results", port, "")?;
+    let text = std::fs::read_to_string(&policy)?;
+    std::fs::write(
+        &policy,
+        text.replacen(
+            "    action: block\n",
+            "    action: block\n  - name: answer-secrets\n    type: secrets\n    action: block\n    on: [answer]\n  - name: answer-pii\n    type: pii\n    action: mask\n    on: [answer]\n",
+            1,
+        )
+        .replacen(
+            "    guardrails: [no-secrets]\n",
+            "    guardrails: [no-secrets, answer-secrets, answer-pii]\n",
+            1,
+        ),
+    )?;
+    let gw = gantry_server::governed(&policy, None, &|_| Some("provider-secret".into()))?;
+    let app = gw.router.clone();
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/files",
+        DANA,
+        &form(),
+        upload(&[&line("a", "model-a", "hi"), &line("b", "model-a", "there")]),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let create = br#"{"input_file_id":"file-in","endpoint":"/v1/chat/completions","completion_window":"24h"}"#;
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/batches",
+        DANA,
+        "application/json",
+        create.to_vec(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = call(
+        &app,
+        "GET",
+        "/v1/batches/batch_1",
+        DANA,
+        "application/json",
+        vec![],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let mut content = String::new();
+    for _ in 0..50 {
+        let (status, body) = call(
+            &app,
+            "GET",
+            "/v1/files/file-out/content",
+            DANA,
+            "application/json",
+            vec![],
+        )
+        .await?;
+        if status == StatusCode::OK {
+            content = body;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let lines: Vec<Value> = content
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()?;
+    assert_eq!(lines.len(), 2, "{content}");
+    let a = lines.iter().find(|l| l["custom_id"] == "a").ok_or("no a")?;
+    let said = a["response"]["body"]["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or("no content")?;
+    assert!(
+        !said.contains("maya@example.com") && said.contains("write to"),
+        "masked: {said}"
+    );
+    let b = lines.iter().find(|l| l["custom_id"] == "b").ok_or("no b")?;
+    assert!(b["response"].is_null(), "blocked: {b}");
+    assert_eq!(b["error"]["code"], "guardrail_blocked", "{b}");
+    assert!(!content.contains("AKIAIOSFODNN7EXAMPLE"), "{content}");
+    let found: Vec<Value> = records(&audit)?
+        .into_iter()
+        .filter(|r| r["event"] == "batch_result_guardrails")
+        .collect();
+    assert_eq!(
+        found.len(),
+        2,
+        "one record per line with a finding: {found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|r| r["custom_id"] == "b" && r["verdict"] == "block")
+    );
+    assert!(
+        found
+            .iter()
+            .any(|r| r["custom_id"] == "a" && r["verdict"] == "mask")
+    );
+
+    // Anthropic's results stream is checked the same way.
+    let batch = r#"{"requests":[{"custom_id":"x","params":{"model":"claude-a","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}}]}"#;
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/v1/messages/batches",
+        DANA,
+        "application/json",
+        batch.into(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = call(
+        &app,
+        "GET",
+        "/v1/messages/batches/msgbatch_1/results",
+        DANA,
+        "application/json",
+        vec![],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!body.contains("AKIAIOSFODNN7EXAMPLE"), "{body}");
+    let x: Value = serde_json::from_str(body.lines().next().ok_or("no line")?)?;
+    assert_eq!(x["result"]["type"], "errored", "{x}");
+    assert_eq!(x["result"]["error"]["error"]["type"], "permission_error");
     Ok(())
 }

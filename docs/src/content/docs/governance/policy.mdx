@@ -143,6 +143,7 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `region` | string | `bedrock` only | The AWS region. |
 | `role_arn` | string | `bedrock` only | An IAM role to assume with the AWS credentials Gantry finds. |
 | `model_ids` | map | `bedrock` only | Model name to Bedrock model ID. |
+| `batch` | map | `bedrock`, `vertex`, `vertex_anthropic` only | `{ bucket: s3://<bucket>/<prefix>/ or gs://<bucket>/<prefix>/, role_arn: <IAM role>, url: <batch API>, storage_url: <S3 or Cloud Storage endpoint> }`. Runs `/v1/batches` as Bedrock batch inference or Vertex AI batch prediction on files Gantry keeps in the bucket. `role_arn` (the service role Bedrock assumes) is required for `bedrock` and refused otherwise; `url` and `storage_url` are for private endpoints. See [Files, batches and realtime](/providers/batches-and-realtime/#bedrock-and-vertex-ai-batches). |
 
 Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 
@@ -160,7 +161,9 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `parallel` | integer | none | Most requests in flight at once, 1 to 100000, counted where the budget is. |
 | `guardrails` | list | `[]` | Names from the top-level `guardrails:`, run in this order. An undefined name is an error. |
 | `budget` | map or list | none | `{ usd: <above 0>, per: <period>, tz: <zone>, models: [...] }`, or a list of them. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#budgets). |
-| `rate` | map | none | `{ rpm: 1 to 1000000, tpm: 1 to 1000000000 }`, either or both. |
+| `rate` | map | none | `{ rpm: 1 to 1000000, tpm: 1 to 1000000000 }`, either or both. A file upload and a batch creation count as one request against `rpm`. |
+| `batch` | map | none | `{ max_lines: 1 or more, max_open: 1 or more }`, either or both. The most lines one batch may hold (`batch_too_many_lines`), and the most batches a person under the rule may have not yet ended (`batch_too_many_open`). See [Files, batches and realtime](/providers/batches-and-realtime/#batch-limits). |
+| `file_retention_days` | integer | none | 1 to 30. Days a file uploaded under the rule is kept. See [Retention](/providers/batches-and-realtime/#retention). |
 | `cache` | map | none | `{ ttl_seconds: 1 to 86400, scope: person or team, semantic: { model, threshold } }`. See [Caching](/routing/caching/). |
 | `prompt_cache` | string | `off` | `auto` marks cache breakpoints on Anthropic messages requests. See [Caching](/routing/caching/#prompt-caching). |
 | `buffer_stream` | boolean | `false` | Hold a streamed answer whole so `on: [answer]` guardrails check it first. Needs a guardrail with `on: [answer]`. |

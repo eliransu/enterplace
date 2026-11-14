@@ -995,6 +995,97 @@ struct Hints {
     stored: Vec<&'static str>,
 }
 
+/// Counts one request against every rpm limit in `applied` (from `Policy::applied`): the rule's, the key's and the
+/// `limits:` list's. One over its limit refuses, unless it is observed: then it is counted all the same and pushed to
+/// `observed`.
+pub(crate) async fn count_rpm(
+    spend: &Spend,
+    applied_all: &[Applied],
+    rule: &Rule,
+    observed: &mut Vec<(Refusal, &'static str)>,
+) -> Result<(), Refusal> {
+    for applied in applied_all {
+        let Limit::Rpm(rpm) = applied.limit else {
+            continue;
+        };
+        let counted = match &spend.store {
+            None => spend.rate(&applied.scope, rpm, Instant::now()),
+            Some(store) => match spend
+                .take(store, &format!("rpm:{}", applied.scope), 1, u64::from(rpm))
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(Short::Over(wait)) => Err(wait),
+                Err(Short::Down(err)) => return Err(rate_store_unavailable(&err)),
+            },
+        };
+        if let Err(wait) = counted {
+            let mut refusal = Refusal::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                format!(
+                    "Refused: {} has sent {rpm} requests in the last minute, the most {} allows. Send this one again in {wait} seconds.",
+                    applied.whose,
+                    allows(applied, rule)
+                ),
+            );
+            refusal.retry_after = Some(wait);
+            refusal.record = Some(Box::new(limit_record(
+                applied,
+                serde_json::json!({ "kind": "rpm", "of": applied.of, "value": rpm }),
+            )));
+            let Some(by) = applied.shadow else {
+                return Err(refusal);
+            };
+            observed.push((refusal, by));
+            // Observed: counted all the same, so the minute's count is the one enforcement will see.
+            match &spend.store {
+                None => {
+                    let _ = spend.rate(&applied.scope, u32::MAX, Instant::now());
+                }
+                Some(store) => {
+                    if let Err(Short::Down(err)) = spend
+                        .take_past(store, &format!("rpm:{}", applied.scope), 1)
+                        .await
+                    {
+                        return Err(rate_store_unavailable(&err));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// What a form (an image edit or variation, a transcription) tells the estimate: how many images its `n` asks for.
+fn form_hints(body: &[u8]) -> Result<Hints, String> {
+    // The form was read strictly before it got here; its boundary is its first line.
+    let first = body.split(|b| *b == b'\r').next().unwrap_or_default();
+    let boundary =
+        String::from_utf8_lossy(first.strip_prefix(b"--").unwrap_or_default()).into_owned();
+    let content_type = format!("multipart/form-data; boundary={boundary}");
+    let Ok(parts) = crate::alias::form_parts(&content_type, body) else {
+        return Ok(Hints::default());
+    };
+    let mut n = parts.iter().filter(|p| p.name == "n" && !p.file);
+    let (Some(part), None) = (n.next(), n.next()) else {
+        return match parts.iter().filter(|p| p.name == "n").count() {
+            0 => Ok(Hints::default()),
+            _ => Err("the form has more than one \"n\" field".into()),
+        };
+    };
+    let text = String::from_utf8_lossy(&body[part.value.clone()])
+        .trim()
+        .to_string();
+    match text.parse::<u64>() {
+        Ok(count @ 1..=MAX_N) => Ok(Hints {
+            n: Some(count),
+            ..Hints::default()
+        }),
+        _ => Err(format!("\"n\" must be a whole number from 1 to {MAX_N}")),
+    }
+}
+
 /// The most answers one request may ask for under a budget or a cache. OpenAI allows 128, and with it one request
 /// costs 128 times its output limit: a burst of them would pass a budget by far more than one request's worth.
 const MAX_N: u64 = 16;
@@ -1398,8 +1489,18 @@ pub(crate) async fn admit(
         admitted.estimate_from = Some((ask.body.clone(), ask.route.to_string()));
     }
     // An audio upload is a form, not JSON: it carries none of the fields read here.
-    let form = ask.route.starts_with("/v1/audio/transcriptions");
-    let hints: Hints = if (budgeted || tpm || limits.cache_ttl_seconds.is_some()) && !form {
+    let form = ask.route.starts_with("/v1/audio/transcriptions")
+        || ask.route.starts_with("/v1/images/edits")
+        || ask.route.starts_with("/v1/images/variations");
+    let hints: Hints = if form {
+        form_hints(ask.body).map_err(|err| {
+            Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "bad_limits",
+                format!("Refused: {err}. Send n once, as a whole number from 1 to {MAX_N}."),
+            )
+        })?
+    } else if budgeted || tpm || limits.cache_ttl_seconds.is_some() {
         hints(ask.body).map_err(|err| {
             Refusal::new(
                 StatusCode::BAD_REQUEST,
@@ -1463,56 +1564,7 @@ pub(crate) async fn admit(
             });
         }
     }
-    for applied in ask.applied {
-        let Limit::Rpm(rpm) = applied.limit else {
-            continue;
-        };
-        let counted = match &spend.store {
-            None => spend.rate(&applied.scope, rpm, Instant::now()),
-            Some(store) => match spend
-                .take(store, &format!("rpm:{}", applied.scope), 1, u64::from(rpm))
-                .await
-            {
-                Ok(_) => Ok(()),
-                Err(Short::Over(wait)) => Err(wait),
-                Err(Short::Down(err)) => return Err(rate_store_unavailable(&err)),
-            },
-        };
-        if let Err(wait) = counted {
-            let mut refusal = Refusal::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limited",
-                format!(
-                    "Refused: {} has sent {rpm} requests in the last minute, the most {} allows. Send this one again in {wait} seconds.",
-                    applied.whose,
-                    allows(applied, ask.rule)
-                ),
-            );
-            refusal.retry_after = Some(wait);
-            refusal.record = Some(Box::new(limit_record(
-                applied,
-                serde_json::json!({ "kind": "rpm", "of": applied.of, "value": rpm }),
-            )));
-            let Some(by) = applied.shadow else {
-                return Err(refusal);
-            };
-            observed.push((refusal, by));
-            // Observed: counted all the same, so the minute's count is the one enforcement will see.
-            match &spend.store {
-                None => {
-                    let _ = spend.rate(&applied.scope, u32::MAX, Instant::now());
-                }
-                Some(store) => {
-                    if let Err(Short::Down(err)) = spend
-                        .take_past(store, &format!("rpm:{}", applied.scope), 1)
-                        .await
-                    {
-                        return Err(rate_store_unavailable(&err));
-                    }
-                }
-            }
-        }
-    }
+    count_rpm(spend, ask.applied, ask.rule, &mut observed).await?;
     let tpm_applied: Vec<&Applied> = ask
         .applied
         .iter()
@@ -2876,6 +2928,18 @@ pub(crate) fn charge(spend: &Spend, line: Line<'_>) -> (f64, Map<String, Value>)
         "cache_write_tokens".into(),
         tokens(|u| u.cache_write + u.cache_write_1h),
     );
+    // Audio is priced apart (realtime): its counts are written only when there were any.
+    if line
+        .usage
+        .is_some_and(|u| u.input_audio + u.output_audio + u.cache_read_audio > 0)
+    {
+        record.insert("input_audio_tokens".into(), tokens(|u| u.input_audio));
+        record.insert("output_audio_tokens".into(), tokens(|u| u.output_audio));
+        record.insert(
+            "cache_read_audio_tokens".into(),
+            tokens(|u| u.cache_read_audio),
+        );
+    }
     record.insert(
         "price".into(),
         if line.price.is_some() {
@@ -3119,7 +3183,7 @@ mod tests {
             max_output: None,
             max_context: None,
             per_image: None,
-            source: Default::default(),
+            ..Price::default()
         };
         // 3,000,000 bytes is 1,000,000 tokens at 4 dollars, and 1000 output tokens at 10 dollars per million.
         let most = most_cost(&price, 3_000_000, 0, 1000);
@@ -3138,7 +3202,7 @@ mod tests {
             max_output: Some(16384),
             max_context: None,
             per_image: None,
-            source: Default::default(),
+            ..Price::default()
         };
         let out = |body: &str, route: &str| {
             hints(body.as_bytes()).map(|h| output_tokens(&h, Some(&price), route))

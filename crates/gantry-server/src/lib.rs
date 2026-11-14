@@ -34,6 +34,7 @@ mod admin;
 mod alias;
 mod batch;
 pub mod cloud;
+mod cloud_batch;
 mod cors;
 mod credentials;
 pub mod insights;
@@ -93,6 +94,9 @@ const EMBEDDINGS: &str = "/v1/embeddings";
 /// Images, audio, moderations and rerank: forwarded as sent, to openai providers only. Transcriptions come as
 /// multipart/form-data, whose `model` field is what the policy reads.
 const IMAGES: &str = "/v1/images/generations";
+/// Image edits and variations come as multipart/form-data, as transcriptions do, and are priced per image.
+const IMAGE_EDITS: &str = "/v1/images/edits";
+const IMAGE_VARIATIONS: &str = "/v1/images/variations";
 const TRANSCRIPTIONS: &str = "/v1/audio/transcriptions";
 const SPEECH: &str = "/v1/audio/speech";
 const MODERATIONS: &str = "/v1/moderations";
@@ -145,12 +149,19 @@ fn openai_only(path: &str) -> bool {
         RESPONSES
             | EMBEDDINGS
             | IMAGES
+            | IMAGE_EDITS
+            | IMAGE_VARIATIONS
             | TRANSCRIPTIONS
             | SPEECH
             | MODERATIONS
             | RERANK
             | COMPLETIONS
     )
+}
+
+/// The routes whose body is a multipart form: the policy reads its `model` field, the guardrails its text fields.
+fn is_form(path: &str) -> bool {
+    matches!(path, TRANSCRIPTIONS | IMAGE_EDITS | IMAGE_VARIATIONS)
 }
 
 fn route_kind(method: &Method, path: &str) -> Option<Kind> {
@@ -287,6 +298,8 @@ pub struct ProviderRoute {
     pub keys: Vec<Secret>,
     /// Picks the pool's key with the fewest requests sent, not the next in turn.
     pub least_used_key: bool,
+    /// Bedrock or Vertex AI: the bucket its batch jobs read and write, for `/v1/batches`.
+    pub batch: Option<gantry_core::config::ProviderBatch>,
 }
 
 /// What the server needs to start.
@@ -539,6 +552,7 @@ struct Upstream {
     /// The key pool, each key as its header and its fingerprint (never the key). Empty without a pool.
     pool: Vec<((HeaderName, HeaderValue), String)>,
     least_used_key: bool,
+    batch: Option<gantry_core::config::ProviderBatch>,
 }
 
 impl Upstream {
@@ -642,6 +656,7 @@ pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError
         timeouts: route.timeouts,
         pool: if pool.len() > 1 { pool } else { Vec::new() },
         least_used_key: route.least_used_key,
+        batch: route.batch.clone(),
     })
 }
 
@@ -685,6 +700,7 @@ fn build(
             timeouts: gantry_core::config::Timeouts::default(),
             pool: Vec::new(),
             least_used_key: false,
+            batch: None,
         });
     }
     let console = config.console;
@@ -1828,7 +1844,7 @@ async fn check<'a>(
         Peek {
             model: model.to_string(),
         }
-    } else if parts.uri.path() == TRANSCRIPTIONS {
+    } else if is_form(parts.uri.path()) {
         form_model(&parts.headers, &bytes)?
     } else {
         serde_json::from_slice(&bytes).map_err(|_| {
@@ -2482,7 +2498,7 @@ fn unknown_route() -> Refusal {
     Refusal::new(
         StatusCode::NOT_FOUND,
         "unknown_route",
-        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/completions, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models, Google's Gemini API (POST /v1beta/models/<model>:generateContent, :streamGenerateContent, :countTokens, :embedContent, :batchEmbedContents, and GET /v1beta/models), GET /healthz and GET /readyz. Check the method and the path.",
+        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/images/edits, POST /v1/images/variations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/completions, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models, Google's Gemini API (POST /v1beta/models/<model>:generateContent, :streamGenerateContent, :countTokens, :embedContent, :batchEmbedContents, and GET /v1beta/models), GET /healthz and GET /readyz. Check the method and the path.",
     )
 }
 
@@ -3441,12 +3457,12 @@ async fn decide(
     // QA14-5: a form's text fields (the transcription prompt) are checked; only a form with none is not text.
     let not_text = on_request
         && match &outcome {
-            Ok(Next::Forward(parts, bytes, _)) if path == TRANSCRIPTIONS => {
+            Ok(Next::Forward(parts, bytes, _)) if is_form(&path) => {
                 form_texts(&parts.headers, bytes).is_ok_and(|t| t.is_empty())
             }
             // A passthrough call with no body (a GET of a batch) has nothing to read.
             Ok(Next::Forward(_, bytes, _)) if path.starts_with(PASSTHROUGH) => bytes.is_empty(),
-            _ => path == TRANSCRIPTIONS,
+            _ => is_form(&path),
         };
     outcome = match outcome {
         Ok(Next::Forward(parts, bytes, held)) if on_request && !not_text => {
@@ -3561,6 +3577,8 @@ async fn decide(
         } else if not_text && outcome.is_ok() {
             let why = if path.starts_with(PASSTHROUGH) {
                 "not_run: the request has no body"
+            } else if path.starts_with("/v1/images/") {
+                "not_run: the form holds only an image"
             } else {
                 "not_run: the body is audio"
             };
@@ -3852,7 +3870,7 @@ async fn guarded(
     };
     // A form (a transcription) shows the guardrails its text fields, and gets what they mask written back in place.
     let mut form = None;
-    if parts.uri.path() == TRANSCRIPTIONS {
+    if is_form(parts.uri.path()) {
         match form_texts(&parts.headers, &bytes) {
             Ok(fields) => form = Some(fields),
             Err(why) => return (Err(unreadable(why)), Vec::new()),
@@ -4131,6 +4149,61 @@ async fn answer_guarded(
     let masked = serde_json::to_vec(&answer).map_err(|_| unreadable())?;
     parts.headers.remove(header::CONTENT_LENGTH);
     Ok(Response::from_parts(parts, Body::from(masked)))
+}
+
+/// One whole answer checked by `on: [answer]` guardrails away from a live request (a batch result line, read when
+/// the caller downloads the results): the answer to pass on, masked where they masked it, or the message of the
+/// guardrail that blocked it; and what they found.
+pub(crate) async fn check_answer(
+    state: &AppState,
+    guards: &[Guardrail],
+    person: &str,
+    team: &str,
+    path: &str,
+    decision: &str,
+    answer: &serde_json::Value,
+) -> (Result<serde_json::Value, String>, Vec<guard::AuditEntry>) {
+    let check = AnswerCheck {
+        guards: guards.to_vec(),
+        person: person.to_string(),
+        team: team.to_string(),
+        path: path.to_string(),
+        buffer_stream: false,
+        stream_every: None,
+        gate: None,
+    };
+    let pointers = answer_texts(answer);
+    let texts: Vec<serde_json::Value> = pointers
+        .iter()
+        .map(|p| answer.pointer(p).cloned().unwrap_or_default())
+        .collect();
+    let verdict = answer_verdict(state, &check, decision, &texts).await;
+    if let Some(blocked) = &verdict.blocked {
+        let kinds: Vec<String> = verdict
+            .audit
+            .iter()
+            .filter(|e| e.guardrail == blocked.guardrail && e.action == "block")
+            .map(|e| format!("{} ({})", e.kind, e.count))
+            .collect();
+        let message = format!(
+            "guardrail \"{}\" withheld the model's answer, which contained {}. The answer was produced and is counted in usage.",
+            blocked.guardrail,
+            kinds.join(", ")
+        );
+        return (Err(message), verdict.audit);
+    }
+    let mut out = answer.clone();
+    if verdict.changed {
+        for (i, pointer) in pointers.iter().enumerate() {
+            if let (Some(slot), Some(masked)) = (
+                out.pointer_mut(pointer),
+                verdict.body.pointer(&format!("/messages/{i}/content")),
+            ) {
+                *slot = masked.clone();
+            }
+        }
+    }
+    (Ok(out), verdict.audit)
 }
 
 /// The answer guardrails' verdict on the model's texts: the built-in detectors, then each webhook in order until one

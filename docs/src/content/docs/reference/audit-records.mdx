@@ -129,6 +129,7 @@ Written when a forwarded request's answer ends: its whole body sent, its stream 
 | `cache_saved_usd` | number | What caching saved: the original answer's cost on a hit, or the uncached input price minus the cost when `prompt_cache: auto` marked the request (negative after a cache write) |
 | `usage` | string | `reported`, `partial`, `estimated`, `not_reported`, `caller_left` or `cache_hit` (below) |
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | integer or null | As the provider reported them. Input excludes cache reads and writes. `null` when not reported, `0` for a cache hit |
+| `input_audio_tokens`, `output_audio_tokens`, `cache_read_audio_tokens` | integer | Audio tokens, counted apart from the text ones above (realtime sessions). Present only when there were any |
 | `price` | string | `known`, or `none` for a model with no price |
 | `price_source` | string or null | `policy`, `builtin` or `litellm` |
 | `cost_usd` | number or null | What the answer cost at the model's price. `null` when the usage or price is unknown, never a guess. `0` for a cache hit |
@@ -193,6 +194,21 @@ Follows a request record, with the same `id`, when its rule has guardrails with 
 | `id` | string | The decision ID of the request |
 | `verdict` | string | `block` (the answer was withheld with `guardrail_blocked`), `mask`, `pass`, or `not_run` |
 | `guardrails` | array or string | Entries as on the request record, or `not_run: the answer is streamed` for a streamed answer on a rule without `buffer_stream: true` |
+
+## Batch result guardrails
+
+Written when a caller downloads batch results (an OpenAI output file, an Anthropic message batch's results) and an `on: [answer]` guardrail of the batch owner's rule found something in a line. One record per such line, with the download's decision ID.
+
+```json
+{"n":9,"event":"batch_result_guardrails","id":"01M7CX...","time":"2026-11-14T10:00:00.000Z","object_id":"file-out","line":2,"custom_id":"b","verdict":"block","guardrails":[{"guardrail":"answer-secrets","detector":"secrets","kind":"aws_access_key","action":"block","count":1}],"prev":"...","hash":"..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `object_id` | string | The file or message batch downloaded |
+| `line`, `custom_id` | integer, string | The result line |
+| `verdict` | string | `block` (the line's answer was replaced with an error object), `mask` or `pass` (a `record` guardrail found something) |
+| `guardrails` | array | Entries as on the request record |
 
 ## config_loaded
 

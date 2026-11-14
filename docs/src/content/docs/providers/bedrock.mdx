@@ -150,6 +150,10 @@ A Bedrock error, streamed or not, reaches the caller in Anthropic's error shape 
 - Betas are passed on as sent. A beta Bedrock does not offer comes back as Bedrock's 400.
 - `accept_chat: true` lets chat completions clients reach these models, translated. See [Translation](/routing/translation/).
 
+## Batches
+
+With a `batch:` section naming a bucket, `/v1/files` and `/v1/batches` run as Bedrock batch inference, on files Gantry keeps in S3, owned, checked, reserved and metered per line like OpenAI batches. See [Bedrock and Vertex AI batches](/providers/batches-and-realtime/#bedrock-and-vertex-ai-batches).
+
 ## Errors from gantry check
 
 ```text

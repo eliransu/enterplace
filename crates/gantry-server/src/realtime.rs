@@ -685,12 +685,21 @@ fn usage_of(api: Api, text: &str) -> Option<(Usage, Option<String>)> {
             if !usage.is_object() {
                 return None;
             }
-            let cached = count(&usage["input_token_details"]["cached_tokens"]);
+            // Audio is priced apart from text: the details split each count by modality, cached audio included.
+            let details = &usage["input_token_details"];
+            let cached = count(&details["cached_tokens"]);
+            let cached_audio = count(&details["cached_tokens_details"]["audio_tokens"]).min(cached);
+            let input_audio = count(&details["audio_tokens"]).saturating_sub(cached_audio);
+            let output = count(&usage["output_tokens"]);
+            let output_audio = count(&usage["output_token_details"]["audio_tokens"]).min(output);
             Some((
                 Usage {
-                    input: count(&usage["input_tokens"]).saturating_sub(cached),
-                    output: count(&usage["output_tokens"]),
-                    cache_read: cached,
+                    input: count(&usage["input_tokens"]).saturating_sub(cached + input_audio),
+                    output: output - output_audio,
+                    cache_read: cached - cached_audio,
+                    input_audio,
+                    output_audio,
+                    cache_read_audio: cached_audio,
                     ..Usage::default()
                 },
                 event["response"]["id"].as_str().map(String::from),
@@ -708,15 +717,31 @@ fn usage_of(api: Api, text: &str) -> Option<(Usage, Option<String>)> {
             if !usage.is_object() {
                 return None;
             }
+            // The details lists split each count by modality; what they call AUDIO is priced as audio.
+            let audio = |key: &str| {
+                usage[key].as_array().map_or(0, |parts| {
+                    parts
+                        .iter()
+                        .filter(|p| p["modality"] == "AUDIO")
+                        .map(|p| count(&p["tokenCount"]))
+                        .sum::<u64>()
+                })
+            };
             let cached = count(&usage["cachedContentTokenCount"]);
+            let cached_audio = audio("cacheTokensDetails").min(cached);
+            let input_audio = audio("promptTokensDetails").saturating_sub(cached_audio);
+            let output = count(&usage["responseTokenCount"]) + count(&usage["thoughtsTokenCount"]);
+            let output_audio = audio("responseTokensDetails").min(output);
             Some((
                 Usage {
                     input: (count(&usage["promptTokenCount"])
                         + count(&usage["toolUsePromptTokenCount"]))
-                    .saturating_sub(cached),
-                    output: count(&usage["responseTokenCount"])
-                        + count(&usage["thoughtsTokenCount"]),
-                    cache_read: cached,
+                    .saturating_sub(cached + input_audio),
+                    output: output - output_audio,
+                    cache_read: cached - cached_audio,
+                    input_audio,
+                    output_audio,
+                    cache_read_audio: cached_audio,
                     ..Usage::default()
                 },
                 None,

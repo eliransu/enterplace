@@ -312,6 +312,18 @@ Also 403 when a guardrail with `on: [answer]` withheld the model's whole answer.
 
 **Fix:** wait the seconds in `Retry-After`, or send a smaller `max_tokens`. See [Budgets and rate limits](/governance/budgets-and-rate-limits/).
 
+### batch_too_many_lines
+
+**400.** A batch file or message batch holds more lines than the rule's `batch: { max_lines }` allows. Checked at upload and again when the batch is created.
+
+**Fix:** split it into batches of at most that many lines, or ask an admin to raise the limit.
+
+### batch_too_many_open
+
+**429.** You have as many batches not yet ended as the rule's `batch: { max_open }` allows, counting OpenAI batches and Anthropic message batches. A batch counts until Gantry sees it end.
+
+**Fix:** wait for one to end, or cancel one, and send it again.
+
 ### budget_exceeded
 
 **429.** Spent, plus what requests in flight reserved, plus the most this request could cost would pass a `budget` of the rule or of a `limits:` scope (global, organization, team, person, customer, tag, model). The message names the scope, how much is spent of how much, what requests in flight hold, where the budget is written, and when it starts again in its time zone. The record's `applied` field names the scope's counter and the entry.
@@ -365,6 +377,24 @@ The rule has `regions:` and the request has no deployment in one of them: an ali
 ### no_deployment
 
 Every deployment of the alias that the request may use is kept (`for:`) for another team or tag.
+
+### batch_not_configured
+
+**400.** The batch file's model runs on a Bedrock or Vertex AI provider that has no `batch:` section, so there is no bucket for its batch job.
+
+**Fix:** ask an admin to add `batch: { bucket: ... }` to the provider.
+
+### wrong_endpoint
+
+**400.** The batch file's model runs on Bedrock or Vertex AI, and its lines name another `url` than `/v1/chat/completions`, the one Gantry translates for those batch jobs.
+
+**Fix:** write the lines as chat completions requests.
+
+### provider_refused
+
+**4xx, the provider's own.** Bedrock, Vertex AI, S3 or Cloud Storage refused what Gantry asked for a batch (keeping its file, starting or describing its job). The message carries the provider's words.
+
+**Fix:** act on the provider's message, often a bucket permission or a model the account cannot run in batch.
 
 ## Audit and provider
 

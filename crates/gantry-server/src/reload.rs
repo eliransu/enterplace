@@ -429,6 +429,7 @@ fn route(
         timeouts: provider.timeouts,
         keys,
         least_used_key: provider.least_used_key,
+        batch: provider.batch.clone(),
     })
 }
 
