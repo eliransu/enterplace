@@ -142,6 +142,10 @@ async fn connect(
     if let Ok(value) = format!("Bearer {key}").parse() {
         request.headers_mut().insert(header::AUTHORIZATION, value);
     }
+    request.headers_mut().insert(
+        header::USER_AGENT,
+        header::HeaderValue::from_static("live-client/1.0"),
+    );
     tokio_tungstenite::connect_async(request)
         .await
         .map(|(socket, _)| socket)
@@ -326,6 +330,13 @@ async fn a_gemini_live_session_is_decided_on_its_setup_and_metered() -> Result<(
         .await?;
     let first = next_text(&mut socket).await?.ok_or("no setup answer")?;
     assert!(first.contains("setupComplete"), "{first}");
+    // The decision is recorded once the setup names the model, with the tool it came from, as at connect.
+    let decided = records(&gw.audit)?
+        .into_iter()
+        .filter(|r| r["path"] == path && r["event"] != "usage" && r["model"] == "live-model")
+        .next_back()
+        .ok_or("no decision record for the setup")?;
+    assert_eq!(decided["user_agent"], "live-client/1.0", "{decided}");
     let usage = wait_for(&gw.audit, |r| {
         r["event"] == "usage" && r["model"] == "live-model"
     })

@@ -116,6 +116,10 @@ struct Open {
     model: Option<String>,
     provider: Option<usize>,
     beta: Option<HeaderValue>,
+    /// The caller's address and tool, from the connect request: Gemini's decision is recorded after the upgrade, when
+    /// the headers are gone, and its record names both as every other decision record does.
+    client_ip: Option<String>,
+    user_agent: Map<String, Value>,
 }
 
 async fn open(
@@ -316,6 +320,8 @@ async fn admit<'a>(
         model,
         provider,
         beta: headers.get("openai-beta").cloned(),
+        client_ip: client_ip.map(|ip| ip.to_string()),
+        user_agent: batch::user_agent_of(headers),
     })
 }
 
@@ -616,12 +622,12 @@ async fn gemini_setup(
         state,
         version,
         decision,
-        None,
+        open.client_ip.as_deref(),
         "GET",
         GEMINI,
         &seen,
         decided.as_ref().err(),
-        Map::new(),
+        open.user_agent.clone(),
     )
     .await?;
     let (model, index) = decided?;
