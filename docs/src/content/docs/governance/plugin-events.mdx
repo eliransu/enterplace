@@ -388,7 +388,7 @@ rules:
 | several names | No `application`. | A listed name, with the policy's `intent`. Another: refused. |
 | includes `"*"` | No `application`. | Any name. A listed one has the policy's `intent`; another has the caller's `x-gantry-application-intent`. |
 
-The policy's `intent` always wins over the caller's for a listed application, so a caller cannot restate what a governed application is for. An `intent` is one line of at most 500 characters.
+The policy's `intent` always wins over the caller's for a listed application, so a caller cannot restate what a governed application is for. An `intent` is one line of at most 500 characters. Applications are read on rules with an events guardrail (or in a binary with its own plugin); on other rules the two headers are dropped unread.
 
 ## Signed deliveries
 

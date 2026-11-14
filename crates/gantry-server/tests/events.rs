@@ -609,7 +609,7 @@ async fn a_tool_using_turn_is_the_same_events_on_four_apis() -> TestResult {
             null,
             null,
             null,
-            tools,
+            null,
             false
         ]),
         json!([
