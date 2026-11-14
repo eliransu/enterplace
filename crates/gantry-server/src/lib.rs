@@ -93,6 +93,9 @@ const EMBEDDINGS: &str = "/v1/embeddings";
 /// Images, audio, moderations and rerank: forwarded as sent, to openai providers only. Transcriptions come as
 /// multipart/form-data, whose `model` field is what the policy reads.
 const IMAGES: &str = "/v1/images/generations";
+/// Image edits and variations come as multipart/form-data, as transcriptions do, and are priced per image.
+const IMAGE_EDITS: &str = "/v1/images/edits";
+const IMAGE_VARIATIONS: &str = "/v1/images/variations";
 const TRANSCRIPTIONS: &str = "/v1/audio/transcriptions";
 const SPEECH: &str = "/v1/audio/speech";
 const MODERATIONS: &str = "/v1/moderations";
@@ -109,12 +112,19 @@ fn openai_only(path: &str) -> bool {
         RESPONSES
             | EMBEDDINGS
             | IMAGES
+            | IMAGE_EDITS
+            | IMAGE_VARIATIONS
             | TRANSCRIPTIONS
             | SPEECH
             | MODERATIONS
             | RERANK
             | COMPLETIONS
     )
+}
+
+/// The routes whose body is a multipart form: the policy reads its `model` field, the guardrails its text fields.
+fn is_form(path: &str) -> bool {
+    matches!(path, TRANSCRIPTIONS | IMAGE_EDITS | IMAGE_VARIATIONS)
 }
 
 fn route_kind(method: &Method, path: &str) -> Option<Kind> {
@@ -1605,7 +1615,7 @@ async fn check<'a>(
         ));
     }
     let (bytes, permit) = read_body(Some(&person.name), state, &parts.headers, body).await?;
-    let peek = if parts.uri.path() == TRANSCRIPTIONS {
+    let peek = if is_form(parts.uri.path()) {
         form_model(&parts.headers, &bytes)?
     } else {
         serde_json::from_slice(&bytes).map_err(|_| {
@@ -2222,7 +2232,7 @@ fn unknown_route() -> Refusal {
     Refusal::new(
         StatusCode::NOT_FOUND,
         "unknown_route",
-        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/completions, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models, GET /healthz and GET /readyz. Check the method and the path.",
+        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/images/edits, POST /v1/images/variations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/completions, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models, GET /healthz and GET /readyz. Check the method and the path.",
     )
 }
 
@@ -2880,12 +2890,12 @@ async fn decide(
     // QA14-5: a form's text fields (the transcription prompt) are checked; only a form with none is not text.
     let not_text = on_request
         && match &outcome {
-            Ok(Next::Forward(parts, bytes, _)) if path == TRANSCRIPTIONS => {
+            Ok(Next::Forward(parts, bytes, _)) if is_form(&path) => {
                 form_texts(&parts.headers, bytes).is_ok_and(|t| t.is_empty())
             }
             // A passthrough call with no body (a GET of a batch) has nothing to read.
             Ok(Next::Forward(_, bytes, _)) if path.starts_with(PASSTHROUGH) => bytes.is_empty(),
-            _ => path == TRANSCRIPTIONS,
+            _ => is_form(&path),
         };
     outcome = match outcome {
         Ok(Next::Forward(parts, bytes, held)) if on_request && !not_text => {
@@ -2997,6 +3007,8 @@ async fn decide(
         } else if not_text && outcome.is_ok() {
             let why = if path.starts_with(PASSTHROUGH) {
                 "not_run: the request has no body"
+            } else if path.starts_with("/v1/images/") {
+                "not_run: the form holds only an image"
             } else {
                 "not_run: the body is audio"
             };
@@ -3283,7 +3295,7 @@ async fn guarded(
     };
     // A form (a transcription) shows the guardrails its text fields, and gets what they mask written back in place.
     let mut form = None;
-    if parts.uri.path() == TRANSCRIPTIONS {
+    if is_form(parts.uri.path()) {
         match form_texts(&parts.headers, &bytes) {
             Ok(fields) => form = Some(fields),
             Err(why) => return (Err(unreadable(why)), Vec::new()),

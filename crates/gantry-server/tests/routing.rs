@@ -870,6 +870,132 @@ async fn a_transcription_form_is_decided_on_its_model_field_and_forwarded_as_sen
 
 const TRANSCRIBE: &str = "/v1/audio/transcriptions";
 
+/// An image edit or variation form: an image part, the model, and the fields given.
+fn image_form(fields: &[(&str, &str)]) -> Bytes {
+    let mut body = b"--gantry-img\r\nContent-Disposition: form-data; name=\"image\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\n\x89PNG\x00\x01".to_vec();
+    for (name, value) in fields {
+        body.extend_from_slice(
+            format!(
+                "\r\n--gantry-img\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(b"\r\n--gantry-img--\r\n");
+    Bytes::from(body)
+}
+
+#[tokio::test]
+async fn image_edits_and_variations_are_decided_guarded_and_charged_by_the_image() -> TestResult {
+    let two = r#"{"created":1,"data":[{"b64_json":"AA"},{"b64_json":"BB"}]}"#;
+    let (a, openai) = mock(vec![
+        (200, "application/json", two),
+        (200, "application/json", two),
+    ])
+    .await?;
+    let mut prices = PriceOverrides::new();
+    prices.insert(
+        "dall-e-2".into(),
+        Price {
+            per_image: Some(0.02),
+            ..Price::default()
+        },
+    );
+    let policy = Policy::new()
+        .with_key(MAYA, "maya.cohen", "payments")
+        .with_models("payments", ["dall-e-2"])
+        .with_guardrails(&[Guardrail {
+            name: "secrets".into(),
+            action: Action::Block,
+            check: Check::Secrets,
+            on: gantry_core::guard::On::REQUEST,
+            shadow_until: None,
+        }])
+        .with_limits(Limits {
+            budgets: vec![gantry_core::policy::Cap {
+                budget: Budget {
+                    usd: 10.0,
+                    per: Period::Day,
+                },
+                models: Vec::new(),
+                from: None,
+                shadow_until: None,
+            }],
+            ..Limits::default()
+        })
+        .with_prices(prices);
+    let gw = gateway(
+        "image-edits",
+        vec![route(
+            "openai",
+            Kind::OpenAi,
+            a,
+            &["dall-e-2", "gpt-image-9"],
+        )],
+        vec![],
+        policy,
+    )?;
+    let content_type = "multipart/form-data; boundary=gantry-img";
+    let edit = image_form(&[("model", "dall-e-2"), ("prompt", "add a hat"), ("n", "2")]);
+    let (status, _, body) = send(&gw, "/v1/images/edits", content_type, edit.clone()).await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    let (path, _, sent) = openai.seen().first().cloned().ok_or("nothing sent")?;
+    assert_eq!(path, "/v1/images/edits");
+    assert_eq!(sent, edit, "the form is forwarded byte for byte");
+    // The prompt is text the guardrails read: a secret in it refuses the edit.
+    let (status, _, body) = send(
+        &gw,
+        "/v1/images/edits",
+        content_type,
+        image_form(&[("model", "dall-e-2"), ("prompt", "AKIAIOSFODNN7EXAMPLE")]),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body:?}");
+    // A model the rule does not allow is refused before the provider sees it.
+    let (status, _, body) = send(
+        &gw,
+        "/v1/images/variations",
+        content_type,
+        image_form(&[("model", "gpt-image-9")]),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body:?}");
+    let (status, _, body) = send(
+        &gw,
+        "/v1/images/variations",
+        content_type,
+        image_form(&[("model", "dall-e-2"), ("n", "2")]),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(openai.seen().len(), 2);
+    let mut all = Vec::new();
+    for _ in 0..50 {
+        all = records(&gw, "usage").await?;
+        if all.iter().filter(|r| r["event"] == "usage").count() == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let usage: Vec<&Value> = all.iter().filter(|r| r["event"] == "usage").collect();
+    assert_eq!(usage.len(), 2, "{usage:?}");
+    for one in usage {
+        let charged = one["charged_usd"].as_f64().unwrap_or_default();
+        assert!((charged - 0.04).abs() < 1e-9, "two images at 0.02: {one}");
+        let reserved = one["reserved_usd"].as_f64().unwrap_or_default();
+        assert!(
+            (reserved - 0.04).abs() < 1e-9,
+            "n=2 reserves two images: {one}"
+        );
+    }
+    assert!(
+        all.iter()
+            .any(|r| r["path"] == "/v1/images/variations" && r["verdict"] == "refused"),
+        "the refused variation is recorded"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn speech_moderations_and_rerank_are_governed_and_forwarded() -> TestResult {
     let (a, openai) = mock(vec![

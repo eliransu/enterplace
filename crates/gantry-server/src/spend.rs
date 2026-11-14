@@ -995,6 +995,35 @@ struct Hints {
     stored: Vec<&'static str>,
 }
 
+/// What a form (an image edit or variation, a transcription) tells the estimate: how many images its `n` asks for.
+fn form_hints(body: &[u8]) -> Result<Hints, String> {
+    // The form was read strictly before it got here; its boundary is its first line.
+    let first = body.split(|b| *b == b'\r').next().unwrap_or_default();
+    let boundary =
+        String::from_utf8_lossy(first.strip_prefix(b"--").unwrap_or_default()).into_owned();
+    let content_type = format!("multipart/form-data; boundary={boundary}");
+    let Ok(parts) = crate::alias::form_parts(&content_type, body) else {
+        return Ok(Hints::default());
+    };
+    let mut n = parts.iter().filter(|p| p.name == "n" && !p.file);
+    let (Some(part), None) = (n.next(), n.next()) else {
+        return match parts.iter().filter(|p| p.name == "n").count() {
+            0 => Ok(Hints::default()),
+            _ => Err("the form has more than one \"n\" field".into()),
+        };
+    };
+    let text = String::from_utf8_lossy(&body[part.value.clone()])
+        .trim()
+        .to_string();
+    match text.parse::<u64>() {
+        Ok(count @ 1..=MAX_N) => Ok(Hints {
+            n: Some(count),
+            ..Hints::default()
+        }),
+        _ => Err(format!("\"n\" must be a whole number from 1 to {MAX_N}")),
+    }
+}
+
 /// The most answers one request may ask for under a budget or a cache. OpenAI allows 128, and with it one request
 /// costs 128 times its output limit: a burst of them would pass a budget by far more than one request's worth.
 const MAX_N: u64 = 16;
@@ -1358,8 +1387,18 @@ pub(crate) async fn admit(
         admitted.estimate_from = Some((ask.body.clone(), ask.route.to_string()));
     }
     // An audio upload is a form, not JSON: it carries none of the fields read here.
-    let form = ask.route.starts_with("/v1/audio/transcriptions");
-    let hints: Hints = if (budgeted || tpm || limits.cache_ttl_seconds.is_some()) && !form {
+    let form = ask.route.starts_with("/v1/audio/transcriptions")
+        || ask.route.starts_with("/v1/images/edits")
+        || ask.route.starts_with("/v1/images/variations");
+    let hints: Hints = if form {
+        form_hints(ask.body).map_err(|err| {
+            Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "bad_limits",
+                format!("Refused: {err}. Send n once, as a whole number from 1 to {MAX_N}."),
+            )
+        })?
+    } else if budgeted || tpm || limits.cache_ttl_seconds.is_some() {
         hints(ask.body).map_err(|err| {
             Refusal::new(
                 StatusCode::BAD_REQUEST,
