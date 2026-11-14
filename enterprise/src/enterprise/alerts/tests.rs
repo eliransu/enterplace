@@ -305,7 +305,7 @@ fn request(
     Ok(())
 }
 
-async fn rows(
+pub(crate) async fn rows(
     url: &str,
     sql: &str,
 ) -> Result<Vec<gantry_server::store::tokio_postgres::Row>, Error> {

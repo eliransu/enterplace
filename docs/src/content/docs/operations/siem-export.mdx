@@ -58,6 +58,8 @@ That is the webhook body; the other formats carry the same fields as attributes,
 
 A replica is named by its host name and the start of its chain's first hash, kept beside the log in `gantry-audit.jsonl.replica`.
 
+With [a chain per organization](/governance/audit-log/#a-chain-per-organization) (`audit: { per_org: true }`), each organization's chain is a replica of its own, named the same way from its file (`gantry-audit.jsonl.orgs/acme.jsonl.replica`): its batches carry its own `first_n`, `prev` and hashes, a SIEM checks them as it checks any replica, and `gantry audit verify gantry-audit.jsonl --org acme --expect-last <hash>` checks a `last_hash` of it.
+
 ## Delivery
 
 - **At least once.** A destination's cursor for a replica, kept in Postgres, moves only after the destination accepted the batch. After a restart, or on a new pod with the same volume, export goes on from the cursor. A batch can arrive twice after a failure: deduplicate on the replica and `n` (Elasticsearch does this itself).

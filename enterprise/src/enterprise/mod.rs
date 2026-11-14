@@ -89,12 +89,21 @@ pub fn extend_with(
     // Retired on disk only through what the audit export has read, when it runs (for export or for alerting, which
     // reads the same table); through anything otherwise. With a store the request index must have copied it too.
     let export_reads = (siem_on || alerts_on) && host.postgres.is_some();
-    let limit = Arc::new(AtomicU64::new(if export_reads { 0 } else { u64::MAX }));
+    let read_limit = || Arc::new(AtomicU64::new(if export_reads { 0 } else { u64::MAX }));
+    let limit = read_limit();
+    // Each organization's chain (`audit: { per_org: true }`) is exported, retained and shipped as the install's is,
+    // each with its own read-through limit.
+    let orgs: Vec<(gantry_server::OrgChain, Arc<AtomicU64>)> = host
+        .org_chains
+        .iter()
+        .map(|chain| (chain.clone(), read_limit()))
+        .collect();
     // Not behind the license: it is what keeps the audit chain whole where the disk does not last, a property the
     // gateway promises without one.
     if let Some(store) = segments::Store::from_env(&env)? {
+        let mut shippers = Vec::new();
         let shipper = Arc::new(segments::Shipper::new(
-            store,
+            store.within(""),
             host.audit.clone(),
             host.audit_path.to_path_buf(),
             &env,
@@ -105,10 +114,23 @@ pub fn extend_with(
             extension.routes = std::mem::take(&mut extension.routes)
                 .merge(segments::routes(shipper.clone(), token.trim().to_string()));
         }
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(shipper.clone().run());
+        shippers.push(shipper);
+        for (chain, limit) in &orgs {
+            shippers.push(Arc::new(segments::Shipper::new(
+                store.within(&org_prefix(&chain.org)),
+                chain.log.clone(),
+                chain.path.clone(),
+                &env,
+                limit.clone(),
+                chain.request_index.clone(),
+            )));
         }
-        let _ = SHIPPER.set(shipper);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            for shipper in &shippers {
+                runtime.spawn(shipper.clone().run());
+            }
+        }
+        let _ = SHIPPERS.set(shippers);
     }
     if !(members_on || siem_on || retention_on || alerts_on) {
         return Ok(extension);
@@ -146,20 +168,20 @@ pub fn extend_with(
         if let Some(captures) = &captures {
             extension.capture = Some(captures.clone());
         }
-        let registered = siem::register(
-            &mut extension,
-            siem::Setup {
-                db,
-                log: host.audit.clone(),
-                audit_path: host.audit_path.to_path_buf(),
-                env: env.clone(),
-                siem: siem_on,
-                retention: retention_on,
-                alerts: alerts_on,
-                captures,
-                read_through: limit,
-            },
-        );
+        let setup = |log: &Arc<gantry_core::audit::AuditLog>,
+                     path: &Path,
+                     read_through: &Arc<AtomicU64>| siem::Setup {
+            db: db.clone(),
+            log: log.clone(),
+            audit_path: path.to_path_buf(),
+            env: env.clone(),
+            siem: siem_on,
+            retention: retention_on,
+            alerts: alerts_on,
+            captures: captures.clone(),
+            read_through: read_through.clone(),
+        };
+        let registered = siem::register(&mut extension, setup(host.audit, host.audit_path, &limit));
         match registered {
             Ok(exporter) if alerts_on => {
                 alerts::register(&mut extension, &exporter, &env, host.policy_now.clone());
@@ -167,12 +189,35 @@ pub fn extend_with(
             Ok(_) => {}
             Err(err) => eprintln!("warning: audit export, retention and alerts are off: {err}"),
         }
+        for (chain, read_through) in &orgs {
+            match siem::chain(setup(&chain.log, &chain.path, read_through)) {
+                Ok(exporter) if alerts_on => {
+                    alerts::engine(&exporter, &env, host.policy_now.clone(), true);
+                }
+                Ok(_) => {}
+                Err(err) => eprintln!(
+                    "warning: audit export, retention and alerts are off for the chain of organization \"{}\": {err}",
+                    chain.org
+                ),
+            }
+        }
     }
     Ok(extension)
 }
 
-/// The shipper `extend` started, for the last pass when the gateway stops.
-static SHIPPER: OnceLock<Arc<segments::Shipper>> = OnceLock::new();
+/// The shippers `extend` started, the install's chain's first, for the last pass when the gateway stops.
+static SHIPPERS: OnceLock<Vec<Arc<segments::Shipper>>> = OnceLock::new();
+
+/// Where an organization's segments go in the bucket, beside the install's: `orgs/<org>`, the name as its chain's
+/// file has it.
+fn org_prefix(org: &str) -> String {
+    let file = gantry_core::audit::org_path(Path::new(""), org);
+    let name = file
+        .file_stem()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!("orgs/{name}")
+}
 
 /// Before `serve` opens the audit log: on an empty disk, fetches the chain's newest segments from the store
 /// `GANTRY_AUDIT_SEGMENTS_URL` names, so the gateway continues it. Nothing when it is unset.
@@ -189,13 +234,24 @@ pub fn restore_audit(policy: &Path, keys: Option<&Path>) -> Result<(), String> {
         "audit segments: {}",
         segments::restore(&store, &loaded.audit_path)?
     );
+    if loaded.audit_per_org {
+        for org in loaded.policy.orgs() {
+            eprintln!(
+                "audit segments of organization {org}: {}",
+                segments::restore(
+                    &store.within(&org_prefix(org)),
+                    &gantry_core::audit::org_path(&loaded.audit_path, org)
+                )?
+            );
+        }
+    }
     Ok(())
 }
 
 /// After the gateway stopped serving: seals the log and writes the rest to the store, so a graceful stop loses
 /// no record.
 pub fn finish_audit() {
-    if let Some(shipper) = SHIPPER.get() {
+    for shipper in SHIPPERS.get().into_iter().flatten() {
         match shipper.pass(true) {
             Ok(wrote) => eprintln!("audit segments: wrote {wrote} on stop."),
             Err(err) => eprintln!("warning: audit segments: the last pass failed: {err}"),

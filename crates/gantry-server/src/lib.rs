@@ -58,7 +58,9 @@ use hyper_util::{
     server::{conn::auto::Builder, graceful::GracefulShutdown},
     service::TowerToHyperService,
 };
-pub use reload::{Governed, Host, Reload, Reloader, Trigger, governed, governed_with, open_store};
+pub use reload::{
+    Governed, Host, OrgChain, Reload, Reloader, Trigger, governed, governed_with, open_store,
+};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tower::ServiceExt;
 

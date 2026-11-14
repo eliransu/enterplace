@@ -1930,3 +1930,165 @@ async fn text_goes_only_to_destinations_that_opt_in_redacted_encrypted_and_for_a
     ));
     Ok(())
 }
+
+/// Request records of organization acme, which go to its own chain with `audit: { per_org: true }`.
+fn write_acme(gw: &Gateway, from: usize, count: usize, code: Option<&str>) -> Result<(), Error> {
+    for i in from..from + count {
+        let mut record = audit::record(&audit::Entry {
+            id: &format!("acme-{i}"),
+            person: Some("alice"),
+            method: "POST",
+            path: "/v1/chat/completions",
+            model: Some("m"),
+            allowed: code.is_none(),
+            code,
+            ..Default::default()
+        });
+        record.insert("org".into(), "acme".into());
+        gw.log.append_record(&record)?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn per_org_each_chain_is_exported_retained_held_and_alerted_on_its_own() -> Result<(), Error>
+{
+    let Some(url) = database("siem_per_org").await? else {
+        return Ok(());
+    };
+    let sink = Sink::start().await?;
+    let policy = format!("{POLICY}orgs: [acme]\naudit: {{ per_org: true }}\n");
+    let (gw, ex) = quiet_policy(
+        "siem_per_org",
+        &url,
+        &["siem", "retention", "alerts"],
+        &policy,
+    )?;
+    let acme = audit::org_path(&gw.audit, "acme");
+    let org = registry()
+        .lock()
+        .map_err(|_| "registry")?
+        .get(&acme)
+        .cloned()
+        .ok_or("no exporter for acme's chain")?;
+    assert_ne!(org.replica, ex.replica, "a replica of its own");
+    let mut owner = Browser::admin(&gw.app).await?;
+    owner
+        .go(
+            &gw.app,
+            "POST",
+            "/console/siem",
+            &[
+                ("action", "save"),
+                ("kind", "webhook"),
+                ("url", &format!("{}/in/hook", sink.base)),
+            ],
+        )
+        .await?;
+
+    // Export: acme's records are read from its chain under its replica, and sent; the install's has none of them.
+    write_acme(&gw, 0, 3, None)?;
+    let old = org.log.seal()?.ok_or("nothing sealed")?;
+    write_acme(&gw, 3, 1, None)?;
+    while org.ingest().await? > 0 {}
+    while ex.ingest().await? > 0 {}
+    let count = |replica: &str| {
+        format!(
+            "SELECT count(*) FROM enterprise_audit WHERE replica = '{replica}' AND line LIKE '%\"org\":\"acme\"%'"
+        )
+    };
+    let n = |rows: Vec<gantry_server::store::tokio_postgres::Row>| -> i64 {
+        rows.first().and_then(|r| r.try_get(0).ok()).unwrap_or(-1)
+    };
+    let rows = crate::enterprise::alerts::tests::rows;
+    assert_eq!(n(rows(&url, &count(&org.replica)).await?), 4);
+    assert_eq!(n(rows(&url, &count(&ex.replica)).await?), 0);
+    org.ship().await?;
+    assert!(
+        sink.deliveries()
+            .iter()
+            .any(|h| h.uri.starts_with("/in/hook") && h.text().contains("acme-0")),
+        "acme's records reach the destination"
+    );
+
+    // Legal hold covers every chain; retention then retires acme's old segment in acme's chain.
+    age(&old, 400)?;
+    owner
+        .go(
+            &gw.app,
+            "POST",
+            "/console/siem",
+            &[("action", "hold_on"), ("reason", "Case 9")],
+        )
+        .await?;
+    assert!(org.retain().await?.contains("Legal hold is on"));
+    assert!(old.exists());
+    owner
+        .go(
+            &gw.app,
+            "POST",
+            "/console/siem",
+            &[("action", "hold_off"), ("reason", "Case 9 closed")],
+        )
+        .await?;
+    let note = org.retain().await?;
+    assert!(note.contains("retired records 1 to 3"), "{note}");
+    assert!(!old.exists());
+    org.log.flush();
+    let summary = audit::verify_full(&acme, None)?;
+    assert_eq!(summary.first, 4, "verify proves the rest of acme's chain");
+    audit::verify_full(&gw.audit, None)?;
+
+    // Alerts: acme's guardrail block fires from acme's chain, and the alert is recorded there.
+    owner
+        .go(
+            &gw.app,
+            "POST",
+            "/console/alerts",
+            &[
+                ("action", "channel_save"),
+                ("kind", "webhook"),
+                ("name", "ops"),
+                ("url", &format!("{}/in/alerts", sink.base)),
+            ],
+        )
+        .await?;
+    owner
+        .go(
+            &gw.app,
+            "POST",
+            "/console/alerts",
+            &[
+                ("action", "rule_save"),
+                ("kind", "guardrail_block"),
+                ("name_rule", "Blocks"),
+                ("count", "1"),
+                ("channels", "1"),
+                ("cooldown", "60"),
+            ],
+        )
+        .await?;
+    sink.clear();
+    write_acme(&gw, 4, 1, Some("guardrail_blocked"))?;
+    while org.ingest().await? > 0 {}
+    org.alerts
+        .get()
+        .ok_or("no engine for acme")?
+        .evaluate()
+        .await?;
+    let fired = sink.deliveries();
+    assert!(
+        fired
+            .iter()
+            .any(|h| h.uri.starts_with("/in/alerts") && h.json()["records"][0]["id"] == "acme-4"),
+        "{:?}",
+        fired.iter().map(Hit::text).collect::<Vec<_>>()
+    );
+    org.log.flush();
+    let chain = std::fs::read_to_string(&acme)?;
+    assert!(
+        chain.contains("\"event\":\"alert\""),
+        "the alert is in acme's chain"
+    );
+    Ok(())
+}

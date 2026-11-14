@@ -12,7 +12,7 @@
 //! Every change to a channel or rule is an admin record, written before the change.
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub mod channels;
 
@@ -553,6 +553,8 @@ struct Candidate {
 }
 
 pub struct Engine {
+    /// An organization's chain: trouble with the store is the install engine's to report.
+    org: bool,
     db: Arc<Db>,
     replica: String,
     log: Arc<AuditLog>,
@@ -581,7 +583,27 @@ pub fn register(
     env: &Env,
     policy: gantry_server::PolicyNow,
 ) -> Arc<Engine> {
+    let engine = engine(exporter, env, policy, false);
+    let console = &mut extension.console;
+    console.nav.push(("/console/alerts".into(), NAV.into()));
+    console.routes = std::mem::take(&mut console.routes)
+        .route("/alerts", get(page).post(act))
+        .layer(Ext(Alerts {
+            engine: engine.clone(),
+        }));
+    engine
+}
+
+/// The engine of one chain, on its exporter's tick: the install's, or an organization's (`org`), whose alerts go
+/// to its own chain. An organization's engine leaves trouble with the store to the install's, so it is said once.
+pub fn engine(
+    exporter: &Arc<super::siem::Exporter>,
+    env: &Env,
+    policy: gantry_server::PolicyNow,
+    org: bool,
+) -> Arc<Engine> {
     let engine = Arc::new(Engine {
+        org,
         db: exporter.db.clone(),
         replica: exporter.replica.clone(),
         log: exporter.log.clone(),
@@ -602,13 +624,6 @@ pub fn register(
         said: Mutex::new(String::new()),
     });
     let _ = exporter.alerts.set(engine.clone());
-    let console = &mut extension.console;
-    console.nav.push(("/console/alerts".into(), NAV.into()));
-    console.routes = std::mem::take(&mut console.routes)
-        .route("/alerts", get(page).post(act))
-        .layer(Ext(Alerts {
-            engine: engine.clone(),
-        }));
     engine
 }
 
@@ -749,6 +764,7 @@ impl Engine {
         }
         match self.evaluate().await {
             Ok(()) => {}
+            Err(err) if self.org => self.say(&format!("alerts: {err}")),
             Err(err) => {
                 self.say(&format!("alerts: {err}"));
                 trouble.push((

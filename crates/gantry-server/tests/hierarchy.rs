@@ -389,3 +389,57 @@ async fn the_explanation_lists_each_limit_with_its_source_and_spend_for_a_role_t
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn per_org_each_organizations_records_are_its_own_chain_and_spend_survives_a_restart()
+-> TestResult {
+    let s = setup("per-org").await?;
+    let dir = s.audit.parent().ok_or("no folder")?.to_path_buf();
+    let policy = dir.join("gantry.policy.yaml");
+    let text = std::fs::read_to_string(&policy)?;
+    std::fs::write(&policy, format!("{text}audit: {{ per_org: true }}\n"))?;
+    let audit = s.audit.clone();
+    drop(s);
+    let start = || gantry_server::governed(&policy, None, &|_| Some("provider-secret".into()));
+    let gw = start()?;
+    let shop = [("x-gantry-customer", "globex-shop")];
+    let (status, body) = answer(&gw.router, chat(SHOP, ONE, &shop)?).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = answer(&gw.router, chat(GLOB, ONE, &[])?).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let acme = gantry_core::audit::org_path(&audit, "acme");
+    let globex = gantry_core::audit::org_path(&audit, "globex");
+    usage_count(&acme, 1).await?;
+    usage_count(&globex, 1).await?;
+    gw.log.flush();
+    // Each organization's request and usage are in its chain alone; the install keeps what names none.
+    let install = records(&audit)?;
+    assert!(install.iter().any(|r| r["event"] == "config_loaded"));
+    assert!(
+        !install.iter().any(|r| r.get("org").is_some()),
+        "{install:?}"
+    );
+    for (chain, org) in [(&acme, "acme"), (&globex, "globex")] {
+        let mine = records(chain)?;
+        assert!(mine.iter().all(|r| r["org"] == org), "{mine:?}");
+        assert!(mine.iter().any(|r| r["verdict"] == "allow"));
+        assert_eq!(gantry_core::audit::verify(chain)?.0, 2);
+    }
+    gantry_core::audit::verify(&audit)?;
+    // The request log folds every chain.
+    let rows = gantry_core::insights::fold_chain(&audit)?;
+    assert_eq!(rows.iter().filter(|r| r.verdict == "allow").count(), 2);
+    // Spend is read back from every chain at start: the customer's $0.001 still counts against its $0.0015.
+    drop(gw);
+    let gw = start()?;
+    let (status, body) = answer(&gw.router, chat(SHOP, ONE, &shop)?).await?;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["error"]["code"], "budget_exceeded");
+    gw.log.flush();
+    assert_eq!(
+        gantry_core::audit::verify(&acme)?.0,
+        3,
+        "the refusal goes on its chain"
+    );
+    Ok(())
+}

@@ -703,7 +703,11 @@ struct PrincipalsFile {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AuditFile {
-    path: PathBuf,
+    #[serde(default)]
+    path: Option<PathBuf>,
+    /// Each organization's records in a chain of its own, beside the install's.
+    #[serde(default)]
+    per_org: bool,
 }
 
 #[derive(Deserialize)]
@@ -1423,6 +1427,8 @@ pub struct Loaded {
     pub policy: Policy,
     pub providers: Vec<Provider>,
     pub audit_path: PathBuf,
+    /// `audit: { per_org: true }`: each organization's records go to a chain of its own (`<log>.orgs/<org>.jsonl`).
+    pub audit_per_org: bool,
     pub keys_path: PathBuf,
     pub policy_sha256: String,
     pub keys_sha256: String,
@@ -3920,10 +3926,11 @@ pub fn load_texts(
             None
         }
     };
-    let audit_path = match &parsed.audit {
-        Some(audit) => audit.path.clone(),
+    let audit_path = match parsed.audit.as_ref().and_then(|a| a.path.clone()) {
+        Some(path) => path,
         None => policy_path.with_file_name("gantry-audit.jsonl"),
     };
+    let audit_per_org = parsed.audit.as_ref().is_some_and(|a| a.per_org);
     match providers {
         providers if errors.is_empty() => Ok(Loaded {
             policy: Policy::from_parts(principals(keys), rules)
@@ -3938,6 +3945,7 @@ pub fn load_texts(
                 .with_mode(mode),
             providers,
             audit_path,
+            audit_per_org,
             keys_path: keys_file.to_path_buf(),
             policy_sha256: sha256_hex(policy_text.as_bytes()),
             keys_sha256: sha256_hex(keys_text.as_bytes()),
@@ -3963,6 +3971,11 @@ pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
             old.audit_path.display(),
             new.audit_path.display()
         ));
+    }
+    if old.audit_per_org != new.audit_per_org {
+        reasons.push(
+            "audit per_org changed. Which chain each organization's records go to is set when the audit log opens: restart Gantry to change it.".to_string(),
+        );
     }
     // Each server's credentials are read from the environment at start, like a provider key.
     if old.mcp != new.mcp {

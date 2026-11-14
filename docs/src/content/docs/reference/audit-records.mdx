@@ -165,10 +165,10 @@ Follows a request record, with the same `id`, when the request was tried more th
 
 ## Upstream error
 
-Follows a request record, with the same `id`, when the request was forwarded and no provider answered: a timeout, a refused connection, or every retry and fallback failed. Without it a failed request would have a decision and nothing after it.
+Follows a request record, with the same `id`, when the request was forwarded and no provider answered: a timeout, a refused connection, or every retry and fallback failed. It is written for every such failure the caller gets, retried or not. Without it a failed request would have a decision and nothing after it.
 
 ```json
-{"n":4,"event":"upstream_error","id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-13T00:53:41.020Z","status":504,"code":"upstream_timeout","latency_ms":30002,"prev":"...","hash":"..."}
+{"n":4,"event":"upstream_error","id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-13T00:53:41.020Z","status":504,"code":"upstream_timeout","provider":"openai","tries":1,"latency_ms":30002,"prev":"...","hash":"..."}
 ```
 
 | Field | Type | Description |
@@ -177,6 +177,8 @@ Follows a request record, with the same `id`, when the request was forwarded and
 | `id` | string | The decision ID of the request |
 | `status` | integer | The HTTP status Gantry answered with |
 | `code` | string | The refusal code Gantry answered with, such as `upstream_timeout` |
+| `provider` | string | The provider of the last try (for an alias, the deployment). Absent when no provider was tried |
+| `tries` | integer | How many tries were made. With more than one, the [attempts record](#attempts) lists them |
 | `latency_ms` | integer | Milliseconds from the request's arrival to the failure |
 
 ## Answer guardrails

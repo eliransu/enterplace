@@ -448,8 +448,8 @@ impl Spend {
     /// Sums the usage records of the current month from the audit log, so a restart does not forget spend.
     // ponytail: reads the whole log at start, as the chain check before it does. A checkpoint comes with that one.
     pub(crate) fn replay(&self, path: &Path, policy: Option<&Policy>) -> Result<(), String> {
-        // Sealed segments too: the month may have begun before the last seal.
-        let file = match audit::chain_reader(path) {
+        // Sealed segments too: the month may have begun before the last seal. Every organization's chain too.
+        let file = match audit::chains_reader(path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(err) => {

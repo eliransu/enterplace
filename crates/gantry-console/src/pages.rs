@@ -317,6 +317,10 @@ pub struct AuditView<'a> {
     pub admin: &'a str,
     pub query: &'a Form,
     pub log: &'a Result<Option<String>, String>,
+    /// The chain shown: `""` for the install's, else the organization's (`audit: { per_org: true }`).
+    pub chain: &'a str,
+    /// The chains a person may switch between, as (label, link, shown). Empty with one chain.
+    pub chains: &'a [(String, String, bool)],
     pub policy: Option<&'a str>,
     /// The policy as `gantry check` reads it now, for the budgets and limits a refusal names.
     pub loaded: Option<&'a Loaded>,
@@ -1909,11 +1913,31 @@ pub fn audit(view: &AuditView<'_>) -> String {
         model: query.get("model"),
     };
     let today = today();
+    let switch: String = view
+        .chains
+        .iter()
+        .map(|(label, href, shown)| {
+            link(&esc(label), if *shown { "" } else { "quiet" }, href, true)
+        })
+        .collect();
     let verify = format!(
-        r#"<form method="post" action="/console/audit/verify">{}</form>"#,
+        r#"{switch}<form method="post" action="/console/audit/verify{}">{}</form>"#,
+        if view.chain.is_empty() {
+            String::new()
+        } else {
+            format!("?chain={}", esc(view.chain))
+        },
         button("Verify chain now", "quiet", "submit", "")
     );
-    let lead = "Every decision Gantry made and every change to who may do what, newest first.";
+    let lead = if view.chain.is_empty() {
+        "Every decision Gantry made and every change to who may do what, newest first.".to_string()
+    } else {
+        format!(
+            "Every decision and change of organization {}, newest first, from its own chain.",
+            esc(view.chain)
+        )
+    };
+    let lead = lead.as_str();
     let (records, usage): (Vec<Value>, Vec<Value>) = match view.log {
         Ok(Some(text)) => text
             .lines()

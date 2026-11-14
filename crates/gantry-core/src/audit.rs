@@ -2,7 +2,7 @@
 //! so a record cannot be changed, removed or inserted without `verify` noticing.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap, VecDeque},
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -130,6 +130,82 @@ pub struct AuditLog {
     stats: Arc<Stats>,
     /// The lock file this log wrote beside the file it holds, removed when it closes.
     lock: Option<Lock>,
+    /// With `audit: { per_org: true }`: each organization's chain, where its records go instead of this one.
+    orgs: Option<Arc<Orgs>>,
+}
+
+/// Decisions remembered to route the records that follow them (attempts, upstream errors, answer guardrails), which
+/// do not name their organization, to the chain their decision went to.
+const ORG_IDS: usize = 100_000;
+
+/// Each organization's own chain, opened on its first record, beside the install's.
+struct Orgs {
+    path: PathBuf,
+    logs: std::sync::Mutex<HashMap<String, Arc<AuditLog>>>,
+    ids: std::sync::Mutex<(HashMap<String, String>, VecDeque<String>)>,
+}
+
+impl Orgs {
+    fn log(&self, org: &str) -> Result<Arc<AuditLog>, String> {
+        let mut logs = self
+            .logs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(log) = logs.get(org) {
+            return Ok(log.clone());
+        }
+        let path = org_path(&self.path, org);
+        let dir = orgs_dir(&self.path);
+        std::fs::create_dir_all(&dir).map_err(|err| {
+            format!(
+                "the folder of the organizations' audit chains, {}, cannot be made: {err}.",
+                dir.display()
+            )
+        })?;
+        let log = Arc::new(AuditLog::open(&path)?);
+        logs.insert(org.to_string(), log.clone());
+        Ok(log)
+    }
+
+    fn all(&self) -> Vec<Arc<AuditLog>> {
+        self.logs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    /// The organization a record goes to: its own `org`, else that of the decision it follows.
+    fn of(&self, record: &Map<String, Value>) -> Option<String> {
+        let id = record.get("id").and_then(Value::as_str);
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match record
+            .get("org")
+            .and_then(Value::as_str)
+            .filter(|o| !o.is_empty())
+        {
+            Some(org) => {
+                if let Some(id) = id
+                    && !ids.0.contains_key(id)
+                {
+                    let (map, order) = &mut *ids;
+                    map.insert(id.to_string(), org.to_string());
+                    order.push_back(id.to_string());
+                    while order.len() > ORG_IDS {
+                        if let Some(old) = order.pop_front() {
+                            map.remove(&old);
+                        }
+                    }
+                }
+                Some(org.to_string())
+            }
+            None => ids.0.get(id?).cloned(),
+        }
+    }
 }
 
 /// Lock files held by logs open in this process, so a second open in the same process is refused too.
@@ -1029,6 +1105,7 @@ impl AuditLog {
             len,
             stats,
             lock: None,
+            orgs: None,
         })
     }
 
@@ -1141,6 +1218,14 @@ impl AuditLog {
         record: &Map<String, Value>,
         done: impl FnOnce(io::Result<()>) + Send + 'static,
     ) {
+        if let Some(orgs) = &self.orgs
+            && let Some(org) = orgs.of(record)
+        {
+            return match orgs.log(&org) {
+                Ok(log) => log.append_record_then(record, done),
+                Err(err) => done(Err(io::Error::other(err))),
+            };
+        }
         match fields_of(record) {
             Ok(fields) => self.send(Fields::Ready(fields), Box::new(done)),
             Err(err) => done(Err(err)),
@@ -1155,7 +1240,95 @@ impl AuditLog {
         make: impl FnOnce() -> Option<Map<String, Value>> + Send + 'static,
         done: impl FnOnce(io::Result<()>) + Send + 'static,
     ) {
-        self.send(Fields::Later(Box::new(make)), Box::new(done));
+        let Some(orgs) = self.orgs.clone() else {
+            return self.send(Fields::Later(Box::new(make)), Box::new(done));
+        };
+        // The record is made on this log's writer: one of an organization goes on to its chain from there, and
+        // `done` goes with it, so it hears from the writer that wrote it.
+        type Done = Box<dyn FnOnce(io::Result<()>) + Send>;
+        let slot: Arc<std::sync::Mutex<Option<Done>>> =
+            Arc::new(std::sync::Mutex::new(Some(Box::new(done))));
+        let take = |slot: &std::sync::Mutex<Option<Done>>| {
+            slot.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+        };
+        let routed = slot.clone();
+        let make = move || {
+            let record = make()?;
+            let Some(org) = orgs.of(&record) else {
+                return Some(record);
+            };
+            if let Some(done) = take(&routed) {
+                match orgs.log(&org) {
+                    Ok(log) => log.append_record_then(&record, done),
+                    Err(err) => done(Err(io::Error::other(err))),
+                }
+            }
+            None
+        };
+        self.send(
+            Fields::Later(Box::new(make)),
+            Box::new(move |result| {
+                if let Some(done) = take(&slot) {
+                    done(result);
+                }
+            }),
+        );
+    }
+
+    /// Sends each organization's records to its own chain (`audit: { per_org: true }`), records without one
+    /// staying here. The chains already on disk beside this one, and those of `orgs`, are opened now, each checked
+    /// whole first: Gantry does not add records to a chain it cannot vouch for.
+    pub fn per_org(mut self, orgs: &[String]) -> Result<Self, String> {
+        let Some(path) = self.path.clone() else {
+            return Ok(self);
+        };
+        let chains = Orgs {
+            path: path.clone(),
+            logs: std::sync::Mutex::new(HashMap::new()),
+            ids: std::sync::Mutex::new((HashMap::new(), VecDeque::new())),
+        };
+        let found = org_chains(&path).map_err(|err| {
+            format!(
+                "the organizations' audit chains in {} cannot be listed: {err}.",
+                orgs_dir(&path).display()
+            )
+        })?;
+        let mut names: Vec<String> = found.into_iter().map(|(org, _)| org).collect();
+        names.extend(orgs.iter().cloned());
+        names.sort();
+        names.dedup();
+        for org in names {
+            let at = org_path(&path, &org);
+            let checked = chains.log(&org).and_then(|_| {
+                if has_records(&at) {
+                    verify_full(&at, None)?;
+                }
+                Ok(())
+            });
+            checked.map_err(|err| {
+                format!("{err} This is the audit chain of organization \"{org}\". Gantry does not start on an audit chain that does not hold. Move the file aside to keep it, and start again to begin a new chain for it.")
+            })?;
+        }
+        self.orgs = Some(Arc::new(chains));
+        Ok(self)
+    }
+
+    /// Each organization's open chain, with `audit: { per_org: true }`: for what reads, seals or ships them.
+    pub fn org_logs(&self) -> Vec<(String, Arc<AuditLog>)> {
+        let Some(orgs) = &self.orgs else {
+            return Vec::new();
+        };
+        let mut logs: Vec<(String, Arc<AuditLog>)> = orgs
+            .logs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(org, log)| (org.clone(), log.clone()))
+            .collect();
+        logs.sort_by(|a, b| a.0.cmp(&b.0));
+        logs
     }
 
     fn send(&self, fields: Fields, done: Box<dyn FnOnce(io::Result<()>) + Send>) {
@@ -1196,6 +1369,14 @@ impl AuditLog {
     /// Whether a write has failed or the file has gone. Once true, every record is refused until a restart.
     /// It also looks at the file itself, so a health check sees a deleted or replaced log before any request does.
     pub fn is_broken(&self) -> bool {
+        // An organization's chain that cannot be written stops requests as this one does.
+        if self
+            .orgs
+            .as_ref()
+            .is_some_and(|orgs| orgs.all().iter().any(|log| log.is_broken()))
+        {
+            return true;
+        }
         if self.broken.load(Ordering::Relaxed)
             || self
                 .lock
@@ -1244,6 +1425,12 @@ impl AuditLog {
         );
         let _ = told.recv();
         self.sync();
+        // Records handed over before this call may have gone on to an organization's chain meanwhile.
+        if let Some(orgs) = &self.orgs {
+            for log in orgs.all() {
+                log.flush();
+            }
+        }
     }
 
     /// Moves the records written so far into a sealed segment in the folder beside the log, named for the first and
@@ -1269,6 +1456,11 @@ impl AuditLog {
             .and_then(|f| f.try_clone().ok());
         if let Some(file) = file {
             let _ = file.sync_data();
+        }
+        if let Some(orgs) = &self.orgs {
+            for log in orgs.all() {
+                log.sync();
+            }
         }
     }
 }
@@ -1329,6 +1521,94 @@ pub fn segments(path: &Path) -> io::Result<Vec<Segment>> {
     }
     found.sort_by_key(|s| s.first);
     Ok(found)
+}
+
+/// The folder beside the install's log at `path` that holds each organization's chain: `<log>.orgs`.
+pub fn orgs_dir(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".orgs");
+    PathBuf::from(name)
+}
+
+/// Where organization `org` keeps its chain: `<log>.orgs/<org>.jsonl`, any byte outside letters, digits, `-`, `_`
+/// and an inner `.` written as `%XX`, so no name leaves the folder.
+pub fn org_path(path: &Path, org: &str) -> PathBuf {
+    let mut name = String::new();
+    for (i, b) in org.bytes().enumerate() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || (b == b'.' && i > 0) {
+            name.push(char::from(b));
+        } else {
+            name.push_str(&format!("%{b:02X}"));
+        }
+    }
+    orgs_dir(path).join(format!("{name}.jsonl"))
+}
+
+/// The organizations' chains beside the install's log at `path`, by organization, in name order.
+pub fn org_chains(path: &Path) -> io::Result<Vec<(String, PathBuf)>> {
+    let dir = orgs_dir(path);
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let kind = entry.file_type()?;
+        // The open file, or only its sealed segments (all of them fetched back, before the log is opened).
+        let stem = match name.to_str() {
+            Some(f) if kind.is_file() => f.strip_suffix(".jsonl"),
+            Some(f) if kind.is_dir() => f.strip_suffix(".jsonl.sealed"),
+            _ => None,
+        };
+        let Some(stem) = stem.map(str::to_string) else {
+            continue;
+        };
+        let bytes = stem.as_bytes();
+        let mut org = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            match (bytes[i], stem.get(i + 1..i + 3)) {
+                (b'%', Some(hex)) => {
+                    org.push(u8::from_str_radix(hex, 16).map_err(io::Error::other)?);
+                    i += 3;
+                }
+                (b, _) => {
+                    org.push(b);
+                    i += 1;
+                }
+            }
+        }
+        let org = String::from_utf8(org).map_err(io::Error::other)?;
+        let at = org_path(path, &org);
+        found.push((org, at));
+    }
+    found.sort();
+    found.dedup();
+    Ok(found)
+}
+
+/// Every chain of an install: its own (`None`), then each organization's, by name.
+pub fn chains(path: &Path) -> io::Result<Vec<(Option<String>, PathBuf)>> {
+    let mut all = vec![(None, path.to_path_buf())];
+    all.extend(
+        org_chains(path)?
+            .into_iter()
+            .map(|(org, at)| (Some(org), at)),
+    );
+    Ok(all)
+}
+
+/// [`chain_reader`] of every chain of an install, one after another: for what counts records whatever chain they
+/// are in (spend, batches, coverage). Each chain is whole; their lines are not one hash chain.
+pub fn chains_reader(path: &Path) -> io::Result<Box<dyn BufRead + Send>> {
+    let mut reader: Box<dyn Read + Send> = Box::new(io::empty());
+    for (_, at) in chains(path)? {
+        reader = Box::new(reader.chain(chain_reader(&at)?));
+    }
+    Ok(Box::new(BufReader::new(reader)))
 }
 
 /// Whether the log at `path` holds any record, in its sealed segments or in the file itself.
@@ -1829,6 +2109,84 @@ mod tests {
             std::env::temp_dir().join(format!("gantry-audit-{}-{name}.jsonl", std::process::id()));
         let _ = std::fs::remove_file(&path);
         path
+    }
+
+    fn object(value: Value) -> Map<String, Value> {
+        match value {
+            Value::Object(map) => map,
+            _ => Map::new(),
+        }
+    }
+
+    #[test]
+    fn per_org_each_organization_keeps_its_own_chain_and_the_rest_stays_in_the_install()
+    -> TestResult {
+        let path = temp("per-org");
+        let _ = std::fs::remove_dir_all(orgs_dir(&path));
+        let write = |log: &AuditLog| -> io::Result<()> {
+            log.append_record(&object(
+                serde_json::json!({"event": "config_loaded", "id": "C"}),
+            ))?;
+            log.append_record(&object(
+                serde_json::json!({"id": "D1", "verdict": "allow", "org": "acme"}),
+            ))?;
+            // Follows decision D1 and names no organization: it goes where D1 went.
+            log.append_record(&object(
+                serde_json::json!({"event": "attempts", "id": "D1"}),
+            ))?;
+            log.append_record(&object(serde_json::json!({"id": "D2", "verdict": "allow"})))?;
+            let (tell, told) = mpsc::channel();
+            log.append_later(
+                || {
+                    Some(object(
+                        serde_json::json!({"event": "usage", "id": "D3", "org": "a/b"}),
+                    ))
+                },
+                move |result| {
+                    let _ = tell.send(result);
+                },
+            );
+            told.recv().map_err(io::Error::other)?
+        };
+        let log = AuditLog::open(&path)?.per_org(&["globex".to_string()])?;
+        write(&log)?;
+        log.flush();
+        assert_eq!(
+            log.org_logs()
+                .iter()
+                .map(|(o, _)| o.as_str())
+                .collect::<Vec<_>>(),
+            ["a/b", "acme", "globex"]
+        );
+        drop(log);
+        let acme = org_path(&path, "acme");
+        assert_eq!(verify(&path)?.0, 2, "the configuration and D2");
+        assert_eq!(verify(&acme)?.0, 2, "D1 and its attempts");
+        assert_eq!(verify(&org_path(&path, "a/b"))?.0, 1);
+        assert!(
+            org_path(&path, "a/b").ends_with("a%2Fb.jsonl"),
+            "no name leaves the folder"
+        );
+        assert!(org_path(&path, "../x").ends_with("%2E.%2Fx.jsonl"));
+        // Reopened, each chain goes on from its own last record.
+        let log = AuditLog::open(&path)?.per_org(&[])?;
+        write(&log)?;
+        log.flush();
+        drop(log);
+        assert_eq!(verify(&acme)?.0, 4);
+        assert_eq!(verify(&path)?.0, 4);
+        let listed: Vec<String> = org_chains(&path)?.into_iter().map(|(o, _)| o).collect();
+        assert_eq!(listed, ["a/b", "acme", "globex"]);
+        assert_eq!(chains_reader(&path)?.lines().count(), 10);
+        // A broken organization's chain stops the start, as the install's does.
+        let text = std::fs::read_to_string(&acme)?.replace("\"D1\"", "\"DX\"");
+        std::fs::write(&acme, text)?;
+        let refused = AuditLog::open(&path)?
+            .per_org(&[])
+            .err()
+            .unwrap_or_default();
+        assert!(refused.contains("organization \"acme\""), "{refused}");
+        Ok(())
     }
 
     #[test]

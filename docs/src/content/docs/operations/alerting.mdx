@@ -47,10 +47,10 @@ Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and
 
 | Kind | Fires when | Parameters | Subject |
 |---|---|---|---|
-| `budget` | Spend of a scope reaches an amount this day or month; with **Forecast**, when spend at the current rate would reach it by the period's end (checked once a tenth of the period has passed) | scope (`all`, `team`, `person`, `key`), name (empty: each one), period, amount in USD | scope, name and period: once per period |
+| `budget` | Spend of a scope reaches an amount this day or month, or a **percent** of each budget the policy sets for the scope ([below](#a-percent-of-a-policy-budget)); with **Forecast**, when spend at the current rate would reach it by the period's end (checked once a tenth of the period has passed) | scope (`all`, `team`, `person`, `key`; with a percent also `org`, `customer`, `tag`, `model`), name (empty: each one), period, amount in USD, or percent | scope, name and period: once per period |
 | `rate_limit` | `count` requests refused with `rate_limited` within `minutes` | count, minutes, group by | the group |
 | `refusals` | `count` refusals with any of the codes within `minutes`, such as `budget_exceeded,key_budget_exceeded` | codes, count, minutes, group by | the group |
-| `provider_errors` | `count` provider failures within `minutes`: answers with status 5xx or 429, and failed tries in [attempts records](/reference/audit-records/#attempts) | count, minutes, provider | the provider |
+| `provider_errors` | `count` provider failures within `minutes`: answers with status 5xx or 429, failed tries in [attempts records](/reference/audit-records/#attempts), and every request no provider answered ([upstream error records](/reference/audit-records/#upstream-error)), retried or not | count, minutes, provider | the provider |
 | `latency` | `count` requests slower than `ms` within `minutes`, timed from the decision record to the usage record (the answer's end) | ms, count, minutes, provider | the provider |
 | `guardrail_block` | `count` requests refused with `guardrail_blocked`, or answers a guardrail withheld, within `minutes` | count, minutes, group by | the group |
 | `kill_switch` | A kill switch is set (an `admin` record with action `set_kill`) | none | the record: once each |
@@ -61,9 +61,25 @@ Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and
 
 Group by is `all` (default), `person`, `team` or `key`.
 
-<Aside type="note">
-An upstream failure that was not retried leaves no record of its own (see [refusal codes](/reference/refusal-codes/#upstream_failed)). Give providers `retries: 1` or a `fallback` so failed tries are in attempts records and count toward `provider_errors`.
-</Aside>
+Each failure counts once: a try that was retried is in the attempts record, and the last try is in the usage record when the provider answered (a 5xx or 429 passed on) or in the upstream error record when none did. A failure Gantry made itself, such as a model with no deployment (`unknown_model`), is not a provider's and does not count.
+
+### A percent of a policy budget
+
+A `budget` rule with **percent** set watches the budgets the policy itself sets, instead of an amount of its own:
+
+| Field | Example | Meaning |
+|---|---|---|
+| percent | `80` | Fires when spend reaches 80% of the budget |
+| scope, name | `team`, `payments` (or scope `team:payments`) | The counter, as the policy names it: `global`, `org:acme`, `team:payments`, `person:maya.cohen`, `key:1a2b3c4d`, `customer:globex-shop`, `tag:search`, `model:o3`. Inside an organization, `team:acme/payments`. A kind alone (`team`) watches each one of it |
+| forecast | on | Fires when spend at the current rate would reach the percent by the period's end |
+
+For each request's usage, the rule asks the policy in force which budgets the cost counted against (`Policy::applied`: the rule's own, the key's, and every `limits:` entry for the caller, customer, tags and model) and checks each one the scope names against its own amount and period: a `per: month` budget for this month, a `per: 6h, tz: Europe/Berlin` one for the current six hours in Berlin, a `per: { sliding: 24h }` one for the last 24 hours. Spend is read from the gateway's own counter in the store, the one enforcement reserves against, so the alert and the refusal agree. A policy change applies from the next record.
+
+It fires once per budget and period (subject `team:payments|month|2026-11`). A sliding window has no periods: its subject is `team:payments|sliding:24h`, quiet for the rule's quiet period after each alert, and it has no end to forecast to, so forecast reads what is spent.
+
+```json
+{"kind":"budget","subject":"team:payments|month|2026-11","summary":"team:payments has spent $81.20 of its $100.00 budget per month in 2026-11 (81%), reaching 80%."}
+```
 
 ## Deduplication and rate limits
 
