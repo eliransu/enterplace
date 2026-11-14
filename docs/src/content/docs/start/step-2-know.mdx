@@ -1,0 +1,78 @@
+---
+title: "Step 2: Know"
+description: Give each person their own Gantry key so every request carries a name and a team, and usage and cost show up per person.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## What you get
+
+Every request has a name and a team on it. Usage and cost show up per person and per team.
+
+## The one change
+
+Give each person a key of their own, in place of the shared one from step 1.
+
+```bash
+gantry key new maya.cohen --team payments
+```
+
+The command prints the key once, with the lines Claude Code and the OpenAI SDKs read. Send them to the person through your secret manager. They replace the shared key in their tool, and nothing else changes for them.
+
+When everyone has moved, revoke the shared key on the console's **People and workloads** page.
+
+Nothing is blocked in this step either. Observe mode is still on.
+
+## Check it worked
+
+- **Analytics** (`/console/analytics`): rank by person or team. Each name has its requests, tokens and cost.
+- **People and workloads** (`/console/people`): every key by name and team, with what it spent this month and today.
+- From the terminal, `gantry audit coverage gantry-audit.jsonl --keys gantry.keys.yaml` lists each person and tool. A person with tool `-` and last seen `never` holds a key and has sent nothing.
+
+<Aside type="caution">
+A key is shown once. Never send it in chat or email. If one is lost, issue a new one.
+</Aside>
+
+## When you're ready
+
+You know who uses what. To cap what each team spends, go to [Step 3: Limit](/start/step-3-limit/).
+
+## More
+
+### People sign in and get their own key
+
+With more than a handful of people, let them issue their own key through your identity provider. Add `console.sso` with `self_issue` to the policy:
+
+```yaml title="gantry.policy.yaml (added)"
+console:
+  sso:
+    issuer: https://login.example.com
+    client_id: gantry-console
+    client_secret_env: GANTRY_SSO_SECRET
+    redirect_url: https://gantry.example.com/console/sso/callback
+    allowed_domains: [example.com]
+    role_claim: groups
+    admin_values: [gantry-admins]
+    self_issue:
+      allowed_domains: [example.com]
+      team: developers
+      expires_days: 30
+```
+
+Each developer then runs one command and signs in with their company account:
+
+```bash
+gantry login https://gantry.example.com
+```
+
+The key is named by their email and expires after 30 days. See [Single sign-on](/governance/single-sign-on/).
+
+### Other ways to put a name on a request
+
+| Way | Use it when | Page |
+|---|---|---|
+| A key per workload | A CI job or an agent calls models. Give it a name such as `ci.release`, an expiry and a budget | [Keys](/governance/keys/) |
+| JWT from your identity provider | Services already hold access tokens. Gantry accepts them in place of a key | [JWT sign-in](/governance/access-control/#jwts-from-your-identity-provider) |
+| SCIM (Enterprise) | Okta or Microsoft Entra ID should add and remove people and push groups as teams | [SCIM provisioning](/operations/scim/) |

@@ -6,10 +6,13 @@ hero:
   title: Gantry
   tagline: The open source AI gateway built for governance. Every model request gets an identity, a policy decision and a tamper-evident audit record before it reaches a provider.
   actions:
-    - text: Quickstart
-      link: /getting-started/quickstart/
+    - text: Start with step 1
+      link: /start/step-1-see/
       icon: right-arrow
       variant: primary
+    - text: Why a gateway
+      link: /start/why/
+      variant: secondary
     - text: View on GitHub
       link: https://github.com/ggantry/gantry
       icon: external
@@ -18,14 +21,31 @@ hero:
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Gantry sits between your people, agents and workloads and the model providers they call. Claude Code, Codex, Cursor and any OpenAI or Anthropic SDK point at Gantry instead of the provider. Gantry identifies the caller, decides by policy, writes a hash-chained audit record, and only then forwards the request with the provider key in place of the caller's.
+## Five steps
+
+Your people already use AI tools. Gantry sits between those tools and the model providers, and takes you from seeing what is in use to governing it, one change at a time. Step 1 blocks nothing.
+
+| Step | What you do | What you get |
+|---|---|---|
+| [1. See](/start/step-1-see/) | Run Gantry and point your tools at it | Which tools and models are in use and what they cost |
+| [2. Know](/start/step-2-know/) | Give each person their own key | A name and a team on every request |
+| [3. Limit](/start/step-3-limit/) | Set a budget per team | A cap on spend, and a stop button |
+| [4. Protect](/start/step-4-protect/) | Add a check for secrets, on trial first | Keys and passwords stay out of prompts |
+| [5. Prove](/start/step-5-prove/) | Keep and verify the audit log | Evidence of every request |
+
+<CardGrid>
+	<LinkCard title="Why a gateway" description="Five questions about your company's AI use, and the step that answers each." href="/start/why/" />
+	<LinkCard title="Rollout plan" description="The five steps on one page, to forward to your team." href="/start/plan/" />
+</CardGrid>
+
+## How it works
+
+Claude Code, Codex, Cursor and any OpenAI or Anthropic SDK point at Gantry instead of the provider. Gantry identifies the caller, decides by policy, writes a hash-chained audit record, and only then forwards the request with the provider key in place of the caller's.
 
 It ships as one static binary with no database. Policy, keys and the audit log are plain files you can review, version and verify.
 
-## Get started
-
 <CardGrid>
-	<LinkCard title="Quickstart" description="Build Gantry, write a policy, issue a key and send a governed request." href="/getting-started/quickstart/" />
+	<LinkCard title="Quickstart" description="Build Gantry, write a policy, issue a key and send a governed request, by hand." href="/getting-started/quickstart/" />
 	<LinkCard title="Connect Claude Code" description="Route every Claude Code session in your company through Gantry." href="/integrations/claude-code/" />
 	<LinkCard title="How it works" description="The request path: identify, decide, record, forward." href="/getting-started/how-it-works/" />
 	<LinkCard title="Policy file" description="Every field of gantry.policy.yaml, with the errors gantry check reports." href="/governance/policy/" />

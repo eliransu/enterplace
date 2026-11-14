@@ -1,0 +1,39 @@
+---
+title: Rollout plan
+description: The five steps on one page, in order, with who does each one and what changes for your people. Written to be forwarded.
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+This page is the whole rollout in one table. The steps come in order, and you set the pace: stay on a step for a day or a quarter. Each step works without the next.
+
+| Step | What happens | Who does it | What changes for your people | You can then answer |
+|---|---|---|---|---|
+| [1. See](/start/step-1-see/) | Gantry runs as one container. AI tools point at it. Observe mode: nothing is blocked | A platform engineer | One settings change in each tool | Which tools and models do we use, and what do they cost? |
+| [2. Know](/start/step-2-know/) | Each person gets their own key, or signs in with the company account | The same engineer, or your identity team | They swap a shared key for their own | Who uses what, by person and team? |
+| [3. Limit](/start/step-3-limit/) | A monthly budget per team, recorded first and then enforced. A stop button for a person, team or model | You pick the amount. The engineer adds one line | Nothing until a team reaches its budget. Then requests are refused until the next month or a raised budget | What is the most we can spend this month? Can we stop it today? |
+| [4. Protect](/start/step-4-protect/) | A check for secrets in prompts, on trial until a date you pick, then blocking | Security picks the date. The engineer adds the lines | After the date, a prompt that holds a key or password is refused with a message that says why | What stops a password from being sent to a model? |
+| [5. Prove](/start/step-5-prove/) | The audit log is kept on durable storage and its chain is verified | The engineer | Nothing | Can we show an auditor every request, and that the record is complete? |
+
+## What you decide
+
+- Before step 1: who runs Gantry and where. One container and your existing provider keys.
+- At step 3: the monthly amount per team, and the day you turn enforcement on. Until that day Gantry records what it would refuse and refuses nothing.
+- At step 4: the date the secrets check starts blocking.
+- At step 5: whether you need Gantry Enterprise for SIEM export, retention and legal hold.
+
+## What stays the same
+
+- Your provider accounts and contracts. Gantry holds the provider keys, and your people stop holding them.
+- Prompts and answers. Gantry forwards them unchanged unless a guardrail you added masks or blocks something.
+- The tools your people chose.
+
+<Aside type="note">
+Teams on Claude Team or Enterprise subscriptions follow a shorter track with the [watch setup](/integrations/claude-team/): steps 1 and 2 work from Claude Code's own usage data, and step 5 applies. Steps 3 and 4 need requests that go through Gantry with an API key.
+</Aside>
+
+## Start
+
+Send your engineer to [Step 1: See](/start/step-1-see/). If someone asks why the company needs this, send them [Why a gateway](/start/why/).

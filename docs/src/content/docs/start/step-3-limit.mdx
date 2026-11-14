@@ -1,0 +1,78 @@
+---
+title: "Step 3: Limit"
+description: Set a monthly budget for each team, watch what it would refuse, then enforce it. Stop a person, a team or a model at once with a kill switch.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## What you get
+
+A cap on what each team spends in a month, and a stop button for a person, a team, a key or a model.
+
+## The one change
+
+Add a budget for every team to `gantry.policy.yaml`:
+
+```yaml title="gantry.policy.yaml (added)"
+limits:
+  - { team: "*", budget: { usd: 500, per: month } }
+```
+
+Each team may spend 500 US dollars a month. Pick the amount from what step 2 showed you. Gantry uses the saved file within 2 seconds, without a restart.
+
+Observe mode is still on, so a request over the budget is forwarded and recorded as `would_refuse` with the code `budget_exceeded`. Its cost still counts against the budget, so the numbers are real on the day you enforce.
+
+## Check it worked
+
+- **Spend** (`/console/spend`): spend this month against every budget in the policy.
+- **Analytics** (`/console/analytics`): the budget forecasts say whether each budget lasts the month at the current pace, or the date it runs out.
+
+## Enforce it
+
+When the amounts look right, delete the `mode: observe` line from the policy. From the next request, a team that reaches its budget is refused with `budget_exceeded`, and the message says when the budget starts again.
+
+## The stop button
+
+A kill switch needs no policy change and works in observe mode too. Set `GANTRY_URL` and `GANTRY_ADMIN_KEY`, then:
+
+```bash
+gantry kill --team support --reason "agent retrying one ticket in a loop"
+gantry unkill --team support
+```
+
+The people stopped see the reason and who set it. See [Kill switches](/governance/kill-switches/).
+
+## When you're ready
+
+Spend is capped. To keep secrets and personal data out of prompts, go to [Step 4: Protect](/start/step-4-protect/).
+
+## More
+
+### Try one budget while the rest of the policy is enforced
+
+After you delete `mode: observe`, a new limit can still run on trial by itself. Add `shadow_until` with a UTC date:
+
+```yaml title="gantry.policy.yaml (added)"
+limits:
+  - { team: "*", budget: { usd: 500, per: month } }
+  - { person: "*", budget: { usd: 20, per: day }, shadow_until: 2026-12-15 }
+```
+
+Until 15 December the daily budget per person refuses nothing and records what it would have refused. From that date it is enforced, with no reload. The team budget is enforced throughout.
+
+### More limits
+
+| Limit | Lines | Refusal |
+|---|---|---|
+| A budget for one team | `{ team: payments, budget: { usd: 2000, per: month } }` | `budget_exceeded` |
+| A budget for one costly model | `{ model: o3, budget: { usd: 1000, per: month } }` | `budget_exceeded` |
+| Requests per minute for each person | `{ person: "*", rate: { rpm: 60 } }` | `rate_limited`, with `Retry-After` |
+| A budget on one key | `gantry key new ci.release --team platform --budget 20/month` | `key_budget_exceeded` |
+
+Every entry goes in the `limits:` list. See [Budgets and rate limits](/governance/budgets-and-rate-limits/).
+
+<Aside type="note">
+Alerts on spend, sent to Slack, Teams, PagerDuty or email before a budget runs out, are part of Gantry Enterprise. See [Alerting](/operations/alerting/).
+</Aside>
