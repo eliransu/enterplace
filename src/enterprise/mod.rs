@@ -8,9 +8,12 @@ mod alerts;
 mod capture;
 mod members;
 mod scim;
+mod segments;
 mod siem;
 
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, OnceLock};
 
 use gantry_server::{
     Extension, Host,
@@ -83,6 +86,29 @@ pub fn extend_with(
     if !alerts_on {
         alerts::locked(&mut extension, status);
     }
+    // Retired on disk only through what the audit export has read, when it runs (for export or for alerting, which
+    // reads the same table); through anything otherwise.
+    let export_reads = (siem_on || alerts_on) && host.postgres.is_some();
+    let limit = Arc::new(AtomicU64::new(if export_reads { 0 } else { u64::MAX }));
+    // Not behind the license: it is what keeps the audit chain whole where the disk does not last, a property the
+    // gateway promises without one.
+    if let Some(store) = segments::Store::from_env(&env)? {
+        let shipper = Arc::new(segments::Shipper::new(
+            store,
+            host.audit.clone(),
+            host.audit_path.to_path_buf(),
+            &env,
+            limit.clone(),
+        ));
+        if let Some(token) = env(segments::READ_TOKEN_ENV).filter(|t| !t.trim().is_empty()) {
+            extension.routes = std::mem::take(&mut extension.routes)
+                .merge(segments::routes(shipper.clone(), token.trim().to_string()));
+        }
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(shipper.clone().run());
+        }
+        let _ = SHIPPER.set(shipper);
+    }
     if !(members_on || siem_on || retention_on || alerts_on) {
         return Ok(extension);
     }
@@ -130,6 +156,7 @@ pub fn extend_with(
                 retention: retention_on,
                 alerts: alerts_on,
                 captures,
+                read_through: limit,
             },
         );
         match registered {
@@ -141,6 +168,38 @@ pub fn extend_with(
         }
     }
     Ok(extension)
+}
+
+/// The shipper `extend` started, for the last pass when the gateway stops.
+static SHIPPER: OnceLock<Arc<segments::Shipper>> = OnceLock::new();
+
+/// Before `serve` opens the audit log: on an empty disk, fetches the chain's newest segments from the store
+/// `GANTRY_AUDIT_SEGMENTS_URL` names, so the gateway continues it. Nothing when it is unset.
+pub fn restore_audit(policy: &Path, keys: Option<&Path>) -> Result<(), String> {
+    let env: siem::sinks::Env = Arc::new(|variable| std::env::var(variable).ok());
+    let Some(store) = segments::Store::from_env(&env)? else {
+        return Ok(());
+    };
+    // A policy that does not load is reported by `serve` itself, with every error in it.
+    let Ok(loaded) = gantry_core::config::load(policy, keys) else {
+        return Ok(());
+    };
+    eprintln!(
+        "audit segments: {}",
+        segments::restore(&store, &loaded.audit_path)?
+    );
+    Ok(())
+}
+
+/// After the gateway stopped serving: seals the log and writes the rest to the store, so a graceful stop loses
+/// no record.
+pub fn finish_audit() {
+    if let Some(shipper) = SHIPPER.get() {
+        match shipper.pass(true) {
+            Ok(wrote) => eprintln!("audit segments: wrote {wrote} on stop."),
+            Err(err) => eprintln!("warning: audit segments: the last pass failed: {err}"),
+        }
+    }
 }
 
 /// The license as /healthz shows it: who it is for and until when, never the token.

@@ -269,17 +269,29 @@ async fn main() -> ExitCode {
                 .unwrap_or_else(|| gantry_core::config::keys_path_for(Path::new(&args[1]))),
         ) {
             Err(err) => Err(err),
-            Ok(()) => gantry_server::serve_policy_with(
-            &name,
-            Path::new(&args[1]),
-            flag(&args, "--keys").map(Path::new),
-            flag(&args, "--listen"),
-            flag(&args, "--metrics"),
-            None,
-            &|host| enterprise::extend(license::current(), host),
-        )
-        .await
-        .map_err(|err| err.to_string()),
+            Ok(()) => match enterprise::restore_audit(
+                Path::new(&args[1]),
+                flag(&args, "--keys").map(Path::new),
+            ) {
+                Err(err) => Err(err),
+                Ok(()) => {
+                    let served = gantry_server::serve_policy_with(
+                        &name,
+                        Path::new(&args[1]),
+                        flag(&args, "--keys").map(Path::new),
+                        flag(&args, "--listen"),
+                        flag(&args, "--metrics"),
+                        None,
+                        &|host| enterprise::extend(license::current(), host),
+                    )
+                    .await
+                    .map_err(|err| err.to_string());
+                    tokio::task::spawn_blocking(enterprise::finish_audit)
+                        .await
+                        .ok();
+                    served
+                }
+            },
         },
         // `serve` without a policy and `help` stay here, so the open source server never starts unlicensed from this binary.
         Some(command) if !matches!(command, "serve" | "help" | "--help" | "-h") => {
