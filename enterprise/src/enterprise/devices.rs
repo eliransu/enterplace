@@ -84,6 +84,23 @@ CREATE TABLE enterprise_device_drift (
 );
 ";
 
+/// A device is bound to the first person and token scope (the token's team, empty for every team) that reported
+/// it; a report from another is refused and kept here. Never edit a migration that has shipped: add one.
+pub const MIGRATION_2: &str = "
+ALTER TABLE enterprise_devices ADD COLUMN token_scope text;
+CREATE TABLE enterprise_device_refusals (
+    id bigserial PRIMARY KEY,
+    device_id text NOT NULL,
+    person text NOT NULL,
+    token_id text NOT NULL,
+    reason text NOT NULL,
+    at timestamptz NOT NULL DEFAULT now()
+);
+";
+
+/// The header the agent sends the person's Gantry key in (the one `gantry login` saved), beside the enrolment token.
+pub const PERSON_HEADER: &str = "x-gantry-key";
+
 const NAV: &str = "Devices";
 const PREFIX: &str = "gantry_dev_";
 const DEFAULT_DAYS: i32 = 90;
@@ -95,17 +112,11 @@ const TIME: &str = r#"'YYYY-MM-DD"T"HH24:MI:SS"Z"'"#;
 struct Devices {
     db: Arc<Db>,
     keys: PathBuf,
-    audit: PathBuf,
 }
 
 /// Adds the device routes the agent calls and the console's Devices page and API.
-pub fn register(
-    extension: &mut gantry_server::Extension,
-    db: Arc<Db>,
-    keys: PathBuf,
-    audit: PathBuf,
-) {
-    let devices = Devices { db, keys, audit };
+pub fn register(extension: &mut gantry_server::Extension, db: Arc<Db>, keys: PathBuf) {
+    let devices = Devices { db, keys };
     let agent = Router::new()
         .route("/device/profile", get(profile))
         .route("/device/report", post(report))
@@ -118,6 +129,7 @@ pub fn register(
         .route("/devices/devices.json", get(devices_json))
         .route("/devices/tokens", get(list_tokens).post(create_token_api))
         .route("/devices/tokens/{id}", delete(revoke_token_api))
+        .route("/devices/devices/{id}", delete(remove_device_api))
         .layer(Ext(devices));
 }
 
@@ -203,14 +215,46 @@ struct Token {
 }
 
 impl Devices {
-    /// The team of the key holder named `person` in the keys file, if there is one.
-    fn team_of(&self, person: &str) -> Option<String> {
+    /// The key holder whose key this is, if the key is in the keys file (or the store) and not expired.
+    fn holder(&self, key: &str) -> Option<config::KeyEntry> {
+        if key.is_empty() {
+            return None;
+        }
         let text = config::read_keys(&self.keys).ok()??;
+        let sha = sha256_hex(key.as_bytes());
+        let now = gantry_core::audit::timestamp();
         config::key_entries(&self.keys, &text)
             .ok()?
             .into_iter()
-            .find(|e| e.name == person)
-            .map(|e| e.team)
+            .find(|e| e.sha256 == sha)
+            .filter(|e| {
+                e.expires
+                    .as_deref()
+                    .is_none_or(|at| !gantry_core::policy::expiry_passed(at, &now))
+            })
+    }
+
+    /// The person at the device, from the Gantry key it sent in `x-gantry-key`, never from what the report says.
+    /// `Err` is the refusal's code and message.
+    fn person(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<config::KeyEntry, (&'static str, &'static str)> {
+        let key = headers
+            .get(PERSON_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .trim();
+        if key.is_empty() {
+            return Err((
+                "person_key_required",
+                "Send the person's Gantry key in the x-gantry-key header, as the device agent does once someone has run `gantry login` on the machine. The gateway takes the person from that key, not from the report.",
+            ));
+        }
+        self.holder(key).ok_or((
+            "invalid_person_key",
+            "The key in x-gantry-key is not a Gantry key, or it expired or was revoked. Run `gantry login` again on the machine.",
+        ))
     }
 
     /// The enrolment token the device sent, if it is one that works now.
@@ -425,15 +469,17 @@ impl Devices {
 
 // ---------------------------------------------------------------- the agent's routes
 
-async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls, uri: Uri) -> Response {
+async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response {
     let token = match d.enrolled(&headers).await {
         Ok(token) => token,
         Err(refused) => return refused,
     };
-    let person = Form::of(&uri).get("person").trim().to_string();
-    // A team token decides the team: what the device says about its person is not checked.
+    // A team token decides the team; otherwise the person's key does. A device without one (nobody ran `gantry
+    // login` yet) gets the profile for every team: what it says about its person is not taken.
+    let holder = d.person(&headers).ok();
+    let person = holder.as_ref().map(|h| h.name.clone()).unwrap_or_default();
     let team = if token.team.is_empty() {
-        d.team_of(&person).unwrap_or_default()
+        holder.map(|h| h.team).unwrap_or_default()
     } else {
         token.team
     };
@@ -495,9 +541,13 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
             "The report needs device_id, hostname and os_user as strings of at most 200 characters. Send it as the device agent does (gantry device).",
         );
     };
-    let person = text_of(&body, "email", 200).unwrap_or_else(|| format!("{os_user}@{hostname}"));
+    let holder = match d.person(&headers) {
+        Ok(holder) => holder,
+        Err((code, message)) => return fail(StatusCode::UNAUTHORIZED, code, message),
+    };
+    let person = holder.name;
     let team = if token.team.is_empty() {
-        d.team_of(&person).unwrap_or_default()
+        holder.team
     } else {
         token.team.clone()
     };
@@ -535,11 +585,47 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
     let stored = async {
         let mut client = d.db.client().await?;
         let tx = client.transaction().await.map_err(db_error)?;
+        // The first report binds the device to its person and token scope; a device from before the binding keeps
+        // its person and takes the scope of its next report.
+        let bound = tx
+            .query_opt(
+                "SELECT person, token_scope FROM enterprise_devices WHERE device_id = $1 FOR UPDATE",
+                &[&device_id],
+            )
+            .await
+            .map_err(db_error)?;
+        if let Some(row) = bound {
+            let was: String = row.try_get(0).unwrap_or_default();
+            let scope: Option<String> = row.try_get(1).unwrap_or_default();
+            let reason = if was != person {
+                Some(format!("bound to person {was}"))
+            } else if scope.as_ref().is_some_and(|s| *s != token.team) {
+                Some(format!(
+                    "bound to the token scope {}",
+                    scope
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("every team")
+                ))
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                tx.execute(
+                    "INSERT INTO enterprise_device_refusals (device_id, person, token_id, reason) VALUES ($1, $2, $3, $4)",
+                    &[&device_id, &person, &token.id, &reason],
+                )
+                .await
+                .map_err(db_error)?;
+                tx.commit().await.map_err(db_error)?;
+                return Ok::<_, String>(Some(reason));
+            }
+        }
         tx.execute(
-            "INSERT INTO enterprise_devices (device_id, hostname, os_user, person, team, agent_version, token_id) VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (device_id) DO UPDATE SET hostname = excluded.hostname, os_user = excluded.os_user, person = excluded.person, team = excluded.team, \
-             agent_version = excluded.agent_version, token_id = excluded.token_id, last_seen = now()",
-            &[&device_id, &hostname, &os_user, &person, &team, &version, &token.id],
+            "INSERT INTO enterprise_devices (device_id, hostname, os_user, person, team, agent_version, token_id, token_scope) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (device_id) DO UPDATE SET hostname = excluded.hostname, os_user = excluded.os_user, team = excluded.team, \
+             agent_version = excluded.agent_version, token_id = excluded.token_id, token_scope = excluded.token_scope, last_seen = now()",
+            &[&device_id, &hostname, &os_user, &person, &team, &version, &token.id, &token.team],
         )
         .await
         .map_err(db_error)?;
@@ -560,10 +646,18 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
                 .map_err(db_error)?;
             }
         }
-        tx.commit().await.map_err(db_error)
+        tx.commit().await.map_err(db_error)?;
+        Ok::<_, String>(None)
     };
     match stored.await {
-        Ok(()) => Json(json!({ "ok": true, "person": person, "team": team })).into_response(),
+        Ok(None) => Json(json!({ "ok": true, "person": person, "team": team })).into_response(),
+        Ok(Some(reason)) => fail(
+            StatusCode::FORBIDDEN,
+            "device_bound",
+            &format!(
+                "Refused: device {device_id} is {reason}, from its first report. If the machine changed hands, an owner or admin removes the device (DELETE /console/devices/devices/<device_id>) and its next report binds it again."
+            ),
+        ),
         Err(e) => fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     }
 }
@@ -576,18 +670,7 @@ async fn api_admin(console: &Console, d: &Devices, headers: &HeaderMap) -> Optio
     if key.is_empty() {
         return console.signed_in(headers).await;
     }
-    let text = config::read_keys(&d.keys).ok()??;
-    let sha = sha256_hex(key.as_bytes());
-    let now = gantry_core::audit::timestamp();
-    let entry = config::key_entries(&d.keys, &text)
-        .ok()?
-        .into_iter()
-        .find(|e| e.admin && e.sha256 == sha)
-        .filter(|e| {
-            e.expires
-                .as_deref()
-                .is_none_or(|at| !gantry_core::policy::expiry_passed(at, &now))
-        })?;
+    let entry = d.holder(key).filter(|e| e.admin)?;
     Some(Admin::of_role(&entry.name, &entry.team, false, Via::Key))
 }
 
@@ -663,6 +746,59 @@ async fn revoke_token_api(
             &format!("No active enrolment token {id}. List them with GET /console/devices/tokens."),
         ),
         Err((status, code, message)) => fail(status, code, &message),
+    }
+}
+
+/// Forgets a device and its binding, recorded first: its next report binds it to whoever sends it.
+async fn remove_device_api(
+    State(console): State<Console>,
+    Ext(d): Ext<Devices>,
+    headers: HeaderMap,
+    UrlPath(id): UrlPath<String>,
+) -> Response {
+    if bearer(&headers).is_empty() && !same_origin(&headers) {
+        return foreign();
+    }
+    let Some(admin) = api_admin(&console, &d, &headers).await else {
+        return not_admin();
+    };
+    let viewer = role_of(&admin) == Role::Viewer;
+    let recorded = console
+        .audit(
+            Some(&admin),
+            "device_removed",
+            json!({ "device_id": id }),
+            viewer.then_some("read_only"),
+        )
+        .await;
+    if viewer {
+        return fail(
+            StatusCode::FORBIDDEN,
+            "read_only",
+            "Your role is viewer. An owner or admin can remove devices.",
+        );
+    }
+    if let Err(e) = recorded {
+        return fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", e);
+    }
+    let removed = match d.db.client().await {
+        Ok(client) => client
+            .execute(
+                "DELETE FROM enterprise_devices WHERE device_id = $1",
+                &[&id],
+            )
+            .await
+            .map_err(db_error),
+        Err(e) => Err(e),
+    };
+    match removed {
+        Ok(0) => fail(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            &format!("No device {id}. List them with GET /console/devices/devices.json."),
+        ),
+        Ok(_) => Json(json!({ "device_id": id, "status": "removed" })).into_response(),
+        Err(e) => fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     }
 }
 
@@ -809,15 +945,42 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     let can_edit = role_of(admin) != Role::Viewer;
     let tokens = d.tokens().await?;
     let devices = d.devices().await?;
-    // ponytail: reads this replica's whole audit log on each view, which is fine for a page, not for a poll. Read
-    // from the request index (or enterprise_audit) when logs grow large or replicas many.
-    let audit = d.audit.clone();
-    let traffic = tokio::task::spawn_blocking(move || coverage::traffic(&audit))
-        .await
-        .map_err(|e| e.to_string())?
-        .unwrap_or_default();
-    let (profiles, drift) = {
+    let (traffic, profiles, drift, refusals) = {
         let client = d.db.client().await?;
+        // Every replica's requests, summed in the store's request index (the insights namespace every gateway
+        // with a store keeps), not this replica's audit log read whole.
+        let rows = client
+            .query(
+                &format!("SELECT coalesce(labels->'person'->>0, '-'), coalesce(labels->'agent'->>0, 'unknown'), min(coalesce(labels->'team'->>0, '-')), \
+                 count(*), count(*) FILTER (WHERE verdict <> 'allow'), to_char(max(time) AT TIME ZONE 'UTC', {TIME}) FROM gantry_requests GROUP BY 1, 2"),
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        let traffic: coverage::Coverage = rows
+            .iter()
+            .map(|r| {
+                let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
+                let count = |i| u64::try_from(r.try_get::<_, i64>(i).unwrap_or(0)).unwrap_or(0);
+                (
+                    (get(0), get(1)),
+                    coverage::Row {
+                        team: get(2),
+                        requests: count(3),
+                        refused: count(4),
+                        last_seen: get(5),
+                        ..coverage::Row::default()
+                    },
+                )
+            })
+            .collect();
+        let refusals = client
+            .query(
+                &format!("SELECT to_char(at AT TIME ZONE 'UTC', {TIME}), device_id, person, reason FROM enterprise_device_refusals ORDER BY id DESC LIMIT 20"),
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
         let profiles = client
             .query("SELECT team, gateway_url, tools, updated_by FROM enterprise_device_profiles ORDER BY team", &[])
             .await
@@ -829,7 +992,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
             )
             .await
             .map_err(db_error)?;
-        (profiles, drift)
+        (traffic, profiles, drift, refusals)
     };
     let mut out = html::head(
         NAV,
@@ -972,6 +1135,22 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     }
     list += "</section>";
     out += &section("Drift: settings changed back and re-applied", &list);
+
+    let mut list = String::from(r#"<section class="g-list">"#);
+    for r in &refusals {
+        let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
+        list += &html::row(
+            &esc(&get(1)),
+            &esc(&format!("{} · {} · {}", get(2), get(3), get(0))),
+            "",
+            true,
+        );
+    }
+    if refusals.is_empty() {
+        list += r#"<p class="t-small g-muted" style="margin: 0">No refused reports. Every device reported as the person and token scope it is bound to.</p>"#;
+    }
+    list += "</section>";
+    out += &section("Refused reports: another person or token scope", &list);
     Ok(out)
 }
 

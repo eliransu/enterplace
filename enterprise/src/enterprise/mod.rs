@@ -6,7 +6,7 @@
 
 mod alerts;
 mod capture;
-mod devices;
+pub(crate) mod devices;
 mod members;
 mod scim;
 mod segments;
@@ -34,7 +34,7 @@ const SCIM: &[&str] = &[scim::MIGRATION];
 /// Entry 2 is the captured text of audit export (`capture`).
 const SIEM: &[&str] = &[siem::MIGRATION, capture::MIGRATION];
 /// Enrolment tokens, device profiles, and what the device agents report.
-const DEVICES: &[&str] = &[devices::MIGRATION];
+const DEVICES: &[&str] = &[devices::MIGRATION, devices::MIGRATION_2];
 /// Alert channels, rules and what fired. Runs after `SIEM`: alerting reads the records it ingests.
 const ALERTS: &[&str] = &[alerts::MIGRATION];
 
@@ -167,12 +167,7 @@ pub fn extend_with(
     }
     let db = Arc::new(Db::new(pg.clone()));
     if devices_on {
-        devices::register(
-            &mut extension,
-            db.clone(),
-            host.keys.to_path_buf(),
-            host.audit_path.to_path_buf(),
-        );
+        devices::register(&mut extension, db.clone(), host.keys.to_path_buf());
     }
     if members_on {
         members::register(&mut extension, db.clone(), host.keys.to_path_buf());

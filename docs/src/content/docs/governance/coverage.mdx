@@ -61,7 +61,7 @@ MCP calls (`/mcp`) carry `user_agent` too, so an MCP client counts under its too
 
 The device agent of Gantry Enterprise (`gantry device`, license feature `devices`) reads each coding tool's documented configuration on every enrolled machine and reports one state per tool: `not_installed`, `installed`, `gantry` (pointed at the gateway) or `direct` (pointed at a provider, or holding a provider key or login). See [Devices](/operations/devices/) for enrolment and what is read for each tool.
 
-The console's **Devices** page merges those reports with the audit log, per person: the tools their traffic came from, their enrolled devices, and each tool going direct, as `codex on mbp-ana`. Its **Download devices.json** link gives the reports to the command line:
+The console's **Devices** page merges those reports with every replica's traffic (the store's request index), per person: the tools their traffic came from, their enrolled devices, and each tool going direct, as `codex on mbp-ana`. Its **Download devices.json** link gives the reports to the command line:
 
 ```bash
 gantry audit coverage /var/lib/gantry/gantry-audit.jsonl --keys gantry.keys.yaml --devices devices.json
@@ -81,7 +81,7 @@ dan	web	-	0	0	never	1	0
 
 A tool with requests and `direct` 0 is covered. A tool with `direct` above 0 reaches a provider from at least one device, whatever its traffic says. A row with 0 requests and `devices` above 0 is installed and has never reached Gantry.
 
-Devices are matched to people by the name `gantry login` saved on the machine (the key's name). A device whose user never ran `gantry login` shows as `<os user>@<hostname>`.
+Devices are matched to people by the Gantry key `gantry login` saved on the machine: the agent sends it, and the gateway takes the person from the key. A device whose user never ran `gantry login` is refused until someone does.
 
 ## Related
 

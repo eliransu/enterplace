@@ -7,6 +7,16 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Devices: verified people and bound devices
+
+- The device agent sends the person's Gantry key from `gantry login` in `x-gantry-key`, and the gateway takes the
+  person (and, without a team token, the team) from that key, never from the report. Reports without one are refused
+  with `person_key_required`, with a bad key with `invalid_person_key`.
+- A device is bound to the first person and token scope that reported it. Reports from another are refused with
+  `device_bound` and listed on the Devices page under **Refused reports**. `DELETE /console/devices/devices/<id>`
+  removes a device and its binding. New migration 2 in namespace `enterprise.devices`.
+- The Devices page counts traffic from the store's shared request index (every replica), not this replica's audit log.
+
 ### Google's Gemini API
 
 - Gantry serves Google's own Gemini API, so Gemini CLI (`GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_KEY`) and Google's

@@ -15,7 +15,7 @@ The feature keeps its tables in the store's Postgres (namespace `enterprise.devi
 
 <Steps>
 
-1. **Create an enrolment token.** On the console's Devices page, under **Enrolment tokens**, give it a label (where it is used, such as `jamf-engineering`), a team or none, and how many days it is valid (1 to 365, default 90). The token is shown once; Gantry keeps only its hash. A team token enrols devices into that team; a token without a team takes each device's team from the keys file, by the name `gantry login` saved on the machine.
+1. **Create an enrolment token.** On the console's Devices page, under **Enrolment tokens**, give it a label (where it is used, such as `jamf-engineering`), a team or none, and how many days it is valid (1 to 365, default 90). The token is shown once; Gantry keeps only its hash. A team token enrols devices into that team; a token without a team takes each device's team from the person's key.
 
 2. **Set a device profile** (optional). Without one, devices send their tools to the address they reached Gantry at, and Claude Code and Codex are managed. A profile sets the gateway URL and the tools to manage, for every team or for one team, which wins for its members.
 
@@ -29,6 +29,12 @@ The feature keeps its tables in the store's Postgres (namespace `enterprise.devi
 
 </Steps>
 
+## Who a report is from
+
+The agent sends the person's Gantry key, the one `gantry login` saved on the machine (`~/.config/gantry/credentials`), in the `x-gantry-key` header beside the enrolment token. The gateway takes the person, and without a team token their team, from that key, never from the report body. A report without one is refused with `person_key_required`, one with an unknown, expired or revoked key with `invalid_person_key`: someone runs `gantry login` on the machine first.
+
+A device is bound to the first person and token scope (the token's team, or every team) that reported it. A later report for the same `device_id` from another person or a token of another scope is refused with `device_bound` and kept: the Devices page lists the last 20 under **Refused reports**. A token rotated within the same scope keeps working. When a machine changes hands, remove the device (`DELETE /console/devices/devices/<device_id>`) and its next report binds it again.
+
 Revoke a token on the same page. A revoked or expired token is refused with `invalid_token` or `token_expired` on the device's next check.
 
 ## Admin API
@@ -41,6 +47,7 @@ Tokens can be managed without the console, with an admin key (`admin: true` in t
 | `POST /console/devices/tokens` | Creates one from `{"label": "...", "team": "...", "days": 90}` (`team` and `days` optional). Answers `201` with `id`, `token` and `expires_at`, the only time the token is shown |
 | `DELETE /console/devices/tokens/<id>` | Revokes it |
 | `GET /console/devices/devices.json` | Every device as last reported, the file `gantry audit coverage --devices` reads |
+| `DELETE /console/devices/devices/<device_id>` | Removes a device and its binding, so its next report binds it again. An admin record `device_removed` |
 
 ```bash
 curl -X POST https://gantry.example.com/console/devices/tokens \
@@ -76,9 +83,10 @@ Only Claude Code and Codex are configured by the agent. The others are reported,
 
 ## The Devices page
 
-- **Coverage**: one row per person from the audit log and the reports: the tools their traffic came from, their device count, devices not seen in 24 hours, and a `direct` tag per tool going to a provider, such as `codex on mbp-ana`. The audit log read is this replica's.
+- **Coverage**: one row per person from the audit log and the reports: the tools their traffic came from, their device count, devices not seen in 24 hours, and a `direct` tag per tool going to a provider, such as `codex on mbp-ana`. Traffic is read from the store's shared request index, so it holds every replica's requests (those of the last second may not be copied yet).
 - **Enrolment tokens** and **Device profiles**, as above.
 - **Drift**: the last 20 times a managed setting was changed back and re-applied.
+- **Refused reports**: the last 20 reports refused because the device is bound to another person or token scope.
 
 **Download devices.json** gives the reports to `gantry audit coverage --devices`. See [Coverage](/governance/coverage/).
 

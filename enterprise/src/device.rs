@@ -606,10 +606,15 @@ fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<V
 
 /// The person at this device: the name (their email) `gantry login` saved in the credentials file.
 fn person(home: &Path) -> Option<String> {
+    saved(home, "name=")
+}
+
+/// A line of the credentials file `gantry login` wrote: `name=` or `key=`.
+fn saved(home: &Path, prefix: &str) -> Option<String> {
     std::fs::read_to_string(home.join(".config/gantry/credentials"))
         .unwrap_or_default()
         .lines()
-        .find_map(|l| l.strip_prefix("name=").map(|v| v.trim().to_owned()))
+        .find_map(|l| l.strip_prefix(prefix).map(|v| v.trim().to_owned()))
         .filter(|v| !v.is_empty())
 }
 
@@ -633,13 +638,13 @@ fn once(agent: &ureq::Agent, opts: &Options) -> Result<(), String> {
         other => format!("the control plane is unreachable: {other}"),
     };
     let p = paths(opts.home.as_deref())?;
-    // The gateway answers with the profile of this person's team.
-    let mut ask = agent
+    // The person's Gantry key from `gantry login`: the gateway takes the person from it, never from the report,
+    // and answers with the profile of their team.
+    let key = saved(&p.home, "key=").unwrap_or_default();
+    let ask = agent
         .get(&format!("{cp}/device/profile"))
-        .set("authorization", &auth);
-    if let Some(person) = person(&p.home) {
-        ask = ask.query("person", &person);
-    }
+        .set("authorization", &auth)
+        .set(crate::enterprise::devices::PERSON_HEADER, &key);
     let profile: Value = ask
         .call()
         .map_err(call_err)?
@@ -665,6 +670,7 @@ fn once(agent: &ureq::Agent, opts: &Options) -> Result<(), String> {
     agent
         .post(&format!("{cp}/device/report"))
         .set("authorization", &auth)
+        .set(crate::enterprise::devices::PERSON_HEADER, &key)
         .send_json(report)
         .map_err(call_err)?;
     Ok(())

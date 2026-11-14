@@ -90,8 +90,9 @@ GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55433/postgres cargo
   (`siem/sinks.rs`, `capture.rs`, feature `siem`): text comes through `gantry_server::Capture`, redacted and kept
   encrypted for a limited time, never in the chain.
 - Devices (`devices.rs`, feature `devices`): enrolment tokens scoped to the install or a team, with expiry and an
-  admin API; the device profile per team; reports, drift and the Devices page, which merges reports with this
-  replica's audit traffic.
+  admin API; the device profile per team; reports from the person of the Gantry key the agent sends, each device
+  bound to its first person and token scope; drift, refused reports and the Devices page, which merges reports with
+  every replica's traffic from the shared request index.
 - Alerting (`alerts.rs`, `alerts/channels.rs`, feature `alerts`): rules on the records `enterprise_audit` holds,
   evaluated on the exporter's tick.
 

@@ -19,7 +19,7 @@ struct Reply {
     text: String,
 }
 
-/// A request as the device agent or an admin API client sends it: a bearer token, JSON, no cookie, no origin.
+/// A request as an admin API client sends it: a bearer token, JSON, no cookie, no origin.
 async fn call(
     app: &Router,
     method: &str,
@@ -27,12 +27,28 @@ async fn call(
     token: &str,
     body: Option<Value>,
 ) -> Result<Reply, Error> {
-    let request = Request::builder()
+    agent(app, method, path, token, "", body).await
+}
+
+/// A request as the device agent sends it: the enrolment token as bearer and the person's Gantry key (from `gantry
+/// login`) in x-gantry-key, when there is one.
+async fn agent(
+    app: &Router,
+    method: &str,
+    path: &str,
+    token: &str,
+    person_key: &str,
+    body: Option<Value>,
+) -> Result<Reply, Error> {
+    let mut request = Request::builder()
         .method(method)
         .uri(path)
         .header(header::HOST, HOST)
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::CONTENT_TYPE, "application/json");
+    if !person_key.is_empty() {
+        request = request.header("x-gantry-key", person_key);
+    }
     let body = body.map_or_else(Body::empty, |b| Body::from(b.to_string()));
     let response = app.clone().oneshot(request.body(body)?).await?;
     let status = response.status();
@@ -156,7 +172,7 @@ async fn enrol_profile_report_and_coverage() -> Result<(), Error> {
         )
     );
     // The device's person is noa, of the platform team: their team's profile.
-    let noa = call(&gw.app, "GET", "/device/profile?person=noa", &token, None).await?;
+    let noa = agent(&gw.app, "GET", "/device/profile", &token, ADMIN_KEY, None).await?;
     assert_eq!(
         noa.body["gateway_url"], "https://platform.example.com",
         "{}",
@@ -166,11 +182,12 @@ async fn enrol_profile_report_and_coverage() -> Result<(), Error> {
     assert_eq!(noa.body["person"], "noa");
 
     // Reports: Claude Code through Gantry, Codex straight to OpenAI, one drift.
-    let sent = call(
+    let sent = agent(
         &gw.app,
         "POST",
         "/device/report",
         &token,
+        ADMIN_KEY,
         Some(report(
             "noa",
             "mbp",
@@ -208,13 +225,23 @@ async fn enrol_profile_report_and_coverage() -> Result<(), Error> {
         ..Default::default()
     })?;
 
-    let page = owner.go(&gw.app, "GET", "/console/devices", &[]).await?;
-    let row = page
-        .text
-        .split("t-mono-lg\">noa</span>")
-        .nth(1)
-        .and_then(|r| r.split("g-row\"").next())
-        .unwrap_or_default();
+    // The page reads the store's request index, which the record reaches with the copier's next pass.
+    let mut tries = 0;
+    let (page, row) = loop {
+        let page = owner.go(&gw.app, "GET", "/console/devices", &[]).await?;
+        let row = page
+            .text
+            .split("t-mono-lg\">noa</span>")
+            .nth(1)
+            .and_then(|r| r.split("g-row\"").next())
+            .unwrap_or_default()
+            .to_string();
+        tries += 1;
+        if row.contains("claude-code") || tries == 100 {
+            break (page, row);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
     assert!(row.contains("claude-code"), "tools seen: {row}");
     assert!(row.contains("1 device"), "devices: {row}");
     assert!(row.contains("codex on mbp"), "going direct: {row}");
@@ -284,6 +311,120 @@ async fn enrol_profile_report_and_coverage() -> Result<(), Error> {
 }
 
 #[tokio::test]
+async fn a_report_is_from_the_person_of_its_key_and_a_device_stays_bound() -> Result<(), Error> {
+    let Some(url) = database("devices_bound").await? else {
+        return Ok(());
+    };
+    let gw = gateway("devices_bound", &url, &licensed(&["devices"]))?;
+    const ANA_KEY: &str = "gantry_ana_0123456789abcdef0123456789abcdef";
+    gantry_core::keyfile::add_entry("ana", "web", ANA_KEY, false, &gw.keys)?;
+    let mut tokens = Vec::new();
+    for team in ["", "web"] {
+        let made = call(
+            &gw.app,
+            "POST",
+            "/console/devices/tokens",
+            ADMIN_KEY,
+            Some(json!({"label": format!("t{team}"), "team": team})),
+        )
+        .await?;
+        tokens.push(made.body["token"].as_str().unwrap_or_default().to_string());
+    }
+    let (all, web) = (&tokens[0], &tokens[1]);
+    let send = |token: &str, key: &str| {
+        let (app, token, key) = (gw.app.clone(), token.to_string(), key.to_string());
+        async move {
+            agent(
+                &app,
+                "POST",
+                "/device/report",
+                &token,
+                &key,
+                Some(report("ana", "mbp", json!([]))),
+            )
+            .await
+        }
+    };
+
+    // The person comes from a Gantry key, never from the report.
+    let none = send(all, "").await?;
+    assert_eq!(none.status, StatusCode::UNAUTHORIZED, "{}", none.text);
+    assert!(none.text.contains("person_key_required"), "{}", none.text);
+    let bogus = send(all, "gantry_not_a_key").await?;
+    assert!(bogus.text.contains("invalid_person_key"), "{}", bogus.text);
+    let first = send(all, ADMIN_KEY).await?;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.text);
+    assert_eq!(
+        first.body["person"], "noa",
+        "the report said ana: {}",
+        first.text
+    );
+
+    // Bound to noa and the every-team scope: another person or scope is refused and kept.
+    let other_person = send(all, ANA_KEY).await?;
+    assert_eq!(
+        other_person.status,
+        StatusCode::FORBIDDEN,
+        "{}",
+        other_person.text
+    );
+    assert!(
+        other_person.text.contains("device_bound"),
+        "{}",
+        other_person.text
+    );
+    let other_scope = send(web, ADMIN_KEY).await?;
+    assert_eq!(
+        other_scope.status,
+        StatusCode::FORBIDDEN,
+        "{}",
+        other_scope.text
+    );
+    let again = send(all, ADMIN_KEY).await?;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.text);
+    let listed = call(
+        &gw.app,
+        "GET",
+        "/console/devices/devices.json",
+        ADMIN_KEY,
+        None,
+    )
+    .await?;
+    assert_eq!(listed.body[0]["person"], "noa", "{}", listed.text);
+    let mut owner = Browser::admin(&gw.app).await?;
+    let page = owner.go(&gw.app, "GET", "/console/devices", &[]).await?;
+    assert!(page.text.contains("bound to person noa"), "{}", page.text);
+    assert!(
+        page.text.contains("bound to the token scope every team"),
+        "{}",
+        page.text
+    );
+
+    // Removed by an admin, the device binds to whoever reports next.
+    let removed = call(
+        &gw.app,
+        "DELETE",
+        "/console/devices/devices/mbp:ana",
+        ADMIN_KEY,
+        None,
+    )
+    .await?;
+    assert_eq!(removed.status, StatusCode::OK, "{}", removed.text);
+    let ana = send(web, ANA_KEY).await?;
+    assert_eq!(ana.status, StatusCode::OK, "{}", ana.text);
+    assert_eq!(
+        (&ana.body["person"], &ana.body["team"]),
+        (&json!("ana"), &json!("web"))
+    );
+    assert!(
+        admin_records(&gw)?
+            .iter()
+            .any(|r| r["action"] == "device_removed")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn admin_api_issues_team_tokens_that_expire_and_revoke() -> Result<(), Error> {
     let Some(url) = database("devices_api").await? else {
         return Ok(());
@@ -327,13 +468,14 @@ async fn admin_api_issues_team_tokens_that_expire_and_revoke() -> Result<(), Err
     );
 
     // A team token gives its team's view whoever the device says it is.
-    let profile = call(&gw.app, "GET", "/device/profile?person=noa", &token, None).await?;
+    let profile = agent(&gw.app, "GET", "/device/profile", &token, ADMIN_KEY, None).await?;
     assert_eq!(profile.body["team"], "web", "{}", profile.text);
-    let sent = call(
+    let sent = agent(
         &gw.app,
         "POST",
         "/device/report",
         &token,
+        ADMIN_KEY,
         Some(report("noa", "pc", json!([]))),
     )
     .await?;
@@ -420,7 +562,10 @@ async fn the_agent_enrols_applies_and_reports() -> Result<(), Error> {
         r#"{"security":{"auth":{"selectedType":"gemini-api-key"}}}"#,
     )?;
     std::fs::create_dir_all(home.join(".config/gantry"))?;
-    std::fs::write(home.join(".config/gantry/credentials"), "name=noa\n")?;
+    std::fs::write(
+        home.join(".config/gantry/credentials"),
+        format!("name=noa\nkey={ADMIN_KEY}\n"),
+    )?;
     let opts = crate::device::Options {
         control_plane: format!("http://{address}"),
         token,

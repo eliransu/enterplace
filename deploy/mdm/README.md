@@ -36,7 +36,11 @@ Devices page. Docs: https://gantry-docs.eliran.me/operations/devices/
    ```
    The agent's token order: `GANTRY_DEVICE_TOKEN`, then the file named by `GANTRY_DEVICE_TOKEN_FILE`, then
    `/Library/Application Support/Gantry/device-token`.
-5. Deploy the package. The agent's log is `/var/log/gantry-device.log`. Devices show up on the Devices page after the
+5. Each person runs `gantry login <gateway url>` once on their machine. The agent sends the key that saves
+   (`~/.config/gantry/credentials`) with every report, and the gateway takes the person from it; a machine where
+   nobody has signed in is refused with `person_key_required` until someone does. A device stays bound to the first
+   person and token scope that reported it.
+6. Deploy the package. The agent's log is `/var/log/gantry-device.log`. Devices show up on the Devices page after the
    first run; one not seen in 24 hours is flagged. A token expires after the days it was made for: deliver a new one
    before then.
 
