@@ -63,7 +63,7 @@ Before any balance: a deployment cooling down after a failure is passed over, an
 
 The 90th percentile is used rather than the average, so one slow answer does not move a deployment, while a deployment that stays slow loses its place within 32 answers. Each gateway measures its own path to the provider.
 
-**Deployment limits.** A deployment may set `max_parallel` (requests in flight at once through this gateway), `rpm` and `tpm` (requests and estimated tokens a minute, the prompt's bytes over four). One at a limit is passed over; when every deployment of the alias is at one, the caller gets 429 `deployment_limit`. The counts are per gateway.
+**Deployment limits.** A deployment may set `max_parallel` (requests in flight at once), `rpm` and `tpm` (requests and tokens in the current minute). A request is counted in `tpm` at its estimate (the prompt's bytes over four) while it runs, and at what its answer says it used (input and output tokens) once the answer is settled. One at a limit is passed over; when every deployment of the alias is at one, the caller gets 429 `deployment_limit`. With a store the counts are every replica's: each replica writes its own with the 500 ms poll (table `gantry_deployment_load`) and reads the others' from memory, so the check costs no database call, and requests arriving at once on several replicas can pass a limit by a few within a poll. Without a store they are per gateway.
 
 ```yaml
 deployments:

@@ -7,6 +7,14 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Deployment limits: actual tokens, every replica
+
+- A deployment's `tpm` counts each request at its estimate while it runs and at the tokens its answer used once it
+  is settled.
+- With a store, `max_parallel`, `rpm` and `tpm` count every replica's requests: each replica writes its load with the
+  500 ms poll (table `gantry_deployment_load`, migration 3 of namespace `gantry_routing`) and checks against the
+  others' from memory, with no database call on the request path.
+
 ### Devices: MCP servers approved or blocked
 
 - The self-hosted `/device/report` takes the agent's `os` and its `mcp` inventory and keeps them (migration 3 of

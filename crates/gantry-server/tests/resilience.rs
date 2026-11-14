@@ -1043,6 +1043,61 @@ async fn a_deployment_at_its_rpm_is_passed_over_and_with_all_full_the_caller_wai
     Ok(())
 }
 
+/// A deployment's tpm is held at each request's estimate (its body over four) while it runs, and counts what the
+/// answer said it used once the answer is settled: a small request whose answer is long fills it, a long request
+/// whose answer is short leaves room.
+#[tokio::test]
+async fn a_deployment_tpm_counts_the_tokens_the_answer_used() -> TestResult {
+    let long_answer = r#"{"id":"c","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":600,"total_tokens":610}}"#;
+    let short_answer = r#"{"id":"c","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":5}}"#;
+    let ask =
+        |text: String| json!({"model": "smart", "messages": [{"role": "user", "content": text}]});
+    let settled = || tokio::time::sleep(Duration::from_millis(300));
+
+    // tpm 500: a short request is estimated at a few tokens, and its answer used 610.
+    let (a, _) = same(answer(200, long_answer)).await?;
+    let mut only = deployment("a", "m");
+    only.tpm = Some(500);
+    let gw = gateway(
+        "tpm-actual",
+        vec![route("a", Kind::OpenAi, a, &[])],
+        vec![alias("smart", Balance::RoundRobin, vec![only])],
+        everyone(),
+    )?;
+    let (status, _, body) = send(&gw, "/v1/chat/completions", ask("hi".into()), &[]).await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    settled().await;
+    let (status, _, body) = send(&gw, "/v1/chat/completions", ask("hi".into()), &[]).await?;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "610 of 500 used: {body:?}"
+    );
+    assert!(body.unwrap_or_default().contains("deployment_limit"));
+
+    // tpm 700: a request of 2,000 bytes is estimated at about 500 tokens, and its answer used 5.
+    let (b, _) = same(answer(200, short_answer)).await?;
+    let mut only = deployment("b", "m");
+    only.tpm = Some(700);
+    let gw = gateway(
+        "tpm-short",
+        vec![route("b", Kind::OpenAi, b, &[])],
+        vec![alias("smart", Balance::RoundRobin, vec![only])],
+        everyone(),
+    )?;
+    for _ in 0..3 {
+        let (status, _, body) =
+            send(&gw, "/v1/chat/completions", ask("x".repeat(2000)), &[]).await?;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "each answer used 5 tokens: {body:?}"
+        );
+        settled().await;
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_chat_probe_is_recorded_as_gantry_probe_and_charged_to_its_scope() -> TestResult {
     let (a, _) = same(answer(200, CHAT_OK)).await?;

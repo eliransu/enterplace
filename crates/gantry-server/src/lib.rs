@@ -6015,6 +6015,10 @@ async fn send(
                 &served_model,
                 price.clone(),
             );
+            // The alias deployment that answered counts the tokens its answer used, not the estimate, for its tpm.
+            if let Some(settle) = busy.as_ref().and_then(alias::Busy::settler) {
+                admitted.on_tokens(settle);
+            }
             if let Some(creator) = creator.as_mut() {
                 creator.defer(&mut admitted);
             }

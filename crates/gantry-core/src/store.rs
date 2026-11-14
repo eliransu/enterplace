@@ -136,6 +136,16 @@ impl std::fmt::Display for VersionError {
 
 /// Shared state. Reads come from memory, refreshed in the background, so a request never waits on the database
 /// for a key or a kill switch, and a database that is down leaves the last state in force.
+/// One gateway's (or, summed, the others') load on a deployment: requests in flight, and the requests and tokens
+/// sent in the wall-clock minute `minute` (seconds since the epoch over 60).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeploymentLoad {
+    pub in_flight: u32,
+    pub minute: i64,
+    pub requests: u32,
+    pub tokens: u64,
+}
+
 pub trait Store: Send + Sync + std::fmt::Debug {
     /// The keys, written as a keys file, so they are checked by the same rules as one.
     fn keys_text(&self) -> String;
@@ -183,6 +193,13 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     }
     /// A deployment answered here after `ms`: one sample every gateway ranks it on. Does not wait.
     fn observed(&self, _deployment: &str, _ms: u32) {}
+    /// What every other gateway has in flight and has sent this minute to each deployment, for its `max_parallel`,
+    /// `rpm` and `tpm`. From memory, polled.
+    fn deployment_load(&self) -> Arc<std::collections::HashMap<String, DeploymentLoad>> {
+        Arc::default()
+    }
+    /// This gateway's load on a deployment now, for the others. Does not wait: written on the next poll.
+    fn publish_load(&self, _deployment: &str, _load: DeploymentLoad) {}
     /// Whether this gateway runs the health probe of `deployment` now. One gateway at a time holds each, for `ttl`
     /// after it last took it; without a store every gateway probes its own.
     fn probe_lease(&self, _deployment: String, _ttl: Duration) -> Pending<bool> {

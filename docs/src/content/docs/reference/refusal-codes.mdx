@@ -381,7 +381,7 @@ Every deployment of the alias that the request may use is kept (`for:`) for anot
 
 ### deployment_limit
 
-**429.** Every deployment of the alias is at its `max_parallel`, `rpm` or `tpm` on this gateway. Nothing was sent.
+**429.** Every deployment of the alias is at its `max_parallel`, `rpm` or `tpm`, counted across every replica on the store. Nothing was sent.
 
 **Fix:** try again in a moment, or ask an admin to raise the limits or add a deployment. See [Deployment limits](/routing/strategies/#balance).
 

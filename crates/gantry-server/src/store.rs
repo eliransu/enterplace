@@ -32,8 +32,8 @@ use gantry_core::{
     kill::Kill,
     policy::{Budget, Period},
     store::{
-        self as core_store, Bucket, Change, Credential, LEASE, Lease, NewVersion, Pending,
-        PolicyVersion, Reserve, Store, VersionError,
+        self as core_store, Bucket, Change, Credential, DeploymentLoad, LEASE, Lease, NewVersion,
+        Pending, PolicyVersion, Reserve, Store, VersionError,
     },
 };
 
@@ -205,7 +205,21 @@ CREATE TABLE gantry_latency (
 );
 ", "
 CREATE TABLE gantry_probe_leases (deployment text PRIMARY KEY, gateway text NOT NULL, until timestamptz NOT NULL);
+", "
+CREATE TABLE gantry_deployment_load (
+    deployment text NOT NULL,
+    gateway text NOT NULL,
+    in_flight integer NOT NULL,
+    minute bigint NOT NULL,
+    requests integer NOT NULL,
+    tokens bigint NOT NULL,
+    updated timestamptz NOT NULL,
+    PRIMARY KEY (deployment, gateway)
+);
 "];
+
+/// A gateway's load on a deployment counts this long after it last wrote it: one that stopped holds nothing.
+const LOAD_FOR_SECS: f64 = 10.0;
 
 /// A pin written this long ago is written again when its session sends, so the others know it is still in use. A
 /// session that keeps sending costs one write per gateway in this time.
@@ -301,6 +315,10 @@ struct Inner {
     samples: Mutex<HashMap<String, (std::collections::VecDeque<u32>, bool)>>,
     /// Each deployment's 90th percentile over every gateway's samples.
     latency: RwLock<Arc<HashMap<String, u32>>>,
+    /// This gateway's load on each deployment, changed since the last write.
+    load_out: Mutex<HashMap<String, DeploymentLoad>>,
+    /// Every other gateway's load on each deployment, summed.
+    load: RwLock<Arc<HashMap<String, DeploymentLoad>>>,
     polls: std::sync::atomic::AtomicU64,
 }
 
@@ -361,6 +379,8 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         pins_read: Mutex::new(0.0),
         samples: Mutex::default(),
         latency: RwLock::default(),
+        load_out: Mutex::default(),
+        load: RwLock::default(),
         polls: std::sync::atomic::AtomicU64::new(0),
     });
     let store = PgStore {
@@ -1019,6 +1039,33 @@ impl Inner {
             .filter_map(|(d, samples)| Some((d.clone(), crate::alias::percentile(samples, 90)?)))
             .collect();
         write(&self.latency, Arc::new(p90));
+        // The others' load on each deployment: in flight now, and sent in this minute.
+        let minute = crate::alias::minute_now();
+        let rows = client
+            .query(
+                "SELECT deployment, sum(in_flight)::bigint, coalesce(sum(requests) FILTER (WHERE minute = $3), 0)::bigint, \
+                 coalesce(sum(tokens) FILTER (WHERE minute = $3), 0)::bigint FROM gantry_deployment_load \
+                 WHERE gateway <> $1 AND updated > clock_timestamp() - $2 * interval '1 second' GROUP BY deployment",
+                &[&self.gateway, &LOAD_FOR_SECS, &minute],
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+        let mut load = HashMap::new();
+        for row in &rows {
+            let field = |err: tokio_postgres::Error| err.to_string();
+            let count =
+                |i: usize| -> Result<i64, String> { row.try_get::<_, i64>(i).map_err(field) };
+            load.insert(
+                row.try_get::<_, String>(0).map_err(field)?,
+                DeploymentLoad {
+                    in_flight: u32::try_from(count(1)?).unwrap_or(0),
+                    minute,
+                    requests: u32::try_from(count(2)?).unwrap_or(0),
+                    tokens: u64::try_from(count(3)?).unwrap_or(0),
+                },
+            );
+        }
+        write(&self.load, Arc::new(load));
         Ok(())
     }
 
@@ -1076,6 +1123,46 @@ impl Inner {
             )
             .await;
         }
+        let load = std::mem::take(
+            &mut *self
+                .load_out
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if !load.is_empty() {
+            let deployments: Vec<String> = load.keys().cloned().collect();
+            let column = |f: fn(&DeploymentLoad) -> i64| -> Vec<i64> {
+                deployments
+                    .iter()
+                    .map(|d| load.get(d).map_or(0, f))
+                    .collect()
+            };
+            let columns = (
+                deployments.clone(),
+                column(|l| i64::from(l.in_flight)),
+                column(|l| l.minute),
+                column(|l| i64::from(l.requests)),
+                column(|l| i64::try_from(l.tokens).unwrap_or(i64::MAX)),
+            );
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.query_typed(
+                    "INSERT INTO gantry_deployment_load (deployment, gateway, in_flight, minute, requests, tokens, updated) \
+                     SELECT d, $6, f::integer, m, r::integer, t, clock_timestamp() FROM unnest($1::text[], $2::int8[], $3::int8[], $4::int8[], $5::int8[]) AS x(d, f, m, r, t) \
+                     ON CONFLICT (deployment, gateway) DO UPDATE SET in_flight = excluded.in_flight, minute = excluded.minute, \
+                     requests = excluded.requests, tokens = excluded.tokens, updated = excluded.updated",
+                    &[
+                        (&columns.0, Type::TEXT_ARRAY),
+                        (&columns.1, Type::INT8_ARRAY),
+                        (&columns.2, Type::INT8_ARRAY),
+                        (&columns.3, Type::INT8_ARRAY),
+                        (&columns.4, Type::INT8_ARRAY),
+                        (&self.gateway, Type::TEXT),
+                    ],
+                ),
+            )
+            .await;
+        }
         if self.polls.fetch_add(1, Ordering::Relaxed) % CLEAN_EVERY == 0 {
             let idle = crate::alias::SESSION_IDLE.as_secs_f64();
             let _ = tokio::time::timeout(
@@ -1091,6 +1178,14 @@ impl Inner {
                 client.execute(
                     "DELETE FROM gantry_latency WHERE updated < clock_timestamp() - $1 * interval '1 second'",
                     &[&LATENCY_FOR_SECS],
+                ),
+            )
+            .await;
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.execute(
+                    "DELETE FROM gantry_deployment_load WHERE updated < clock_timestamp() - $1 * interval '1 second'",
+                    &[&LOAD_FOR_SECS],
                 ),
             )
             .await;
@@ -2337,6 +2432,18 @@ impl Store for PgStore {
         }
         window.push_back(ms);
         *dirty = true;
+    }
+
+    fn deployment_load(&self) -> Arc<HashMap<String, DeploymentLoad>> {
+        read(&self.inner.load)
+    }
+
+    fn publish_load(&self, deployment: &str, load: DeploymentLoad) {
+        self.inner
+            .load_out
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(deployment.to_string(), load);
     }
 
     fn open_session(&self, id_sha256: String, who: String, ttl: Duration) -> Pending<()> {

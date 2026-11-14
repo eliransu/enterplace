@@ -57,8 +57,6 @@ const KEY_REST: Duration = Duration::from_secs(60);
 const HEADROOM_PERCENT: u32 = 5;
 
 /// The window of a deployment's `rpm` and `tpm`.
-const MINUTE: Duration = Duration::from_secs(60);
-
 /// How long a provider's rate-limit headers are believed: its windows are about a minute.
 const HEADROOM_FOR: Duration = Duration::from_secs(60);
 
@@ -80,8 +78,9 @@ struct Deployed {
     errors: f64,
     /// The smallest share of its rate limits its provider said was left, and when.
     headroom: Option<(f64, Instant)>,
-    /// The current minute: when it began, and the requests and estimated tokens sent in it.
-    minute: (Option<Instant>, u32, u64),
+    /// The current wall-clock minute (as [`minute_now`]), and the requests and tokens sent in it: each request's
+    /// estimate while it runs, its answer's own count once that is known.
+    minute: (i64, u32, u64),
     /// Times it was put to cool down, for `/metrics`.
     cooldowns: u64,
 }
@@ -156,12 +155,42 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// Held while a request is at a deployment, so `least_busy` sees it. Dropped with the answer's body.
-pub(crate) struct Busy(Arc<AtomicUsize>);
+pub(crate) struct Busy {
+    count: Arc<AtomicUsize>,
+    pool: Option<Arc<Pool>>,
+    deployment: String,
+    /// The minute it was counted in and the tokens it was counted with, until its answer's own count replaces them.
+    minute: i64,
+    held: u64,
+}
+
+impl Busy {
+    /// Replaces the tokens this request was counted with by what its answer used, when the provider said.
+    pub(crate) fn settler(&self) -> Option<impl FnOnce(Option<u64>) + Send + Sync + 'static> {
+        let pool = self.pool.clone()?;
+        let (deployment, minute, held) = (self.deployment.clone(), self.minute, self.held);
+        Some(move |used: Option<u64>| {
+            if let Some(used) = used {
+                pool.settle_tokens(&deployment, minute, held, used);
+            }
+        })
+    }
+}
 
 impl Drop for Busy {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
+        self.count.fetch_sub(1, Ordering::Relaxed);
+        if let Some(pool) = &self.pool {
+            pool.publish(&self.deployment);
+        }
     }
+}
+
+/// The wall-clock minute, the window of a deployment's `rpm` and `tpm` on every gateway alike.
+pub(crate) fn minute_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| (d.as_secs() / 60) as i64)
 }
 
 impl Pool {
@@ -411,44 +440,101 @@ impl Pool {
     }
 
     /// Whether `d` can take one more request of about `tokens` tokens now: under its `max_parallel` in flight, and
-    /// under its `rpm` and `tpm` this minute. A deployment with none of them always can.
-    // ponytail: checked here and counted at send, per replica and without a reservation, so requests arriving at
-    // once can pass a limit by a few; shared and reserved counts if a provider's limit must never be crossed.
+    /// under its `rpm` and `tpm` this minute, counting what every gateway on the store has. A deployment with none
+    /// of them always can.
+    // ponytail: the other gateways' load is read from memory, polled every half second, so requests arriving at once
+    // on several gateways can pass a limit by a few; a reservation in the store per request if a provider's limit
+    // must never be crossed.
     pub(crate) fn has_room(&self, d: &gantry_core::config::Deployment, tokens: u64) -> bool {
         if d.max_parallel.is_none() && d.rpm.is_none() && d.tpm.is_none() {
             return true;
         }
-        let deployments = locked(&self.deployments);
-        let Some(state) = deployments.get(&label(&d.provider, &d.model)) else {
-            return true;
-        };
-        let busy = state.busy.load(Ordering::Relaxed);
-        if d.max_parallel.is_some_and(|max| busy >= max as usize) {
-            return false;
+        let label = label(&d.provider, &d.model);
+        let now = minute_now();
+        let others = self
+            .store
+            .as_ref()
+            .filter(|store| store.shares_routing())
+            .and_then(|store| store.deployment_load().get(&label).copied())
+            .unwrap_or_default();
+        let (mut busy, mut requests, mut used) = (others.in_flight as usize, 0, 0);
+        if others.minute == now {
+            (requests, used) = (others.requests, others.tokens);
         }
-        let (requests, used) = match state.minute {
-            (Some(at), requests, used) if at.elapsed() < MINUTE => (requests, used),
-            _ => (0, 0),
-        };
-        d.rpm.is_none_or(|rpm| requests < rpm) && d.tpm.is_none_or(|tpm| used + tokens <= tpm)
+        if let Some(state) = locked(&self.deployments).get(&label) {
+            busy += state.busy.load(Ordering::Relaxed);
+            if state.minute.0 == now {
+                requests += state.minute.1;
+                used += state.minute.2;
+            }
+        }
+        d.max_parallel.is_none_or(|max| busy < max as usize)
+            && d.rpm.is_none_or(|rpm| requests < rpm)
+            && d.tpm.is_none_or(|tpm| used + tokens <= tpm)
     }
 
     /// Counts a request in flight at a deployment until the returned guard is dropped.
-    /// Also counts it, with its estimated `tokens`, in the deployment's minute for `rpm` and `tpm`.
-    pub(crate) fn busy(&self, deployment: &str, tokens: u64) -> Busy {
-        let mut deployments = locked(&self.deployments);
-        let state = deployments.entry(deployment.to_string()).or_default();
-        state.minute = match state.minute {
-            (Some(at), requests, used) if at.elapsed() < MINUTE => (
-                Some(at),
-                requests.saturating_add(1),
-                used.saturating_add(tokens),
-            ),
-            _ => (Some(Instant::now()), 1, tokens),
+    /// Also counts it, with its estimated `tokens`, in the deployment's minute for `rpm` and `tpm`, until its
+    /// answer's count replaces the estimate ([`Busy::settler`]).
+    pub(crate) fn busy(self: &Arc<Self>, deployment: &str, tokens: u64) -> Busy {
+        let now = minute_now();
+        let count = {
+            let mut deployments = locked(&self.deployments);
+            let state = deployments.entry(deployment.to_string()).or_default();
+            state.minute = if state.minute.0 == now {
+                (
+                    now,
+                    state.minute.1.saturating_add(1),
+                    state.minute.2.saturating_add(tokens),
+                )
+            } else {
+                (now, 1, tokens)
+            };
+            let count = state.busy.clone();
+            count.fetch_add(1, Ordering::Relaxed);
+            count
         };
-        let busy = state.busy.clone();
-        busy.fetch_add(1, Ordering::Relaxed);
-        Busy(busy)
+        self.publish(deployment);
+        Busy {
+            count,
+            pool: Some(self.clone()),
+            deployment: deployment.to_string(),
+            minute: now,
+            held: tokens,
+        }
+    }
+
+    /// An answer used `used` tokens where `held` were counted: its minute's count takes the difference.
+    pub(crate) fn settle_tokens(&self, deployment: &str, minute: i64, held: u64, used: u64) {
+        {
+            let mut deployments = locked(&self.deployments);
+            let Some(state) = deployments.get_mut(deployment) else {
+                return;
+            };
+            if state.minute.0 != minute {
+                return;
+            }
+            state.minute.2 = state.minute.2.saturating_sub(held).saturating_add(used);
+        }
+        self.publish(deployment);
+    }
+
+    /// Hands this gateway's load on `deployment` to the store, for the other gateways' limits.
+    fn publish(&self, deployment: &str) {
+        let Some(store) = self.store.as_ref().filter(|store| store.shares_routing()) else {
+            return;
+        };
+        let load = locked(&self.deployments).get(deployment).map(|state| {
+            gantry_core::store::DeploymentLoad {
+                in_flight: u32::try_from(state.busy.load(Ordering::Relaxed)).unwrap_or(u32::MAX),
+                minute: state.minute.0,
+                requests: state.minute.1,
+                tokens: state.minute.2,
+            }
+        });
+        if let Some(load) = load {
+            store.publish_load(deployment, load);
+        }
     }
 
     /// A deployment failed (no answer, a 429 or a 5xx): it is passed over for `cooldown`.
@@ -1240,7 +1326,7 @@ mod tests {
 
     #[test]
     fn a_deployment_at_its_max_parallel_rpm_or_tpm_has_no_room() {
-        let pool = Pool::default();
+        let pool = Arc::new(Pool::default());
         let d = |max_parallel, rpm, tpm| gantry_core::config::Deployment {
             provider: "p".into(),
             model: "m".into(),
@@ -1270,6 +1356,30 @@ mod tests {
     }
 
     #[test]
+    fn a_settled_answer_replaces_its_estimate_in_the_tpm() {
+        let pool = Arc::new(Pool::default());
+        let d = gantry_core::config::Deployment {
+            provider: "p".into(),
+            model: "m".into(),
+            tpm: Some(100),
+            ..Default::default()
+        };
+        let held = pool.busy("p/m", 90);
+        assert!(!pool.has_room(&d, 20), "90 held of 100");
+        if let Some(settle) = held.settler() {
+            settle(Some(5));
+        }
+        assert!(pool.has_room(&d, 20), "5 used of 100");
+        if let Some(settle) = held.settler() {
+            settle(None);
+        }
+        assert!(
+            pool.has_room(&d, 20),
+            "no count from the provider keeps what was counted"
+        );
+    }
+
+    #[test]
     fn rate_limit_headers_give_the_smallest_share_left() {
         let mut headers = axum::http::HeaderMap::new();
         assert_eq!(headroom(&headers), None);
@@ -1295,7 +1405,7 @@ mod tests {
 
     #[test]
     fn least_busy_picks_the_deployment_with_fewest_in_flight() {
-        let pool = Pool::default();
+        let pool = Arc::new(Pool::default());
         let smart = alias(Balance::LeastBusy, &[1, 1]);
         let held = pool.busy("p0/m", 0);
         assert_eq!(order(&pool, &smart, &[0, 1], Instant::now())[0], 1);

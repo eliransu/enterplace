@@ -151,6 +151,12 @@ aliases:
     deployments:
       - {{ provider: mock, model: lag }}
       - {{ provider: mock2, model: fast }}
+  - name: capped
+    deployments:
+      - {{ provider: mock, model: free, rpm: 2 }}
+  - name: single
+    deployments:
+      - {{ provider: mock, model: slow, max_parallel: 1 }}
 prices:
   m: {{ input: 0, output: 1000 }}
 rules:
@@ -175,7 +181,7 @@ rules:
     rate: {{ tpm: 300 }}
   - name: paired
     principals: {{ team: paired }}
-    models: [pair, sticky, quick]
+    models: [pair, sticky, quick, capped, single]
   - name: shop
     principals: {{ team: shop }}
     models: [m]
@@ -1468,6 +1474,58 @@ async fn lowest_latency_ranks_deployments_on_what_every_gateway_measured() -> Te
     let (deployment, reason) = on_b.first().cloned().unwrap_or_default();
     assert_eq!(deployment, "mock2/fast", "{on_b:?}");
     assert!(reason.contains("p90 time to first byte"), "{reason}");
+    Ok(())
+}
+
+/// A deployment's rpm and max_parallel count every gateway's requests: what a sent is seen by b within a poll.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deployment_s_rpm_and_max_parallel_hold_across_gateways() -> TestResult {
+    let Some(url) = database("deployment_load").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let [a, b, _c] = three("deployment_load", &url, port, &[("maya", "paired", MAYA)])?;
+    // The rpm window is the wall-clock minute: start well inside one.
+    let second = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs()
+        % 60;
+    if second > 45 {
+        tokio::time::sleep(Duration::from_secs(61 - second)).await;
+    }
+    let capped = r#"{"model":"capped","messages":[]}"#;
+    send(&a, capped, None).await?;
+    send(&a, capped, None).await?;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let (status, body) = answer(
+        &b.router,
+        request("POST", "/v1/chat/completions", MAYA, capped)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(code(&body), "deployment_limit", "{body}");
+
+    // One slow request in flight on a: b's is refused while it runs, and taken once it answered.
+    let slow = r#"{"model":"single","messages":[]}"#;
+    let (first, second) = tokio::join!(
+        answer(
+            &a.router,
+            request("POST", "/v1/chat/completions", MAYA, slow)?
+        ),
+        async {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            answer(
+                &b.router,
+                request("POST", "/v1/chat/completions", MAYA, slow)?,
+            )
+            .await
+        }
+    );
+    assert_eq!(first?.0, StatusCode::OK);
+    let (status, body) = second?;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    send(&b, slow, None).await?;
     Ok(())
 }
 

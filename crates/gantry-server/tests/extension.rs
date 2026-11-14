@@ -207,7 +207,7 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
             ("batches".to_string(), 2),
             ("demo".to_string(), 1),
             ("gantry_policy".to_string(), 1),
-            ("gantry_routing".to_string(), 2),
+            ("gantry_routing".to_string(), 3),
             ("insights".to_string(), 1),
             ("mcp".to_string(), 1),
         ]

@@ -1412,6 +1412,8 @@ pub(crate) struct Admitted {
     /// A background response (`background: true`): when its answer says it is still queued or running, nothing is
     /// charged now and its reservation is handed on here, held until the response is settled.
     deferred: Option<tokio::sync::oneshot::Sender<Deferred>>,
+    /// Told the tokens the answer used (input and output, when the provider said), for the deployment's `tpm`.
+    on_tokens: Option<Box<dyn FnOnce(Option<u64>) + Send + Sync>>,
 }
 
 /// What a background response leaves to be settled when it ends: the reservations it holds (as a batch keeps them),
@@ -1575,6 +1577,7 @@ pub(crate) async fn admit(
             .map(|_| ask.body.clone()),
         stream_copy: None,
         deferred: None,
+        on_tokens: None,
     };
     // The caller pays their provider: unless the rule says otherwise, budgets (what the organization pays) do not
     // reserve or count it. Rate and token limits still hold.
@@ -2315,6 +2318,11 @@ impl Admitted {
         self.deferred = Some(to);
     }
 
+    /// Calls `tell` with the tokens the answer used when it is settled.
+    pub(crate) fn on_tokens(&mut self, tell: impl FnOnce(Option<u64>) + Send + Sync + 'static) {
+        self.on_tokens = Some(Box::new(tell));
+    }
+
     /// Marks whether the provider holds the request now, so a caller who leaves before the answer is charged.
     pub(crate) fn forwarded(&mut self, yes: bool) {
         self.forwarded = yes;
@@ -2432,6 +2440,9 @@ impl Admitted {
                 serde_json::from_slice::<Value>(body)
                     .is_ok_and(|a| matches!(a["status"].as_str(), Some("queued" | "in_progress")))
             });
+        if let Some(tell) = self.on_tokens.take() {
+            tell(usage.map(|u| u.prompt() + u.output + u.output_audio));
+        }
         let deferred = match self.deferred.take() {
             Some(to) if pending => {
                 let estimate = self
