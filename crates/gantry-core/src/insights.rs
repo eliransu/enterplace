@@ -242,6 +242,10 @@ fn labels_of(record: &Value) -> BTreeMap<String, Vec<String>> {
 pub fn fact(line: &str, replica: &str, prev: Option<&str>) -> Option<Fact> {
     let record: Value = serde_json::from_str(line).ok()?;
     if record.get("event").and_then(Value::as_str) == Some("audit_retired") {
+        // Segments kept elsewhere (`audit::retire_kept`) are still the chain's: their rows stay.
+        if record.get("kept").is_some() {
+            return None;
+        }
         return Some(Fact::Retired {
             through: record.get("through_n").and_then(Value::as_u64)?,
         });

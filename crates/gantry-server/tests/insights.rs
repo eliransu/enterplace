@@ -473,6 +473,11 @@ async fn legal_hold_keeps_expired_bodies_and_retention_takes_rows_and_bodies_wit
         1,
         "the expired body stays after the hold"
     );
+    // Segments kept elsewhere leave the disk with their rows kept.
+    log.append_record(&object(serde_json::json!({"event": "audit_retired", "from_n": 1, "through_n": 2, "kept": "s3://audit/gantry"})))?;
+    log.flush();
+    index.copy().await?;
+    assert_eq!(count("gantry_requests").await?, 3);
     // Retention removes records 1 and 2 from the chain: their rows and the body of 1 go with them.
     log.append_record(&object(
         serde_json::json!({"event": "audit_retired", "from_n": 1, "through_n": 2}),

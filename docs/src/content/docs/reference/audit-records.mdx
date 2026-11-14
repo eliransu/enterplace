@@ -285,3 +285,4 @@ Appended before the oldest sealed segments of a log are deleted (Gantry Enterpri
 | `through_hash` | string | The hash of the last removed record: the `prev` of the first record kept |
 | `records` | integer | How many records were removed |
 | `segments` | array | Each removed file: its name, first and last record, size and SHA-256, to match an archived copy |
+| `kept` | string | Only when the segments left the disk because they are kept elsewhere (`gantry_core::audit::retire_kept`, such as Gantry Enterprise's audit segments in object storage): where. The request log then keeps its rows for those records; after any other retirement it deletes them and their kept bodies |

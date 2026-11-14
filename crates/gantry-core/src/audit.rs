@@ -1367,6 +1367,27 @@ pub struct Retired {
 /// follows `through_hash`. The whole chain is verified first, so a log that does not hold keeps its evidence.
 /// `None` when no segment is that old. `log` must be the log open at `path`. Blocks while it reads the chain.
 pub fn retire(log: &AuditLog, path: &Path, through: u64) -> Result<Option<Retired>, String> {
+    retire_with(log, path, through, None)
+}
+
+/// `retire`, for segments that leave the disk because they are kept elsewhere (`kept`, such as an object storage
+/// bucket), not deleted: the `audit_retired` record names where, so readers that follow retention (the request log)
+/// keep what they copied of those records.
+pub fn retire_kept(
+    log: &AuditLog,
+    path: &Path,
+    through: u64,
+    kept: &str,
+) -> Result<Option<Retired>, String> {
+    retire_with(log, path, through, Some(kept))
+}
+
+fn retire_with(
+    log: &AuditLog,
+    path: &Path,
+    through: u64,
+    kept: Option<&str>,
+) -> Result<Option<Retired>, String> {
     let io_err =
         |err: io::Error| format!("the audit log at {} cannot be read: {err}.", path.display());
     let old: Vec<Segment> = segments(path)
@@ -1427,6 +1448,9 @@ pub fn retire(log: &AuditLog, path: &Path, through: u64) -> Result<Option<Retire
     record.insert("through_hash".into(), last["hash"].clone());
     record.insert("records".into(), (newest.last - oldest.first + 1).into());
     record.insert("segments".into(), files.into());
+    if let Some(kept) = kept {
+        record.insert("kept".into(), kept.into());
+    }
     // Written before anything is removed: a removal the chain does not name is a gap `verify` reports.
     log.append_record(&record).map_err(|err| {
         format!(
