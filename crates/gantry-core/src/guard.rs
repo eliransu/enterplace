@@ -61,6 +61,9 @@ pub enum GuardType {
     Lasso,
     GuardrailsAi,
     Aporia,
+    /// Not a check: a service that rewrites the whole request or answer (docs/transform-webhook). Runs before every
+    /// other guardrail of the rule, so the checks read what is really sent.
+    Transform,
 }
 
 /// Which text a guardrail reads, as written in `on:`.
@@ -221,7 +224,7 @@ const RESERVED_HEADERS: &[&str] = &[
 pub fn unset_webhook_env(rules: &[crate::policy::Rule], set: &dyn Fn(&str) -> bool) -> Vec<String> {
     let mut missing = std::collections::BTreeSet::new();
     for guardrail in rules.iter().flat_map(|rule| &rule.guardrails) {
-        if let Check::Webhook(hook) = &guardrail.check {
+        if let Check::Webhook(hook) | Check::Transform(hook) = &guardrail.check {
             for (header, variable) in &hook.headers_env {
                 if !set(variable) {
                     missing.insert(format!(
@@ -254,6 +257,8 @@ pub enum Check {
     /// A `regex` or `keywords` guardrail, compiled.
     Custom(Custom),
     Webhook(Webhook),
+    /// A `transform`: called with the whole body, answers with the body to use. The server runs these.
+    Transform(Webhook),
 }
 
 /// A checked guardrail definition.
@@ -272,7 +277,7 @@ pub struct Guardrail {
 impl Guardrail {
     /// Whether it runs inside Gantry, with no call out.
     fn local(&self) -> bool {
-        !matches!(self.check, Check::Webhook(_))
+        !matches!(self.check, Check::Webhook(_) | Check::Transform(_))
     }
 
     /// Whether it is still in its shadow period, read from the clock at each check.
@@ -295,7 +300,7 @@ impl Guardrail {
             Check::Gitleaks => gitleaks_findings(parts),
             Check::Pii => of(PII),
             Check::Custom(custom) => custom.scan(parts),
-            Check::Webhook(_) => Vec::new(),
+            Check::Webhook(_) | Check::Transform(_) => Vec::new(),
         }
     }
 }
@@ -523,6 +528,13 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
                     },
                 }
             }
+            GuardType::Transform => match webhook(def) {
+                Ok(hook) => Check::Transform(hook),
+                Err(err) => {
+                    errors.push(err);
+                    continue;
+                }
+            },
             _ => match webhook(def) {
                 Ok(hook) => Check::Webhook(hook),
                 Err(err) => {
@@ -539,6 +551,13 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
             (GuardType::Presidio, Some(Action::Mask)) if def.anonymizer_url.is_none() => {
                 errors.push(format!(
                     "guardrail \"{name}\": a presidio guardrail masks through the Presidio anonymizer. Add anonymizer_url (for example http://127.0.0.1:5001), or use action: block or warn."
+                ));
+                continue;
+            }
+            (GuardType::Transform, None) => Action::Warn,
+            (GuardType::Transform, Some(_)) => {
+                errors.push(format!(
+                    "guardrail \"{name}\": a transform rewrites the request or answer and takes no action. Remove action:, and add a check after it if what it writes must be checked."
                 ));
                 continue;
             }
@@ -628,6 +647,7 @@ fn type_name(kind: GuardType) -> &'static str {
         GuardType::Lasso => "lasso",
         GuardType::GuardrailsAi => "guardrails_ai",
         GuardType::Aporia => "aporia",
+        GuardType::Transform => "transform",
     }
 }
 
@@ -2084,6 +2104,12 @@ pub fn backtest(guard: &Guardrail, samples: &[Sample]) -> Result<Backtest, Strin
         Check::Gitleaks => GITLEAKS,
         Check::Pii => PII,
         Check::Custom(custom) => custom.detector,
+        Check::Transform(_) => {
+            return Err(format!(
+                "guardrail \"{}\" is a transform. A backtest measures what a check finds, and a transform finds nothing: it rewrites.",
+                guard.name
+            ));
+        }
         Check::Webhook(hook) => {
             return Err(format!(
                 "guardrail \"{}\" is a {} guardrail. A backtest runs Gantry's own detectors (secrets, pii, regex, keywords) and would send every example to the service; try it with action: warn or shadow_until instead.",

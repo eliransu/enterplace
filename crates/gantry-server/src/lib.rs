@@ -287,6 +287,40 @@ pub struct Extension {
     /// Takes the prompt and answer of requests the binary was told to keep. `None` keeps no text, as the open
     /// source gateway never does.
     pub capture: Option<Arc<dyn Capture>>,
+    /// Rewrites requests before they are checked and sent, and answers before they are checked and returned.
+    pub transform: Option<Arc<dyn Transform>>,
+}
+
+/// Who and what a transform is rewriting for.
+#[derive(Clone, Copy, Debug)]
+pub struct TransformContext<'a> {
+    pub decision: &'a str,
+    pub person: &'a str,
+    pub team: &'a str,
+    pub route: &'a str,
+}
+
+/// A binary's own rewrite of requests and answers, in process: add a system prompt, redact, drop a field. It runs
+/// first, before the rule's `transform` guardrails, its function tool check and its other guardrails, so they all
+/// read what it wrote. Each change is recorded as a diff summary (paths only). A request may not change `model` or
+/// `stream`. An `Err` refuses the request, or withholds the answer: its text is logged, never sent to the caller.
+/// A streamed answer is not passed to `answer`.
+pub trait Transform: Send + Sync {
+    fn request(
+        &self,
+        _context: &TransformContext<'_>,
+        _body: &mut serde_json::Value,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn answer(
+        &self,
+        _context: &TransformContext<'_>,
+        _body: &mut serde_json::Value,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Prompt and answer text handed to a binary that embeds the gateway, for an operator who opted in to sending it
@@ -445,6 +479,8 @@ struct AppState {
     jwks: Arc<jwt::Keys>,
     // Who owns each file, batch and fine-tuning job created through this gateway (batch.rs).
     owned: Arc<batch::Registry>,
+    // The embedding binary's rewrite of requests and answers.
+    transform: Option<Arc<dyn Transform>>,
 }
 
 impl AppState {
@@ -695,6 +731,7 @@ fn build(
         health: config.extension.health.clone(),
         jwks: Arc::default(),
         owned,
+        transform: config.extension.transform.clone(),
     };
     let keep = Arc::new(state.clone());
     batch::spawn_poller(Arc::downgrade(&keep));
@@ -2887,6 +2924,55 @@ async fn decide(
             Ok(Next::Forward(_, bytes, _)) if path.starts_with(PASSTHROUGH) => bytes.is_empty(),
             _ => path == TRANSCRIPTIONS,
         };
+    // Transforms first, so the tool check and the guardrails read what is really sent.
+    let mut transforms = Vec::new();
+    let has_transforms = state.transform.is_some()
+        || guards
+            .iter()
+            .any(|g| matches!(g.check, guard::Check::Transform(_)));
+    if has_transforms
+        && let Ok(Next::Forward(parts, bytes, _)) = &mut outcome
+        && let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(bytes)
+    {
+        let (person, team) = seen
+            .person
+            .map_or(("", ""), |p| (p.name.as_str(), p.team.as_str()));
+        let context = TransformContext {
+            decision,
+            person,
+            team,
+            route: &path,
+        };
+        let (found, refused) = transformed(
+            state,
+            guards,
+            &context,
+            gantry_core::transform::Side::Request,
+            &mut body,
+        )
+        .await;
+        let changed = found.iter().any(|s| s.outcome == "changed");
+        transforms = found;
+        match (refused, changed) {
+            (Some(refusal), _) => outcome = Err(refusal),
+            (None, true) => match serde_json::to_vec(&body) {
+                Ok(written) => {
+                    parts
+                        .headers
+                        .insert(header::CONTENT_LENGTH, HeaderValue::from(written.len()));
+                    *bytes = Bytes::from(written);
+                }
+                Err(_) => {
+                    outcome = Err(Refusal::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        TRANSFORM_FAILED,
+                        "Refused: the transformed request could not be written, so it was not sent. Tell your Gantry admin.",
+                    ));
+                }
+            },
+            (None, false) => {}
+        }
+    }
     // The function tools a request declares are checked against the rule's tools: before the guardrails read it.
     let mut tool_entries = Vec::new();
     if let Some(rule) = seen
@@ -2984,7 +3070,7 @@ async fn decide(
         .rule
         .filter(|r| gantry_core::fntools::checked(&r.tools))
         .map(|r| (r.name.clone(), r.tools.clone(), r.tool_strip));
-    if (!on_answer.is_empty() || answer_tools.is_some())
+    if (!on_answer.is_empty() || answer_tools.is_some() || state.transform.is_some())
         && matches!(path.as_str(), CHAT | MESSAGES | RESPONSES)
     {
         let check = AnswerCheck {
@@ -3048,6 +3134,12 @@ async fn decide(
         };
         // The record is written before anything is forwarded. A request that cannot be recorded does not happen.
         let mut record = gantry_core::audit::record(&entry);
+        if !transforms.is_empty() {
+            record.insert(
+                "transforms".into(),
+                serde_json::to_value(&transforms).unwrap_or_default(),
+            );
+        }
         if let Some(found) = &found {
             record.insert(
                 "guardrails".into(),
@@ -3540,6 +3632,9 @@ async fn answer_guarded(
     };
     let mut tools = gantry_core::fntools::Verdict::default();
     let mut tools_refusal = None;
+    let mut transforms = Vec::new();
+    let mut transforms_refusal: Option<Refusal> = None;
+    let mut transformed_answer = false;
     let (mut answer, pointers, texts) = if streamed {
         let slots = stream_texts(&bytes).ok_or_else(unreadable)?;
         let texts = slots.into_iter().map(|(_, text)| text.into()).collect();
@@ -3547,6 +3642,25 @@ async fn answer_guarded(
     } else {
         let mut answer: serde_json::Value =
             serde_json::from_slice(&bytes).map_err(|_| unreadable())?;
+        let context = TransformContext {
+            decision,
+            person: &check.person,
+            team: &check.team,
+            route: &check.path,
+        };
+        let (found, refused) = transformed(
+            state,
+            &check.guards,
+            &context,
+            gantry_core::transform::Side::Answer,
+            &mut answer,
+        )
+        .await;
+        transformed_answer = found.iter().any(|s| s.outcome == "changed");
+        transforms = found;
+        if let Some(refusal) = refused {
+            transforms_refusal = Some(refusal);
+        }
         if let Some((rule, patterns, strip)) = &check.tools {
             tools = gantry_core::fntools::answer(&mut answer, patterns, *strip);
             if !tools.refused.is_empty() {
@@ -3589,12 +3703,26 @@ async fn answer_guarded(
         (None, false) => "pass",
     };
     // Only a pass that is recorded lets the answer be cached: anything else drops the gate unopened.
-    let gate = check.gate.clone().filter(|_| word == "pass");
+    let word = if transforms_refusal.is_some() {
+        "block"
+    } else {
+        word
+    };
+    let gate = check
+        .gate
+        .clone()
+        .filter(|_| word == "pass" && !transformed_answer);
     if let Some(audit) = &state.audit {
-        let record = record(
+        let mut record = record(
             serde_json::to_value(&verdict.audit).unwrap_or_default(),
             word,
         );
+        if !transforms.is_empty() {
+            record.insert(
+                "transforms".into(),
+                serde_json::to_value(&transforms).unwrap_or_default(),
+            );
+        }
         let (tell, written) = tokio::sync::oneshot::channel();
         audit.log.append_record_then(&record, move |result| {
             let _ = tell.send(result);
@@ -3609,6 +3737,9 @@ async fn answer_guarded(
     }
     if let Some(gate) = gate {
         gate.passed(true);
+    }
+    if let Some(refusal) = transforms_refusal {
+        return Err(refusal);
     }
     if let (Some(message), Some(blocked)) = (&tools_refusal, &verdict.blocked)
         && blocked.guardrail == "tools"
@@ -3636,7 +3767,7 @@ async fn answer_guarded(
             ),
         ));
     }
-    if !verdict.changed && !tools.changed {
+    if !verdict.changed && !tools.changed && !transformed_answer {
         return Ok(Response::from_parts(parts, Body::from(bytes)));
     }
     let masked_text = |i: usize| {
@@ -4145,6 +4276,128 @@ fn text_fields(path: &str, body: &serde_json::Value) -> Result<Vec<String>, Stri
 
 /// Asks a remote guardrail (a webhook, or a vendor in its own API) through the provider client, all calls within
 /// the guardrail's timeout. Returns the answer in the contract's terms, or why there is none, for the server's log.
+/// The refusal code when a transform fails closed or writes what Gantry cannot send.
+const TRANSFORM_FAILED: &str = "transform_failed";
+
+/// Runs the binary's transform, then each `transform` guardrail of the rule that reads this side, in order, on `body`.
+/// Returns what each did, and the refusal when one failed closed. A transform in its shadow period (or observe mode)
+/// is asked and recorded as `shadow`, and its body is not used.
+async fn transformed(
+    state: &AppState,
+    guards: &[Guardrail],
+    context: &TransformContext<'_>,
+    side: gantry_core::transform::Side,
+    body: &mut serde_json::Value,
+) -> (Vec<gantry_core::transform::Summary>, Option<Refusal>) {
+    use gantry_core::transform::{self as t, Side};
+    let mut out = Vec::new();
+    let refuse = |name: &str| {
+        Refusal::new(
+            StatusCode::BAD_GATEWAY,
+            TRANSFORM_FAILED,
+            format!(
+                "Refused: transform \"{name}\" could not rewrite this {}, and it is set to fail closed, so nothing was sent on. Try again later; if it keeps failing, ask an administrator to check the transform.",
+                if side == Side::Request {
+                    "request"
+                } else {
+                    "answer"
+                }
+            ),
+        )
+    };
+    let valid = |before: &serde_json::Value, after: &serde_json::Value| match side {
+        Side::Request => t::request_ok(before, after),
+        Side::Answer if after.is_object() => Ok(()),
+        Side::Answer => Err("the transform's body is not a JSON object".into()),
+    };
+    if let Some(own) = &state.transform {
+        let before = body.clone();
+        let result = match side {
+            Side::Request => own.request(context, body),
+            Side::Answer => own.answer(context, body),
+        }
+        .and_then(|()| valid(&before, body));
+        if let Err(cause) = result {
+            eprintln!(
+                "gantry: decision {}: the binary's transform: {cause}",
+                context.decision
+            );
+            *body = before;
+            return (out, Some(refuse("extension")));
+        }
+        out.push(t::summary("extension", side, &before, body));
+    }
+    for guard in guards {
+        let guard::Check::Transform(hook) = &guard.check else {
+            continue;
+        };
+        let reads = match side {
+            Side::Request => guard.on.request,
+            Side::Answer => guard.on.answer,
+        };
+        if !reads {
+            continue;
+        }
+        let sent = t::TransformRequest {
+            decision_id: context.decision,
+            person: context.person,
+            team: context.team,
+            route: context.route,
+            side,
+            body,
+        };
+        let answer = async {
+            let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
+            for (name, variable) in &hook.headers_env {
+                let value = std::env::var(variable)
+                    .map_err(|_| format!("the environment variable {variable} is not set"))?;
+                headers.push((name.clone(), value));
+            }
+            let call = gantry_core::vendors::Call {
+                url: hook.url.clone(),
+                headers,
+                body: serde_json::to_vec(&sent).map_err(|e| e.to_string())?,
+            };
+            let bytes = tokio::time::timeout(hook.timeout, post(state, call))
+                .await
+                .map_err(|_| format!("gave no answer within {} ms", hook.timeout.as_millis()))??;
+            let answer: t::TransformAnswer = serde_json::from_slice(&bytes)
+                .map_err(|e| format!("the answer is not {{\"body\": ...}}: {e}"))?;
+            valid(body, &answer.body)?;
+            Ok::<_, String>(answer.body)
+        }
+        .await;
+        match answer {
+            Ok(new) => {
+                let mut summary = t::summary(&guard.name, side, body, &new);
+                if guard.shadowing() {
+                    summary.outcome = guard::SHADOW;
+                } else {
+                    *body = new;
+                }
+                out.push(summary);
+            }
+            Err(cause) => {
+                eprintln!(
+                    "gantry: decision {}: transform \"{}\" at {}: {cause}",
+                    context.decision, guard.name, hook.url
+                );
+                out.push(t::Summary {
+                    transform: guard.name.clone(),
+                    side,
+                    outcome: "skipped",
+                    changes: Vec::new(),
+                    more: 0,
+                });
+                if hook.on_failure == guard::OnFailure::FailClosed && !guard.shadowing() {
+                    return (out, Some(refuse(&guard.name)));
+                }
+            }
+        }
+    }
+    (out, None)
+}
+
 async fn ask(
     state: &AppState,
     action: guard::Action,
