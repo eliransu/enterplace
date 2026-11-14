@@ -117,6 +117,10 @@ rules:
 - **Never wider access.** The caller's rule must allow each fallback by name, or it is not taken. A fallback stopped by a kill switch is not taken either. A rule's `regions` apply to a fallback alias's deployments.
 - **Charged as served.** The usage record names the provider and model that answered, at that model's price. An answer from the other API is not stored in the answer cache.
 
+### Fallbacks in the request
+
+A request may name its own `fallbacks`, as LiteLLM's clients send them: `{"model": "gpt-4o", "fallbacks": ["claude-sonnet-5-5"], ...}`. They are tried after the alias's own fallbacks, on the alias's `fallback_on` (or the default list for a model that is not an alias). Each must be allowed by the caller's rule: one that is not is refused with `model_not_allowed`, naming it, before anything is sent. `fallbacks` is Gantry's field and is taken out of the body before it reaches a provider. A `fallbacks` that is not a list of names is refused with `invalid_request`.
+
 The named fallbacks `context_window_fallback` and `content_policy_fallback` (see [Aliases](/routing/aliases/#behavior)) are taken first, and may cross APIs the same way.
 
 ## Audit records

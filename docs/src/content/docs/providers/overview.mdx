@@ -89,6 +89,8 @@ See [Translation](/routing/translation/).
 | `api_version` | string | none | `azure` only: the Azure OpenAI `api-version`. |
 | `region` | string | none | `bedrock` only: the AWS region. |
 | `model_ids` | map | none | `bedrock` only: model name to Bedrock model ID. |
+| `headers_env` | map | none | Headers sent with every request to this provider, each name to the environment variable that holds its value, such as `{ x-team-id: TEAM_ID_HEADER }`. Not for keys (`Authorization`, `x-api-key` and the like are refused) or `Host` and `Content-Length`. Values are never written to a record. |
+| `proxy_env` | string | none | The environment variable that holds an HTTP proxy, `http://[user:password@]host:port`. Requests to the provider are tunnelled through it with `CONNECT`, the credentials sent as `Proxy-Authorization: Basic`. Batches use it too; realtime sessions and cloud sign-in (AWS, Google) do not. |
 
 Any field Gantry does not know is an error in `gantry check`, never ignored. See [Policy file](/governance/policy/).
 

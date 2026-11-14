@@ -2281,3 +2281,52 @@ fn audit_verify_checks_each_organizations_chain_and_one_with_org() -> TestResult
     assert_eq!(out.status.code(), Some(1));
     Ok(())
 }
+
+#[test]
+fn check_prints_each_alias_s_worst_wait_across_retries_timeouts_and_fallbacks() -> TestResult {
+    let dir = workdir("worst")?;
+    let policy = path(&dir, "gantry.policy.yaml");
+    std::fs::write(
+        &policy,
+        "version: 1
+providers:
+  - name: a
+    kind: openai
+    url: http://127.0.0.1:9
+    allow_private: true
+    retries: 2
+    timeouts: { first_byte_ms: 10000 }
+    models: [m1]
+  - name: b
+    kind: openai
+    url: http://127.0.0.1:9
+    allow_private: true
+    models: [m2]
+aliases:
+  - name: smart
+    timeouts: { total_ms: 60000 }
+    fallbacks: [m2]
+    deployments:
+      - { provider: a, model: m1 }
+      - { provider: b, model: m2, timeouts: { first_byte_ms: 5000 } }
+rules:
+  - name: all
+    principals: { any: true }
+    models: [smart, m1, m2]
+",
+    )?;
+    let out = gantry(&["check", &policy], &[])?;
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    // a: 3 tries of 10 s with pauses of 0.2 and 0.4 s; b: 5 s; then the fallback m2 at b's own 120 s default.
+    assert!(
+        stdout
+            .contains("alias smart: a caller waits at most 155.6 s for the first byte (5 attempts"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("then at most 1800 s for the answer"),
+        "{stdout}"
+    );
+    Ok(())
+}

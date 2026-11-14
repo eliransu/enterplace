@@ -191,6 +191,14 @@ const KNOWN: &[&str] = &[
     "total_ms",
     "idle_ms",
     "key_balance",
+    "key_quarantine_seconds",
+    "weight",
+    "headers_env",
+    "proxy_env",
+    "max_parallel",
+    "rpm",
+    "tpm",
+    "rate_limit_headroom_percent",
     "fallbacks",
     "fallback_on",
     "weights",
@@ -444,6 +452,8 @@ struct AliasFile {
     content_policy_fallback: Option<String>,
     #[serde(default)]
     session_affinity: bool,
+    #[serde(default)]
+    rate_limit_headroom_percent: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -463,6 +473,12 @@ struct DeploymentFile {
     timeouts: Option<TimeoutsFile>,
     #[serde(default)]
     probe: Option<ProbeFile>,
+    #[serde(default)]
+    max_parallel: Option<u32>,
+    #[serde(default)]
+    rpm: Option<u32>,
+    #[serde(default)]
+    tpm: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -525,6 +541,8 @@ struct PoolKeyFile {
     key_env: Option<String>,
     #[serde(default)]
     credential: Option<String>,
+    #[serde(default)]
+    weight: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -693,6 +711,11 @@ pub struct Deployment {
     pub when: Option<When>,
     pub timeouts: Timeouts,
     pub probe: Option<Probe>,
+    /// Most requests in flight at it through this Gantry; one at its most is passed over.
+    pub max_parallel: Option<u32>,
+    /// Most requests and tokens a minute it is sent through this Gantry; one at its limit is passed over.
+    pub rpm: Option<u32>,
+    pub tpm: Option<u64>,
 }
 
 /// A model name callers send that Gantry serves from one or more deployments.
@@ -716,6 +739,9 @@ pub struct Alias {
     pub fallback_on: Vec<FallbackOn>,
     /// For `balance: adaptive`.
     pub weights: Weights,
+    /// A deployment whose provider says less than this share of a rate limit is left (in percent) goes after the
+    /// others. `None` is 5.
+    pub rate_limit_headroom_percent: Option<u32>,
 }
 
 /// How long a failed deployment is passed over when its alias does not say.
@@ -771,6 +797,12 @@ struct ProviderFile {
     keys: Vec<PoolKeyFile>,
     #[serde(default)]
     key_balance: Option<String>,
+    #[serde(default)]
+    key_quarantine_seconds: Option<u64>,
+    #[serde(default)]
+    headers_env: BTreeMap<String, String>,
+    #[serde(default)]
+    proxy_env: Option<String>,
     #[serde(default)]
     batch: Option<ProviderBatchFile>,
 }
@@ -1678,6 +1710,14 @@ pub struct Provider {
     pub keys: Vec<KeySource>,
     /// Picks the key with the fewest requests sent, not the next in turn.
     pub least_used_key: bool,
+    /// Each key's share of the pool's requests, by position in `keys`: a key of weight 2 is sent twice as many.
+    pub key_weights: Vec<u32>,
+    /// How long a key answered 401 or 403 is set aside. `None` is an hour.
+    pub key_quarantine_seconds: Option<u64>,
+    /// Headers sent with every request to it, each with the environment variable that holds its value.
+    pub headers_env: Vec<(String, String)>,
+    /// The environment variable that holds the HTTP proxy its requests go through (`http://[user:pass@]host:port`).
+    pub proxy_env: Option<String>,
     /// Where the provider's own batch jobs keep their files: Bedrock batch inference and Vertex AI batch prediction.
     pub batch: Option<ProviderBatch>,
 }
@@ -3276,6 +3316,9 @@ fn aliases(
                     })
                 }
             };
+            if d.max_parallel == Some(0) || d.rpm == Some(0) || d.tpm == Some(0) {
+                errors.push(format!("{at}: max_parallel, rpm and tpm are the most the deployment takes, each at least 1. Remove one to leave it unlimited."));
+            }
             deployments.push(Deployment {
                 provider: d.provider.clone(),
                 model: d.model.clone(),
@@ -3285,6 +3328,9 @@ fn aliases(
                 when,
                 timeouts: timeouts(d.timeouts.as_ref(), &at, errors),
                 probe,
+                max_parallel: d.max_parallel,
+                rpm: d.rpm,
+                tpm: d.tpm,
             });
         }
         let balance = match entry.balance.as_deref() {
@@ -3369,6 +3415,10 @@ fn aliases(
             }
         };
         let alias_timeouts = timeouts(entry.timeouts.as_ref(), &at, errors);
+        let rate_limit_headroom_percent = entry.rate_limit_headroom_percent;
+        if rate_limit_headroom_percent.is_some_and(|p| p > 100) {
+            errors.push(format!("{at}: rate_limit_headroom_percent is the share of a provider's rate limit left under which a deployment goes after the others, 0 to 100 (default 5)."));
+        }
         if errors.len() == before {
             out.push(Alias {
                 name: entry.name.clone(),
@@ -3382,6 +3432,7 @@ fn aliases(
                 fallbacks: entry.fallbacks.clone(),
                 fallback_on,
                 weights,
+                rate_limit_headroom_percent,
             });
         }
     }
@@ -4052,6 +4103,53 @@ fn providers(
             }
         }
         let keys = key_pool(entry, bedrock, parsed.store.is_some(), &at, errors);
+        let key_weights: Vec<u32> = entry.keys.iter().map(|k| k.weight.unwrap_or(1)).collect();
+        if entry
+            .keys
+            .iter()
+            .any(|k| k.weight.is_some_and(|w| !(1..=1000).contains(&w)))
+        {
+            errors.push(format!(
+                "{}: a key's weight is its share of the pool's requests, 1 to 1000.",
+                at("keys")
+            ));
+        }
+        let key_quarantine_seconds = entry.key_quarantine_seconds;
+        if key_quarantine_seconds.is_some_and(|s| !(1..=86_400).contains(&s)) {
+            errors.push(format!(
+                "{}: key_quarantine_seconds is how long a key answered 401 or 403 is set aside, 1 to 86400 (default 3600).",
+                at("key_quarantine_seconds")
+            ));
+        }
+        let env_name =
+            |v: &str| !v.is_empty() && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+        for (header, variable) in &entry.headers_env {
+            let reserved = [
+                "authorization",
+                "x-api-key",
+                "api-key",
+                "x-goog-api-key",
+                "host",
+                "content-length",
+            ]
+            .contains(&header.to_ascii_lowercase().as_str());
+            let token = !header.is_empty()
+                && header
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+            if !token || reserved || !env_name(variable) {
+                errors.push(format!(
+                    "{}: headers_env maps a header name to the environment variable that holds its value, such as `x-team-id: TEAM_ID_HEADER`. \"{header}\" is not one Gantry sends this way: keys go in key_env or keys, and Host and Content-Length are Gantry's.",
+                    at("headers_env")
+                ));
+            }
+        }
+        if entry.proxy_env.as_deref().is_some_and(|v| !env_name(v)) {
+            errors.push(format!(
+                "{}: proxy_env names the environment variable that holds the proxy URL, such as `proxy_env: OPENAI_PROXY`.",
+                at("proxy_env")
+            ));
+        }
         let least_used_key = match entry.key_balance.as_deref() {
             None | Some("round_robin") => false,
             Some("least_used") => true,
@@ -4086,6 +4184,14 @@ fn providers(
                 timeouts,
                 keys,
                 least_used_key,
+                key_weights,
+                key_quarantine_seconds,
+                headers_env: entry
+                    .headers_env
+                    .iter()
+                    .map(|(h, v)| (h.to_ascii_lowercase(), v.clone()))
+                    .collect(),
+                proxy_env: entry.proxy_env.clone(),
                 batch: entry.batch.as_ref().map(|b| ProviderBatch {
                     bucket: if b.bucket.ends_with('/') {
                         b.bucket.clone()
@@ -4654,6 +4760,13 @@ pub fn same_connection(a: &Provider, b: &Provider) -> bool {
         && a.role_arn == b.role_arn
         && a.allow_private == b.allow_private
         && a.batch == b.batch
+        && a.keys == b.keys
+        && a.key_weights == b.key_weights
+        && a.least_used_key == b.least_used_key
+        && a.key_quarantine_seconds == b.key_quarantine_seconds
+        && a.headers_env == b.headers_env
+        && a.proxy_env == b.proxy_env
+        && a.timeouts == b.timeouts
 }
 
 /// What `gantry check` warns about in a policy that loads: observe mode, and models no provider serves.
@@ -6771,8 +6884,11 @@ providers:
   - name: east
     kind: openai
     url: https://api.openai.com
-    keys: [{ key_env: EAST_A }, { key_env: EAST_B }]
+    keys: [{ key_env: EAST_A }, { key_env: EAST_B, weight: 3 }]
     key_balance: least_used
+    key_quarantine_seconds: 600
+    headers_env: { X-Team-Id: EAST_TEAM }
+    proxy_env: EAST_PROXY
     timeouts: { connect_ms: 1000, first_byte_ms: 20000, total_ms: 60000, idle_ms: 5000 }
     models: [gpt-*]
   - name: claude
@@ -6787,8 +6903,9 @@ aliases:
     timeouts: { first_byte_ms: 10000 }
     fallbacks: [claude-sonnet-5-5]
     fallback_on: [rate_limit, timeout]
+    rate_limit_headroom_percent: 10
     deployments:
-      - { provider: east, model: gpt-4o, probe: { every_seconds: 30 } }
+      - { provider: east, model: gpt-4o, probe: { every_seconds: 30 }, max_parallel: 8, rpm: 600, tpm: 90000 }
       - provider: east
         model: gpt-4o-mini
         timeouts: { first_byte_ms: 3000 }
@@ -6811,9 +6928,20 @@ rules:
             ]
         );
         assert!(east.least_used_key);
+        assert_eq!(east.key_weights, [1, 3]);
+        assert_eq!(east.key_quarantine_seconds, Some(600));
+        assert_eq!(east.headers_env, [("x-team-id".into(), "EAST_TEAM".into())]);
+        assert_eq!(east.proxy_env.as_deref(), Some("EAST_PROXY"));
+        assert_eq!(loaded.providers[1].key_quarantine_seconds, None);
         assert_eq!(east.timeouts.idle_ms, Some(5000));
         let smart = &loaded.aliases[0];
         assert_eq!(smart.balance, Balance::Adaptive);
+        assert_eq!(smart.rate_limit_headroom_percent, Some(10));
+        let first = &smart.deployments[0];
+        assert_eq!(
+            (first.max_parallel, first.rpm, first.tpm),
+            (Some(8), Some(600), Some(90000))
+        );
         assert_eq!(smart.weights.latency, 2.0);
         assert_eq!(smart.fallbacks, ["claude-sonnet-5-5"]);
         assert_eq!(
@@ -6852,18 +6980,40 @@ rules:
                 "key_balance: random",
                 "key_balance is \"random\"",
             ),
+            ("weight: 3", "weight: 0", "a key's weight"),
             (
-                "keys: [{ key_env: EAST_A }, { key_env: EAST_B }]",
+                "key_quarantine_seconds: 600",
+                "key_quarantine_seconds: 0",
+                "key_quarantine_seconds",
+            ),
+            (
+                "X-Team-Id: EAST_TEAM",
+                "Authorization: EAST_TEAM",
+                "keys go in key_env",
+            ),
+            (
+                "proxy_env: EAST_PROXY",
+                "proxy_env: http://proxy",
+                "proxy_env names",
+            ),
+            ("rpm: 600", "rpm: 0", "max_parallel, rpm and tpm"),
+            (
+                "rate_limit_headroom_percent: 10",
+                "rate_limit_headroom_percent: 101",
+                "rate_limit_headroom_percent",
+            ),
+            (
+                "keys: [{ key_env: EAST_A }, { key_env: EAST_B, weight: 3 }]",
                 "keys: [{ key_env: EAST_A }, { key_env: EAST_A }]",
                 "the same key twice",
             ),
             (
-                "keys: [{ key_env: EAST_A }, { key_env: EAST_B }]",
+                "keys: [{ key_env: EAST_A }, { key_env: EAST_B, weight: 3 }]",
                 "keys: [{ credential: x }]",
                 "credentials are kept in the store",
             ),
             (
-                "keys: [{ key_env: EAST_A }, { key_env: EAST_B }]",
+                "keys: [{ key_env: EAST_A }, { key_env: EAST_B, weight: 3 }]",
                 "key_env: K\n    keys: [{ key_env: EAST_A }]",
                 "keys list and key_env",
             ),

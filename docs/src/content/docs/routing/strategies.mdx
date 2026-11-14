@@ -59,9 +59,16 @@ Team `legal` reaches only `azure-eu`. Everyone else gets the fastest of the two 
 
 Before any balance: a deployment cooling down after a failure is passed over, and once its cooldown ends one request probes it (`probe: ...`). The rest of the deployments follow as the chain of fallbacks, cooling ones last.
 
-**Rate limits.** A deployment whose provider said in its last answer, within the last minute, that less than 5% of a rate limit is left goes after the deployments with room, before those cooling down. Gantry reads OpenAI's `x-ratelimit-remaining-requests` and `x-ratelimit-remaining-tokens` against their `x-ratelimit-limit-*`, and Anthropic's `anthropic-ratelimit-*-remaining` against `anthropic-ratelimit-*-limit`. This applies under every balance, so traffic moves off a nearly exhausted key before it starts getting 429s.
+**Rate limits.** A deployment whose provider said in its last answer, within the last minute, that less than 5% of a rate limit is left (the alias's `rate_limit_headroom_percent`, 0 to 100) goes after the deployments with room, before those cooling down. Gantry reads OpenAI's `x-ratelimit-remaining-requests` and `x-ratelimit-remaining-tokens` against their `x-ratelimit-limit-*`, and Anthropic's `anthropic-ratelimit-*-remaining` against `anthropic-ratelimit-*-limit`. This applies under every balance, so traffic moves off a nearly exhausted key before it starts getting 429s.
 
 The 90th percentile is used rather than the average, so one slow answer does not move a deployment, while a deployment that stays slow loses its place within 32 answers. Each gateway measures its own path to the provider.
+
+**Deployment limits.** A deployment may set `max_parallel` (requests in flight at once through this gateway), `rpm` and `tpm` (requests and estimated tokens a minute, the prompt's bytes over four). One at a limit is passed over; when every deployment of the alias is at one, the caller gets 429 `deployment_limit`. The counts are per gateway.
+
+```yaml
+deployments:
+  - { provider: openai, model: gpt-4o, max_parallel: 20, rpm: 500, tpm: 300000 }
+```
 
 ## Adaptive
 

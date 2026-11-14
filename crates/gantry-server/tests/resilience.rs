@@ -888,3 +888,191 @@ async fn every_answer_names_its_provider_deployment_model_cost_and_request() -> 
     assert!(!headers.contains_key("x-gantry-provider"));
     Ok(())
 }
+
+/// A forward proxy that takes HTTP CONNECT, as a corporate egress proxy does: it records each request line and
+/// Proxy-Authorization, then joins the two ends.
+async fn connect_proxy() -> Result<(SocketAddr, Arc<Mutex<Vec<String>>>), Box<dyn std::error::Error>>
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        while let Ok((mut client, _)) = listener.accept().await {
+            let log = log.clone();
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if client.read_exact(&mut byte).await.is_err() {
+                        return;
+                    }
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8_lossy(&head).to_string();
+                if let Ok(mut log) = log.lock() {
+                    log.push(head.clone());
+                }
+                let Some(target) = head
+                    .lines()
+                    .next()
+                    .and_then(|l| l.strip_prefix("CONNECT "))
+                    .and_then(|l| l.split(' ').next())
+                else {
+                    return;
+                };
+                let Ok(mut upstream) = tokio::net::TcpStream::connect(target).await else {
+                    return;
+                };
+                if client.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.is_ok() {
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                }
+            });
+        }
+    });
+    Ok((addr, seen))
+}
+
+#[tokio::test]
+async fn a_provider_s_headers_and_proxy_come_from_its_settings() -> TestResult {
+    let (a, seen) = same(answer(200, CHAT_OK)).await?;
+    let (proxy, through) = connect_proxy().await?;
+    let mut provider = route("egress", Kind::OpenAi, a, &["m"]);
+    provider.headers = vec![("x-team-id".into(), Secret::new("payments-7"))];
+    provider.proxy = Some(Secret::new(format!("http://gw:s3cret@{proxy}")));
+    let gw = gateway("egress", vec![provider], vec![], everyone())?;
+    let (status, _, body) = chat(&gw, "m").await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    let (_, headers, _) = seen
+        .all()
+        .first()
+        .cloned()
+        .ok_or("nothing reached the provider")?;
+    assert_eq!(
+        headers.get("x-team-id").map(|v| v.as_bytes()),
+        Some(&b"payments-7"[..])
+    );
+    let heads = through.lock().map_err(|_| "poisoned")?.clone();
+    let head = heads.first().ok_or("nothing went through the proxy")?;
+    assert!(head.starts_with(&format!("CONNECT {a} ")), "{head}");
+    // gw:s3cret, as Basic credentials.
+    assert!(head.contains("Basic Z3c6czNjcmV0"), "{head}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_request_s_own_fallbacks_are_taken_only_for_models_its_rule_allows() -> TestResult {
+    let (a, _) = same(answer(503, "{}")).await?;
+    let (b, b_seen) = same(answer(200, CHAT_OK)).await?;
+    let providers = || {
+        vec![
+            route("a", Kind::OpenAi, a, &["primary"]),
+            route("b", Kind::OpenAi, b, &["backup", "secret"]),
+        ]
+    };
+    let rule = Policy::new()
+        .with_key(MAYA, "maya.cohen", "payments")
+        .with_rule(
+            "two",
+            Who::Any,
+            Models::Only(vec!["primary".into(), "backup".into()]),
+        );
+    let gw = gateway("body-fallbacks", providers(), vec![], rule)?;
+    let ask = |fallbacks: Value| json!({"model": "primary", "fallbacks": fallbacks, "messages": [{"role": "user", "content": "hi"}]});
+    let (status, headers, body) =
+        send(&gw, "/v1/chat/completions", ask(json!(["backup"])), &[]).await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(
+        headers.get("x-gantry-provider").map(|v| v.as_bytes()),
+        Some(&b"b"[..])
+    );
+    let (_, _, sent) = b_seen
+        .all()
+        .first()
+        .cloned()
+        .ok_or("the fallback was not sent")?;
+    assert_eq!(sent["model"], "backup");
+    assert!(
+        sent.get("fallbacks").is_none(),
+        "Gantry's field reached the provider: {sent}"
+    );
+    // A fallback the rule does not allow is a refusal that names it, before anything is sent.
+    let before = b_seen.all().len();
+    let (status, _, body) = send(&gw, "/v1/chat/completions", ask(json!(["secret"])), &[]).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let body = body.unwrap_or_default();
+    assert!(
+        body.contains("fallbacks name model") && body.contains("secret"),
+        "{body}"
+    );
+    assert_eq!(b_seen.all().len(), before);
+    let (status, _, _) = send(&gw, "/v1/chat/completions", ask(json!("backup")), &[]).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_deployment_at_its_rpm_is_passed_over_and_with_all_full_the_caller_waits() -> TestResult {
+    let (a, a_seen) = same(answer(200, CHAT_OK)).await?;
+    let (b, b_seen) = same(answer(200, CHAT_OK)).await?;
+    let mut first = deployment("a", "m");
+    first.rpm = Some(1);
+    first.weight = 100;
+    let mut second = deployment("b", "m");
+    second.rpm = Some(1);
+    let gw = gateway(
+        "rpm",
+        vec![
+            route("a", Kind::OpenAi, a, &[]),
+            route("b", Kind::OpenAi, b, &[]),
+        ],
+        vec![alias("smart", Balance::RoundRobin, vec![first, second])],
+        everyone(),
+    )?;
+    assert_eq!(chat(&gw, "smart").await?.0, StatusCode::OK);
+    assert_eq!(chat(&gw, "smart").await?.0, StatusCode::OK);
+    assert_eq!(
+        (a_seen.all().len(), b_seen.all().len()),
+        (1, 1),
+        "one each, by rpm"
+    );
+    let (status, _, body) = chat(&gw, "smart").await?;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body:?}");
+    assert!(body.unwrap_or_default().contains("deployment_limit"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_chat_probe_is_recorded_as_gantry_probe_and_charged_to_its_scope() -> TestResult {
+    let (a, _) = same(answer(200, CHAT_OK)).await?;
+    let mut probed = deployment("p", "m");
+    probed.probe = Some(Probe {
+        every_seconds: 1,
+        chat: true,
+    });
+    let mut prices = PriceOverrides::new();
+    prices.insert("m".into(), price(1.0, 2.0));
+    let gw = gateway(
+        "probe-record",
+        vec![route("p", Kind::OpenAi, a, &[])],
+        vec![alias("smart", Balance::RoundRobin, vec![probed])],
+        everyone().with_prices(prices),
+    )?;
+    let all = records(&gw, "usage").await?;
+    let decision = all
+        .iter()
+        .find(|r| r["workload"] == "gantry-probe")
+        .ok_or("no probe record")?;
+    assert_eq!(decision["person"], "gantry-probe");
+    assert_eq!(decision["probe"]["up"], true);
+    let usage = all
+        .iter()
+        .find(|r| r["event"] == "usage" && r["id"] == decision["id"])
+        .ok_or("no usage record for the probe")?;
+    // 1000 tokens in at $1 and 500 out at $2 per million.
+    let cost = usage["cost_usd"].as_f64().ok_or("no cost")?;
+    assert!((cost - 0.002).abs() < 1e-9, "{usage}");
+    assert_eq!(usage["person"], "gantry-probe");
+    Ok(())
+}

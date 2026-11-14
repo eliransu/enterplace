@@ -1565,3 +1565,31 @@ async fn a_console_sign_in_on_one_gateway_is_good_on_all_and_a_sign_out_ends_it_
     assert_ne!(console_page(&a, &cookie).await?, StatusCode::OK);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_gateway_at_a_time_holds_a_deployment_s_probe() -> TestResult {
+    use gantry_core::store::Store;
+    let Some(url) = database("probe_lease").await? else {
+        return Ok(());
+    };
+    let a = gantry_server::store::open("GANTRY_TEST_DATABASE_URL", &url)?;
+    let b = gantry_server::store::open("GANTRY_TEST_DATABASE_URL", &url)?;
+    let ttl = Duration::from_secs(1);
+    assert!(a.probe_lease("p/m".into(), ttl).await?);
+    assert!(!b.probe_lease("p/m".into(), ttl).await?, "a holds it");
+    assert!(
+        b.probe_lease("q/m".into(), ttl).await?,
+        "each deployment has its own"
+    );
+    assert!(
+        a.probe_lease("p/m".into(), ttl).await?,
+        "the holder keeps it"
+    );
+    tokio::time::sleep(Duration::from_millis(1300)).await;
+    assert!(
+        b.probe_lease("p/m".into(), ttl).await?,
+        "taken over once a stopped probing"
+    );
+    assert!(!a.probe_lease("p/m".into(), ttl).await?);
+    Ok(())
+}

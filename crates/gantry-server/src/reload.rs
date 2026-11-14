@@ -428,6 +428,25 @@ fn route(
         };
         keys.push(Secret::new(value.trim()));
     }
+    let mut headers = Vec::new();
+    for (header, variable) in &provider.headers_env {
+        let value = set(variable).ok_or_else(|| {
+            format!(
+                "provider \"{}\" sends header {header} from the environment variable {variable}, which is not set. Set it (`export {variable}=...`) and start again.",
+                provider.name
+            )
+        })?;
+        headers.push((header.clone(), Secret::new(value.trim())));
+    }
+    let proxy = match &provider.proxy_env {
+        Some(variable) => Some(Secret::new(set(variable).ok_or_else(|| {
+            format!(
+                "provider \"{}\" goes through the proxy in the environment variable {variable}, which is not set. Set it (`export {variable}=http://proxy.internal:3128`) and start again.",
+                provider.name
+            )
+        })?)),
+        None => None,
+    };
     Ok(ProviderRoute {
         name: provider.name.clone(),
         kind: provider.kind,
@@ -446,6 +465,10 @@ fn route(
         timeouts: provider.timeouts,
         keys,
         least_used_key: provider.least_used_key,
+        key_weights: provider.key_weights.clone(),
+        key_quarantine: provider.key_quarantine_seconds.map(Duration::from_secs),
+        headers,
+        proxy,
         batch: provider.batch.clone(),
     })
 }

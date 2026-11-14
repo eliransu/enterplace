@@ -203,6 +203,8 @@ CREATE TABLE gantry_latency (
     updated timestamptz NOT NULL,
     PRIMARY KEY (deployment, gateway)
 );
+", "
+CREATE TABLE gantry_probe_leases (deployment text PRIMARY KEY, gateway text NOT NULL, until timestamptz NOT NULL);
 "];
 
 /// A pin written this long ago is written again when its session sends, so the others know it is still in use. A
@@ -798,6 +800,21 @@ impl Inner {
     }
 
     /// The connection, if it is open. The request path never connects: it is refused at once instead of waiting.
+    /// Takes or keeps the probe lease of `deployment` for `ttl`: free, expired, or already this gateway's.
+    async fn probe_lease(&self, deployment: &str, ttl: Duration) -> Result<bool, String> {
+        let client = self.client()?;
+        let row = client
+            .query_opt(
+                "INSERT INTO gantry_probe_leases (deployment, gateway, until) VALUES ($1, $2, now() + make_interval(secs => $3)) \
+                 ON CONFLICT (deployment) DO UPDATE SET gateway = excluded.gateway, until = excluded.until \
+                 WHERE gantry_probe_leases.until < now() OR gantry_probe_leases.gateway = excluded.gateway RETURNING 1",
+                &[&deployment, &self.gateway, &ttl.as_secs_f64()],
+            )
+            .await
+            .map_err(|e| format!("the probe lease could not be taken: {e}"))?;
+        Ok(row.is_some())
+    }
+
     fn client(&self) -> Result<Arc<Client>, String> {
         read(&self.client)
             .filter(|client| !client.is_closed())
@@ -2255,6 +2272,11 @@ impl Store for PgStore {
 
     fn shares_routing(&self) -> bool {
         true
+    }
+
+    fn probe_lease(&self, deployment: String, ttl: Duration) -> Pending<bool> {
+        let inner = self.inner.clone();
+        self.ask(async move { inner.probe_lease(&deployment, ttl).await })
     }
 
     fn pinned(&self, session: &str, idle: Duration) -> Option<String> {

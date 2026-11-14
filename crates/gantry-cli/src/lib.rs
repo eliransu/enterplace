@@ -672,10 +672,105 @@ fn check(policy: &Path, keys: Option<&Path>) -> ExitCode {
                 gantry_core::count(loaded.policy.rules(), "rule"),
                 gantry_core::config::describe(&loaded.providers)
             );
+            for line in worst_waits(&loaded) {
+                println!("{line}");
+            }
             ExitCode::SUCCESS
         }
         Err(errors) => check_failed(policy, &errors),
     }
+}
+
+/// For each alias, the longest a caller can wait before the first byte of an answer or the error: every deployment
+/// tried with its provider's retries (and their pauses), each up to its first-byte limit, then each fallback in turn,
+/// and after that the answer's total limit.
+fn worst_waits(loaded: &config::Loaded) -> Vec<String> {
+    let defaults = gantry_server::Timeouts::default();
+    // (wait before the first byte, attempts, the longest total limit of a deployment that may answer)
+    fn walk(
+        loaded: &config::Loaded,
+        target: &str,
+        defaults: &gantry_server::Timeouts,
+        seen: &mut Vec<String>,
+    ) -> (std::time::Duration, u32, std::time::Duration) {
+        use std::time::Duration;
+        if seen.iter().any(|s| s == target) {
+            return (Duration::ZERO, 0, Duration::ZERO);
+        }
+        seen.push(target.to_string());
+        let ms = |v: Option<u64>, d: Duration| v.map_or(d, Duration::from_millis);
+        let hop = |provider: &config::Provider, set: config::Timeouts| {
+            let set = set.or(provider.timeouts);
+            let total = ms(set.total_ms, defaults.total);
+            let first = ms(set.first_byte_ms, defaults.first_byte).min(total);
+            let pauses: u64 = (1..=provider.retries).map(|r| 100u64 << r.min(5)).sum();
+            (
+                first * (provider.retries + 1) + Duration::from_millis(pauses),
+                provider.retries + 1,
+                total,
+            )
+        };
+        let (mut wait, mut tries, mut total) = (Duration::ZERO, 0, Duration::ZERO);
+        let mut add = |(w, t, tot): (Duration, u32, Duration)| {
+            wait += w;
+            tries += t;
+            total = total.max(tot);
+        };
+        match loaded.aliases.iter().find(|a| a.name == target) {
+            Some(alias) => {
+                for d in &alias.deployments {
+                    if let Some(p) = loaded.providers.iter().find(|p| p.name == d.provider) {
+                        add(hop(p, d.timeouts.or(alias.timeouts)));
+                    }
+                }
+                for next in alias
+                    .fallbacks
+                    .iter()
+                    .chain(&alias.context_window_fallback)
+                    .chain(&alias.content_policy_fallback)
+                {
+                    add(walk(loaded, next, defaults, seen));
+                }
+            }
+            None => {
+                // A model of a provider: that provider, then its fallback providers hop by hop.
+                let mut next = loaded
+                    .providers
+                    .iter()
+                    .find(|p| p.models.iter().any(|m| config::model_matches(m, target)));
+                let mut hops = Vec::new();
+                while let Some(p) = next.filter(|p| !hops.contains(&p.name)) {
+                    hops.push(p.name.clone());
+                    add(hop(p, config::Timeouts::default()));
+                    next = p
+                        .fallback
+                        .as_ref()
+                        .and_then(|f| loaded.providers.iter().find(|q| q.name == *f));
+                }
+            }
+        }
+        (wait, tries, total)
+    }
+    let secs = |d: std::time::Duration| {
+        if d.subsec_millis() == 0 {
+            format!("{} s", d.as_secs())
+        } else {
+            format!("{:.1} s", d.as_secs_f64())
+        }
+    };
+    loaded
+        .aliases
+        .iter()
+        .map(|alias| {
+            let (wait, tries, total) = walk(loaded, &alias.name, &defaults, &mut Vec::new());
+            format!(
+                "alias {}: a caller waits at most {} for the first byte ({tries} attempts across deployments, retries and fallbacks, each to its first-byte limit), then at most {} for the answer.",
+                alias.name,
+                secs(wait),
+                secs(total)
+            )
+        })
+        .collect()
 }
 
 fn check_failed(policy: &Path, errors: &[String]) -> ExitCode {

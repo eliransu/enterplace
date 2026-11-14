@@ -300,6 +300,14 @@ pub struct ProviderRoute {
     pub keys: Vec<Secret>,
     /// Picks the pool's key with the fewest requests sent, not the next in turn.
     pub least_used_key: bool,
+    /// Each pool key's share of requests, by position in `keys`. Missing entries are 1.
+    pub key_weights: Vec<u32>,
+    /// How long a pool key answered 401 or 403 is set aside. `None` is an hour.
+    pub key_quarantine: Option<Duration>,
+    /// Headers sent with every request to it, as (name, value).
+    pub headers: Vec<(String, Secret)>,
+    /// The HTTP proxy its requests go through, `http://[user:pass@]host:port`.
+    pub proxy: Option<Secret>,
     /// Bedrock or Vertex AI: the bucket its batch jobs read and write, for `/v1/batches`.
     pub batch: Option<gantry_core::config::ProviderBatch>,
 }
@@ -489,6 +497,9 @@ struct Snapshot {
 
 /// A pooled client to providers.
 type Upstreams = Client<HttpsConnector<HttpConnector>, Body>;
+/// A pooled client whose connections are tunnelled through a provider's HTTP proxy.
+type Proxied =
+    Client<HttpsConnector<hyper_util::client::legacy::connect::proxy::Tunnel<HttpConnector>>, Body>;
 
 /// The version in use. Requests take a snapshot of it. A reload puts a new one in place.
 type Live = Arc<RwLock<Arc<Snapshot>>>;
@@ -518,6 +529,8 @@ struct AppState {
     client: Client<HttpsConnector<HttpConnector>, Body>,
     // Clients for providers with a connect timeout of their own, by that timeout.
     clients: Arc<std::sync::Mutex<std::collections::HashMap<Duration, Upstreams>>>,
+    // Clients through a provider's proxy, by its connect timeout and the proxy.
+    proxied: Arc<std::sync::Mutex<std::collections::HashMap<(Duration, String), Proxied>>>,
     live: Live,
     audit: Option<Audit>,
     reloader: Option<Arc<Reloader>>,
@@ -577,7 +590,61 @@ struct Upstream {
     /// The key pool, each key as its header and its fingerprint (never the key). Empty without a pool.
     pool: Vec<((HeaderName, HeaderValue), String)>,
     least_used_key: bool,
+    /// Each pool key's weight, by position in `pool`.
+    key_weights: Vec<u32>,
+    key_quarantine: Duration,
+    /// Sent with every request, marked sensitive.
+    headers: Vec<(HeaderName, HeaderValue)>,
+    proxy: Option<Proxy>,
     batch: Option<gantry_core::config::ProviderBatch>,
+}
+
+/// A provider's HTTP proxy: where requests are tunnelled through (CONNECT), and its Basic credentials.
+#[derive(Clone, Debug)]
+struct Proxy {
+    uri: axum::http::Uri,
+    auth: Option<HeaderValue>,
+    /// Names its pooled clients: the URL as given, credentials included, so two proxies never share one.
+    id: String,
+}
+
+/// A proxy URL checked: http(s), a host, no path; user and password, if any, become a Basic header.
+fn proxy_of(provider: &str, url: &str) -> Result<Proxy, ConfigError> {
+    let bad = || {
+        ConfigError(format!(
+            "the proxy of provider \"{provider}\" is not a URL of the form http://[user:password@]host:port. Check the variable its proxy_env names."
+        ))
+    };
+    let (scheme, rest) = url.trim().split_once("://").ok_or_else(bad)?;
+    if !matches!(scheme, "http" | "https") {
+        return Err(bad());
+    }
+    let rest = rest.trim_end_matches('/');
+    let (userinfo, host) = match rest.rsplit_once('@') {
+        Some((userinfo, host)) => (Some(userinfo), host),
+        None => (None, rest),
+    };
+    if host.is_empty() || host.contains(['/', '?', '#']) {
+        return Err(bad());
+    }
+    let uri: axum::http::Uri = format!("{scheme}://{host}").parse().map_err(|_| bad())?;
+    let auth = match userinfo {
+        Some(userinfo) => {
+            let mut value = HeaderValue::from_str(&format!(
+                "Basic {}",
+                gantry_core::eventstream::base64_encode(userinfo.as_bytes())
+            ))
+            .map_err(|_| bad())?;
+            value.set_sensitive(true);
+            Some(value)
+        }
+        None => None,
+    };
+    Ok(Proxy {
+        uri,
+        auth,
+        id: url.trim().to_string(),
+    })
 }
 
 impl Upstream {
@@ -655,6 +722,30 @@ pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError
                 .map(|header| (header, id::sha256_hex(key.0.as_bytes())[..8].to_string()))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let headers = route
+        .headers
+        .iter()
+        .map(|(name, value)| {
+            let bad = || {
+                ConfigError(format!(
+                    "header {name} of provider \"{}\" cannot be sent: its name or its value holds a character an HTTP header cannot. Check headers_env and the variable it names.",
+                    route.name
+                ))
+            };
+            let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| bad())?;
+            let mut value = HeaderValue::from_str(value.0.trim()).map_err(|_| bad())?;
+            value.set_sensitive(true);
+            Ok((name, value))
+        })
+        .collect::<Result<Vec<_>, ConfigError>>()?;
+    let proxy = route
+        .proxy
+        .as_ref()
+        .map(|url| proxy_of(&route.name, &url.0))
+        .transpose()?;
+    let key_weights: Vec<u32> = (0..pool.len())
+        .map(|i| route.key_weights.get(i).copied().unwrap_or(1).max(1))
+        .collect();
     Ok(Upstream {
         name: route.name.clone(),
         kind: route.kind,
@@ -679,8 +770,16 @@ pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError
         accept_chat: route.accept_chat,
         accept_messages: route.accept_messages,
         timeouts: route.timeouts,
+        key_weights: if pool.len() > 1 {
+            key_weights
+        } else {
+            Vec::new()
+        },
         pool: if pool.len() > 1 { pool } else { Vec::new() },
         least_used_key: route.least_used_key,
+        key_quarantine: route.key_quarantine.unwrap_or(Duration::from_secs(3600)),
+        headers,
+        proxy,
         batch: route.batch.clone(),
     })
 }
@@ -725,6 +824,10 @@ fn build(
             timeouts: gantry_core::config::Timeouts::default(),
             pool: Vec::new(),
             least_used_key: false,
+            key_weights: Vec::new(),
+            key_quarantine: Duration::from_secs(3600),
+            headers: Vec::new(),
+            proxy: None,
             batch: None,
         });
     }
@@ -803,6 +906,7 @@ fn build(
     let state = AppState {
         client,
         clients: Arc::default(),
+        proxied: Arc::default(),
         tracer,
         live,
         audit: config.audit,
@@ -1971,7 +2075,7 @@ async fn check<'a>(
                 )
             });
             // An alias's fallbacks never widen access: the caller's rule must allow each by name.
-            let fallbacks: Vec<Chain> = alias
+            let mut fallbacks: Vec<Chain> = alias
                 .map(|a| {
                     a.fallbacks
                         .iter()
@@ -1997,6 +2101,31 @@ async fn check<'a>(
             // Translated here, before the record is written, so a field that cannot be carried across is a
             // recorded refusal and never a request sent with that field missing.
             let from_messages = translate && route == Kind::Anthropic;
+            // The caller's own `fallbacks`, tried after the alias's: each one its rule allows, and a refusal naming
+            // one it does not. Gantry's field, so the provider never sees it.
+            let (bytes, asked) = body_fallbacks(&bytes)?;
+            for target in &asked {
+                if !matches!(policy.decide(person, target), Decision::Allow(_)) {
+                    return Err(Refusal::new(
+                        StatusCode::FORBIDDEN,
+                        "model_not_allowed",
+                        format!(
+                            "Refused: the request's fallbacks name model \"{target}\", which your rule does not allow. Remove it from fallbacks, or ask a Gantry admin to allow it."
+                        ),
+                    ));
+                }
+            }
+            fallbacks.extend(
+                asked
+                    .iter()
+                    .map(|t| fallback(Some(t)))
+                    .filter(|chain| !chain.is_empty()),
+            );
+            let fallback_on = match alias {
+                Some(a) => a.fallback_on.clone(),
+                None if !asked.is_empty() => gantry_core::config::FallbackOn::DEFAULT.to_vec(),
+                None => Vec::new(),
+            };
             // Read only when a fallback may need the request translated as it is sent.
             let crossing = !context.is_empty() || !content.is_empty() || !fallbacks.is_empty();
             let include_usage = route == Kind::OpenAi
@@ -2039,7 +2168,7 @@ async fn check<'a>(
                 passthrough: None,
                 caller_key: provider_key.map(Secret::new),
                 fallbacks,
-                fallback_on: alias.map(|a| a.fallback_on.clone()).unwrap_or_default(),
+                fallback_on,
                 body_api,
                 include_usage,
             });
@@ -2051,6 +2180,33 @@ async fn check<'a>(
             Err(rule_refusal(decision, person, model, parts.uri.path()))
         }
     }
+}
+
+/// A JSON body's `fallbacks` (models or aliases to try when the requested one fails), and the body without it.
+/// A body without one comes back as it is.
+fn body_fallbacks(bytes: &Bytes) -> Result<(Bytes, Vec<String>), Refusal> {
+    let Ok(serde_json::Value::Object(mut body)) = serde_json::from_slice(bytes) else {
+        return Ok((bytes.clone(), Vec::new()));
+    };
+    let Some(asked) = body.remove("fallbacks") else {
+        return Ok((bytes.clone(), Vec::new()));
+    };
+    let names: Option<Vec<String>> = asked.as_array().and_then(|list| {
+        list.iter()
+            .map(|v| v.as_str().map(str::to_string))
+            .collect()
+    });
+    let Some(names) = names else {
+        return Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Refused: fallbacks must be a list of model or alias names, such as [\"gpt-4o-mini\"].",
+        ));
+    };
+    Ok((
+        Bytes::from(serde_json::Value::Object(body).to_string()),
+        names,
+    ))
 }
 
 /// The refusal of a request the rules do not allow. An allowed one has none: it gets a generic `no_rule`.
@@ -2774,6 +2930,19 @@ fn targets(
             .unwrap_or_default();
         routing["for"] = label.into();
         eligible = kept;
+    }
+    // A deployment at its max_parallel, rpm or tpm is passed over; with every one there, the caller waits.
+    let tokens = body_facts(want.body).0;
+    let full = eligible.len();
+    eligible.retain(|(at, _)| state.pool.has_room(&alias.deployments[*at], tokens));
+    if eligible.is_empty() && full > 0 {
+        return Err(Refusal::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "deployment_limit",
+            format!(
+                "Refused: every deployment of alias \"{model}\" is at its max_parallel, rpm or tpm. Try again in a moment, or ask a Gantry admin to raise the limits or add a deployment."
+            ),
+        ));
     }
     let positions: Vec<usize> = eligible.iter().map(|(at, _)| *at).collect();
     let none = gantry_core::usage::PriceOverrides::new();
@@ -5335,6 +5504,24 @@ impl AppState {
     }
 }
 
+/// A client whose connections go through `proxy` (HTTP CONNECT), giving up after `connect`.
+fn proxied_with(connect: Duration, proxy: &Proxy) -> Proxied {
+    let mut connector = HttpConnector::new();
+    connector.set_connect_timeout(Some(connect));
+    connector.enforce_http(false);
+    let mut tunnel =
+        hyper_util::client::legacy::connect::proxy::Tunnel::new(proxy.uri.clone(), connector);
+    if let Some(auth) = &proxy.auth {
+        tunnel = tunnel.with_auth(auth.clone());
+    }
+    let connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_or_http()
+        .enable_http1()
+        .wrap_connector(tunnel);
+    Client::builder(TokioExecutor::new()).build(connector)
+}
+
 /// A client with its own connection pool, whose connections give up after `connect`.
 fn client_with(connect: Duration) -> Client<HttpsConnector<HttpConnector>, Body> {
     let mut connector = HttpConnector::new();
@@ -5488,15 +5675,19 @@ impl Tries<'_> {
                     let key = if plan.is_some_and(|p| p.caller_key.is_some()) {
                         None
                     } else {
-                        self.state
-                            .pool
-                            .key(&provider.name, &ids, provider.least_used_key)
+                        self.state.pool.key(
+                            &provider.name,
+                            &ids,
+                            &provider.key_weights,
+                            provider.least_used_key,
+                        )
                     };
                     let request =
                         outbound(provider, self.parts, &bytes, &route, plan, &hop.model, key)?;
                     let started = Instant::now();
                     sent.get_or_insert(started);
-                    let busy = hop.cooldown.map(|_| self.state.pool.busy(&label));
+                    let tokens = u64::try_from(bytes.len() / 4).unwrap_or(u64::MAX);
+                    let busy = hop.cooldown.map(|_| self.state.pool.busy(&label, tokens));
                     // Dropped while waiting here (the caller hung up), the request is charged: the provider has it.
                     if let Some(admitted) = admitted.as_mut() {
                         admitted.forwarded(true);
@@ -5542,6 +5733,7 @@ impl Tries<'_> {
                             k,
                             response.status(),
                             retry_after,
+                            provider.key_quarantine,
                         ) {
                             self.state
                                 .metrics
@@ -5893,6 +6085,10 @@ fn outbound(
     if let Some(token) = &provider.google {
         headers.insert(header::AUTHORIZATION, token.get());
     }
+    // The provider's own headers (headers_env), before Bedrock signs, so its signature covers them.
+    for (name, value) in &provider.headers {
+        headers.insert(name.clone(), value.clone());
+    }
     if provider.kind == Kind::Bedrock {
         sign_for_bedrock(provider, &uri, &body, &mut headers)?;
     }
@@ -6066,7 +6262,32 @@ fn spawn_probes(state: std::sync::Weak<AppState>) {
                         cooldown: Some(Duration::from_secs(alias.cooldown_seconds)),
                     };
                     let (state, version, chat) = (state.clone(), version.clone(), probe.chat);
+                    let every = Duration::from_secs(probe.every_seconds);
                     tokio::spawn(async move {
+                        // With a store, one gateway probes each deployment at a time; the others take its
+                        // outcome from the shared cooldowns.
+                        if let Some(store) = state.pool.store() {
+                            match store
+                                .probe_lease(label.clone(), every + PROBE_LEASE_SLACK)
+                                .await
+                            {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    state.pool.probed(
+                                        &label,
+                                        true,
+                                        "probed by another gateway".into(),
+                                    );
+                                    return;
+                                }
+                                Err(err) => {
+                                    eprintln!(
+                                        "gantry: the health probe of {label} is skipped: {err}."
+                                    );
+                                    return;
+                                }
+                            }
+                        }
                         probe_once(&state, &version, &hop, chat).await;
                     });
                 }
@@ -6074,6 +6295,13 @@ fn spawn_probes(state: std::sync::Weak<AppState>) {
         }
     });
 }
+
+/// How much longer than its interval a gateway holds a deployment's probe lease: another takes it over once the
+/// holder has missed a probe by this much.
+const PROBE_LEASE_SLACK: Duration = Duration::from_secs(5);
+
+/// The workload health probes are recorded and charged as.
+pub const PROBE_WORKLOAD: &str = "gantry-probe";
 
 /// One health probe of a deployment: its provider's model list, or a one-token request. Any answer under 500 other
 /// than 429 means it is up (a 400 is still an answer); no answer, a 429 or a 5xx means it is down.
@@ -6114,9 +6342,12 @@ async fn probe_once(state: &AppState, version: &Snapshot, hop: &Hop, chat: bool)
     };
     let (parts, ()) = request.into_parts();
     let ids: Vec<String> = provider.pool.iter().map(|(_, id)| id.clone()).collect();
-    let key = state
-        .pool
-        .key(&provider.name, &ids, provider.least_used_key);
+    let key = state.pool.key(
+        &provider.name,
+        &ids,
+        &provider.key_weights,
+        provider.least_used_key,
+    );
     let outcome = match outbound(provider, &parts, &body, &route, None, &hop.model, key) {
         Ok(request) => attempt_within(state, provider, request, &state.limits(provider, hop)).await,
         Err(refusal) => Err(refusal),
@@ -6131,6 +6362,18 @@ async fn probe_once(state: &AppState, version: &Snapshot, hop: &Hop, chat: bool)
         }
         Err(refusal) => (false, refusal.code.to_string()),
     };
+    // A chat probe is a billed request: its usage is read off the answer and charged to the gantry-probe scope.
+    let usage = match outcome {
+        Ok(response) if chat => http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .ok()
+            .and_then(|body| gantry_core::usage::Usage::from_body(&body.to_bytes())),
+        _ => None,
+    };
+    record_probe(
+        state, version, provider, &route, &hop.model, &word, up, usage,
+    )
+    .await;
     state.pool.probed(&label, up, word.clone());
     if let Some(cooldown) = hop.cooldown {
         if up {
@@ -6142,6 +6385,76 @@ async fn probe_once(state: &AppState, version: &Snapshot, hop: &Hop, chat: bool)
             state.pool.failed(&label, cooldown);
         }
     }
+}
+
+/// A probe in the audit log, as the workload `gantry-probe`: a decision record, and for a chat probe a usage record
+/// whose cost is charged to the `gantry-probe` person and team scopes, so it shows on the spend page and counts
+/// against a budget set for it.
+#[allow(clippy::too_many_arguments)]
+async fn record_probe(
+    state: &AppState,
+    version: &Snapshot,
+    provider: &Upstream,
+    route: &str,
+    model: &str,
+    outcome: &str,
+    up: bool,
+    usage: Option<gantry_core::usage::Usage>,
+) {
+    let Some(audit) = &state.audit else {
+        return;
+    };
+    let decision = id::random_hex(16);
+    let mut record = gantry_core::audit::record(&gantry_core::audit::Entry {
+        id: &decision,
+        person: Some(PROBE_WORKLOAD),
+        team: Some(PROBE_WORKLOAD),
+        user_agent: Some(PROBE_WORKLOAD),
+        method: if route == MODELS { "GET" } else { "POST" },
+        path: route,
+        model: Some(model),
+        allowed: true,
+        provider: &provider.name,
+        policy_sha256: &version.policy_sha256,
+        keys_sha256: &version.keys_sha256,
+        ..Default::default()
+    });
+    record.insert("workload".into(), PROBE_WORKLOAD.into());
+    record.insert(
+        "probe".into(),
+        serde_json::json!({ "outcome": outcome, "up": up }),
+    );
+    let _ = audit.log.append_record(&record);
+    if route == MODELS {
+        return;
+    }
+    let price = version
+        .policy
+        .as_ref()
+        .and_then(|p| gantry_core::usage::price_for(model, p.prices()));
+    let (_, usage_record) = spend::charge(
+        &state.spend,
+        spend::Line {
+            decision: &decision,
+            person: PROBE_WORKLOAD,
+            team: PROBE_WORKLOAD,
+            key: "",
+            org: "",
+            customer: None,
+            tags: &[],
+            counted: &[],
+            model,
+            provider: &provider.name,
+            version: (&version.policy_sha256, &version.keys_sha256),
+            price,
+            usage,
+            share: 1.0,
+            unreported: 0.0,
+            succeeded: up,
+            extra: serde_json::Map::new(),
+        },
+    );
+    let _ = audit.log.append_record(&usage_record);
 }
 
 /// One attempt with the provider's own time limits, for requests that are not an alias's (batches).
@@ -6162,8 +6475,22 @@ async fn attempt_within(
     limits: &Limits,
 ) -> Result<Response, Refusal> {
     let upstream = &provider.url;
-    let client = state.client_for(limits.connect);
-    let outcome = tokio::time::timeout(limits.first_byte, client.request(request)).await;
+    let outcome = match &provider.proxy {
+        None => {
+            let client = state.client_for(limits.connect);
+            tokio::time::timeout(limits.first_byte, client.request(request)).await
+        }
+        Some(proxy) => {
+            let client = state
+                .proxied
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entry((limits.connect, proxy.id.clone()))
+                .or_insert_with(|| proxied_with(limits.connect, proxy))
+                .clone();
+            tokio::time::timeout(limits.first_byte, client.request(request)).await
+        }
+    };
     match outcome {
         Ok(Ok(response)) => Ok(response.map(Body::new)),
         Ok(Err(err)) => {

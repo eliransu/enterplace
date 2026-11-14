@@ -19,9 +19,10 @@ providers:
     url: https://api.openai.com
     keys:
       - { key_env: OPENAI_KEY_TEAM_A }
-      - { key_env: OPENAI_KEY_TEAM_B }
+      - { key_env: OPENAI_KEY_TEAM_B, weight: 2 }
       - { key_env: OPENAI_KEY_TEAM_C }
     key_balance: least_used
+    key_quarantine_seconds: 900
     models: [gpt-4o]
 rules:
   - name: everyone
@@ -33,8 +34,10 @@ rules:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `keys` | list | none | Each entry is `{ key_env: <variable> }` or `{ credential: <name> }` (a provider credential in the [store](/operations/store/)). Replaces `key_env`, `key_file` and `credential` on the provider. |
-| `key_balance` | string | `round_robin` | `round_robin` takes the keys in turn. `least_used` takes the key that has sent the fewest requests through this gateway. |
+| `keys` | list | none | Each entry is `{ key_env: <variable> }` or `{ credential: <name> }` (a provider credential in the [store](/operations/store/)), with an optional `weight`. Replaces `key_env`, `key_file` and `credential` on the provider. |
+| `keys[].weight` | integer | `1` | 1 to 1000. The key's share of the pool's requests: a key of weight 2 is sent twice as many as a key of weight 1. |
+| `key_balance` | string | `round_robin` | `round_robin` takes the keys in turn, each as often as its weight. `least_used` takes the key with the fewest requests sent through this gateway for its weight. |
+| `key_quarantine_seconds` | integer | `3600` | 1 to 86400. How long a key answered 401 or 403 is set aside. |
 
 `gantry check` refuses a pool beside `key_env`, `key_file` or `credential`, an entry with both or neither source, a key listed twice, a credential without a store, and a pool on a `bedrock` provider. `gantry serve` refuses to start when a key's variable is not set.
 
@@ -42,7 +45,7 @@ rules:
 
 | The provider answers | The key | The request |
 |---|---|---|
-| 401 or 403 | Set aside for an hour | Sent again at once with the next key |
+| 401 or 403 | Set aside for `key_quarantine_seconds` (an hour by default) | Sent again at once with the next key |
 | 429 | Rests for the answer's `Retry-After` seconds (at most 3600), or 60 seconds | Sent again at once with the next key |
 | anything else | Stays in turn | Handled as usual (retries, cooldowns, fallbacks) |
 

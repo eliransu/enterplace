@@ -49,17 +49,15 @@ pub(crate) struct Probed {
     pub(crate) outcome: String,
 }
 
-/// How long a key answered 401 or 403 is set aside: a key that was revoked stays revoked, and one put right is
-/// back within the hour. A new key (another fingerprint) is used at once.
-// ponytail: fixed; a setting when someone needs another.
-const KEY_QUARANTINE: Duration = Duration::from_secs(3600);
-
 /// How long a key answered 429 without a Retry-After rests.
 const KEY_REST: Duration = Duration::from_secs(60);
 
-/// A deployment whose provider says less than this share of its rate limit is left goes after the others.
-// ponytail: fixed at 5%; a setting per alias when someone needs another.
-const HEADROOM: f64 = 0.05;
+/// A deployment whose provider says less than this share of its rate limit is left goes after the others, unless
+/// its alias sets `rate_limit_headroom_percent`.
+const HEADROOM_PERCENT: u32 = 5;
+
+/// The window of a deployment's `rpm` and `tpm`.
+const MINUTE: Duration = Duration::from_secs(60);
 
 /// How long a provider's rate-limit headers are believed: its windows are about a minute.
 const HEADROOM_FOR: Duration = Duration::from_secs(60);
@@ -82,6 +80,8 @@ struct Deployed {
     errors: f64,
     /// The smallest share of its rate limits its provider said was left, and when.
     headroom: Option<(f64, Instant)>,
+    /// The current minute: when it began, and the requests and estimated tokens sent in it.
+    minute: (Option<Instant>, u32, u64),
 }
 
 /// What a request brings to the choice of deployment besides the alias.
@@ -229,11 +229,16 @@ impl Pool {
         let (warm, cold): (Vec<usize>, Vec<usize>) =
             eligible.iter().copied().partition(|i| !cooling(i));
         // A deployment nearly out of its provider's rate limit goes after those with room, before those cooling.
+        let headroom = f64::from(
+            alias
+                .rate_limit_headroom_percent
+                .unwrap_or(HEADROOM_PERCENT),
+        ) / 100.0;
         let tight = |i: &usize| {
             deployments
                 .get(&name_of(*i))
                 .and_then(|s| s.headroom)
-                .is_some_and(|(left, at)| left < HEADROOM && now.duration_since(at) < HEADROOM_FOR)
+                .is_some_and(|(left, at)| left < headroom && now.duration_since(at) < HEADROOM_FOR)
         };
         let (mut warm, full): (Vec<usize>, Vec<usize>) = warm.into_iter().partition(|i| !tight(i));
         let cold: Vec<usize> = full.into_iter().chain(cold).collect();
@@ -403,14 +408,43 @@ impl Pool {
         }
     }
 
+    /// Whether `d` can take one more request of about `tokens` tokens now: under its `max_parallel` in flight, and
+    /// under its `rpm` and `tpm` this minute. A deployment with none of them always can.
+    // ponytail: checked here and counted at send, per replica and without a reservation, so requests arriving at
+    // once can pass a limit by a few; shared and reserved counts if a provider's limit must never be crossed.
+    pub(crate) fn has_room(&self, d: &gantry_core::config::Deployment, tokens: u64) -> bool {
+        if d.max_parallel.is_none() && d.rpm.is_none() && d.tpm.is_none() {
+            return true;
+        }
+        let deployments = locked(&self.deployments);
+        let Some(state) = deployments.get(&label(&d.provider, &d.model)) else {
+            return true;
+        };
+        let busy = state.busy.load(Ordering::Relaxed);
+        if d.max_parallel.is_some_and(|max| busy >= max as usize) {
+            return false;
+        }
+        let (requests, used) = match state.minute {
+            (Some(at), requests, used) if at.elapsed() < MINUTE => (requests, used),
+            _ => (0, 0),
+        };
+        d.rpm.is_none_or(|rpm| requests < rpm) && d.tpm.is_none_or(|tpm| used + tokens <= tpm)
+    }
+
     /// Counts a request in flight at a deployment until the returned guard is dropped.
-    pub(crate) fn busy(&self, deployment: &str) -> Busy {
+    /// Also counts it, with its estimated `tokens`, in the deployment's minute for `rpm` and `tpm`.
+    pub(crate) fn busy(&self, deployment: &str, tokens: u64) -> Busy {
         let mut deployments = locked(&self.deployments);
-        let busy = deployments
-            .entry(deployment.to_string())
-            .or_default()
-            .busy
-            .clone();
+        let state = deployments.entry(deployment.to_string()).or_default();
+        state.minute = match state.minute {
+            (Some(at), requests, used) if at.elapsed() < MINUTE => (
+                Some(at),
+                requests.saturating_add(1),
+                used.saturating_add(tokens),
+            ),
+            _ => (Some(Instant::now()), 1, tokens),
+        };
+        let busy = state.busy.clone();
         busy.fetch_add(1, Ordering::Relaxed);
         Busy(busy)
     }
@@ -461,13 +495,20 @@ impl Pool {
             .headroom = Some((left, Instant::now()));
     }
 
-    /// Which key of `provider`'s pool to send with: in turn, or the least used, passing over keys set aside. When
-    /// every key is set aside, the one back soonest. `None` for a provider without a pool.
-    pub(crate) fn key(&self, provider: &str, ids: &[String], least_used: bool) -> Option<usize> {
+    /// Which key of `provider`'s pool to send with: in turn by weight, or the least used for its weight, passing over
+    /// keys set aside. When every key is set aside, the one back soonest. `None` for a provider without a pool.
+    pub(crate) fn key(
+        &self,
+        provider: &str,
+        ids: &[String],
+        weights: &[u32],
+        least_used: bool,
+    ) -> Option<usize> {
         if ids.is_empty() {
             return None;
         }
         let now = Instant::now();
+        let weight = |i: usize| weights.get(i).copied().unwrap_or(1).max(1);
         let mut keys = locked(&self.keys);
         let name = |id: &String| format!("{provider}/{id}");
         let out = |k: &Keyed| k.out_until.is_some_and(|until| until > now);
@@ -477,27 +518,34 @@ impl Pool {
         let picked = if ready.is_empty() {
             (0..ids.len()).min_by_key(|i| keys.get(&name(&ids[*i])).and_then(|k| k.out_until))
         } else if least_used {
-            ready
-                .iter()
-                .copied()
-                .min_by_key(|i| keys.get(&name(&ids[*i])).map_or(0, |k| k.uses))
+            // Uses per unit of weight: a key of weight 2 takes twice the requests before it is the least used.
+            ready.iter().copied().min_by(|a, b| {
+                let per = |i: &usize| {
+                    keys.get(&name(&ids[*i])).map_or(0, |k| k.uses) as f64 / f64::from(weight(*i))
+                };
+                per(a).total_cmp(&per(b))
+            })
         } else {
-            // In turn over the whole pool, from where the last pick left off, so a key set aside hands over to the
-            // one after it.
+            // In turn over the whole pool by weight (a key of weight 2 holds two turns), from where the last pick
+            // left off, so a key set aside hands over to the one after it.
+            let slots: Vec<usize> = (0..ids.len())
+                .flat_map(|i| std::iter::repeat_n(i, weight(i) as usize))
+                .collect();
             let mut turns = locked(&self.turns);
             let turn = turns.entry(format!("key\n{provider}")).or_default();
-            let start = usize::try_from(*turn).unwrap_or(0) % ids.len();
-            let at = (0..ids.len())
-                .map(|step| (start + step) % ids.len())
-                .find(|i| ready.contains(i));
+            let start = usize::try_from(*turn).unwrap_or(0) % slots.len().max(1);
+            let at = (0..slots.len())
+                .map(|step| (start + step) % slots.len())
+                .find(|slot| ready.contains(&slots[*slot]));
             *turn = at.map_or(*turn, |at| at as u64 + 1);
-            at
+            at.map(|slot| slots[slot])
         }?;
         keys.entry(name(&ids[picked])).or_default().uses += 1;
         Some(picked)
     }
 
-    /// A key of a pool got `status`. A 401 or 403 sets it aside for an hour, a 429 for its Retry-After or a minute.
+    /// A key of a pool got `status`. A 401 or 403 sets it aside for `quarantine` (an hour unless the provider says),
+    /// a 429 for its Retry-After or a minute.
     /// Returns whether another key can be tried now: the request then moves on to it.
     pub(crate) fn key_answered(
         &self,
@@ -506,9 +554,10 @@ impl Pool {
         at: usize,
         status: axum::http::StatusCode,
         retry_after: Option<u64>,
+        quarantine: Duration,
     ) -> bool {
         let rest = match status.as_u16() {
-            401 | 403 => KEY_QUARANTINE,
+            401 | 403 => quarantine,
             429 => retry_after.map_or(KEY_REST, |s| Duration::from_secs(s.min(3600))),
             _ => return false,
         };
@@ -524,6 +573,11 @@ impl Pool {
             keys.get(&format!("{provider}/{other}"))
                 .is_none_or(|k| k.out_until.is_none_or(|until| until <= now))
         })
+    }
+
+    /// The store deployments' state is shared through, when there is one.
+    pub(crate) fn store(&self) -> Option<&Arc<dyn gantry_core::store::Store>> {
+        self.store.as_ref()
     }
 
     /// A health probe of `deployment` got `outcome`.
@@ -1110,25 +1164,89 @@ mod tests {
     #[test]
     fn key_pools_rotate_or_take_the_least_used_and_set_keys_aside() {
         use axum::http::StatusCode;
+        const HOUR: Duration = Duration::from_secs(3600);
         let pool = Pool::default();
         let ids: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
-        let picks: Vec<Option<usize>> = (0..4).map(|_| pool.key("p", &ids, false)).collect();
+        let picks: Vec<Option<usize>> = (0..4).map(|_| pool.key("p", &ids, &[], false)).collect();
         assert_eq!(picks, [Some(0), Some(1), Some(2), Some(0)]);
         // b is refused: set aside, and another key can be tried.
-        assert!(pool.key_answered("p", &ids, 1, StatusCode::UNAUTHORIZED, None));
-        let picks: Vec<Option<usize>> = (0..3).map(|_| pool.key("p", &ids, false)).collect();
+        assert!(pool.key_answered("p", &ids, 1, StatusCode::UNAUTHORIZED, None, HOUR));
+        let picks: Vec<Option<usize>> = (0..3).map(|_| pool.key("p", &ids, &[], false)).collect();
         assert!(!picks.contains(&Some(1)), "{picks:?}");
         // A 500 is the provider's failure, not the key's.
-        assert!(!pool.key_answered("p", &ids, 0, StatusCode::INTERNAL_SERVER_ERROR, None));
+        assert!(!pool.key_answered("p", &ids, 0, StatusCode::INTERNAL_SERVER_ERROR, None, HOUR));
         // With every key aside, the one back soonest is used rather than none.
-        assert!(pool.key_answered("p", &ids, 0, StatusCode::TOO_MANY_REQUESTS, Some(5)));
-        assert!(!pool.key_answered("p", &ids, 2, StatusCode::TOO_MANY_REQUESTS, Some(60)));
-        assert_eq!(pool.key("p", &ids, false), Some(0));
+        assert!(pool.key_answered("p", &ids, 0, StatusCode::TOO_MANY_REQUESTS, Some(5), HOUR));
+        assert!(!pool.key_answered("p", &ids, 2, StatusCode::TOO_MANY_REQUESTS, Some(60), HOUR));
+        assert_eq!(pool.key("p", &ids, &[], false), Some(0));
         let least = Pool::default();
-        least.key("q", &ids, true);
-        least.key("q", &ids, true);
-        assert_eq!(least.key("q", &ids, true), Some(2));
-        assert_eq!(pool.key("p", &[], false), None);
+        least.key("q", &ids, &[], true);
+        least.key("q", &ids, &[], true);
+        assert_eq!(least.key("q", &ids, &[], true), Some(2));
+        assert_eq!(pool.key("p", &[], &[], false), None);
+        // Weights: a key of weight 3 takes three turns to one's one, and three times the uses before least used.
+        let weighted = Pool::default();
+        let two = &ids[..2];
+        let picks: Vec<Option<usize>> = (0..8)
+            .map(|_| weighted.key("w", two, &[1, 3], false))
+            .collect();
+        assert_eq!(
+            picks.iter().filter(|p| **p == Some(1)).count(),
+            6,
+            "{picks:?}"
+        );
+        let least = Pool::default();
+        let picks: Vec<Option<usize>> =
+            (0..8).map(|_| least.key("l", two, &[1, 3], true)).collect();
+        assert_eq!(
+            picks.iter().filter(|p| **p == Some(1)).count(),
+            6,
+            "{picks:?}"
+        );
+        // The quarantine is the provider's setting: a short one is over when it says.
+        let short = Pool::default();
+        short.key_answered(
+            "s",
+            two,
+            0,
+            StatusCode::UNAUTHORIZED,
+            None,
+            Duration::from_millis(1),
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        let picks: Vec<Option<usize>> = (0..2).map(|_| short.key("s", two, &[], false)).collect();
+        assert!(picks.contains(&Some(0)), "{picks:?}");
+    }
+
+    #[test]
+    fn a_deployment_at_its_max_parallel_rpm_or_tpm_has_no_room() {
+        let pool = Pool::default();
+        let d = |max_parallel, rpm, tpm| gantry_core::config::Deployment {
+            provider: "p".into(),
+            model: "m".into(),
+            max_parallel,
+            rpm,
+            tpm,
+            ..Default::default()
+        };
+        assert!(pool.has_room(&d(Some(1), None, None), 10));
+        let held = pool.busy("p/m", 10);
+        assert!(
+            !pool.has_room(&d(Some(1), None, None), 10),
+            "one in flight of one"
+        );
+        assert!(pool.has_room(&d(Some(2), None, None), 10));
+        drop(held);
+        assert!(
+            pool.has_room(&d(Some(1), None, None), 10),
+            "back once it answered"
+        );
+        // Two sent this minute, 20 tokens: an rpm of 2 is full, a tpm of 25 has no room for 10 more, of 30 has.
+        drop(pool.busy("p/m", 10));
+        assert!(!pool.has_room(&d(None, Some(2), None), 10));
+        assert!(pool.has_room(&d(None, Some(3), None), 10));
+        assert!(!pool.has_room(&d(None, None, Some(25)), 10));
+        assert!(pool.has_room(&d(None, None, Some(30)), 10));
     }
 
     #[test]
@@ -1159,10 +1277,10 @@ mod tests {
     fn least_busy_picks_the_deployment_with_fewest_in_flight() {
         let pool = Pool::default();
         let smart = alias(Balance::LeastBusy, &[1, 1]);
-        let held = pool.busy("p0/m");
+        let held = pool.busy("p0/m", 0);
         assert_eq!(order(&pool, &smart, &[0, 1], Instant::now())[0], 1);
         drop(held);
-        let _other = pool.busy("p1/m");
+        let _other = pool.busy("p1/m", 0);
         assert_eq!(order(&pool, &smart, &[0, 1], Instant::now())[0], 0);
     }
 

@@ -55,7 +55,7 @@ rules:
 - A probe that gets no answer, a 429 or a 5xx marks the deployment down: it cools down for its alias's `cooldown_seconds`, doubling on each further failure, as a failed request would make it.
 - A probe that gets any other answer marks it up and closes its circuit, so a deployment that came back is used again without waiting for its cooldown.
 - A probe has the deployment's [time limits](/routing/timeouts/) and its provider's key (the next key of a [key pool](/routing/key-pools/)).
-- With a [store](/operations/store/#cooldowns), a cooldown is shared: a deployment one replica finds down is passed over by every replica within about a second. Each replica sends its own probes.
+- With a [store](/operations/store/#cooldowns), a cooldown is shared: a deployment one replica finds down is passed over by every replica within about a second. One replica at a time probes each deployment: it holds a lease in the store (table `gantry_probe_leases`) for the probe's interval plus 5 seconds, and another replica takes the lease over once the holder stops probing.
 
 ## Where to see it
 
@@ -67,9 +67,7 @@ rules:
 
 `GET /metrics` has `gantry_deployment_up{deployment="local/llama-4"}`, 1 or 0.
 
-<Aside type="note">
-Probes are not written to the audit log. A `with: chat` probe's tokens appear on the provider's bill, not in Gantry's spend.
-</Aside>
+Each probe is in the audit log as the workload `gantry-probe`: a decision record with `"workload": "gantry-probe"`, `person` and `team` `gantry-probe`, and `probe: { outcome, up }`. A `with: chat` probe also writes a usage record, and its cost is charged to the `gantry-probe` person and team scopes, so it shows on the spend page and a budget can be set for it.
 
 ## Related
 

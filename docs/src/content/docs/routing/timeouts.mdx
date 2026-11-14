@@ -68,6 +68,14 @@ Each field is looked up on its own: the deployment's, then its alias's, then its
 `idle_ms` counts a stream's keep-alive comments and ping events as pieces, so a reasoning model that sends them while it thinks is not cut off.
 </Aside>
 
+## The worst wait
+
+`gantry check` prints, for each alias, the longest a caller can wait for the first byte: every deployment tried with its provider's `retries` and the pauses between them, each up to its first-byte limit, then each fallback in turn, and after that the longest `total_ms` of what may answer.
+
+```text
+alias smart: a caller waits at most 155.6 s for the first byte (5 attempts across deployments, retries and fallbacks, each to its first-byte limit), then at most 1800 s for the answer.
+```
+
 ## Related
 
 <CardGrid>

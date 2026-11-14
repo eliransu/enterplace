@@ -16,7 +16,7 @@ gantry-cli = { path = "crates/gantry-cli", version = "0.1.0" }
 # `ws`: realtime sessions (OpenAI Realtime, Gemini Live) are WebSocket connections callers open to Gantry.
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "tokio", "ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio", "server-auto", "server-graceful", "service"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "http2", "tokio", "server-auto", "server-graceful", "service"] }
 http-body-util = "0.1"
 http-body = "1"
 serde = { version = "1", features = ["derive"] }

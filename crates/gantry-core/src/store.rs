@@ -183,6 +183,11 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     }
     /// A deployment answered here after `ms`: one sample every gateway ranks it on. Does not wait.
     fn observed(&self, _deployment: &str, _ms: u32) {}
+    /// Whether this gateway runs the health probe of `deployment` now. One gateway at a time holds each, for `ttl`
+    /// after it last took it; without a store every gateway probes its own.
+    fn probe_lease(&self, _deployment: String, _ttl: Duration) -> Pending<bool> {
+        Box::pin(async { Ok(true) })
+    }
     /// Opens a console session, by the SHA-256 of its ID, for `who`, ending after `ttl`.
     fn open_session(&self, id_sha256: String, who: String, ttl: Duration) -> Pending<()>;
     /// Who a console session is for, or `None` when it is unknown, ended or expired.

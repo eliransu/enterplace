@@ -54,6 +54,7 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`tag_not_allowed`](#tag_not_allowed) | 403 | `permission_error` |
 | [`region_not_allowed`](#region_not_allowed) | 403 | `permission_error` |
 | [`no_deployment`](#no_deployment) | 403 | `permission_error` |
+| [`deployment_limit`](#deployment_limit) | 429 | `rate_limit_error` |
 | [`unknown_route`](#unknown_route) | 404 | `not_found_error` |
 | [`body_too_large`](#body_too_large) | 413 | `request_too_large` |
 | [`body_timeout`](#body_timeout) | 408 | `invalid_request_error` |
@@ -377,6 +378,12 @@ The rule has `regions:` and the request has no deployment in one of them: an ali
 ### no_deployment
 
 Every deployment of the alias that the request may use is kept (`for:`) for another team or tag.
+
+### deployment_limit
+
+**429.** Every deployment of the alias is at its `max_parallel`, `rpm` or `tpm` on this gateway. Nothing was sent.
+
+**Fix:** try again in a moment, or ask an admin to raise the limits or add a deployment. See [Deployment limits](/routing/strategies/#balance).
 
 ### batch_not_configured
 

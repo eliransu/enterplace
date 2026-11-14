@@ -7,6 +7,21 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Routing resilience, continued
+
+- Providers take `headers_env` (headers sent with every request, values from the environment) and `proxy_env` (an
+  HTTP proxy its requests are tunnelled through with CONNECT, Basic credentials from the URL).
+- Deployments take `max_parallel`, `rpm` and `tpm`: one at a limit is passed over, and with every deployment there
+  the caller gets 429 `deployment_limit`.
+- Key pools take a `weight` per key and `key_quarantine_seconds` (default 3600); aliases take
+  `rate_limit_headroom_percent` (default 5).
+- A request's own `fallbacks` field is honored for models the caller's rule allows; one it does not allow is refused
+  with `model_not_allowed`. The field never reaches the provider.
+- `gantry check` prints each alias's worst-case wait for the first byte across retries, timeouts and fallbacks.
+- Health probes are written to the audit log as the workload `gantry-probe`, and a chat probe's cost is charged to the
+  `gantry-probe` scope. With a store, one replica at a time probes each deployment (lease in `gantry_probe_leases`,
+  migration 2 of namespace `gantry_routing`).
+
 ### An organization added by a reload is covered at once
 
 - With `audit: { per_org: true }`, an organization a policy reload adds gets its chain opened when the reload is used,
