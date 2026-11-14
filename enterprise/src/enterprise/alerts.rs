@@ -166,9 +166,14 @@ pub enum RuleKind {
     CredentialFailing,
     GuardrailVendorFailing,
     ExportLagging,
+    DailyDigest,
+    RegionOutage,
+    ConfigRejected,
+    KillCleared,
+    CircuitOpen,
 }
 
-pub const RULE_KINDS: [RuleKind; 19] = [
+pub const RULE_KINDS: [RuleKind; 24] = [
     RuleKind::Budget,
     RuleKind::RateLimit,
     RuleKind::Refusals,
@@ -188,6 +193,11 @@ pub const RULE_KINDS: [RuleKind; 19] = [
     RuleKind::CredentialFailing,
     RuleKind::GuardrailVendorFailing,
     RuleKind::ExportLagging,
+    RuleKind::DailyDigest,
+    RuleKind::RegionOutage,
+    RuleKind::ConfigRejected,
+    RuleKind::KillCleared,
+    RuleKind::CircuitOpen,
 ];
 
 impl RuleKind {
@@ -212,6 +222,11 @@ impl RuleKind {
             Self::CredentialFailing => "credential_failing",
             Self::GuardrailVendorFailing => "guardrail_vendor_failing",
             Self::ExportLagging => "export_lagging",
+            Self::DailyDigest => "daily_digest",
+            Self::RegionOutage => "region_outage",
+            Self::ConfigRejected => "config_rejected",
+            Self::KillCleared => "kill_cleared",
+            Self::CircuitOpen => "circuit_open",
         }
     }
 
@@ -236,6 +251,11 @@ impl RuleKind {
             Self::CredentialFailing => "A provider refuses its credential",
             Self::GuardrailVendorFailing => "A guardrail service cannot be reached",
             Self::ExportLagging => "Audit export falls behind",
+            Self::DailyDigest => "A daily digest of spend, refusals, top users and alerts",
+            Self::RegionOutage => "Every deployment of a region fails",
+            Self::ConfigRejected => "A policy change is refused",
+            Self::KillCleared => "Kill switch cleared",
+            Self::CircuitOpen => "A deployment is put to cool down",
         }
     }
 
@@ -250,6 +270,7 @@ impl RuleKind {
             | Self::GuardrailBlock
             | Self::NewIp
             | Self::DeploymentDown
+            | Self::RegionOutage
             | Self::CredentialFailing
             | Self::GuardrailVendorFailing => Severity::Critical,
             _ => Severity::Warning,
@@ -269,6 +290,9 @@ impl RuleKind {
                 | Self::UnusualErrors
                 | Self::UnusualLatency
                 | Self::KeyExpiring
+                | Self::DailyDigest
+                | Self::ConfigRejected
+                | Self::KillCleared
         )
     }
 
@@ -297,9 +321,9 @@ impl RuleKind {
 }
 
 /// The parameters a rule may have, as the form names them.
-const PARAMS: [&str; 14] = [
+const PARAMS: [&str; 16] = [
     "scope", "name", "period", "usd", "forecast", "count", "minutes", "by", "codes", "provider",
-    "ms", "hours", "factor", "days",
+    "ms", "hours", "factor", "days", "at", "region",
 ];
 
 #[derive(Clone, Debug)]
@@ -415,6 +439,15 @@ impl Rule {
                 }
             }
             RuleKind::UnusualSpend if !get("usd").is_empty() => number("usd", 0.0, 1e9)?,
+            RuleKind::DailyDigest if parse_at(&get("at")).is_none() => {
+                return Err("Send the digest at a time such as 09:00, or 09:00+0200 for an offset from UTC (UTC by default).".into());
+            }
+            RuleKind::RegionOutage
+                if !get("region").is_empty()
+                    && !gantry_core::config::valid_name(&get("region")) =>
+            {
+                return Err("Region is a label an alias deployment's region: gives, such as eu or eu-west-1. Empty: every region.".into());
+            }
             _ => {}
         }
         let mut params = serde_json::Map::new();
@@ -523,6 +556,23 @@ impl Rule {
                 "an audit export destination is more than {} minutes behind",
                 p("minutes", "15")
             ),
+            RuleKind::DailyDigest => format!(
+                "every day at {}: the last 24 hours of spend, refusals, top users and alerts",
+                p("at", "09:00")
+            ),
+            RuleKind::RegionOutage => format!(
+                "every deployment of {} has {} failures and no answer in {} minutes",
+                p("region", "a region"),
+                self.count(),
+                self.minutes()
+            ),
+            RuleKind::ConfigRejected => {
+                "a reload refuses a policy or keys change, or a policy version is refused as invalid".into()
+            }
+            RuleKind::KillCleared => "an admin clears a kill switch".into(),
+            RuleKind::CircuitOpen => {
+                "an alias deployment fails and is passed over for its cooldown, by deployment".into()
+            }
             _ => String::new(),
         }
     }
@@ -544,6 +594,36 @@ fn parse_hours(text: &str) -> Option<(u32, u32, i64)> {
     }
     let minutes = digits[..2].parse::<i64>().ok()? * 60 + digits[2..].parse::<i64>().ok()?;
     (start < end && end <= 24 && minutes <= 14 * 60).then_some((start, end, sign * minutes))
+}
+
+/// `09:00` or `09:00+0200`: the digest's minute of the day and the offset from UTC in minutes.
+fn parse_at(text: &str) -> Option<(u32, i64)> {
+    let text = if text.is_empty() { "09:00" } else { text };
+    let (time, offset) = match text.find(['+', '-']) {
+        Some(i) => (&text[..i], &text[i..]),
+        None => (text, "+0000"),
+    };
+    let (hour, minute) = time.split_once(':')?;
+    let (hour, minute): (u32, u32) = (hour.parse().ok()?, minute.parse().ok()?);
+    let sign = if offset.starts_with('-') { -1 } else { 1 };
+    let digits = offset.get(1..).filter(|d| d.len() == 4)?;
+    let offset =
+        digits.get(..2)?.parse::<i64>().ok()? * 60 + digits.get(2..)?.parse::<i64>().ok()?;
+    (hour < 24 && minute < 60 && offset <= 14 * 60).then_some((hour * 60 + minute, sign * offset))
+}
+
+/// The local date (`2026-11-14`) whose digest is due at `now`: once the day's local time has reached `at`.
+fn digest_due(now: SystemTime, at: (u32, i64)) -> Option<String> {
+    let shift = Duration::from_secs(at.1.unsigned_abs() * 60);
+    let local = if at.1 >= 0 {
+        now + shift
+    } else {
+        now.checked_sub(shift)?
+    };
+    let stamp = audit::rfc3339(local);
+    let hour: u32 = stamp.get(11..13)?.parse().ok()?;
+    let minute: u32 = stamp.get(14..16)?.parse().ok()?;
+    (hour * 60 + minute >= at.0).then(|| stamp[..10].to_string())
 }
 
 /// Whether a time is outside working hours on a weekday, or on a weekend, at the offset.
@@ -591,6 +671,8 @@ pub struct Engine {
     said: Mutex<String>,
     /// The keys file (or the store's keys), for the rule on keys nearing their expiry.
     keys: std::path::PathBuf,
+    /// The policy, for the region labels of alias deployments.
+    policy: std::path::PathBuf,
     /// When the state checks last ran: once a minute.
     checked: Mutex<Option<Instant>>,
 }
@@ -606,6 +688,7 @@ pub fn register(
     exporter: &Arc<super::siem::Exporter>,
     env: &Env,
     keys: std::path::PathBuf,
+    policy: std::path::PathBuf,
 ) -> Arc<Engine> {
     let engine = Arc::new(Engine {
         db: exporter.db.clone(),
@@ -626,6 +709,7 @@ pub fn register(
         offline: Mutex::new(HashMap::new()),
         said: Mutex::new(String::new()),
         keys,
+        policy,
         checked: Mutex::new(None),
     });
     let _ = exporter.alerts.set(engine.clone());
@@ -696,6 +780,46 @@ fn failed_outcome(outcome: &str) -> bool {
         Ok(status) => status >= 500 || status == 429,
         Err(_) => outcome.starts_with("upstream_"),
     }
+}
+
+/// The alias deployments (`provider/model`) a record shows being tried, and whether each failed. Attempts records
+/// name every try of a request that needed more than one; a usage record names the deployment that gave the answer.
+fn deployment_outcomes(event: &str, record: &Value) -> Vec<(String, bool)> {
+    match event {
+        "attempts" => record["attempts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|a| {
+                let label = a["provider"].as_str().filter(|p| p.contains('/'))?;
+                let outcome = a["outcome"]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| a["outcome"].to_string());
+                Some((label.to_string(), failed_outcome(&outcome)))
+            })
+            .collect(),
+        "usage" if record["alias"].is_string() => match (
+            record["provider"].as_str(),
+            record["model"].as_str(),
+            record["status"].as_u64(),
+        ) {
+            (Some(provider), Some(model), Some(status)) => vec![(
+                format!("{provider}/{model}"),
+                status >= 500 || status == 429,
+            )],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// The first 12 hex characters of a hash in a record, or `?`.
+fn short(hash: &Value) -> String {
+    hash.as_str()
+        .and_then(|h| h.get(..12))
+        .unwrap_or("?")
+        .to_string()
 }
 
 impl Engine {
@@ -858,6 +982,33 @@ impl Engine {
         }
     }
 
+    /// Each alias deployment with a `region:` label, as `provider/model` (as attempts records name it), and its region.
+    /// Empty when the policy does not load: `gantry check` says why.
+    // ponytail: the policy is read on each tick that has a region rule; keep it from the reload if that shows up.
+    async fn regions(&self) -> HashMap<String, String> {
+        let path = self.policy.clone();
+        tokio::task::spawn_blocking(move || {
+            gantry_core::config::policy_text(&path)
+                .ok()
+                .and_then(|text| gantry_core::config::load_texts(&path, &text, &path, "").ok())
+                .map(|loaded| {
+                    loaded
+                        .aliases
+                        .iter()
+                        .flat_map(|a| &a.deployments)
+                        .filter_map(|d| {
+                            d.region
+                                .clone()
+                                .map(|r| (format!("{}/{}", d.provider, d.model), r))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default()
+    }
+
     async fn cursor(&self) -> Result<i64, String> {
         let client = self.db.client().await?;
         // A replica new to alerting starts 14 days before this month, so month-to-date spend and the unusual spend
@@ -966,6 +1117,13 @@ impl Engine {
         let mut daily: BTreeMap<(String, String), [i64; 4]> = BTreeMap::new();
         // Answers a deployment gave, counted beside its failures: a deployment that answers is not down.
         let mut oks: BTreeMap<(i64, String, String), i64> = BTreeMap::new();
+        let regions = if rules.iter().any(|r| r.kind == RuleKind::RegionOutage) {
+            self.regions().await
+        } else {
+            HashMap::new()
+        };
+        // Failures and answers of each alias deployment in a region, for the region rules.
+        let mut region_counts: BTreeMap<(i64, String, String), i64> = BTreeMap::new();
         let new_ip = rules.iter().any(|r| r.kind == RuleKind::NewIp);
         let (mut known_keys, mut known_pairs) = (HashSet::new(), HashSet::new());
         if new_ip {
@@ -1400,6 +1558,98 @@ impl Engine {
                             }
                         }
                     }
+                    (RuleKind::KillCleared, "admin")
+                        if record["verdict"] == "allow" && record["action"] == "clear_kill" =>
+                    {
+                        let t = &record["target"];
+                        hit(
+                            rule,
+                            record["id"].as_str().unwrap_or_default().to_string(),
+                            format!(
+                                "{} cleared the kill switch on {} {}: the traffic it stopped is let through again",
+                                record["person"].as_str().unwrap_or("someone"),
+                                t["scope"].as_str().unwrap_or("?"),
+                                t["value"].as_str().unwrap_or("?")
+                            ),
+                            0,
+                        );
+                    }
+                    (RuleKind::ConfigRejected, "config_rejected") => {
+                        let problems = record["problems"].as_array();
+                        hit(
+                            rule,
+                            format!(
+                                "config:{}:{}",
+                                short(&record["policy_sha256"]),
+                                short(&record["keys_sha256"])
+                            ),
+                            format!(
+                                "a {} reload refused a change to the policy or keys ({} problems) and keeps deciding with policy {}; the first problem: {}. Fix it and save again, `gantry check` says what passes",
+                                record["trigger"].as_str().unwrap_or("config"),
+                                problems.map_or(0, Vec::len),
+                                short(&record["policy_sha256_before"]),
+                                problems
+                                    .and_then(|p| p.first())
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("not recorded")
+                            ),
+                            0,
+                        );
+                    }
+                    (RuleKind::ConfigRejected, "admin")
+                        if record["verdict"] != "allow" && record["code"] == "invalid_policy" =>
+                    {
+                        hit(
+                            rule,
+                            record["id"].as_str().unwrap_or_default().to_string(),
+                            format!(
+                                "{} sent a policy version that does not pass `gantry check` ({}), refused as invalid_policy; the live version is unchanged",
+                                record["person"].as_str().unwrap_or("someone"),
+                                record["action"].as_str().unwrap_or("a policy change")
+                            ),
+                            0,
+                        );
+                    }
+                    (RuleKind::CircuitOpen, "attempts" | "usage") => {
+                        for (label, failed) in deployment_outcomes(event, record) {
+                            if failed {
+                                hit(
+                                    rule,
+                                    format!("deployment:{label}"),
+                                    format!(
+                                        "{label} failed and is passed over for its alias's cooldown_seconds, twice as long each time it fails again"
+                                    ),
+                                    0,
+                                );
+                            }
+                        }
+                    }
+                    (RuleKind::RegionOutage, "attempts" | "usage") => {
+                        for (label, failed) in deployment_outcomes(event, record) {
+                            let Some(region) = regions.get(&label) else {
+                                continue;
+                            };
+                            if !rule.text("region").is_empty() && rule.text("region") != region {
+                                continue;
+                            }
+                            let key = if failed {
+                                format!("deployment:{label}")
+                            } else {
+                                format!("ok:deployment:{label}")
+                            };
+                            *region_counts
+                                .entry((rule.id, key, minute.clone()))
+                                .or_default() += 1;
+                            if failed {
+                                hit(
+                                    rule,
+                                    format!("region:{region}"),
+                                    format!("{label} failed"),
+                                    0,
+                                );
+                            }
+                        }
+                    }
                     (RuleKind::System, "request")
                         if matches!(
                             record["code"].as_str(),
@@ -1425,6 +1675,9 @@ impl Engine {
             }
         }
 
+        for (slot, n) in region_counts {
+            *counts.entry(slot).or_default() += n;
+        }
         {
             let mut client = self.db.client().await?;
             let tx = client.transaction().await.map_err(db_error)?;
@@ -1625,8 +1878,131 @@ impl Engine {
                 }))
             }
             kind if kind.unusual() => self.unusual(rule, &c.key).await,
+            RuleKind::RegionOutage => self.region_down(rule, &c.key, &c.summary).await,
             _ => Ok(Some(c.summary.clone())),
         }
+    }
+
+    /// Whether every deployment of a region (`region:eu`) failed at least the rule's count in its window and answered
+    /// nothing. One deployment of the region that answers, or has not failed enough, keeps the alert back.
+    async fn region_down(
+        &self,
+        rule: &Rule,
+        key: &str,
+        latest: &str,
+    ) -> Result<Option<String>, String> {
+        let region = key.strip_prefix("region:").unwrap_or_default();
+        let mut labels: Vec<String> = self
+            .regions()
+            .await
+            .into_iter()
+            .filter(|(_, r)| r == region)
+            .map(|(label, _)| label)
+            .collect();
+        labels.sort();
+        if labels.is_empty() {
+            return Ok(None);
+        }
+        let client = self.db.client().await?;
+        let mut failed = Vec::new();
+        for label in &labels {
+            let mut sums = [0i64; 2];
+            for (i, slot) in [
+                format!("deployment:{label}"),
+                format!("ok:deployment:{label}"),
+            ]
+            .iter()
+            .enumerate()
+            {
+                sums[i] = client
+                    .query_one(
+                        "SELECT coalesce(sum(count), 0)::bigint FROM enterprise_alert_counts \
+                         WHERE rule = $1 AND key = $2 AND minute >= date_trunc('minute', now()) - make_interval(mins => $3)",
+                        &[&rule.id, slot, &rule.minutes()],
+                    )
+                    .await
+                    .map_err(db_error)?
+                    .try_get(0)
+                    .map_err(db_error)?;
+            }
+            if sums[0] < rule.count() || sums[1] > 0 {
+                return Ok(None);
+            }
+            failed.push(format!("{label} ({})", sums[0]));
+        }
+        Ok(Some(format!(
+            "every deployment of region {region} failed in the last {} minutes and none answered: {}; the latest: {latest}. Requests kept to {region} by a rule's regions: are refused until one recovers.",
+            rule.minutes(),
+            failed.join(", ")
+        )))
+    }
+
+    /// The daily digest's text: the last 24 hours across every replica.
+    async fn digest(&self) -> Result<String, String> {
+        let client = self.db.client().await?;
+        let totals = client
+            .query_one(
+                "SELECT coalesce(sum(CASE WHEN j->>'event' = 'usage' THEN (j->>'charged_usd')::float8 END), 0)::float8, \
+                 count(*) FILTER (WHERE j->>'event' IS NULL), \
+                 count(*) FILTER (WHERE j->>'event' IS NULL AND j->>'verdict' IS DISTINCT FROM 'allow') \
+                 FROM (SELECT line::jsonb AS j FROM enterprise_audit WHERE time > now() - interval '24 hours') a",
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        let spent: f64 = totals.try_get(0).map_err(db_error)?;
+        let requests: i64 = totals.try_get(1).map_err(db_error)?;
+        let refused: i64 = totals.try_get(2).map_err(db_error)?;
+        let codes = client
+            .query(
+                "SELECT j->>'code', count(*) FROM (SELECT line::jsonb AS j FROM enterprise_audit WHERE time > now() - interval '24 hours') a \
+                 WHERE j->>'event' IS NULL AND j->>'verdict' IS DISTINCT FROM 'allow' AND j->>'code' IS NOT NULL \
+                 GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 3",
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        let users = client
+            .query(
+                "SELECT coalesce(j->>'person', 'unknown'), sum((j->>'charged_usd')::float8)::float8 AS usd \
+                 FROM (SELECT line::jsonb AS j FROM enterprise_audit WHERE time > now() - interval '24 hours') a \
+                 WHERE j->>'event' = 'usage' AND (j->>'charged_usd')::float8 > 0 GROUP BY 1 ORDER BY usd DESC, 1 LIMIT 5",
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        let alerts = client
+            .query(
+                "SELECT kind, count(*) FROM enterprise_alerts WHERE fired_at > now() - interval '24 hours' \
+                 AND kind <> 'daily_digest' GROUP BY 1 ORDER BY 2 DESC, 1",
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        let list = |rows: &[gantry_server::store::tokio_postgres::Row],
+                    money: bool|
+         -> Result<String, String> {
+            let mut out = Vec::new();
+            for row in rows {
+                let name: String = row.try_get(0).map_err(db_error)?;
+                out.push(if money {
+                    format!("{name} ${:.2}", row.try_get::<_, f64>(1).map_err(db_error)?)
+                } else {
+                    format!("{name} {}", row.try_get::<_, i64>(1).map_err(db_error)?)
+                });
+            }
+            Ok(if out.is_empty() {
+                "none".into()
+            } else {
+                out.join(", ")
+            })
+        };
+        Ok(format!(
+            "The last 24 hours: ${spent:.2} spent over {requests} requests; {refused} refused (most: {}). Top users by spend: {}. Alerts fired: {}.",
+            list(&codes, false)?,
+            list(&users, true)?,
+            list(&alerts, false)?
+        ))
     }
 
     /// Today's requests, error rate or average latency of a scope (`team:payments:2026-11-14`) against its last 14
@@ -1738,6 +2114,31 @@ impl Engine {
                             &channels,
                         )
                         .await?;
+                    }
+                }
+                RuleKind::DailyDigest => {
+                    let Some(day) =
+                        parse_at(rule.text("at")).and_then(|at| digest_due(SystemTime::now(), at))
+                    else {
+                        continue;
+                    };
+                    let key = format!("digest:{day}");
+                    // Sent (or held back by the hourly cap) already today: no need to sum the day again.
+                    let sent = self
+                        .db
+                        .client()
+                        .await?
+                        .query_opt(
+                            "SELECT 1 FROM enterprise_alert_state WHERE rule = $1 AND key = $2",
+                            &[&rule.id, &key],
+                        )
+                        .await
+                        .map_err(db_error)?
+                        .is_some();
+                    if !sent {
+                        let summary = self.digest().await?;
+                        self.fire(rule, &key, &summary, Vec::new(), &channels)
+                            .await?;
                     }
                 }
                 RuleKind::ExportLagging => {
@@ -2427,6 +2828,20 @@ async fn main(
                             &v("factor"),
                             "",
                             "Unusual spend: how many times the person's daily average of the last 14 days (default 3)."
+                        ),
+                        input(
+                            "at",
+                            "Digest time",
+                            &v("at"),
+                            "",
+                            "Daily digest: 09:00, or 09:00+0200 for an offset from UTC (default 09:00 UTC)."
+                        ),
+                        input(
+                            "region",
+                            "Region",
+                            &v("region"),
+                            "",
+                            "Region outage: the region: label of alias deployments, such as eu. Empty: each region."
                         )
                     ]
                     .concat(),

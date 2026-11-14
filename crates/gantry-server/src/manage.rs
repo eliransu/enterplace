@@ -851,14 +851,16 @@ async fn allow(
                 ),
             ));
         }
-        // The policy governs every organization: changing it is for a role not kept to one.
-        if permission == EditPolicy && role.org.is_some() {
+        // The policy governs the whole install: changing it is for a role not kept to part of it.
+        if permission == EditPolicy && role.confined() {
             return Err(refused(
                 StatusCode::FORBIDDEN,
                 "not_permitted",
                 format!(
-                    "Refused: {} changes the policy of the whole install, and role \"{}\" is kept to one organization. Ask an admin of the whole install.",
-                    route.action, role.name
+                    "Refused: {} changes the policy of the whole install, and role \"{}\" is kept to {}. Ask an admin of the whole install.",
+                    route.action,
+                    role.name,
+                    reach(&role)
                 ),
             ));
         }
@@ -923,13 +925,7 @@ async fn allow(
                     .get(header::ACCEPT)
                     .and_then(|v| v.to_str().ok())
                     .is_some_and(|a| a.contains("text/csv"));
-            usage(
-                &reloader.audit_path(),
-                &form,
-                role.org.as_deref(),
-                wants_csv,
-            )
-            .await
+            usage(&reloader.audit_path(), &form, &role, wants_csv).await
         }
         "list_teams" => Ok(Plan::Read(teams(policy, &role, &read("limits")?))),
         "list_models" => {
@@ -1096,7 +1092,7 @@ fn if_match(headers: &HeaderMap) -> Option<Option<i64>> {
 fn teams(policy: &gantry_core::policy::Policy, role: &Role, limits: &Value) -> Value {
     let mut by: std::collections::BTreeMap<&str, Vec<Value>> = Default::default();
     for (_, who) in policy.entries() {
-        if role.org.as_ref().is_none_or(|o| *o == who.org) {
+        if role.covers(&who.org, &who.team, who.customer.as_deref()) {
             by.entry(who.team.as_str())
                 .or_default()
                 .push(json!({ "name": who.name, "admin": who.admin, "sha256_prefix": who.key, "org": (!who.org.is_empty()).then_some(&who.org) }));
@@ -1158,15 +1154,70 @@ fn csv_field(text: &str) -> String {
     format!("\"{}\"", text.replace('"', "\"\""))
 }
 
+/// Keeps a query within what a confined role reaches: its organization, teams and customers. A filter outside them is
+/// refused, not quietly dropped, so a caller never mistakes an empty answer for no usage.
+fn confine(query: &mut Query, role: &Role) -> Result<(), Refusal> {
+    let org: Vec<String> = role.org.iter().cloned().collect();
+    for (dimension, reach_of) in [
+        ("org", &org),
+        ("team", &role.teams),
+        ("customer", &role.customers),
+    ] {
+        if reach_of.is_empty() {
+            continue;
+        }
+        if let Some((_, value)) = query
+            .labels
+            .iter()
+            .find(|(d, v)| d == dimension && !reach_of.contains(v))
+        {
+            return Err(refused(
+                StatusCode::FORBIDDEN,
+                "not_permitted",
+                format!(
+                    "Refused: role \"{}\" is kept to {}, so it sees usage within it only, and {dimension} \"{value}\" is not. Leave {dimension} out, or ask an admin of the whole install.",
+                    role.name,
+                    reach(role)
+                ),
+            ));
+        }
+        query.within.push((dimension.to_string(), reach_of.clone()));
+    }
+    Ok(())
+}
+
+/// What a confined role is kept to, for messages: "organization \"acme\" and teams payments, web".
+fn reach(role: &Role) -> String {
+    let mut parts = Vec::new();
+    if let Some(org) = &role.org {
+        parts.push(format!("organization \"{org}\""));
+    }
+    for (word, list) in [("team", &role.teams), ("customer", &role.customers)] {
+        if !list.is_empty() {
+            parts.push(format!(
+                "{word}{} {}",
+                if list.len() == 1 { "" } else { "s" },
+                list.join(", ")
+            ));
+        }
+    }
+    if parts.is_empty() {
+        "the whole install".into()
+    } else {
+        parts.join(" and ")
+    }
+}
+
 /// `GET /admin/usage`: the requests the query matches, summed by one dimension, day or hour. Summed in SQL by the
 /// store's request index when the gateway has one; else folded from this gateway's audit chain.
 async fn usage(
     audit: &std::path::Path,
     form: &gantry_console::Form,
-    own_org: Option<&str>,
+    role: &Role,
     csv: bool,
 ) -> Result<Plan, Refusal> {
     let mut query = Query::parse(&|name| form.get(name).to_string()).map_err(bad)?;
+    confine(&mut query, role)?;
     let group = match form.get("group_by").trim() {
         "" => "day",
         g => g,
@@ -1178,20 +1229,6 @@ async fn usage(
             "group_by is \"{group}\". Group by day, hour or one of {}.",
             names.join(", ")
         )));
-    }
-    if let Some(org) = own_org {
-        if query.labels.iter().any(|(d, v)| d == "org" && v != org) {
-            return Err(refused(
-                StatusCode::FORBIDDEN,
-                "not_permitted",
-                format!(
-                    "Refused: your role is kept to organization \"{org}\", so it sees that organization's usage only. Leave org out, or ask an admin of the whole install."
-                ),
-            ));
-        }
-        if !query.labels.iter().any(|(d, _)| d == "org") {
-            query.labels.push(("org".into(), org.to_string()));
-        }
     }
     query.limit = insights::MAX_ROWS;
     let hourly = group == "hour";
@@ -1432,6 +1469,156 @@ mod tests {
             .map(|p| p.values().filter_map(Value::as_object).map(Map::len).sum())
             .unwrap_or_default();
         assert_eq!(operations, ROUTES.len());
+    }
+
+    fn role(org: Option<&str>, teams: &[&str], customers: &[&str]) -> Role {
+        Role {
+            name: "kept".into(),
+            permissions: vec![SeeSpend],
+            org: org.map(str::to_string),
+            teams: teams.iter().map(|t| (*t).to_string()).collect(),
+            customers: customers.iter().map(|c| (*c).to_string()).collect(),
+            sso_values: Vec::new(),
+            line: 1,
+        }
+    }
+
+    /// A chain of three answered requests: payments for customer acme-corp, payments for globex-inc, and search.
+    fn chain() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!("gantry-manage-{}", id::random_hex(6)));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("audit.jsonl");
+        let log = gantry_core::audit::AuditLog::open(&path)?;
+        for (decision, team, customer) in [
+            ("D1", "payments", "acme-corp"),
+            ("D2", "payments", "globex-inc"),
+            ("D3", "search", "acme-corp"),
+        ] {
+            let mut request = gantry_core::audit::record(&gantry_core::audit::Entry {
+                id: decision,
+                person: Some("maya.cohen"),
+                team: Some(team),
+                key: Some("5d1e4a07"),
+                method: "POST",
+                path: "/v1/chat/completions",
+                model: Some("m"),
+                allowed: true,
+                provider: "mock",
+                ..Default::default()
+            });
+            request.insert("customer".into(), customer.into());
+            log.append_record(&request)?;
+            let usage = json!({"event": "usage", "id": decision, "provider": "mock", "model": "m", "status": 200,
+                "input_tokens": 10, "output_tokens": 5, "charged_usd": 1.0, "customer": customer});
+            log.append_record(usage.as_object().ok_or("not an object")?)?;
+        }
+        log.flush();
+        Ok(path)
+    }
+
+    async fn summed(
+        path: &std::path::Path,
+        query: &str,
+        role: &Role,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
+        match usage(path, &gantry_console::Form::parse(query), role, false).await {
+            Ok(Plan::Read(value)) => Ok(value),
+            Ok(_) => Err("not a JSON answer".into()),
+            Err(refusal) => Err(format!("{}: {}", refusal.code, refusal.message).into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn usage_stays_within_the_teams_and_customers_a_role_is_kept_to()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = chain()?;
+        let everyone = role(None, &[], &[]);
+        assert_eq!(
+            summed(&path, "group_by=team", &everyone).await?["totals"]["requests"],
+            3
+        );
+
+        let payments = role(None, &["payments"], &[]);
+        let seen = summed(&path, "group_by=team", &payments).await?;
+        assert_eq!(seen["totals"]["requests"], 2, "{seen}");
+        assert!(
+            seen["groups"]
+                .as_array()
+                .is_some_and(|g| g.iter().all(|r| r["team"] == "payments")),
+            "{seen}"
+        );
+        let refused = summed(&path, "team=search", &payments).await;
+        let message = refused.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            message.starts_with("not_permitted") && message.contains("team payments"),
+            "{message}"
+        );
+
+        let acme = role(None, &[], &["acme-corp"]);
+        let seen = summed(&path, "group_by=team", &acme).await?;
+        assert_eq!(seen["totals"]["requests"], 2, "{seen}");
+        let refused = summed(&path, "customer=globex-inc", &acme).await;
+        assert!(refused.is_err(), "another customer's usage is refused");
+
+        // Kept to both: only what lies in each.
+        let both = role(None, &["payments"], &["acme-corp"]);
+        assert_eq!(summed(&path, "", &both).await?["totals"]["requests"], 1);
+        Ok(())
+    }
+
+    #[test]
+    fn the_teams_list_shows_the_people_a_role_reaches() {
+        let policy = gantry_core::policy::Policy::new()
+            .with_key("gantry_a", "maya.cohen", "payments")
+            .with_key("gantry_b", "dana.levi", "search")
+            .with_key("gantry_c", "noa.bar", "payments")
+            .with_key_change("gantry_c", |who| who.customer = Some("acme-corp".into()));
+        let names = |r: &Role| {
+            teams(&policy, r, &Value::Null)["teams"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|t| t["people"].as_array().cloned().unwrap_or_default())
+                .filter_map(|p| p["name"].as_str().map(str::to_string))
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        assert_eq!(names(&role(None, &[], &[])).len(), 3);
+        assert_eq!(
+            names(&role(None, &["payments"], &[])),
+            ["maya.cohen".to_string(), "noa.bar".to_string()].into()
+        );
+        assert_eq!(
+            names(&role(None, &[], &["acme-corp"])),
+            ["noa.bar".to_string()].into()
+        );
+        assert!(role(None, &["payments"], &[]).confined());
+        assert!(role(None, &[], &["acme-corp"]).confined());
+        assert!(!role(None, &[], &[]).confined());
+        assert_eq!(
+            reach(&role(Some("acme"), &["payments", "web"], &["acme-corp"])),
+            "organization \"acme\" and teams payments, web and customer acme-corp"
+        );
+    }
+
+    /// A route the router serves itself, beside the catch-all, would never reach this table: the OpenAPI document
+    /// would miss it and its calls would skip the checks here. A branch that adds one (`/admin/teams` handlers, say)
+    /// fails this until the route is a row of `ROUTES` instead.
+    #[test]
+    fn every_admin_route_the_router_serves_goes_through_the_table() {
+        let source = include_str!("lib.rs");
+        let mut served = Vec::new();
+        for piece in source.split(".route(\"").skip(1) {
+            let path = piece.split('"').next().unwrap_or_default();
+            if path == "/admin" || path.starts_with("/admin/") {
+                served.push(path);
+            }
+        }
+        assert_eq!(
+            served,
+            ["/admin", "/admin/{*rest}"],
+            "add these to ROUTES (the method, action, permission and summary) and drop them from the router; dispatch sends every /admin path through the table"
+        );
+        assert!(ROUTES.iter().all(|(_, r)| r.path.starts_with("/admin")));
     }
 
     #[test]

@@ -28,6 +28,12 @@ one repository. How a release is made: RELEASING.md.
   team, key or provider; `deployment_down`, `key_expiring`, `credential_failing`, `guardrail_vendor_failing` and
   `export_lagging`. Alert rules are in the admin API (`/admin/alerts/rules`), and an embedding binary adds admin routes
   through `gantry_server::AdminApi`, checked and recorded by the gateway.
+- Alerts (enterprise): `daily_digest` (per rule's channels, at a local time, the last 24 hours of spend, refusals,
+  top users and alerts), `region_outage` (every alias deployment of a `region:` failing with none answering),
+  `config_rejected` (a reload refusing a policy or keys change, or a policy version refused as `invalid_policy`),
+  `kill_cleared` and `circuit_open` (an alias deployment put to cool down).
+- `/admin/usage`, `/admin/teams` and the policy-changing routes honor roles kept to teams or end customers (`teams:`
+  and `customers:` on a role) as they do roles kept to an organization.
 - `gantry import litellm --url <proxy> --master-key-env <VAR>` reads a running LiteLLM proxy's model list, keys and
   teams through its management API, writes team budgets as `limits:`, and issues one Gantry key per LiteLLM key into a
   new keys file, printing each beside the key it replaces.

@@ -266,6 +266,36 @@ fn working_hours_and_weekends() {
     assert!(parse_hours("19-08").is_none() && parse_hours("08-19+2").is_none());
 }
 
+#[test]
+fn the_digest_is_due_once_the_local_day_reaches_its_time() {
+    let at = |text: &str| parse_time(text).unwrap_or(SystemTime::UNIX_EPOCH);
+    assert_eq!(parse_at(""), Some((9 * 60, 0)), "09:00 UTC by default");
+    assert_eq!(parse_at("07:30+0200"), Some((7 * 60 + 30, 120)));
+    assert_eq!(parse_at("18:00-0500"), Some((18 * 60, -300)));
+    for wrong in ["25:00", "9", "09:60", "09:00+2", "09:00+1500", "nine"] {
+        assert!(parse_at(wrong).is_none(), "{wrong}");
+    }
+    let nine = parse_at("09:00").unwrap_or_default();
+    assert_eq!(digest_due(at("2026-11-14T08:59:00.000Z"), nine), None);
+    assert_eq!(
+        digest_due(at("2026-11-14T09:00:00.000Z"), nine).as_deref(),
+        Some("2026-11-14")
+    );
+    // 23:30 UTC is already 01:30 the next day at +0200, before its 07:30.
+    let israel = parse_at("07:30+0200").unwrap_or_default();
+    assert_eq!(digest_due(at("2026-11-14T23:30:00.000Z"), israel), None);
+    assert_eq!(
+        digest_due(at("2026-11-15T05:30:00.000Z"), israel).as_deref(),
+        Some("2026-11-15")
+    );
+    // 02:00 UTC is still the day before at -0500.
+    let ny = parse_at("18:00-0500").unwrap_or_default();
+    assert_eq!(
+        digest_due(at("2026-11-15T02:00:00.000Z"), ny).as_deref(),
+        Some("2026-11-14")
+    );
+}
+
 // ---------------------------------------------------------------- against Postgres
 
 fn write(gw: &Gateway, fields: Value) -> Result<(), Error> {
@@ -1002,5 +1032,162 @@ async fn alert_rules_are_in_the_admin_api_with_records_and_the_license_gate() ->
     let (status, body, _) = admin_call(&locked, "GET", "/admin/alerts/rules", Value::Null).await?;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"]["code"], "license_required");
+    Ok(())
+}
+
+#[tokio::test]
+async fn digests_regions_rejected_changes_cleared_kills_and_open_circuits_alert()
+-> Result<(), Error> {
+    let Some(url) = database("alerts_ops").await? else {
+        return Ok(());
+    };
+    let (gw, ex) = quiet("alerts_ops", &url, &["alerts"])?;
+    // Two eu deployments and one in us behind one alias.
+    std::fs::write(
+        gw.dir.join("gantry.policy.yaml"),
+        "version: 1\nstore: { postgres_url_env: GANTRY_STORE_URL }\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\n  - name: mock-b\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m2]\n  - name: mock-us\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m3]\naliases:\n  - name: smart\n    deployments:\n      - { provider: mock, model: m, region: eu }\n      - { provider: mock-b, model: m2, region: eu }\n      - { provider: mock-us, model: m3, region: us }\nrules:\n  - name: all\n    principals: { any: true }\n    models: [m, m2, m3, smart]\n",
+    )?;
+    let rules = [
+        json!({"name": "Digest", "kind": "daily_digest", "params": {"at": "00:00"}}),
+        json!({"name": "Region", "kind": "region_outage", "params": {"count": "1", "minutes": "10"}}),
+        json!({"name": "Rejected", "kind": "config_rejected"}),
+        json!({"name": "Cleared", "kind": "kill_cleared"}),
+        json!({"name": "Circuit", "kind": "circuit_open"}),
+    ];
+    for rule in &rules {
+        let (status, body, _) =
+            admin_call(&gw, "POST", "/admin/alerts/rules", rule.clone()).await?;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+    for (params, says) in [
+        (json!({"at": "25:00"}), "09:00+0200"),
+        (json!({"region": "e u"}), "region: gives"),
+    ] {
+        let kind = if params.get("at").is_some() {
+            "daily_digest"
+        } else {
+            "region_outage"
+        };
+        let (status, body, _) = admin_call(
+            &gw,
+            "POST",
+            "/admin/alerts/rules",
+            json!({"name": "Bad", "kind": kind, "params": params}),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.to_string().contains(says), "{body}");
+    }
+
+    // Both eu deployments fail and us answers; then us fails once but has answered, so it is not out.
+    write(
+        &gw,
+        json!({"event": "attempts", "id": "a1", "attempts": [
+            {"provider": "mock/m", "outcome": "503"},
+            {"provider": "mock-b/m2", "outcome": "upstream_timeout"},
+            {"provider": "mock-us/m3", "outcome": "200"}]}),
+    )?;
+    write(
+        &gw,
+        json!({"event": "usage", "id": "a1", "person": "alice", "team": "payments", "alias": "smart",
+            "provider": "mock-us", "model": "m3", "status": 200, "charged_usd": 2.5}),
+    )?;
+    write(
+        &gw,
+        json!({"event": "attempts", "id": "a2", "attempts": [
+            {"provider": "mock-us/m3", "outcome": "502"}, {"provider": "mock/m", "outcome": "503"}]}),
+    )?;
+    write(
+        &gw,
+        json!({"event": "config_rejected", "trigger": "file_change", "policy_sha256_before": "aaaaaaaaaaaaaaaa",
+            "keys_sha256_before": "bbbbbbbbbbbbbbbb", "policy_sha256": "cccccccccccccccc", "keys_sha256": "bbbbbbbbbbbbbbbb",
+            "problem_count": 1, "problems": ["gantry.policy.yaml line 3: unknown field colour"]}),
+    )?;
+    for (id, action, verdict, code) in [
+        ("p1", "approve_policy", "refused", Some("invalid_policy")),
+        ("p2", "propose_policy", "allow", None),
+        ("p3", "approve_policy", "refused", Some("not_permitted")),
+        ("k1", "clear_kill", "allow", None),
+        ("k2", "clear_kill", "refused", Some("not_permitted")),
+    ] {
+        write(
+            &gw,
+            json!({"event": "admin", "id": id, "person": "noa", "action": action, "verdict": verdict, "code": code,
+                "target": {"scope": "team", "value": "payments"}}),
+        )?;
+    }
+    run(&ex).await?;
+    let engine = ex.alerts.get().ok_or("no engine")?.clone();
+    engine.checks().await?;
+    engine.checks().await?;
+
+    let fired = rows(
+        &url,
+        "SELECT kind, key, summary FROM enterprise_alerts ORDER BY id",
+    )
+    .await?;
+    let fired: Vec<(String, String, String)> = fired
+        .iter()
+        .map(|r| Ok((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?)))
+        .collect::<Result<_, gantry_server::store::tokio_postgres::Error>>()?;
+    let of = |kind: &str| {
+        fired
+            .iter()
+            .filter(|f| f.0 == kind)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let region = of("region_outage");
+    assert_eq!(
+        region.iter().map(|f| f.1.as_str()).collect::<Vec<_>>(),
+        ["region:eu"],
+        "us answered, so only eu is out: {fired:?}"
+    );
+    assert!(
+        region[0].2.contains("mock/m (2)") && region[0].2.contains("mock-b/m2 (1)"),
+        "{fired:?}"
+    );
+    let mut circuits: Vec<String> = of("circuit_open").into_iter().map(|f| f.1).collect();
+    circuits.sort();
+    assert_eq!(
+        circuits,
+        [
+            "deployment:mock-b/m2",
+            "deployment:mock-us/m3",
+            "deployment:mock/m"
+        ],
+        "once per deployment within the quiet period: {fired:?}"
+    );
+    let rejected = of("config_rejected");
+    assert_eq!(rejected.len(), 2, "{fired:?}");
+    assert!(
+        rejected[0].1 == "config:cccccccccccc:bbbbbbbbbbbb"
+            && rejected[0].2.contains("unknown field colour")
+            && rejected[0].2.contains("aaaaaaaaaaaa"),
+        "{fired:?}"
+    );
+    assert_eq!(rejected[1].1, "p1", "{fired:?}");
+    let cleared = of("kill_cleared");
+    assert_eq!(cleared.len(), 1, "{fired:?}");
+    assert!(
+        cleared[0].1 == "k1"
+            && cleared[0]
+                .2
+                .contains("noa cleared the kill switch on team payments"),
+        "{fired:?}"
+    );
+    let digest = of("daily_digest");
+    assert_eq!(digest.len(), 1, "once a day: {fired:?}");
+    let day = &audit::timestamp()[..10];
+    assert_eq!(digest[0].1, format!("digest:{day}"));
+    let text = &digest[0].2;
+    assert!(
+        text.contains("$2.50 spent") && text.contains("alice $2.50"),
+        "{text}"
+    );
+    assert!(
+        text.contains("kill_cleared 1") && text.contains("region_outage 1"),
+        "{text}"
+    );
     Ok(())
 }

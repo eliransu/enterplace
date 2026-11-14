@@ -2314,6 +2314,9 @@ fn roles(file: &Path, text: &str, parsed: &PolicyFile, errors: &mut Vec<String>)
             name: role.name.clone(),
             permissions,
             org: role.org.clone(),
+            // Set from the role's `teams:` and `customers:` once the policy reads them; kept to none until then.
+            teams: Vec::new(),
+            customers: Vec::new(),
             sso_values: role.sso_values.clone(),
             line,
         });

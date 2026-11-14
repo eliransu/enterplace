@@ -162,7 +162,13 @@ pub fn extend_with(
         );
         match registered {
             Ok(exporter) if alerts_on => {
-                alerts::register(&mut extension, &exporter, &env, host.keys.to_path_buf());
+                alerts::register(
+                    &mut extension,
+                    &exporter,
+                    &env,
+                    host.keys.to_path_buf(),
+                    host.policy.to_path_buf(),
+                );
             }
             Ok(_) => {}
             Err(err) => eprintln!("warning: audit export, retention and alerts are off: {err}"),

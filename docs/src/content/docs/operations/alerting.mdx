@@ -65,6 +65,11 @@ Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and
 | `guardrail_vendor_failing` | `count` requests or answers whose guardrail service could not be reached within `minutes`, whether it failed open or closed | count, minutes | the guardrail |
 | `key_expiring` | A key expires within `days`. Checked once a minute against the keys | days (7) | key and expiry: once each |
 | `export_lagging` | An audit export destination has records older than `minutes` that it has not sent. Checked once a minute | minutes (15) | replica and destination |
+| `daily_digest` | Every day once the local time reaches `at`: the last 24 hours of every replica, with spend, requests, refusals and their commonest codes, the five top users by spend, and the alerts fired by kind. Sent to each of the rule's channels. A rule added after that time sends today's digest at once | at, such as `09:00` or `09:00+0200` (default `09:00` UTC) | the local day: once a day |
+| `region_outage` | Every [alias deployment](/routing/aliases/) whose `region:` is the region has `count` failures within `minutes`, and not one of them answered in that time. A region with one deployment still answering does not fire | region (empty: each region), count (1), minutes (5) | the region |
+| `config_rejected` | A reload refuses a change to the policy or keys file (a `config_rejected` record, with the first problem), or a policy version sent through the admin API is refused as `invalid_policy` | none | the refused change, or the record: once each |
+| `kill_cleared` | A kill switch is cleared (an `admin` record with action `clear_kill`) | none | the record: once each |
+| `circuit_open` | An alias deployment fails (no answer, a 429 or a 5xx) and is passed over for its alias's `cooldown_seconds` | none | the deployment (`provider/model`), once per quiet period |
 | `system` | The audit log cannot be written, this replica's records cannot be read into Postgres, the alert tables cannot be read, or requests are refused with `store_unavailable` or `kills_unreadable` | none | replica and problem |
 
 Group by is `all` (default), `person`, `team` or `key`. The unusual kinds compare by `team` (default), `key` or `provider`: their requests, errors and latency are kept per scope and day in Postgres from the first record read, so the baseline is there when a rule is added. A replica new to alerting reads the records of the last 14 days before the month began, so the baseline is whole from the start.
@@ -73,10 +78,12 @@ Group by is `all` (default), `person`, `team` or `key`. The unusual kinds compar
 An upstream failure that was not retried leaves no record of its own (see [refusal codes](/reference/refusal-codes/#upstream_failed)). Give providers `retries: 1` or a `fallback` so failed tries are in attempts records and count toward `provider_errors`.
 </Aside>
 
+`region_outage` and `circuit_open` read alias deployments by `provider/model`, as attempts records name them, and the answer of each usage record that carries an `alias`. Region labels come from the policy in force, read when a region rule has something to check.
+
 ## Deduplication and rate limits
 
 - After an alert, the same rule and subject stay quiet for the rule's **quiet period** (60 minutes by default). Matching records are counted, not sent.
-- Kinds whose subject names a period or an event (budget, kill switch, new address, after hours, the unusual kinds, key expiring) fire once per subject.
+- Kinds whose subject names a period or an event (budget, kill switch set or cleared, new address, after hours, the unusual kinds, key expiring, daily digest, config rejected) fire once per subject.
 - A rule sends at most **At most per hour** alerts an hour (10 by default). The rest are counted as suppressed.
 - Each replica evaluates its own records once, and counts, spend and known addresses live in Postgres. A rule therefore sees every replica, and one alert goes out however many replicas there are.
 - Records older than an hour when first read (a new install, a replica catching up) count toward spend and the baseline but never fire.
