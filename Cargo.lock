@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "gantry-cli"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "gantry-console",
  "gantry-core",
@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "gantry-console"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "axum",
  "gantry-core",
@@ -418,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "gantry-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
  "hmac 0.12.1",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "gantry-enterprise"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "axum",
  "base64",
@@ -451,7 +451,7 @@ dependencies = [
 
 [[package]]
 name = "gantry-server"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "axum",
  "gantry-console",

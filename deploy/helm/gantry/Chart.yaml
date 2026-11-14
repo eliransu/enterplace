@@ -2,5 +2,5 @@ apiVersion: v2
 name: gantry
 description: Gantry Enterprise, the self-hosted AI gateway. Each replica keeps its own audit chain on its own volume.
 type: application
-version: 0.0.1
-appVersion: "0.0.1"
+version: 0.1.0
+appVersion: "0.1.0"
