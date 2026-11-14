@@ -21,8 +21,10 @@ The retention period is 30 to 3650 days; 365 by default. Owners and admins chang
 
 Sealing needs Linux or macOS: a Windows replica keeps its log whole and says so on the page.
 
+With [a chain per organization](/governance/audit-log/#a-chain-per-organization) (`audit: { per_org: true }`), each organization's chain is retained as a replica of its own: sealed daily, its old segments retired with an `audit_retired` record in that chain, never past what the audit export has read from it.
+
 ## Legal hold
 
-An owner turns legal hold on or off with a reason. While it is on, nothing is sealed or deleted, on any replica. The reason, who set it and when are shown on the page, and each change is an admin record in the audit log. Admins and viewers cannot change it.
+An owner turns legal hold on or off with a reason. While it is on, nothing is sealed or deleted, on any replica and in any organization's chain. The reason, who set it and when are shown on the page, and each change is an admin record in the audit log. Admins and viewers cannot change it.
 
 Keep the archive before turning on retention if you need records past the period: use the [archive](/operations/siem-export/#backfill-and-archive) or an object storage destination.

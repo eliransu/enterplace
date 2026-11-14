@@ -305,7 +305,7 @@ fn request(
     Ok(())
 }
 
-async fn rows(
+pub(crate) async fn rows(
     url: &str,
     sql: &str,
 ) -> Result<Vec<gantry_server::store::tokio_postgres::Row>, Error> {
@@ -717,5 +717,261 @@ async fn without_the_feature_the_page_says_why_and_a_viewer_changes_nothing() ->
     assert!(page.text.contains("license_required"), "{}", page.text);
     let audit = owner.go(&gw.app, "GET", "/console/audit", &[]).await?;
     assert!(!audit.text.contains("/console/alerts"), "no nav entry");
+    Ok(())
+}
+
+/// Saves a rule through the console, sending to channel 1.
+async fn add_rule(
+    owner: &mut Browser,
+    gw: &Gateway,
+    fields: &[(&str, &str)],
+) -> Result<String, Error> {
+    let mut form: Vec<(&str, &str)> = vec![
+        ("action", "rule_save"),
+        ("channels", "1"),
+        ("cooldown", "60"),
+    ];
+    form.extend_from_slice(fields);
+    Ok(owner
+        .go(&gw.app, "POST", "/console/alerts", &form)
+        .await?
+        .text)
+}
+
+async fn webhook(owner: &mut Browser, gw: &Gateway, sink: &Sink) -> Result<(), Error> {
+    let saved = owner
+        .go(
+            &gw.app,
+            "POST",
+            "/console/alerts",
+            &[
+                ("action", "channel_save"),
+                ("kind", "webhook"),
+                ("name", "ops hook"),
+                ("url", &format!("{}/in/alerts", sink.base)),
+            ],
+        )
+        .await?;
+    assert!(saved.text.contains("Saved channel 1"), "{}", saved.text);
+    Ok(())
+}
+
+async fn execute(url: &str, sql: &str, params: &[&str]) -> Result<(), Error> {
+    use gantry_server::store::tokio_postgres;
+    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls).await?;
+    tokio::spawn(connection);
+    let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+        .iter()
+        .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
+        .collect();
+    client.execute(sql, &params).await?;
+    Ok(())
+}
+
+/// What the gateway's own counter has spent, as settled spend: the alert reads the counter enforcement reads.
+async fn set_spent(url: &str, scope: &str, per: Period, usd: f64) -> Result<(), Error> {
+    let label = per.label(&audit::timestamp());
+    execute(
+        url,
+        &format!(
+            "INSERT INTO gantry_spend (scope, per, period, spent) VALUES ($1, $2, $3, {usd}) \
+             ON CONFLICT (scope, per, period) DO UPDATE SET spent = {usd}"
+        ),
+        &[scope, &per.word(), &label],
+    )
+    .await
+}
+
+fn usage(gw: &Gateway, id: &str) -> Result<(), Error> {
+    write(
+        gw,
+        json!({ "event": "usage", "id": id, "person": "alice", "team": "payments", "key": "aaaa1111", "model": "m", "provider": "mock", "status": 200, "charged_usd": 1.0 }),
+    )
+}
+
+#[tokio::test]
+async fn a_percent_rule_fires_at_its_share_of_each_policy_budget_for_its_period()
+-> Result<(), Error> {
+    let Some(url) = database("alerts_percent").await? else {
+        return Ok(());
+    };
+    // A period a fifth to three fifths through now, for the forecast: projected past the threshold, actual not yet.
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let chosen = ["6h", "day", "week", "month"].into_iter().find_map(|p| {
+        let per = Period::parse(p, None).ok()?;
+        let (start, end) = per.window(now);
+        let elapsed = (now - start) as f64 / (end - start) as f64;
+        (0.2..0.6).contains(&elapsed).then_some((p, per, elapsed))
+    });
+    let forecast_per = chosen.map_or("day", |c| c.0);
+    let policy = format!(
+        "{}limits:\n  - {{ team: payments, budget: [{{ usd: 100, per: month }}, {{ usd: 10, per: {{ sliding: 24h }} }}] }}\n  - {{ person: alice, budget: {{ usd: 1000, per: {forecast_per} }} }}\n",
+        crate::enterprise::testing::POLICY
+    );
+    let sink = Sink::start().await?;
+    let (gw, ex) =
+        crate::enterprise::siem::tests::quiet_policy("alerts_percent", &url, &["alerts"], &policy)?;
+    let mut owner = Browser::admin(&gw.app).await?;
+    webhook(&mut owner, &gw, &sink).await?;
+    let added = add_rule(
+        &mut owner,
+        &gw,
+        &[
+            ("kind", "budget"),
+            ("name_rule", "Payments 80%"),
+            ("percent", "80"),
+            ("scope", "team"),
+            ("name", "payments"),
+        ],
+    )
+    .await?;
+    assert!(added.contains("Added rule"), "{added}");
+    let added = add_rule(
+        &mut owner,
+        &gw,
+        &[
+            ("kind", "budget"),
+            ("name_rule", "Alice forecast"),
+            ("percent", "50"),
+            ("scope", "person:alice"),
+            ("forecast", "on"),
+        ],
+    )
+    .await?;
+    assert!(added.contains("Added rule"), "{added}");
+    let refused = add_rule(
+        &mut owner,
+        &gw,
+        &[
+            ("kind", "budget"),
+            ("name_rule", "bad"),
+            ("percent", "80"),
+            ("scope", "planet:mars"),
+        ],
+    )
+    .await?;
+    assert!(
+        refused.contains("With a percent, scope is global, or org, team"),
+        "{refused}"
+    );
+
+    let month = Period::Month;
+    let sliding = Period::parse("sliding 24h", None)?;
+    set_spent(&url, "team:payments", month, 79.0).await?;
+    set_spent(&url, "team:payments", sliding, 9.0).await?;
+    if let Some((_, per, elapsed)) = chosen {
+        set_spent(&url, "person:alice", per, 500.0 * elapsed * 1.5).await?;
+    }
+    usage(&gw, "u1")?;
+    run(&ex).await?;
+    let hits: Vec<Value> = sink.deliveries().iter().map(|h| h.json()).collect();
+    let payments: Vec<&Value> = hits
+        .iter()
+        .filter(|h| h["rule"] == "Payments 80%")
+        .collect();
+    assert_eq!(payments.len(), 1, "the sliding budget only: {hits:?}");
+    assert_eq!(payments[0]["subject"], "team:payments|sliding:24h");
+    let summary = payments[0]["summary"].as_str().unwrap_or_default();
+    assert!(
+        summary.contains("$9.00 of its $10.00 budget for any 24 hours in the last 24 hours (90%)"),
+        "{summary}"
+    );
+    assert_eq!(payments[0]["records"][0]["id"], "u1");
+    if chosen.is_some() {
+        let forecast = hits
+            .iter()
+            .find(|h| h["rule"] == "Alice forecast")
+            .ok_or(format!("no forecast alert: {hits:?}"))?;
+        assert!(
+            forecast["summary"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("is forecast to spend"),
+            "{forecast}"
+        );
+    } else {
+        eprintln!("forecast not checked: every period is at its very start or end now");
+    }
+
+    // The month reaches 80%: its own alert, once for the month. The sliding one stays quiet for its quiet period.
+    sink.clear();
+    set_spent(&url, "team:payments", month, 81.0).await?;
+    usage(&gw, "u2")?;
+    run(&ex).await?;
+    let hits: Vec<Value> = sink.deliveries().iter().map(|h| h.json()).collect();
+    let payments: Vec<&Value> = hits
+        .iter()
+        .filter(|h| h["rule"] == "Payments 80%")
+        .collect();
+    assert_eq!(payments.len(), 1, "{hits:?}");
+    assert_eq!(
+        payments[0]["subject"],
+        format!("team:payments|month|{}", month.label(&audit::timestamp()))
+    );
+    sink.clear();
+    usage(&gw, "u3")?;
+    run(&ex).await?;
+    assert!(
+        !sink
+            .deliveries()
+            .iter()
+            .any(|h| h.json()["rule"] == "Payments 80%"),
+        "once per period"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn provider_errors_count_failures_that_were_not_retried() -> Result<(), Error> {
+    let Some(url) = database("alerts_upstream").await? else {
+        return Ok(());
+    };
+    let sink = Sink::start().await?;
+    let (gw, ex) = quiet("alerts_upstream", &url, &["alerts"])?;
+    let mut owner = Browser::admin(&gw.app).await?;
+    webhook(&mut owner, &gw, &sink).await?;
+    let added = add_rule(
+        &mut owner,
+        &gw,
+        &[
+            ("kind", "provider_errors"),
+            ("name_rule", "Gone"),
+            ("count", "3"),
+            ("minutes", "10"),
+            ("provider", "gone"),
+        ],
+    )
+    .await?;
+    assert!(added.contains("Added rule"), "{added}");
+    // One failure with no retry: an upstream error record and nothing else. It counts, one of three.
+    write(
+        &gw,
+        json!({ "event": "upstream_error", "id": "f1", "status": 502, "code": "upstream_unreachable", "provider": "gone", "tries": 1 }),
+    )?;
+    // A refusal Gantry made itself, not the provider's failure: not counted.
+    write(
+        &gw,
+        json!({ "event": "upstream_error", "id": "f0", "status": 403, "code": "unknown_model", "provider": "gone", "tries": 0 }),
+    )?;
+    run(&ex).await?;
+    assert!(sink.deliveries().is_empty());
+    // Retried once: the attempts record has both tries, the upstream error the last. Two more: three.
+    write(
+        &gw,
+        json!({ "event": "attempts", "id": "f2", "attempts": [{ "provider": "gone", "outcome": "upstream_timeout" }, { "provider": "gone", "outcome": "upstream_timeout" }] }),
+    )?;
+    write(
+        &gw,
+        json!({ "event": "upstream_error", "id": "f2", "status": 504, "code": "upstream_timeout", "provider": "gone", "tries": 2 }),
+    )?;
+    run(&ex).await?;
+    let hits: Vec<Value> = sink.deliveries().iter().map(|h| h.json()).collect();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0]["subject"], "provider:gone");
+    let summary = hits[0]["summary"].as_str().unwrap_or_default();
+    assert!(summary.starts_with("3 in the last 10 minutes"), "{summary}");
+    assert!(summary.contains("upstream_timeout"), "{summary}");
     Ok(())
 }

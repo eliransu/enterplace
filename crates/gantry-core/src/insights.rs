@@ -386,9 +386,15 @@ pub fn fold_chain(path: &Path) -> Result<Vec<Row>, String> {
     if !crate::audit::has_records(path) {
         return Ok(Vec::new());
     }
-    let reader = crate::audit::chain_reader(path)
-        .map_err(|err| format!("the audit log at {} cannot be read: {err}.", path.display()))?;
-    Ok(fold(reader, ""))
+    let failed =
+        |err: std::io::Error| format!("the audit log at {} cannot be read: {err}.", path.display());
+    // Every organization's chain too (`audit: { per_org: true }`), each folded as its own chain.
+    let mut rows = Vec::new();
+    for (_, at) in crate::audit::chains(path).map_err(failed)? {
+        rows.extend(fold(crate::audit::chain_reader(&at).map_err(failed)?, ""));
+    }
+    rows.sort_by(|a, b| b.time.cmp(&a.time));
+    Ok(rows)
 }
 
 /// What the request log is asked for. Every field narrows it; an empty field does not.

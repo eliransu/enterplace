@@ -168,7 +168,8 @@ struct Inner {
     /// Discovery and keys of the identity provider, refetched after `sso::CACHE`.
     provider: Mutex<Option<Arc<sso::Provider>>>,
     client: sso::HttpClient,
-    verified: Mutex<Option<Verified>>,
+    /// The last check of each chain: `""` the install's, else the organization's.
+    verified: Mutex<std::collections::HashMap<String, Verified>>,
     /// Codes handed to `gantry login` and not traded yet, by code.
     codes: Mutex<HashMap<String, Pending>>,
     /// The one-time setup link's token, and whether it was used.
@@ -848,12 +849,13 @@ impl Console {
         Ok(session)
     }
 
-    fn verified(&self) -> Option<Verified> {
+    fn verified(&self, chain: &str) -> Option<Verified> {
         self.0
             .verified
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .get(chain)
+            .cloned()
     }
 }
 
@@ -1788,6 +1790,41 @@ pub(crate) fn not_permitted(admin: &Admin, permission: Permission) -> Response {
     )
 }
 
+/// The chain a person reads on the audit page, by organization (`""` for the install's) and path. Someone kept to an
+/// organization reads its own chain when it has one (`audit: { per_org: true }`); anyone else may pick one with
+/// `?chain=<org>`.
+fn chain_for(admin: &Admin, audit: &std::path::Path, query: &Form) -> (String, std::path::PathBuf) {
+    let wanted = match &admin.org {
+        Some(org) => org.clone(),
+        None => query.get("chain").trim().to_string(),
+    };
+    let own = audit::org_path(audit, &wanted);
+    if !wanted.is_empty() && own.exists() {
+        (wanted, own)
+    } else {
+        (String::new(), audit.to_path_buf())
+    }
+}
+
+/// The records a person may see on the spend and people pages: their organization's chain, or their records in the
+/// install's; for someone kept to no organization, every chain one after another.
+fn records_for(admin: &Admin, audit: &std::path::Path) -> Result<Option<String>, String> {
+    if let Some(org) = &admin.org {
+        let own = audit::org_path(audit, org);
+        if own.exists() {
+            return read(&own);
+        }
+        return log_for(admin, read(audit));
+    }
+    let mut text = read(audit)?;
+    for (_, at) in audit::org_chains(audit).unwrap_or_default() {
+        if let Some(more) = read(&at)? {
+            text.get_or_insert_with(String::new).push_str(&more);
+        }
+    }
+    Ok(text)
+}
+
 /// The audit log as a person may see it: whole, or only their organization's records.
 fn log_for(admin: &Admin, log: Result<Option<String>, String>) -> Result<Option<String>, String> {
     if admin.org.is_none() {
@@ -1815,31 +1852,59 @@ async fn audit_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
         return not_permitted(&admin, Permission::SeeRecords);
     }
     let config = console.config();
+    let query = Form::of(&uri);
+    let (chain, path) = chain_for(&admin, &config.audit, &query);
     // ponytail: the whole audit log is read and parsed on every request. Fine for today's logs; an index or a tail read when they reach many megabytes.
-    let log = log_for(&admin, read(&config.audit));
+    let log = if chain.is_empty() {
+        log_for(&admin, read(&path))
+    } else {
+        read(&path)
+    };
+    // Someone kept to no organization may switch between the install's chain and each organization's.
+    let chains: Vec<(String, String, bool)> = match &admin.org {
+        Some(_) => Vec::new(),
+        None => {
+            let orgs = audit::org_chains(&config.audit).unwrap_or_default();
+            let mut list = Vec::new();
+            if !orgs.is_empty() {
+                list.push((
+                    "Install".to_string(),
+                    "/console/audit".to_string(),
+                    chain.is_empty(),
+                ));
+            }
+            for (org, _) in orgs {
+                let href = format!("/console/audit?chain={}", html::esc(&org));
+                list.push((org.clone(), href, org == chain));
+            }
+            list
+        }
+    };
     let policy = config::policy_text(&config.policy).ok();
     let loaded = config::load(&config.policy, Some(&config.keys)).ok();
     let body = pages::audit(&pages::AuditView {
         admin: &admin.label(),
-        query: &Form::of(&uri),
+        query: &query,
         log: &log,
+        chain: &chain,
+        chains: &chains,
         policy: policy.as_deref(),
         loaded: loaded.as_ref(),
-        verified: console.verified(),
+        verified: console.verified(&chain),
         read_only: admin.read_only,
         kills: &gantry_core::kill::read(&gantry_core::kill::path_beside(&config.keys)),
     });
     page(StatusCode::OK, body)
 }
 
-async fn verify(State(console): State<Console>, headers: HeaderMap) -> Response {
+async fn verify(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
     if !same_origin(&headers) {
         return foreign();
     }
-    if console.admin(&headers).await.is_none() {
+    let Some(admin) = console.admin(&headers).await else {
         return redirect("/console/sign-in");
-    }
-    let path = console.config().audit.clone();
+    };
+    let (chain, path) = chain_for(&admin, &console.config().audit, &Form::of(&uri));
     // The same walk as `gantry audit verify`. It reads the whole file, so it runs off the request threads.
     let result = tokio::task::spawn_blocking(move || {
         if path.exists() {
@@ -1850,12 +1915,17 @@ async fn verify(State(console): State<Console>, headers: HeaderMap) -> Response 
     })
     .await
     .unwrap_or_else(|err| Err(format!("the check stopped before it finished: {err}.")));
-    *console
+    console
         .0
         .verified
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((Instant::now(), result));
-    redirect("/console/audit")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(chain.clone(), (Instant::now(), result));
+    if chain.is_empty() || admin.org.is_some() {
+        redirect("/console/audit")
+    } else {
+        redirect(&format!("/console/audit?chain={chain}"))
+    }
 }
 
 async fn people_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
@@ -1883,7 +1953,7 @@ fn people_body(console: &Console, admin: &Admin, query: &Form, dialog: pages::Di
         query,
         keys_path: &config.keys,
         keys: keys_for(admin, &config.keys, config::read_keys(&config.keys)),
-        log: log_for(admin, read(&config.audit)).ok().flatten(),
+        log: records_for(admin, &config.audit).ok().flatten(),
         dialog,
         read_only: admin.read_only,
         // A list that cannot be read shows no one stopped here; the audit log's banner says it cannot be read.
@@ -2312,7 +2382,7 @@ async fn spend_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
     }
     let config = console.config();
     // ponytail: the whole audit log is read on every request, as the audit page does.
-    let log = log_for(&admin, read(&config.audit));
+    let log = records_for(&admin, &config.audit);
     let loaded = config::load(&config.policy, Some(&config.keys));
     page(
         StatusCode::OK,

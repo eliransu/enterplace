@@ -173,6 +173,28 @@ error: gantry-audit.jsonl starts at record 40212: records 1 to 40211 are missing
 
 A hash kept elsewhere for a retired record is no longer in the chain, so `--expect-last` with it fails: keep the hash of a later record, or check the retired range against your archive (the `audit_retired` record gives each file's SHA-256).
 
+## A chain per organization
+
+```yaml
+orgs: [acme, globex]
+audit: { per_org: true }
+```
+
+With `per_org`, each organization's records go to a hash chain of its own, beside the install's: `gantry-audit.jsonl.orgs/acme.jsonl`, with its own sealed segments in `gantry-audit.jsonl.orgs/acme.jsonl.sealed/` and its own lock file. A record goes to the chain of the `org` it names; the records that follow a decision and name no organization (attempts, upstream errors, answer guardrails) go where their decision went. Records of no organization (configuration records, admin records of people kept to none, requests of keys with no `org`) stay in the install's chain. Each chain is numbered from 1 and checked on its own.
+
+| | Install's chain | An organization's chain |
+|---|---|---|
+| Holds | Records that name no organization | That organization's decisions and every record that follows them |
+| `gantry audit verify gantry-audit.jsonl` | Checked | Checked after it, one block per organization; exit 1 if any fails |
+| `gantry audit verify gantry-audit.jsonl --org acme` | | Checked alone; `--expect-last` applies to it |
+| `gantry audit repair` | `gantry audit repair gantry-audit.jsonl` | `gantry audit repair gantry-audit.jsonl.orgs/acme.jsonl` |
+| Checked at start | Yes | Yes, every chain on disk and of every listed organization: Gantry does not start on one that does not hold |
+| Console audit page | People kept to no organization, by default; **Install** and one button per organization switch between them | People kept to the organization read it whole, and **Verify chain now** checks it |
+| [Retention](/operations/retention/), [legal hold](/operations/retention/#legal-hold), [audit export](/operations/siem-export/), [alerts](/operations/alerting/) | A replica | A replica of its own (`<host>-<first hash>`): sealed, retired, held, exported and alerted on as the install's is; an organization's alerts are recorded in its chain |
+| [Segments in object storage](/deploy/cloudflare/) | Under `GANTRY_AUDIT_SEGMENTS_URL` | Under `<that prefix>/orgs/acme`, fetched back on an empty disk |
+
+Spend replay at start and the console's request log and spend page read every chain. A chain is opened at start for each organization listed under `orgs:` and each one already on disk; one that first appears while Gantry runs (an organization added by a reload) gets its chain at its first record, and its export, retention and shipping start at the next restart. Turning `per_org` on or off needs a restart: records already written stay in the chain they are in.
+
 ## Size
 
 A request record is about 650 bytes and a usage record about 700, so a million forwarded requests make about 1.35 GB. Gantry reads the whole file at every start to verify it, so start-up time grows with the file. To start a new chain, stop Gantry, move the file aside with its last hash, and start again. With Gantry Enterprise, retention seals the log daily and deletes old segments with a record in the chain: see [Retention and legal hold](/operations/retention/).

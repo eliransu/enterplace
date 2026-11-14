@@ -2325,3 +2325,89 @@ async fn the_audit_log_says_when_observe_mode_lets_everything_through() -> TestR
     assert!(page.contains("Observe mode: nothing is blocked."), "{page}");
     Ok(())
 }
+
+#[tokio::test]
+async fn with_per_org_chains_an_org_role_reads_its_own_chain_and_an_admin_switches_between_them()
+-> TestResult {
+    const AUDITOR_KEY: &str = "gantry_auditor_key_for_tests";
+    let s = setup("per-org")?;
+    let policy = format!(
+        "{POLICY}orgs: [acme]\naudit: {{ per_org: true }}\nroles:\n  - name: auditor\n    permissions: [see_records]\n"
+    );
+    std::fs::write(s.dir.join("gantry.policy.yaml"), policy)?;
+    std::fs::write(
+        s.keys(),
+        format!(
+            "{}  - name: ana\n    team: audit\n    sha256: {}\n    org: acme\n    role: auditor\n",
+            keys_text(),
+            sha256_hex(AUDITOR_KEY.as_bytes())
+        ),
+    )?;
+    // acme's chain: its decision, and one that follows a decision of acme's and names no organization.
+    let acme = gantry_core::audit::org_path(&s.audit(), "acme");
+    std::fs::create_dir_all(acme.parent().ok_or("no folder")?)?;
+    let chain = AuditLog::open(&acme)?;
+    for (id, org) in [("ACMEDECISION1", Some("acme")), ("ACMEDECISION2", None)] {
+        let mut record = gantry_core::audit::record(&Entry {
+            id,
+            person: Some("acme-bot"),
+            method: "POST",
+            path: "/v1/chat/completions",
+            allowed: true,
+            ..Entry::default()
+        });
+        if let Some(org) = org {
+            record.insert("org".into(), org.into());
+        }
+        chain.append_record(&record)?;
+    }
+    chain.flush();
+    drop(chain);
+
+    let (status, headers, _) = send(
+        &s.app,
+        post("/console/sign-in", "", &format!("key={AUDITOR_KEY}"))?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let ana = headers
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .map(|c| c.split(';').next().unwrap_or("").to_string())
+        .unwrap_or_default();
+    let (status, _, page) = send(&s.app, get("/console/audit", &ana)?).await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(
+        page.contains("ACMEDECISION1") && page.contains("ACMEDECISION2"),
+        "the whole of acme's chain: {page}"
+    );
+    assert!(
+        !page.contains("maya.cohen"),
+        "nothing of the install's chain"
+    );
+    assert!(page.contains("organization acme"), "{page}");
+    // Verify checks acme's chain, whatever the address asks for.
+    let (status, _, _) = send(&s.app, post("/console/audit/verify?chain=", &ana, "")?).await?;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, _, page) = send(&s.app, get("/console/audit", &ana)?).await?;
+    assert!(
+        page.contains("unbroken from record 1 to record 2"),
+        "{page}"
+    );
+
+    // An admin kept to no organization starts on the install's chain and may switch to acme's.
+    let cookie = sign_in(&s.app).await?;
+    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    assert!(
+        page.contains("maya.cohen")
+            && !page.contains("ACMEDECISION1")
+            && page.contains("/console/audit?chain=acme"),
+        "{page}"
+    );
+    let (_, _, page) = send(&s.app, get("/console/audit?chain=acme", &cookie)?).await?;
+    assert!(
+        page.contains("ACMEDECISION1") && !page.contains("maya.cohen"),
+        "{page}"
+    );
+    Ok(())
+}

@@ -48,6 +48,8 @@ const MAX_ANSWER_COPY: usize = 32 * 1024 * 1024;
 #[derive(Default)]
 pub(crate) struct Spend {
     ledger: Mutex<HashMap<(String, Period), Bucket>>,
+    /// Sliding windows, without a store: each counter's slots, by the slot's label, oldest first.
+    slides: Mutex<HashMap<(String, Period), BTreeMap<String, Bucket>>>,
     // Times of each person's admitted requests within the last minute.
     rates: Mutex<HashMap<String, VecDeque<Instant>>>,
     // Tokens used within the last minute, and held by requests in flight, per team, person or key.
@@ -248,7 +250,45 @@ struct Over {
     resets: String,
 }
 
+/// What a sliding window holds at its slot `now`: what was spent in its slots from the window's start, and what every
+/// slot holds (a request in flight longer than the window still holds its reservation). Slots wholly before the
+/// window that hold nothing are dropped.
+fn slid(slots: &mut BTreeMap<String, Bucket>, per: Period, now: &str) -> (f64, f64) {
+    let from = per.window_start_label(now);
+    slots.retain(|slot, b| slot.as_str() >= from.as_str() || b.reserved > 0.0);
+    slots
+        .iter()
+        .fold((0.0, 0.0), |(spent, reserved), (slot, b)| {
+            (
+                spent
+                    + if slot.as_str() >= from.as_str() {
+                        b.spent
+                    } else {
+                        0.0
+                    },
+                reserved + b.reserved,
+            )
+        })
+}
+
 impl Spend {
+    /// The slot of a sliding window's counter.
+    fn slot<'a>(
+        slides: &'a mut HashMap<(String, Period), BTreeMap<String, Bucket>>,
+        scope: &str,
+        per: Period,
+        period: &str,
+    ) -> &'a mut Bucket {
+        slides
+            .entry((scope.to_string(), per))
+            .or_default()
+            .entry(period.to_string())
+            .or_insert_with(|| Bucket {
+                period: period.to_string(),
+                ..Bucket::default()
+            })
+    }
+
     /// The bucket of `scope` for `period`, started afresh when the period has turned. None for a period already over.
     fn bucket<'a>(
         ledger: &'a mut HashMap<(String, Period), Bucket>,
@@ -275,6 +315,25 @@ impl Spend {
     ) -> Result<Reservation, Over> {
         let period = period_of(now, budget.per);
         let period = period.as_str();
+        if budget.per.sliding {
+            let mut slides = locked(&self.slides);
+            let slots = slides.entry((scope.to_string(), budget.per)).or_default();
+            let (spent, reserved) = slid(slots, budget.per, period);
+            if spent + reserved + usd > budget.usd {
+                return Err(Over {
+                    spent,
+                    reserved,
+                    resets: resets(period, budget.per),
+                });
+            }
+            Self::slot(&mut slides, scope, budget.per, period).reserved += usd;
+            return Ok(Reservation {
+                scope: scope.to_string(),
+                per: budget.per,
+                period: period.to_string(),
+                usd,
+            });
+        }
         let mut ledger = locked(&self.ledger);
         let Some(bucket) = Self::bucket(&mut ledger, scope, budget.per, period) else {
             // The clock went back past a period boundary. Counting nothing would let spend through unchecked.
@@ -343,6 +402,17 @@ impl Spend {
             }]);
             return;
         }
+        if reservation.per.sliding {
+            let mut slides = locked(&self.slides);
+            let slot = Self::slot(
+                &mut slides,
+                &reservation.scope,
+                reservation.per,
+                &reservation.period,
+            );
+            slot.reserved = (slot.reserved - reservation.usd).max(0.0);
+            return;
+        }
         let mut ledger = locked(&self.ledger);
         if let Some(bucket) = ledger.get_mut(&(reservation.scope.clone(), reservation.per)) {
             if bucket.period == reservation.period {
@@ -367,7 +437,9 @@ impl Spend {
         }
         let mut ledger = locked(&self.ledger);
         for b in buckets(person, team, key, counted, time) {
-            if let Some(bucket) = Self::bucket(&mut ledger, &b.scope, b.per, &b.period) {
+            if b.per.sliding {
+                Self::slot(&mut locked(&self.slides), &b.scope, b.per, &b.period).spent += usd;
+            } else if let Some(bucket) = Self::bucket(&mut ledger, &b.scope, b.per, &b.period) {
                 bucket.spent += usd;
             }
         }
@@ -376,8 +448,8 @@ impl Spend {
     /// Sums the usage records of the current month from the audit log, so a restart does not forget spend.
     // ponytail: reads the whole log at start, as the chain check before it does. A checkpoint comes with that one.
     pub(crate) fn replay(&self, path: &Path, policy: Option<&Policy>) -> Result<(), String> {
-        // Sealed segments too: the month may have begun before the last seal.
-        let file = match audit::chain_reader(path) {
+        // Sealed segments too: the month may have begun before the last seal. Every organization's chain too.
+        let file = match audit::chains_reader(path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(err) => {
@@ -735,6 +807,11 @@ impl Spend {
                 Ok(Reserve::Over { spent, reserved }) => Some((spent, reserved)),
                 _ => None,
             },
+            None if per.sliding => Some(
+                locked(&self.slides)
+                    .get_mut(&(scope.to_string(), per))
+                    .map_or((0.0, 0.0), |slots| slid(slots, per, &period)),
+            ),
             None => Some(
                 locked(&self.ledger)
                     .get(&(scope.to_string(), per))
@@ -769,6 +846,11 @@ impl Spend {
     #[cfg(test)]
     fn spent(&self, scope: &str, per: Period) -> f64 {
         let now = audit::timestamp();
+        if per.sliding {
+            return locked(&self.slides)
+                .get_mut(&(scope.to_string(), per))
+                .map_or(0.0, |slots| slid(slots, per, &period_of(&now, per)).0);
+        }
         locked(&self.ledger)
             .get(&(scope.to_string(), per))
             .filter(|b| b.period == period_of(&now, per))
@@ -2163,6 +2245,20 @@ fn over_budget(
     } else {
         ""
     };
+    if budget.per.sliding {
+        let length = budget.per.describe();
+        let length = length.trim_end_matches(", sliding");
+        return Refusal::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            code,
+            format!(
+                "Refused: {whose} has spent {} of its {} budget for any {length}{under}{held}. {what} could cost up to {}, which would pass it.{smaller} The budget slides: each cost stops counting {length} after it was made, so room comes back as older spend leaves. Ask a Gantry admin to raise it if you need more before then.",
+                dollars(over.spent),
+                dollars(budget.usd),
+                dollars(most),
+            ),
+        );
+    }
     Refusal::new(
         StatusCode::TOO_MANY_REQUESTS,
         code,
@@ -2811,6 +2907,16 @@ impl Spend {
         if self.store.is_some() {
             return;
         }
+        if reservation.per.sliding {
+            Self::slot(
+                &mut locked(&self.slides),
+                &reservation.scope,
+                reservation.per,
+                &reservation.period,
+            )
+            .reserved += reservation.usd;
+            return;
+        }
         let mut ledger = locked(&self.ledger);
         if let Some(bucket) = Self::bucket(
             &mut ledger,
@@ -3031,6 +3137,46 @@ mod tests {
             "2000-01-01T00:00:00.000Z",
         );
         assert_eq!(spend.spent("team:t", Period::Month), 1.5);
+    }
+
+    #[test]
+    fn a_sliding_budget_without_a_store_counts_the_window_back_from_now() -> Result<(), String> {
+        let spend = Spend::default();
+        let per = Period::parse("sliding 24h", None)?;
+        let budget = Budget { usd: 10.0, per };
+        let now = "2026-11-14T12:00:30.000Z";
+        let counted = [("team:t".to_string(), per)];
+        // 25 hours ago is out of the window; 23 hours ago is in it.
+        spend.add(
+            "person:p",
+            "team:t",
+            "",
+            &counted,
+            50.0,
+            "2026-11-13T11:00:00.000Z",
+        );
+        spend.add(
+            "person:p",
+            "team:t",
+            "",
+            &counted,
+            4.0,
+            "2026-11-13T13:00:00.000Z",
+        );
+        let first = spend.reserve("team:t", budget, 5.0, now);
+        assert!(first.is_ok(), "4 spent and 5 held fit in 10");
+        let over = spend.reserve("team:t", budget, 2.0, now).err();
+        assert!(over.is_some_and(|o| o.spent == 4.0 && o.reserved == 5.0));
+        if let Ok(first) = first {
+            spend.release(&first);
+        }
+        // Once the 4 is older than the window, the whole 10 is free: no calendar turn needed.
+        assert!(
+            spend
+                .reserve("team:t", budget, 9.5, "2026-11-14T13:01:00.000Z")
+                .is_ok()
+        );
+        Ok(())
     }
 
     #[test]

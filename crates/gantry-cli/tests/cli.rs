@@ -2119,3 +2119,46 @@ fn start_without_any_provider_key_says_which_env_to_set() -> TestResult {
     assert!(String::from_utf8(out.stderr)?.contains("ANTHROPIC_PROVIDER_KEY"));
     Ok(())
 }
+
+#[test]
+fn audit_verify_checks_each_organizations_chain_and_one_with_org() -> TestResult {
+    let dir = workdir("per-org")?;
+    let log_path = dir.join("gantry-audit.jsonl");
+    let log = gantry_core::audit::AuditLog::open(&log_path)?.per_org(&[])?;
+    for (id, org) in [("A", "acme"), ("B", "globex"), ("C", ""), ("D", "acme")] {
+        let mut record = serde_json::Map::new();
+        record.insert("id".into(), id.into());
+        if !org.is_empty() {
+            record.insert("org".into(), org.into());
+        }
+        log.append_record(&record)?;
+    }
+    log.flush();
+    drop(log);
+    let file = log_path.display().to_string();
+    let out = gantry(&["audit", "verify", &file], &[])?;
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    assert!(
+        stdout.contains("Organization acme:") && stdout.contains("Organization globex:"),
+        "{stdout}"
+    );
+    let out = gantry(&["audit", "verify", &file, "--org", "acme"], &[])?;
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(
+        stdout.contains("2 records in an unbroken chain"),
+        "{stdout}"
+    );
+    let out = gantry(&["audit", "verify", &file, "--org", "initech"], &[])?;
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8(out.stderr)?.contains("has no audit chain"));
+    // A changed record in one organization's chain fails the whole check.
+    let acme = gantry_core::audit::org_path(&log_path, "acme");
+    std::fs::write(
+        &acme,
+        std::fs::read_to_string(&acme)?.replacen("\"id\":\"A\"", "\"id\":\"X\"", 1),
+    )?;
+    let out = gantry(&["audit", "verify", &file], &[])?;
+    assert_eq!(out.status.code(), Some(1));
+    Ok(())
+}

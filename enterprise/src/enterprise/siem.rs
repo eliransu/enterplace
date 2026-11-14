@@ -167,6 +167,33 @@ pub fn register(
     extension: &mut gantry_server::Extension,
     setup: Setup,
 ) -> Result<Arc<Exporter>, String> {
+    let exporter = chain(setup)?;
+    let export = Export {
+        exporter: exporter.clone(),
+    };
+    // Alerting alone reads the chain and adds no export page.
+    if !(export.exporter.siem || export.exporter.retention) {
+        return Ok(exporter);
+    }
+    let console = &mut extension.console;
+    console.nav.push(("/console/siem".into(), NAV.into()));
+    console.routes = std::mem::take(&mut console.routes)
+        .route("/siem", get(page).post(act))
+        .route("/siem/archive", get(archive))
+        .layer(Ext(export.clone()));
+    if export.exporter.siem {
+        extension.routes = std::mem::take(&mut extension.routes).merge(
+            Router::new()
+                .route("/export/records", get(pull))
+                .layer(Ext(export)),
+        );
+    }
+    Ok(exporter)
+}
+
+/// The exporter of one chain, running: the install's, or an organization's (`audit: { per_org: true }`), which is a
+/// replica of its own in the table, so its records are read, sent, retained and held as the install's are.
+pub fn chain(setup: Setup) -> Result<Arc<Exporter>, String> {
     let replica = replica_id(&setup.audit_path, &setup.env)?;
     let key = match (setup.env)(KEY_ENV).filter(|k| !k.trim().is_empty()) {
         None => None,
@@ -201,26 +228,6 @@ pub fn register(
         .insert(exporter.path.clone(), exporter.clone());
     if let Ok(runtime) = tokio::runtime::Handle::try_current() {
         runtime.spawn(exporter.clone().run(tick));
-    }
-    let export = Export {
-        exporter: exporter.clone(),
-    };
-    // Alerting alone reads the chain and adds no export page.
-    if !(export.exporter.siem || export.exporter.retention) {
-        return Ok(exporter);
-    }
-    let console = &mut extension.console;
-    console.nav.push(("/console/siem".into(), NAV.into()));
-    console.routes = std::mem::take(&mut console.routes)
-        .route("/siem", get(page).post(act))
-        .route("/siem/archive", get(archive))
-        .layer(Ext(export.clone()));
-    if export.exporter.siem {
-        extension.routes = std::mem::take(&mut extension.routes).merge(
-            Router::new()
-                .route("/export/records", get(pull))
-                .layer(Ext(export)),
-        );
     }
     Ok(exporter)
 }

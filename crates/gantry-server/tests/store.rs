@@ -183,6 +183,10 @@ rules:
   - name: held
     principals: {{ team: held }}
     models: [slow]
+  - name: slid
+    principals: {{ team: slid }}
+    models: [m]
+    budget: {{ usd: 0.01, per: {{ sliding: 24h }} }}
 limits:
   - {{ customer: \"*\", budget: {{ usd: 0.006, per: day, tz: America/New_York }} }}
   - {{ team: held, parallel: 2 }}
@@ -459,6 +463,105 @@ async fn two_gateways_sending_at_once_never_pass_one_budget() -> TestResult {
         .await?;
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
         assert_eq!(code(&body), "budget_exceeded", "{body}");
+    }
+    Ok(())
+}
+
+/// What the store's sliding counter of team slid holds, by slot.
+async fn slots(url: &str) -> Result<Vec<(String, f64)>, Error> {
+    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls).await?;
+    tokio::spawn(connection);
+    Ok(client
+        .query(
+            "SELECT period, spent FROM gantry_spend WHERE scope = 'team:slid' AND per = 'sliding:24h' ORDER BY period",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|r| (r.get(0), r.get(1)))
+        .collect())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sliding_budget_counts_the_last_24_hours_exactly_across_two_gateways() -> TestResult {
+    let Some(url) = database("sliding").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let (a_dir, b_dir) = (dir("slide-a")?, dir("slide-b")?);
+    let a = gateway(&a_dir, &url, port)?;
+    add_key(&a, "pat", "slid", PAT, false)?;
+    let b = gateway(&b_dir, &url, port)?;
+    until(&b.router, PAT, Duration::from_secs(2), |s, _| {
+        s != StatusCode::UNAUTHORIZED
+    })
+    .await?;
+    // Spent 25 hours ago: out of the window. Spent 2 hours ago: in it, leaving $0.006 of the $0.01.
+    let per = gantry_core::policy::Period::parse("sliding 24h", None)?;
+    let ago = |hours: u64| {
+        per.label(&gantry_core::audit::rfc3339(
+            std::time::SystemTime::now() - Duration::from_secs(hours * 3600),
+        ))
+    };
+    let (old, recent) = (ago(25), ago(2));
+    {
+        let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
+        tokio::spawn(connection);
+        client
+            .execute(
+                "INSERT INTO gantry_spend (scope, per, period, spent) VALUES ('team:slid', 'sliding:24h', $1, 100), ('team:slid', 'sliding:24h', $2, 0.004)",
+                &[&old, &recent],
+            )
+            .await?;
+    }
+    let mut tasks = Vec::new();
+    for i in 0..20 {
+        let app = if i % 2 == 0 {
+            a.router.clone()
+        } else {
+            b.router.clone()
+        };
+        tasks.push(tokio::spawn(async move {
+            let request = request("POST", "/v1/chat/completions", PAT, BUDGETED)
+                .map_err(|e| e.to_string())?;
+            answer(&app, request).await.map_err(|e| e.to_string())
+        }));
+    }
+    let mut admitted = 0;
+    let mut refusal = String::new();
+    for task in tasks {
+        let (status, body) = task.await??;
+        match status {
+            StatusCode::OK => admitted += 1,
+            StatusCode::TOO_MANY_REQUESTS => {
+                assert_eq!(code(&body), "budget_exceeded", "{body}");
+                refusal = body["error"]["message"].as_str().unwrap_or_default().into();
+            }
+            other => return Err(format!("unexpected {other}: {body}").into()),
+        }
+    }
+    assert_eq!(
+        admitted, 2,
+        "two requests of $0.003 fit in what the last 24 hours left, across both gateways"
+    );
+    assert!(refusal.contains("The budget slides"), "{refusal}");
+    assert!(refusal.contains("any 24 hours"), "{refusal}");
+    // The settled costs are in the current slot; the slot older than the window, holding nothing, is gone.
+    let start = Instant::now();
+    loop {
+        let held = slots(&url).await?;
+        let now: f64 = held
+            .iter()
+            .filter(|(p, _)| *p > recent)
+            .map(|(_, s)| s)
+            .sum();
+        if (now - 0.006).abs() < 1e-9 {
+            assert!(!held.iter().any(|(p, _)| *p == old), "{held:?}");
+            assert!(held.iter().any(|(p, _)| *p == recent), "{held:?}");
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "{held:?}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     Ok(())
 }

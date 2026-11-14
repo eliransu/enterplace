@@ -454,7 +454,7 @@ impl Registry {
         if self.pg.is_some() {
             return Ok(());
         }
-        let file = match audit::chain_reader(path) {
+        let file = match audit::chains_reader(path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(err) => {

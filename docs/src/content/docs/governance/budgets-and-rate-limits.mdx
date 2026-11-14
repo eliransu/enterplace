@@ -68,7 +68,7 @@ gantry key new ci.release --team platform --budget 20/month --tpm 50000 --parall
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `usd` | number | required | US dollars, above 0. |
-| `per` | string | required | When the budget starts again. See [Periods](#periods). |
+| `per` | string or map | required | When the budget starts again, or `{ sliding: 24h }` for a window that counts back from now. See [Periods](#periods) and [Sliding windows](#sliding-windows). |
 | `tz` | string | UTC | An IANA time zone, such as `America/New_York` or `Asia/Jerusalem`. Calendar periods start at midnight there, daylight saving included. |
 | `shadow_until` | string | none | In a rule or a profile only: a UTC date or time. Until then the budget records what it would refuse and refuses nothing. See [Trying a limit first](#trying-a-limit-first). |
 | `models` | list | every model | In a rule or a profile only: count requests for these models alone (by the name sent, an alias, or the model an alias sends to), in a counter of their own. |
@@ -84,7 +84,30 @@ gantry key new ci.release --team platform --budget 20/month --tpm 50000 --parall
 
 The shortest period is a minute and the longest a year: `13mo` or `2y` is refused.
 
-**Rolling budgets are fixed-length windows.** `per: 30d` starts again every 30 days at midnight, counted from 1970-01-01, and is not a sliding window over the last 30 days. A sliding window cannot be reserved against exactly across replicas with one counter, so Gantry does not offer one. A budget's refusal says when its window ends, in its zone.
+**`per: 30d` is a calendar window.** It starts again every 30 days at midnight, counted from 1970-01-01, and its refusal says when it ends, in its zone. For the last 30 days counted back from now, write `per: { sliding: 30d }`.
+
+### Sliding windows
+
+```yaml
+limits:
+  - { team: payments, budget: [{ usd: 4000, per: month }, { usd: 300, per: { sliding: 24h } }] }
+```
+
+`per: { sliding: <length> }` counts what was spent in the length before now, whenever now is. A calendar `per: day` lets a team spend its whole budget at 23:59 and again at 00:01; `per: { sliding: 24h }` does not, because the first spend still counts until it is 24 hours old. Room comes back gradually, as older spend leaves the window, not all at once at a reset.
+
+| | Calendar (`per: day`) | Sliding (`per: { sliding: 24h }`) |
+|---|---|---|
+| Counts | Spend since the window started | Spend in the last 24 hours |
+| Starts again | At each local midnight, all at once | Never: each cost stops counting 24 hours after it was made |
+| `tz` | Sets the calendar | Refused: a sliding window has no calendar |
+| Lengths | Any unit up to a year | Minutes, hours, days or weeks (`90min`, `24h`, `30d`, `2w`). Months and years have no fixed length and are refused |
+| Refusal says | When it starts again | That it slides, and how long a cost counts |
+| Admin explain `resets` | The reset time | `no fixed time: each cost stops counting ... after it was made` |
+| Store cost | One row, one statement | A row per slot, one round trip that takes a lock on the counter |
+
+A sliding window is kept in 1,440 slots: a minute each for `24h`, 7 minutes each for `7d`. A cost counts until its whole slot is older than the window, so it counts for at least the window and at most one slot longer, never less. With a store every replica reserves against the same slots under a lock on the counter, so the window is exact across replicas: two gateways never both pass it. Slots older than the window that hold nothing are deleted as the window moves. A calendar budget and a sliding one may sit on the same scope; they are separate counters.
+
+Sliding budgets work in rules, profiles, `limits:` entries and key files (`budget: { usd: 50, per: { sliding: 24h } }`), and an [alert on a percent](/operations/alerting/#a-percent-of-a-policy-budget) of one reads the same slots.
 
 ## Scopes and the `limits:` list
 

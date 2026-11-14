@@ -59,6 +59,8 @@ const KNOWN: &[&str] = &[
     "budget",
     "usd",
     "per",
+    "sliding",
+    "per_org",
     "rate",
     "batch",
     "rpm",
@@ -877,7 +879,7 @@ struct PassthroughFile {
 #[serde(deny_unknown_fields)]
 struct BudgetFile {
     usd: f64,
-    per: String,
+    per: PerFile,
     #[serde(default)]
     tz: Option<String>,
     /// In a rule or a profile: count only these models.
@@ -886,6 +888,30 @@ struct BudgetFile {
     /// In a rule or a profile: until then the budget records what it would refuse and refuses nothing.
     #[serde(default)]
     shadow_until: Option<String>,
+}
+
+/// A budget's `per`: a calendar period (`month`, `6h`), or `{ sliding: 24h }` for a sliding window.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PerFile {
+    Calendar(String),
+    Sliding(SlidingFile),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SlidingFile {
+    sliding: String,
+}
+
+impl PerFile {
+    /// As [`Period::parse`] reads it.
+    fn text(&self) -> String {
+        match self {
+            PerFile::Calendar(per) => per.clone(),
+            PerFile::Sliding(s) => format!("sliding {}", s.sliding),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -930,7 +956,11 @@ struct PrincipalsFile {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AuditFile {
-    path: PathBuf,
+    #[serde(default)]
+    path: Option<PathBuf>,
+    /// Each organization's records in a chain of its own, beside the install's.
+    #[serde(default)]
+    per_org: bool,
 }
 
 #[derive(Deserialize)]
@@ -1381,7 +1411,7 @@ pub fn issuable_expiry(text: &str) -> Result<(), String> {
 
 /// Reads a budget's `per`, `tz` and `usd`, or says what is wrong with them. `at` names where the budget is written.
 fn budget_of(budget: &BudgetFile, at: &str, errors: &mut Vec<String>) -> Option<Budget> {
-    let per = match Period::parse(&budget.per, budget.tz.as_deref()) {
+    let per = match Period::parse(&budget.per.text(), budget.tz.as_deref()) {
         Ok(per) => Some(per),
         Err(problem) => {
             errors.push(format!("{at}: {problem}"));
@@ -1683,6 +1713,8 @@ pub struct Loaded {
     pub policy: Policy,
     pub providers: Vec<Provider>,
     pub audit_path: PathBuf,
+    /// `audit: { per_org: true }`: each organization's records go to a chain of its own (`<log>.orgs/<org>.jsonl`).
+    pub audit_per_org: bool,
     pub keys_path: PathBuf,
     pub policy_sha256: String,
     pub keys_sha256: String,
@@ -4538,10 +4570,11 @@ pub fn load_texts(
             None
         }
     };
-    let audit_path = match &parsed.audit {
-        Some(audit) => audit.path.clone(),
+    let audit_path = match parsed.audit.as_ref().and_then(|a| a.path.clone()) {
+        Some(path) => path,
         None => policy_path.with_file_name("gantry-audit.jsonl"),
     };
+    let audit_per_org = parsed.audit.as_ref().is_some_and(|a| a.per_org);
     match providers {
         providers if errors.is_empty() => Ok(Loaded {
             policy: Policy::from_parts(principals(keys), rules)
@@ -4556,6 +4589,7 @@ pub fn load_texts(
                 .with_mode(mode),
             providers,
             audit_path,
+            audit_per_org,
             keys_path: keys_file.to_path_buf(),
             policy_sha256: sha256_hex(policy_text.as_bytes()),
             keys_sha256: sha256_hex(keys_text.as_bytes()),
@@ -4581,6 +4615,11 @@ pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
             old.audit_path.display(),
             new.audit_path.display()
         ));
+    }
+    if old.audit_per_org != new.audit_per_org {
+        reasons.push(
+            "audit per_org changed. Which chain each organization's records go to is set when the audit log opens: restart Gantry to change it.".to_string(),
+        );
     }
     // Each server's credentials are read from the environment at start, like a provider key.
     if old.mcp != new.mcp {
@@ -6626,6 +6665,30 @@ roles:
         assert!(!role.may(crate::policy::Permission::IssueKeys));
         assert!(
             matches!(policy.decide(&who, "o3"), Decision::Allow(r) if r.name == "acme-payments")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_sliding_budget_loads_beside_a_calendar_one_and_a_wrong_one_is_named() -> TestResult {
+        let sliding = HIERARCHY.replace(
+            "{ tag: search, budget: { usd: 300, per: week } }",
+            "{ tag: search, budget: [{ usd: 300, per: week }, { usd: 80, per: { sliding: 24h } }] }",
+        );
+        let loaded = check("sliding", &sliding, None)?.map_err(|e| e.join("\n"))?;
+        let tag = loaded
+            .policy
+            .scope_limits()
+            .iter()
+            .find(|l| l.name == "search")
+            .ok_or("no tag entry")?;
+        let pers: Vec<String> = tag.budgets.iter().map(|b| b.per.word()).collect();
+        assert_eq!(pers, ["week", "sliding:24h"]);
+        let bad = sliding.replace("{ sliding: 24h }", "{ sliding: 3mo }");
+        let errors = errors(check("sliding-bad", &bad, None)?)?;
+        assert!(
+            errors.contains("A sliding window is a fixed length"),
+            "{errors}"
         );
         Ok(())
     }

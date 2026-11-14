@@ -449,6 +449,21 @@ pub struct Host<'a> {
     /// request log). A binary that removes records from the disk, as one shipping sealed segments elsewhere does,
     /// removes none past it: the copier reads them from the disk, so their rows would never be copied.
     pub request_index: Option<Arc<std::sync::atomic::AtomicU64>>,
+    /// The policy in force, after every reload. Empty while `extend` runs: read it later.
+    pub policy_now: crate::PolicyNow,
+    /// With `audit: { per_org: true }`: each organization's chain open at start, for a binary that exports, retains
+    /// or ships each chain as it does the install's.
+    pub org_chains: Vec<OrgChain>,
+}
+
+/// One organization's audit chain (`audit: { per_org: true }`).
+#[derive(Clone)]
+pub struct OrgChain {
+    pub org: String,
+    pub log: Arc<AuditLog>,
+    pub path: PathBuf,
+    /// With a store: the last record of this chain the request index has copied, as `Host::request_index`.
+    pub request_index: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 /// The request index of every gateway on the store, and where bodies are kept, when there are.
@@ -538,7 +553,11 @@ pub fn governed_with(
             .is_some_and(|sso| sso.self_issue.is_some()),
         audit_path: Some(loaded.audit_path.clone()),
     };
-    let log = Arc::new(AuditLog::open(&loaded.audit_path)?);
+    let mut log = AuditLog::open(&loaded.audit_path)?;
+    if loaded.audit_per_org {
+        log = log.per_org(loaded.policy.orgs())?;
+    }
+    let log = Arc::new(log);
     // The whole chain is checked before serving: Gantry does not add records to a log it cannot vouch for.
     // ponytail: this reads the whole file at every start. When logs grow past a few gigabytes, checkpoint the verified prefix.
     let last = if audit::has_records(&loaded.audit_path) {
@@ -587,11 +606,27 @@ pub fn governed_with(
     let seal = master
         .map(|m| -> Arc<dyn gantry_core::insights::Seal> { Arc::new(crate::insights::Sealer(m)) });
     let mut request_index = None;
+    let mut org_chains: Vec<OrgChain> = log
+        .org_logs()
+        .into_iter()
+        .map(|(org, log)| OrgChain {
+            path: audit::org_path(&loaded.audit_path, &org),
+            org,
+            log,
+            request_index: None,
+        })
+        .collect();
     let (index, bodies): Served = match &postgres {
         Some(pg) => {
             let index =
                 crate::insights::PgIndex::open(pg.clone(), &loaded.audit_path, seal.clone(), true)?;
             request_index = Some(index.copied());
+            // Each organization's chain is a replica of its own in the request log: its rows are copied the same way.
+            for chain in &mut org_chains {
+                let copier =
+                    crate::insights::PgIndex::open(pg.clone(), &chain.path, seal.clone(), true)?;
+                chain.request_index = Some(copier.copied());
+            }
             let bodies = seal
                 .is_some()
                 .then(|| -> Arc<dyn gantry_core::insights::Bodies> { index.clone() });
@@ -611,6 +646,7 @@ pub fn governed_with(
     // First run: no one can sign in to the console yet, so a one-time link makes the first admin.
     let setup =
         (!loaded.policy.entries().any(|(_, p)| p.admin)).then(|| gantry_core::id::random_hex(24));
+    let policy_now = crate::PolicyNow::default();
     let extension = extend(Host {
         postgres: postgres.as_ref(),
         keys: &loaded.keys_path,
@@ -618,6 +654,8 @@ pub fn governed_with(
         audit: &log,
         audit_path: &loaded.audit_path,
         request_index,
+        policy_now: policy_now.clone(),
+        org_chains,
     })?;
     let config = Config {
         providers,
@@ -652,6 +690,7 @@ pub fn governed_with(
         loaded.keys_file_found.then(|| loaded.keys_sha256.clone()),
     );
     let (router, reloader, metrics) = build(config, |live| {
+        policy_now.set(live);
         Some(Arc::new(Reloader {
             policy_path: policy_path.to_path_buf(),
             keys_path: loaded.keys_path.clone(),

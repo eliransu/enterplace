@@ -93,6 +93,24 @@ one repository. How a release is made: RELEASING.md.
 - The price table from LiteLLM's map now carries audio token prices and batch prices (`batch_input`, `batch_output`,
   `batch_cache_read`); a batch line pays them where set, half the model's price where not.
 
+### Budgets, alerts and audit chains per organization
+
+- Sliding-window budgets: `budget: { usd: 300, per: { sliding: 24h } }` counts what was spent in the 24 hours before
+  now, in 1,440 slots, and never starts again all at once. Exact across replicas with a store: every replica reserves
+  against the same slots under a lock on the counter. Minutes, hours, days or weeks; `tz` is refused for one. The
+  refusal says the budget slides. A calendar `per: 30d` is unchanged.
+- Alerts: a `budget` rule with a **percent** fires when spend reaches that percent of each budget the policy sets for a
+  scope (`team:payments`, `org:acme`, `customer:globex-shop`, or a kind alone for each one), in that budget's own
+  period, calendar or sliding, read from the counter enforcement reserves against; with **Forecast**, when the
+  current rate would reach it by the period's end. The dollar form is unchanged.
+- `provider_errors` alerts count every request no provider answered, retried or not. The `upstream_error` record
+  names the provider of the last try and how many tries there were (`provider`, `tries`).
+- `audit: { per_org: true }` keeps each organization's records in a hash chain of its own
+  (`gantry-audit.jsonl.orgs/<org>.jsonl`); records of no organization stay in the install's chain. `gantry audit
+  verify` checks every chain, `--org <org>` one. People kept to an organization read its chain in the console, and
+  others switch between chains. Retention, legal hold, audit export, alerts, the request log and segment shipping
+  (under `orgs/<org>` in the bucket) work per chain. Gantry checks every chain at start.
+
 ### Browser access
 
 - `cors:` in the policy: `allowed_origins` lists the browser origins (or `"*"`) that may call Gantry's routes. Off by

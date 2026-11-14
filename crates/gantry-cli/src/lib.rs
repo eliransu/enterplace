@@ -100,10 +100,11 @@ Commands:
         Listens on 127.0.0.1:8080 unless --listen says otherwise. --metrics serves GET /metrics
         (Prometheus) on an address of its own; it takes no key, so keep it on loopback or a private network.
         --tls-cert and --tls-key (both, PEM) make Gantry serve HTTPS itself.
-  audit verify [<file>] [--expect-last <hash>]
+  audit verify [<file>] [--org <org>] [--expect-last <hash>]
         Check that the audit log is one unbroken chain: no record changed, inserted or reordered.
         Prints the count and the last hash, to keep elsewhere. With --expect-last, it also checks
         that a hash kept earlier is still in the chain with nothing before it changed.
+        With audit per_org, each organization's chain beside it is checked too; --org checks one.
   audit repair [<file>] [--yes]
         For a log whose last line was cut short by a write that failed (a full disk): shows that line
         and the chain before it, which must hold. With --yes, removes only that line and appends an
@@ -403,9 +404,10 @@ pub async fn run(args: &[String]) -> ExitCode {
             }
             _ => None,
         },
-        ["audit", "verify", rest @ ..] => match options(rest, &["--expect-last"]) {
-            Some((positional, named)) if positional.len() <= 1 => Some(audit_verify(
+        ["audit", "verify", rest @ ..] => match options(rest, &["--expect-last", "--org"]) {
+            Some((positional, named)) if positional.len() <= 1 => Some(audit_verify_chains(
                 Path::new(positional.first().copied().unwrap_or("gantry-audit.jsonl")),
+                named.get("--org").copied(),
                 named.get("--expect-last").copied(),
             )),
             _ => None,
@@ -594,7 +596,7 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["unkill", ..] => Some(
                 "gantry unkill (--person <name> | --team <team> | --key-prefix <hash> | --model <model> | --all) [--url <gantry url>]",
             ),
-            ["audit", ..] => Some("gantry audit verify [<file>] [--expect-last <hash>]"),
+            ["audit", ..] => Some("gantry audit verify [<file>] [--org <org>] [--expect-last <hash>]"),
             _ => None,
         };
         let help = args.iter().any(|arg| matches!(*arg, "--help" | "-h"));
@@ -1276,7 +1278,8 @@ fn audit_coverage(path: &Path, keys: Option<&Path>) -> Result<(), String> {
     use std::io::BufRead;
     // (person, tool) -> (team, requests, refused, last seen)
     let mut rows: BTreeMap<(String, String), (String, u64, u64, String)> = BTreeMap::new();
-    let reader = audit::chain_reader(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Every organization's chain too (`audit: { per_org: true }`).
+    let reader = audit::chains_reader(path).map_err(|e| format!("{}: {e}", path.display()))?;
     for line in reader.lines() {
         let line = line.map_err(|e| format!("{}: {e}", path.display()))?;
         let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
@@ -1314,6 +1317,30 @@ fn audit_coverage(path: &Path, keys: Option<&Path>) -> Result<(), String> {
         println!("{person}\t{team}\t{tool}\t{requests}\t{refused}\t{last}");
     }
     Ok(())
+}
+
+/// `gantry audit verify`: the install's chain, then each organization's beside it (`audit: { per_org: true }`).
+/// With `--org`, that organization's chain alone, which `--expect-last` then applies to.
+fn audit_verify_chains(path: &Path, org: Option<&str>, expect: Option<&str>) -> ExitCode {
+    if let Some(org) = org {
+        let own = audit::org_path(path, org);
+        if !own.exists() {
+            eprintln!(
+                "error: organization \"{org}\" has no audit chain at {}. Chains of their own are kept with `audit: {{ per_org: true }}` in the policy, from the organization's first record; check the name, and the install's log path given first.",
+                own.display()
+            );
+            return ExitCode::from(1);
+        }
+        return audit_verify(&own, expect);
+    }
+    let mut code = audit_verify(path, expect);
+    for (org, own) in audit::org_chains(path).unwrap_or_default() {
+        println!("\nOrganization {org}:");
+        if audit_verify(&own, None) != ExitCode::SUCCESS {
+            code = ExitCode::from(1);
+        }
+    }
+    code
 }
 
 fn audit_verify(path: &Path, expect: Option<&str>) -> ExitCode {

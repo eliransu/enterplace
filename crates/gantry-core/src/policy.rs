@@ -279,12 +279,17 @@ impl Unit {
 /// How often a budget starts again from zero: every `every` units, aligned to the calendar of `tz` (UTC when
 /// `None`). Windows are counted from 1970-01-01 00:00 in that zone, so `per: day` starts at each local midnight,
 /// `per: 3mo` at each quarter and `per: 6h` at 00:00, 06:00, 12:00 and 18:00.
+///
+/// A sliding period (`per: { sliding: 24h }`) never starts again: it counts what was spent in the `every` units
+/// before now. It is kept in slots of 1/1,440 of the window (a minute for 24 hours), and a cost counts until its
+/// slot is wholly older than the window, so never less than the window and at most a slot more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Period {
     pub every: u32,
     pub unit: Unit,
     /// An IANA zone name such as `America/New_York`, interned: there are a few hundred and each is kept once.
     pub tz: Option<&'static str>,
+    pub sliding: bool,
 }
 
 // The names of before periods had a unit and a zone, so every caller written against them still reads.
@@ -294,16 +299,19 @@ impl Period {
         every: 1,
         unit: Unit::Day,
         tz: None,
+        sliding: false,
     };
     pub const Month: Period = Period {
         every: 1,
         unit: Unit::Month,
         tz: None,
+        sliding: false,
     };
     pub const Hour: Period = Period {
         every: 1,
         unit: Unit::Hour,
         tz: None,
+        sliding: false,
     };
 }
 
@@ -354,6 +362,13 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     )
 }
 
+/// `2026-11-14T13:59` for a count of minutes since the epoch, UTC.
+fn minute_label(minutes: i64) -> String {
+    let (y, m, d) = civil_from_days(minutes.div_euclid(1440));
+    let (h, mi) = (minutes.rem_euclid(1440) / 60, minutes.rem_euclid(60));
+    format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}")
+}
+
 /// Seconds since the epoch of a record timestamp, `2026-11-13T09:14:02.120Z`. None for another shape.
 pub fn unix_seconds(time: &str) -> Option<i64> {
     let num = |r: std::ops::Range<usize>| time.get(r)?.parse::<i64>().ok();
@@ -368,8 +383,30 @@ pub fn unix_seconds(time: &str) -> Option<i64> {
 
 impl Period {
     /// Reads `per` (`day`, `week`, `month`, `year`, `hour`, `minute`, or a count of units such as `6h`, `15min`,
-    /// `7d`, `2w`, `3mo`) and `tz` (an IANA name, or none for UTC). The message names the fix.
+    /// `7d`, `2w`, `3mo`) and `tz` (an IANA name, or none for UTC). The message names the fix. `sliding 24h` (or
+    /// `sliding:24h`, as [`Period::word`] writes it) is a sliding window of minutes, hours, days or weeks.
     pub fn parse(per: &str, tz: Option<&str>) -> Result<Period, String> {
+        if let Some(length) = per.strip_prefix("sliding") {
+            let length = length.trim_start_matches([':', ' ']);
+            let fixed = || {
+                format!(
+                    "per is \"{per}\". A sliding window is a fixed length of minutes, hours, days or weeks: write per: {{ sliding: 24h }}, {{ sliding: 30d }} or {{ sliding: 90min }}. Months and years have no fixed length; for those use a calendar period such as per: month."
+                )
+            };
+            let period = Period::parse(length, None).map_err(|_| fixed())?;
+            if matches!(period.unit, Unit::Month | Unit::Year) {
+                return Err(fixed());
+            }
+            if tz.is_some_and(|tz| tz != "UTC") {
+                return Err(format!(
+                    "per is \"{per}\" with a tz. A sliding window counts back from now and has no calendar, so a time zone changes nothing: remove tz."
+                ));
+            }
+            return Ok(Period {
+                sliding: true,
+                ..period
+            });
+        }
         let unit_of = |word: &str| match word {
             "minute" | "min" => Some(Unit::Minute),
             "hour" | "h" => Some(Unit::Hour),
@@ -410,11 +447,19 @@ impl Period {
                 }
             },
         };
-        Ok(Period { every, unit, tz })
+        Ok(Period {
+            every,
+            unit,
+            tz,
+            sliding: false,
+        })
     }
 
     /// The name counters keep the period under. `day` and `month` in UTC keep the names of before.
     pub fn word(self) -> String {
+        if self.sliding {
+            return format!("sliding:{}{}", self.every, self.unit.short());
+        }
         let base = if self.every == 1 {
             self.unit.name().to_string()
         } else {
@@ -442,6 +487,9 @@ impl Period {
         } else {
             format!("{} {}s", self.every, self.unit.name())
         };
+        if self.sliding {
+            return format!("{base}, sliding");
+        }
         match self.tz {
             None => base,
             Some(tz) => format!("{base} ({tz})"),
@@ -466,6 +514,11 @@ impl Period {
     /// The window `time` (a record timestamp) falls in, named by when it starts on the zone's clock: `2026-11`,
     /// `2026-11-13`, `2026-11-13T09`, `2026-11-13T09:15`, `2026`. Names of one period sort in time order.
     pub fn label(self, time: &str) -> String {
+        if self.sliding {
+            let slot = self.slot_minutes();
+            let start = (unix_seconds(time).unwrap_or(0).div_euclid(60)).div_euclid(slot) * slot;
+            return minute_label(start);
+        }
         // The common case, and the hot path's: one day or one month in UTC is the start of the timestamp itself.
         if self.tz.is_none() && self.every == 1 {
             match self.unit {
@@ -522,6 +575,9 @@ impl Period {
     /// The window the instant `unix` (seconds since the epoch) falls in, as UTC seconds: when it started and when
     /// it resets. What a forecast measures a budget's spend and pace over.
     pub fn window(self, unix: i64) -> (i64, i64) {
+        if self.sliding {
+            return (unix - self.minutes() * 60, unix);
+        }
         let time = crate::audit::rfc3339(
             std::time::UNIX_EPOCH
                 + std::time::Duration::from_secs(u64::try_from(unix).unwrap_or(0)),
@@ -549,8 +605,33 @@ impl Period {
         local - self.offset(local - self.offset(local))
     }
 
-    /// When the window named `label` ends, on the zone's clock: `2026-12-01 00:00 UTC`.
+    /// A sliding window's length in minutes.
+    fn minutes(self) -> i64 {
+        i64::from(self.every) * self.unit.minutes() as i64
+    }
+
+    /// A sliding window's slot: 1/1,440 of it, rounded up to whole minutes.
+    fn slot_minutes(self) -> i64 {
+        (self.minutes() + 1439).div_euclid(1440).max(1)
+    }
+
+    /// The first slot a sliding window ending in slot `label` counts: the one the instant a window before falls in.
+    /// Every slot from it to `label` counts, both included, so a cost counts for at least the whole window.
+    pub fn window_start_label(self, label: &str) -> String {
+        let start = unix_seconds(label).unwrap_or(0).div_euclid(60) - self.minutes();
+        let slot = self.slot_minutes();
+        minute_label(start.div_euclid(slot) * slot)
+    }
+
+    /// When the window named `label` ends, on the zone's clock: `2026-12-01 00:00 UTC`. A sliding window does not
+    /// end: what it says instead.
     pub fn resets(self, label: &str) -> String {
+        if self.sliding {
+            return format!(
+                "no fixed time: each cost stops counting {} after it was made",
+                self.describe().trim_end_matches(", sliding")
+            );
+        }
         let num = |r: std::ops::Range<usize>| label.get(r).and_then(|t| t.parse::<i64>().ok());
         let every = i64::from(self.every);
         let (y, m) = (num(0..4).unwrap_or(1970), num(5..7).unwrap_or(1));
@@ -2056,6 +2137,50 @@ mod tests {
             assert!(utc(bad).is_err(), "{bad}");
         }
         assert!(Period::parse("day", Some("Mars/Olympus")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_sliding_window_counts_back_from_now_in_slots_and_has_no_calendar() -> Result<(), String> {
+        let at = |time: &str| unix_seconds(time).ok_or(format!("no time in {time}"));
+        let day = Period::parse("sliding 24h", None)?;
+        assert!(day.sliding);
+        assert_eq!(day.word(), "sliding:24h");
+        assert_eq!(Period::from_word("sliding:24h"), Some(day));
+        assert_eq!(Period::parse("sliding: 1d", None)?.word(), "sliding:1d");
+        assert_eq!(day.describe(), "24 hours, sliding");
+        // A 24 hour window counts in minute slots: a cost leaves it within a minute of turning 24 hours old.
+        assert_eq!(day.label("2026-11-14T13:59:42.120Z"), "2026-11-14T13:59");
+        assert_eq!(
+            day.window_start_label("2026-11-14T13:59"),
+            "2026-11-13T13:59"
+        );
+        assert_eq!(
+            day.window(at("2026-11-14T13:59:42Z")?),
+            (at("2026-11-13T13:59:42Z")?, at("2026-11-14T13:59:42Z")?)
+        );
+        // A week counts in slots of 7 minutes, 1,440 of them, aligned to the epoch.
+        let week = Period::parse("sliding 7d", None)?;
+        assert_eq!(week.label("2026-11-14T13:59:42Z"), "2026-11-14T13:57");
+        assert_eq!(
+            week.window_start_label("2026-11-14T13:57"),
+            "2026-11-07T13:57"
+        );
+        // No calendar: months and years have no fixed length, and a zone means nothing.
+        for bad in [
+            "sliding month",
+            "sliding 3mo",
+            "sliding y",
+            "sliding",
+            "sliding 0h",
+            "sliding 2y",
+        ] {
+            assert!(Period::parse(bad, None).is_err(), "{bad}");
+        }
+        let zoned = Period::parse("sliding 24h", Some("Europe/Berlin"));
+        assert!(zoned.is_err_and(|e| e.contains("tz")));
+        // The calendar day it is not: the two never share a counter.
+        assert_ne!(day.word(), Period::Day.word());
         Ok(())
     }
 

@@ -12,7 +12,7 @@
 //! Every change to a channel or rule is an admin record, written before the change.
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub mod channels;
 
@@ -33,6 +33,7 @@ use gantry_console::{
     redirect, same_origin,
 };
 use gantry_core::audit::{self, AuditLog};
+use gantry_core::policy::{Budget, Limit, Period, Principal};
 use serde_json::{Value, json};
 
 use super::Db;
@@ -178,7 +179,9 @@ impl RuleKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Budget => "Spend reaches an amount, or is forecast to by the period's end",
+            Self::Budget => {
+                "Spend reaches an amount or a percent of a policy budget, or is forecast to by the period's end"
+            }
             Self::RateLimit => "Rate limits hit",
             Self::Refusals => "Refusals with chosen codes",
             Self::ProviderErrors => "Provider errors",
@@ -227,9 +230,14 @@ impl RuleKind {
 }
 
 /// The parameters a rule may have, as the form names them.
-const PARAMS: [&str; 13] = [
-    "scope", "name", "period", "usd", "forecast", "count", "minutes", "by", "codes", "provider",
-    "ms", "hours", "factor",
+const PARAMS: [&str; 14] = [
+    "scope", "name", "period", "usd", "percent", "forecast", "count", "minutes", "by", "codes",
+    "provider", "ms", "hours", "factor",
+];
+
+/// The scope kinds a budget of the policy may be set for, as `Policy::applied` names their counters.
+const POLICY_SCOPES: [&str; 8] = [
+    "global", "org", "team", "person", "key", "customer", "tag", "model",
 ];
 
 #[derive(Clone, Debug)]
@@ -259,6 +267,17 @@ impl Rule {
 
     fn minutes(&self) -> i32 {
         self.number("minutes", 5.0).clamp(1.0, 1440.0) as i32
+    }
+
+    /// A budget rule on a percent of the policy's budget: the percent.
+    fn percent(&self) -> Option<f64> {
+        self.text("percent").parse().ok().filter(|p: &f64| *p > 0.0)
+    }
+
+    /// The counter a percent rule watches, as `Policy::applied` names it: `team:payments`, or a kind alone
+    /// (`team`) for each one of it. `all` is `global`.
+    fn policy_scope(&self) -> String {
+        policy_scope(self.text("scope"), self.text("name"))
     }
 
     fn codes(&self) -> Vec<String> {
@@ -313,6 +332,14 @@ impl Rule {
             return Err("Group by is all, person, team or key.".into());
         }
         match kind {
+            RuleKind::Budget if !get("percent").is_empty() => {
+                number("percent", 1.0, 1000.0)?;
+                let scope = policy_scope(&get("scope"), &get("name"));
+                let kind = scope.split(':').next().unwrap_or_default();
+                if !POLICY_SCOPES.contains(&kind) {
+                    return Err("With a percent, scope is global, or org, team, person, key, customer, tag or model, alone for each one or with a name such as team:payments (team:acme/payments inside organization acme).".into());
+                }
+            }
             RuleKind::Budget => {
                 if !matches!(get("scope").as_str(), "all" | "team" | "person" | "key") {
                     return Err("Scope is all, team, person or key.".into());
@@ -352,6 +379,13 @@ impl Rule {
         if form.get("forecast") == "on" {
             params.insert("forecast".into(), Value::from("on"));
         }
+        // `team:payments` is kept as the form shows it: scope team, name payments.
+        if kind == RuleKind::Budget && !get("percent").is_empty() {
+            if let Some((scope, name)) = get("scope").split_once(':') {
+                params.insert("scope".into(), Value::from(scope));
+                params.insert("name".into(), Value::from(name));
+            }
+        }
         Ok(Value::Object(params))
     }
 
@@ -365,6 +399,21 @@ impl Rule {
             }
         };
         match self.kind {
+            RuleKind::Budget if self.percent().is_some() => format!(
+                "{} {} spend {} {}% of each budget the policy sets for it",
+                self.policy_scope(),
+                if self.text("forecast") == "on" {
+                    "forecast"
+                } else {
+                    "actual"
+                },
+                if self.text("forecast") == "on" {
+                    "to reach"
+                } else {
+                    "reaches"
+                },
+                p("percent", "?"),
+            ),
             RuleKind::Budget => format!(
                 "{} {} {} spend {} ${} this {}",
                 p("scope", "all"),
@@ -415,6 +464,44 @@ impl Rule {
     }
 }
 
+/// A percent rule's scope, from the form's scope (`team`, or `team:payments`) and name (`payments`).
+fn policy_scope(scope: &str, name: &str) -> String {
+    let scope = match scope {
+        "" | "all" => "global",
+        s => s,
+    };
+    if scope.contains(':') || name.is_empty() || scope == "global" {
+        scope.to_string()
+    } else {
+        format!("{scope}:{name}")
+    }
+}
+
+/// A percent rule's subject: the counter, its period and the period it is in, so it fires once per period. A
+/// sliding window has no periods: its subject is the counter, quiet for the rule's quiet period after each alert.
+fn share_subject(scope: &str, per: Period, time: &str) -> String {
+    if per.sliding {
+        format!("{scope}|{}", per.word())
+    } else {
+        format!("{scope}|{}|{}", per.word(), per.label(time))
+    }
+}
+
+fn sliding_subject(key: &str) -> bool {
+    let mut parts = key.split('|');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(_), Some(per), None) => Period::from_word(per).is_some_and(|p| p.sliding),
+        _ => false,
+    }
+}
+
+/// Whether a budget counter of the policy (`team:payments`, `team:payments models:m1`) is one a percent rule
+/// watches: the same counter, or any of its kind when the rule names the kind alone.
+fn watches(want: &str, counter: &str) -> bool {
+    let base = counter.split(' ').next().unwrap_or_default();
+    base == want || (!want.contains(':') && base.split(':').next() == Some(want))
+}
+
 /// `08-19` or `08-19+0200`: working hours and the offset from UTC in minutes.
 fn parse_hours(text: &str) -> Option<(u32, u32, i64)> {
     let text = if text.is_empty() { "08-19" } else { text };
@@ -461,15 +548,21 @@ struct Candidate {
     key: String,
     summary: String,
     evidence: Vec<Value>,
+    /// A percent rule: the policy budget's amount, in US dollars, and its period.
+    budget: Option<Budget>,
 }
 
 pub struct Engine {
+    /// An organization's chain: trouble with the store is the install engine's to report.
+    org: bool,
     db: Arc<Db>,
     replica: String,
     log: Arc<AuditLog>,
     key: Option<[u8; 32]>,
     sinks: Arc<Sinks>,
     console: String,
+    /// The policy in force, for the budgets a percent rule is a share of.
+    policy: gantry_server::PolicyNow,
     recent: Mutex<(HashMap<String, Seen>, std::collections::VecDeque<String>)>,
     /// The last rules and channels read, for alerts about the store itself when it cannot be read.
     cache: Mutex<(Vec<Rule>, Vec<Channel>)>,
@@ -488,13 +581,35 @@ pub fn register(
     extension: &mut gantry_server::Extension,
     exporter: &Arc<super::siem::Exporter>,
     env: &Env,
+    policy: gantry_server::PolicyNow,
+) -> Arc<Engine> {
+    let engine = engine(exporter, env, policy, false);
+    let console = &mut extension.console;
+    console.nav.push(("/console/alerts".into(), NAV.into()));
+    console.routes = std::mem::take(&mut console.routes)
+        .route("/alerts", get(page).post(act))
+        .layer(Ext(Alerts {
+            engine: engine.clone(),
+        }));
+    engine
+}
+
+/// The engine of one chain, on its exporter's tick: the install's, or an organization's (`org`), whose alerts go
+/// to its own chain. An organization's engine leaves trouble with the store to the install's, so it is said once.
+pub fn engine(
+    exporter: &Arc<super::siem::Exporter>,
+    env: &Env,
+    policy: gantry_server::PolicyNow,
+    org: bool,
 ) -> Arc<Engine> {
     let engine = Arc::new(Engine {
+        org,
         db: exporter.db.clone(),
         replica: exporter.replica.clone(),
         log: exporter.log.clone(),
         key: exporter.key,
         sinks: exporter.sinks.clone(),
+        policy,
         console: env("GANTRY_CONSOLE_URL")
             .map(|u| {
                 u.trim()
@@ -509,13 +624,6 @@ pub fn register(
         said: Mutex::new(String::new()),
     });
     let _ = exporter.alerts.set(engine.clone());
-    let console = &mut extension.console;
-    console.nav.push(("/console/alerts".into(), NAV.into()));
-    console.routes = std::mem::take(&mut console.routes)
-        .route("/alerts", get(page).post(act))
-        .layer(Ext(Alerts {
-            engine: engine.clone(),
-        }));
     engine
 }
 
@@ -656,6 +764,7 @@ impl Engine {
         }
         match self.evaluate().await {
             Ok(()) => {}
+            Err(err) if self.org => self.say(&format!("alerts: {err}")),
             Err(err) => {
                 self.say(&format!("alerts: {err}"));
                 trouble.push((
@@ -822,6 +931,11 @@ impl Engine {
         let mut spend: BTreeMap<(String, String), f64> = BTreeMap::new();
         let mut counts: BTreeMap<(i64, String, String), i64> = BTreeMap::new();
         let mut candidates: Vec<Candidate> = Vec::new();
+        let mut shares: Vec<Candidate> = Vec::new();
+        let percent_rules: Vec<&Rule> = rules
+            .iter()
+            .filter(|r| r.kind == RuleKind::Budget && r.percent().is_some())
+            .collect();
         let mut addresses: Vec<(String, String)> = Vec::new();
         let new_ip = rules.iter().any(|r| r.kind == RuleKind::NewIp);
         let (mut known_keys, mut known_pairs) = (HashSet::new(), HashSet::new());
@@ -883,9 +997,32 @@ impl Engine {
                         key,
                         summary,
                         evidence: vec![evidence(record, &self.replica)],
+                        budget: None,
                     });
                 }
             };
+            // A share of a policy budget: each budget the policy counted this cost against, as it is in force now.
+            if event == "usage"
+                && live
+                && !percent_rules.is_empty()
+                && record["charged_usd"].as_f64().unwrap_or(0.0) > 0.0
+                && record["budget"] != "not_counted"
+            {
+                for (scope, budget) in self.policy_budgets(record) {
+                    for rule in percent_rules
+                        .iter()
+                        .filter(|r| watches(&r.policy_scope(), &scope))
+                    {
+                        shares.push(Candidate {
+                            rule: (*rule).clone(),
+                            key: share_subject(&scope, budget.per, &time),
+                            summary: String::new(),
+                            evidence: vec![evidence(record, &self.replica)],
+                            budget: Some(budget),
+                        });
+                    }
+                }
+            }
             if event == "usage" {
                 let charged = record["charged_usd"].as_f64().unwrap_or(0.0);
                 if charged > 0.0 && charged.is_finite() {
@@ -907,7 +1044,8 @@ impl Engine {
             for rule in &rules {
                 match (rule.kind, event) {
                     (RuleKind::Budget, "usage")
-                        if record["charged_usd"].as_f64().unwrap_or(0.0) > 0.0 =>
+                        if rule.percent().is_none()
+                            && record["charged_usd"].as_f64().unwrap_or(0.0) > 0.0 =>
                     {
                         let scope = rule.text("scope");
                         let value = match scope {
@@ -974,9 +1112,33 @@ impl Engine {
                             1,
                         );
                     }
+                    // No provider answered, retried or not: the last try, named by the record.
+                    (RuleKind::ProviderErrors, "upstream_error")
+                        if record["code"]
+                            .as_str()
+                            .is_some_and(|c| c.starts_with("upstream_")) =>
+                    {
+                        let provider = match record["provider"].as_str() {
+                            Some(p) if !p.is_empty() => p,
+                            _ => "unknown",
+                        };
+                        if !rule.text("provider").is_empty() && rule.text("provider") != provider {
+                            continue;
+                        }
+                        hit(
+                            rule,
+                            format!("provider:{provider}"),
+                            format!(
+                                "{provider} gave no answer ({})",
+                                record["code"].as_str().unwrap_or_default()
+                            ),
+                            1,
+                        );
+                    }
                     (RuleKind::ProviderErrors, "attempts") => {
                         let tries = record["attempts"].as_array().cloned().unwrap_or_default();
-                        // The last try's outcome is in the usage record when there is one; count the failed tries.
+                        // The last try's outcome is in the usage record, or the upstream error record when no
+                        // provider answered; count the failed tries before it.
                         for attempt in tries.iter().rev().skip(1) {
                             let provider = attempt["provider"].as_str().unwrap_or("unknown");
                             let outcome = attempt["outcome"]
@@ -1162,6 +1324,7 @@ impl Engine {
         }
 
         // One check per rule and subject, with the records of every hit.
+        candidates.extend(shares);
         let mut merged: Vec<Candidate> = Vec::new();
         for c in candidates {
             match merged
@@ -1171,6 +1334,10 @@ impl Engine {
                 Some(m) => {
                     if m.evidence.len() < EVIDENCE {
                         m.evidence.extend(c.evidence);
+                    }
+                    // Two budgets on one counter and period: the smaller is reached first.
+                    if let (Some(b), Some(other)) = (m.budget.as_mut(), c.budget) {
+                        b.usd = b.usd.min(other.usd);
                     }
                     if m.summary.is_empty() {
                         m.summary = c.summary;
@@ -1230,6 +1397,7 @@ impl Engine {
             )));
         }
         match rule.kind {
+            RuleKind::Budget if c.budget.is_some() => self.share(c).await,
             RuleKind::Budget => {
                 let mut parts = c.key.rsplitn(2, ':');
                 let period = parts.next().unwrap_or_default().to_string();
@@ -1284,6 +1452,140 @@ impl Engine {
         }
     }
 
+    /// The budgets the policy in force counts a usage record's cost against, by counter: what the gateway reserved
+    /// and settled it under (`Policy::applied`, for the caller, its rule, customer, tags and model).
+    fn policy_budgets(&self, record: &Value) -> Vec<(String, Budget)> {
+        let text = |key: &str| record[key].as_str().unwrap_or_default();
+        let who = Principal {
+            name: text("person").to_string(),
+            team: text("team").to_string(),
+            key: text("key").to_string(),
+            org: text("org").to_string(),
+            ..Principal::default()
+        };
+        let tags: Vec<String> = record["tags"]
+            .as_array()
+            .map(|t| {
+                t.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.policy
+            .with(|policy| {
+                // The key's own entry carries its budget; a key gone since is read as the record names it.
+                let identified = policy
+                    .entries()
+                    .find(|(_, p)| p.key == who.key)
+                    .map_or(who.clone(), |(_, p)| p.clone());
+                let Some(rule) = policy.rule_for(&identified) else {
+                    return Vec::new();
+                };
+                let sent = match text("alias") {
+                    "" => text("model"),
+                    alias => alias,
+                };
+                policy
+                    .applied(
+                        &identified,
+                        rule,
+                        gantry_core::policy::Context {
+                            sent,
+                            model: text("model"),
+                            customer: record["customer"].as_str(),
+                            tags: &tags,
+                        },
+                    )
+                    .into_iter()
+                    .filter_map(|a| match a.limit {
+                        Limit::Budget(b) => Some((a.scope, b)),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// What a budget counter has spent in a period, across every gateway on the store: the gateway's own counter,
+    /// which enforcement reads. A sliding window sums its slots back to the window's start.
+    async fn counter_spent(&self, scope: &str, per: Period, label: &str) -> Result<f64, String> {
+        let client = self.db.client().await?;
+        let row = if per.sliding {
+            let from = per.window_start_label(label);
+            client
+                .query_one(
+                    "SELECT coalesce(sum(spent), 0) FROM gantry_spend WHERE scope = $1 AND per = $2 AND period >= $3 AND period <= $4",
+                    &[&scope, &per.word(), &from, &label],
+                )
+                .await
+        } else {
+            client
+                .query_one(
+                    "SELECT coalesce(sum(spent), 0) FROM gantry_spend WHERE scope = $1 AND per = $2 AND period = $3",
+                    &[&scope, &per.word(), &label],
+                )
+                .await
+        };
+        row.map_err(db_error)?.try_get(0).map_err(db_error)
+    }
+
+    /// Whether a counter's spend reaches the rule's percent of its policy budget, or is forecast to by the end of
+    /// the period. Subject: `scope|per|period`, or `scope|per` for a sliding window, read up to now.
+    async fn share(&self, c: &Candidate) -> Result<Option<String>, String> {
+        let (rule, Some(budget)) = (&c.rule, c.budget) else {
+            return Ok(None);
+        };
+        let mut parts = c.key.split('|');
+        let scope = parts.next().unwrap_or_default();
+        let label = match parts.nth(1) {
+            Some(label) => label.to_string(),
+            None => budget.per.label(&audit::timestamp()),
+        };
+        let label = label.as_str();
+        let percent = rule.percent().unwrap_or(100.0);
+        let spent = self.counter_spent(scope, budget.per, label).await?;
+        let threshold = budget.usd * percent / 100.0;
+        let length = budget.per.describe();
+        let length = length.trim_end_matches(", sliding");
+        let of = if budget.per.sliding {
+            format!("its ${:.2} budget for any {length}", budget.usd)
+        } else {
+            format!("its ${:.2} budget per {length}", budget.usd)
+        };
+        let share = |usd: f64| usd / budget.usd * 100.0;
+        // A sliding window never ends, so there is no end to forecast to: the rule reads what is spent.
+        if rule.text("forecast") == "on" && !budget.per.sliding {
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs() as i64);
+            let (start, end) = budget.per.window(now);
+            let elapsed = ((now - start) as f64 / (end - start).max(1) as f64).clamp(0.0, 1.0);
+            // Too early in the period for a forecast to mean anything.
+            if elapsed < 0.1 {
+                return Ok(None);
+            }
+            let projected = spent / elapsed;
+            return Ok((projected >= threshold).then(|| {
+                format!(
+                    "{scope} has spent ${spent:.2} of {of} so far in {label} ({:.0}%) and is forecast to spend ${projected:.2} ({:.0}%) by its end, past {percent}%.",
+                    share(spent),
+                    share(projected)
+                )
+            }));
+        }
+        let window = if budget.per.sliding {
+            format!("the last {length}")
+        } else {
+            label.to_string()
+        };
+        Ok((spent >= threshold).then(|| {
+            format!(
+                "{scope} has spent ${spent:.2} of {of} in {window} ({:.0}%), reaching {percent}%.",
+                share(spent)
+            )
+        }))
+    }
+
     /// Fires an alert unless the rule fired for this subject within its quiet period or too often this hour. Each
     /// alert is kept, written to the audit chain and sent to the rule's channels.
     async fn fire(
@@ -1294,7 +1596,7 @@ impl Engine {
         evidence: Vec<Value>,
         channels: &[Channel],
     ) -> Result<(), String> {
-        let quiet = if rule.kind.once() {
+        let quiet = if rule.kind.once() && !sliding_subject(key) {
             FOREVER
         } else {
             rule.cooldown.max(0)
@@ -1809,7 +2111,7 @@ async fn main(
             &form_for(
                 "rule_save",
                 &format!(
-                    r#"{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}<label class="t-body"><input type="checkbox" name="forecast"{}> Forecast: fire when spend at the current rate would reach the amount by the period's end</label>{}"#,
+                    r#"{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}<label class="t-body"><input type="checkbox" name="forecast"{}> Forecast: fire when spend at the current rate would reach the amount or percent by the period's end</label>{}"#,
                     hidden("id", &editing.map(|r| r.id.to_string()).unwrap_or_default()),
                     select("kind", "Kind", &kinds, chosen),
                     input(
@@ -1847,7 +2149,11 @@ async fn main(
                             ("all", "Budget: the whole install"),
                             ("team", "Budget: a team"),
                             ("person", "Budget: a person"),
-                            ("key", "Budget: a key")
+                            ("key", "Budget: a key"),
+                            ("org", "Budget: an organization (with a percent)"),
+                            ("customer", "Budget: a customer (with a percent)"),
+                            ("tag", "Budget: a tag (with a percent)"),
+                            ("model", "Budget: a model (with a percent)")
                         ],
                         &v("scope")
                     ),
@@ -1856,7 +2162,14 @@ async fn main(
                         "Budget: name",
                         &v("name"),
                         "",
-                        "The team, person or key prefix. Empty: each one."
+                        "The team, person, key prefix, organization, customer, tag or model. Empty: each one. Inside an organization, acme/payments."
+                    ),
+                    input(
+                        "percent",
+                        "Budget: percent of the policy's budget",
+                        &v("percent"),
+                        r#" type="number" min="1" max="1000""#,
+                        "Fires when spend reaches this percent of each budget the policy sets for the scope, in its own period (calendar or sliding). Period and amount are then the policy's."
                     ),
                     select(
                         "period",

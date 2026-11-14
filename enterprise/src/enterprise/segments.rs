@@ -103,6 +103,19 @@ impl Store {
         }))
     }
 
+    /// The same bucket under `<prefix>/<sub>`: an organization's chain (`audit: { per_org: true }`) keeps its
+    /// segments under `orgs/<org>`, apart from the install's.
+    pub fn within(&self, sub: &str) -> Store {
+        Store {
+            origin: self.origin.clone(),
+            bucket: self.bucket.clone(),
+            prefix: self.key(sub),
+            region: self.region.clone(),
+            credentials: self.credentials.clone(),
+            agent: self.agent.clone(),
+        }
+    }
+
     fn key(&self, name: &str) -> String {
         if self.prefix.is_empty() {
             name.to_string()
@@ -282,6 +295,11 @@ pub fn restore(store: &Store, path: &Path) -> Result<String, String> {
         ));
     }
     let names = store.list()?;
+    // An organization's chain lives in a folder beside the install's log, which an empty disk does not have yet.
+    if let Some(folder) = path.parent().filter(|f| !f.as_os_str().is_empty()) {
+        std::fs::create_dir_all(folder)
+            .map_err(|err| format!("{} cannot be made: {err}.", folder.display()))?;
+    }
     if names.iter().any(|n| n == REPLICA)
         && let Some(replica) = store.get(REPLICA)?
     {
@@ -711,6 +729,54 @@ mod tests {
         );
         assert_eq!(chain.records, local.records);
         assert_eq!(chain.last_hash, local.last_hash);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_organizations_chain_ships_under_its_own_prefix_and_comes_back_on_an_empty_disk()
+    -> Result<(), Error> {
+        let (bucket, url) = bucket().await?;
+        let first = disk("org-before")?;
+        let log = Arc::new(AuditLog::open(&first)?.per_org(&["acme".to_string()])?);
+        let (org, acme) = log.org_logs().into_iter().next().ok_or("no org chain")?;
+        let at = audit::org_path(&first, &org);
+        let ship = Shipper::new(
+            store(&url)?.within(&super::super::org_prefix(&org)),
+            acme.clone(),
+            at.clone(),
+            &env(&url),
+            Arc::new(AtomicU64::new(u64::MAX)),
+            None,
+        );
+        write(&acme, 3)?;
+        assert_eq!(ship.pass(true)?, 1);
+        assert!(
+            bucket
+                .lock()
+                .map_err(|_| "lock")?
+                .keys()
+                .any(|k| k == "gw/one/orgs/acme/00000000000000000001-00000000000000000003.jsonl"),
+            "under the install's prefix, in orgs/acme"
+        );
+        // The install's chain is not mixed with it: its restore finds nothing of acme's.
+        drop(ship);
+        drop(acme);
+        drop(log);
+        let second = disk("org-after")?;
+        let note = restore(&store(&url)?, &second)?;
+        assert!(note.contains("no audit segments"), "{note}");
+        let back = audit::org_path(&second, "acme");
+        let note = restore(
+            &store(&url)?.within(&super::super::org_prefix("acme")),
+            &back,
+        )?;
+        assert!(note.contains("fetched 1"), "{note}");
+        let log = AuditLog::open(&second)?.per_org(&[])?;
+        assert_eq!(
+            log.org_logs().len(),
+            1,
+            "the restored chain is opened, checked whole"
+        );
         Ok(())
     }
 
