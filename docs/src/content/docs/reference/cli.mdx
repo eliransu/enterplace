@@ -294,7 +294,7 @@ gantry audit coverage [<file>] [--keys <file>] [--devices <file>]
 |---|---|---|
 | `<file>` | `gantry-audit.jsonl` | The audit log, sealed segments included |
 | `--keys` | none | The keys file the gateway serves with. Each name in it with no requests gets a row with tool `-` and last seen `never` |
-| `--devices` | none | `devices.json` from the console's Devices page (Gantry Enterprise). Adds the columns `devices` and `direct`, and rows for tools installed on devices that never reached Gantry |
+| `--devices` | none | `devices.json` from the console's Devices page (Gantry Enterprise). Adds the columns `devices` and `direct`, rows for tools installed on devices that never reached Gantry, and a second table of each device's MCP servers (`via_gantry`, `decision`) |
 
 ```text
 person	team	tool	requests	refused	last_seen

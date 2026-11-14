@@ -48,6 +48,8 @@ Tokens can be managed without the console, with an admin key (`admin: true` in t
 | `DELETE /console/devices/tokens/<id>` | Revokes it |
 | `GET /console/devices/devices.json` | Every device as last reported, the file `gantry audit coverage --devices` reads |
 | `DELETE /console/devices/devices/<device_id>` | Removes a device and its binding, so its next report binds it again. An admin record `device_removed` |
+| `GET /console/devices/mcp` | Every MCP server devices reported, once per transport and target: `servers` (names), `tools`, `devices`, `via_gantry`, `decision` (`approved`, `blocked`, `pending`), `decided_by`, `decided_at` |
+| `POST /console/devices/mcp` | Decides one: `{"transport": "http", "target": "https://mcp.example.com/mcp", "decision": "blocked"}`; `pending` takes a decision back. An admin record `device_mcp_decided` |
 
 ```bash
 curl -X POST https://gantry.example.com/console/devices/tokens \
@@ -80,6 +82,12 @@ Only Claude Code and Codex are configured by the agent. The others are reported,
 <Aside type="caution">
 `installed` is not proof of coverage. A Cursor, JetBrains or Roo Code with its own provider key shows as `installed`; the audit log then shows whether it reached Gantry.
 </Aside>
+
+## MCP servers
+
+Each report carries the device's OS (`macos`, `linux`, `windows`) and the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed: the tool, the file, the server's name, its transport (`http` or `stdio`), its target (the URL without query or login, or the command's file name) and whether it is Gantry's MCP gateway (`<gateway>/mcp` or a bundle under it). Arguments, environment variables and headers are never sent, and the gateway strips a query or login from a target before it stores it. An agent from before the inventory sends none, and its device keeps what it last listed.
+
+An owner or admin approves or blocks a server on the Devices page (**MCP servers**) or with `POST /console/devices/mcp`; each decision is an admin record, written before it is kept. A server is named by its transport and target, so one decision covers every device and tool that has it, and a decision outlives the configuration it was made for. The device profile (`GET /device/profile`) carries the decisions as `mcp: {"approved": [...], "blocked": [...]}`. The agent marks each server of its next report `approved`, `blocked` or `pending`, and prints a warning naming each blocked server and the file it is in. It does not edit the tools' MCP files: the person, or your device management tool, removes a blocked server, and the page shows it until it is gone.
 
 ## The Devices page
 

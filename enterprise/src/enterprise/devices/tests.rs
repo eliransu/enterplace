@@ -651,3 +651,151 @@ async fn without_the_feature_devices_answer_license_required() -> Result<(), Err
     let _ = url;
     Ok(())
 }
+
+#[tokio::test]
+async fn mcp_servers_are_stored_shown_and_approved_or_blocked() -> Result<(), Error> {
+    let Some(url) = database("devices_mcp").await? else {
+        return Ok(());
+    };
+    let gw = gateway("devices_mcp", &url, &licensed(&["devices"]))?;
+    let made = call(
+        &gw.app,
+        "POST",
+        "/console/devices/tokens",
+        ADMIN_KEY,
+        Some(json!({"label": "mcp", "team": ""})),
+    )
+    .await?;
+    let token = made.body["token"].as_str().ok_or("no token")?.to_string();
+    // The agent's report as guards2's agent sends it: its OS and each configured MCP server. A target an old agent
+    // left a token in is stored without it; a row for a file that could not be read is not a server.
+    let mut sent = report("noa", "nuc", json!([]));
+    sent["os"] = json!("linux");
+    sent["mcp"] = json!([
+        {"tool": "cursor", "file": "/home/noa/.cursor/mcp.json", "server": "github", "transport": "http", "target": "https://u:p@api.githubcopilot.com/mcp?token=abc", "via_gantry": false},
+        {"tool": "claude-code", "file": "/home/noa/.claude.json", "server": "gantry", "transport": "http", "target": "https://gw.example.com/mcp", "via_gantry": true},
+        {"tool": "vscode", "file": "/home/noa/.config/Code/User/mcp.json", "error": "the file is not JSON"}
+    ]);
+    let stored = agent(
+        &gw.app,
+        "POST",
+        "/device/report",
+        &token,
+        ADMIN_KEY,
+        Some(sent),
+    )
+    .await?;
+    assert_eq!(stored.status, StatusCode::OK, "{}", stored.text);
+
+    let listed = call(
+        &gw.app,
+        "GET",
+        "/console/devices/devices.json",
+        ADMIN_KEY,
+        None,
+    )
+    .await?;
+    let device = &listed.body[0];
+    assert_eq!(device["os"], "linux");
+    assert_eq!(
+        device["mcp"].as_array().map(Vec::len),
+        Some(2),
+        "{}",
+        listed.text
+    );
+    assert!(!listed.text.contains("token=abc") && !listed.text.contains("u:p@"));
+    let github = device["mcp"]
+        .as_array()
+        .and_then(|a| a.iter().find(|m| m["server"] == "github"))
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(github["target"], "https://api.githubcopilot.com/mcp");
+    assert_eq!(
+        (&github["via_gantry"], &github["decision"]),
+        (&json!(false), &json!("pending"))
+    );
+    // The download `gantry audit coverage --devices` reads takes the new fields.
+    let _: Vec<gantry_core::coverage::Device> = serde_json::from_str(&listed.text)?;
+
+    // An admin blocks GitHub's server by API and approves Gantry's on the page; a viewer cannot decide.
+    let blocked = call(
+        &gw.app,
+        "POST",
+        "/console/devices/mcp",
+        ADMIN_KEY,
+        Some(json!({"transport": "http", "target": "https://api.githubcopilot.com/mcp", "decision": "blocked"})),
+    )
+    .await?;
+    assert_eq!(blocked.status, StatusCode::OK, "{}", blocked.text);
+    let wrong = call(
+        &gw.app,
+        "POST",
+        "/console/devices/mcp",
+        ADMIN_KEY,
+        Some(json!({"transport": "http", "target": "x", "decision": "maybe"})),
+    )
+    .await?;
+    assert_eq!(wrong.status, StatusCode::BAD_REQUEST, "{}", wrong.text);
+    let mut owner = Browser::admin(&gw.app).await?;
+    let page = owner.go(&gw.app, "GET", "/console/devices", &[]).await?;
+    assert!(page.text.contains("MCP servers"), "{}", page.text);
+    assert!(page.text.contains("https://api.githubcopilot.com/mcp"));
+    assert!(page.text.contains("not via Gantry") && page.text.contains("via Gantry"));
+    let approved = owner
+        .go(
+            &gw.app,
+            "POST",
+            "/console/devices",
+            &[
+                ("action", "mcp_decide"),
+                ("transport", "http"),
+                ("target", "https://gw.example.com/mcp"),
+                ("decision", "approved"),
+            ],
+        )
+        .await?;
+    assert!(approved.text.contains("approved"), "{}", approved.text);
+
+    // The profile tells the agent which servers are allowed and which are blocked.
+    let profile = agent(&gw.app, "GET", "/device/profile", &token, ADMIN_KEY, None).await?;
+    assert_eq!(
+        profile.body["mcp"],
+        json!({"approved": [{"transport": "http", "target": "https://gw.example.com/mcp"}],
+               "blocked": [{"transport": "http", "target": "https://api.githubcopilot.com/mcp"}]}),
+        "{}",
+        profile.text
+    );
+    let servers = call(&gw.app, "GET", "/console/devices/mcp", ADMIN_KEY, None).await?;
+    let decisions: Vec<(Value, Value)> = servers.body["servers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|m| (m["target"].clone(), m["decision"].clone()))
+        .collect();
+    assert_eq!(
+        decisions,
+        [
+            (json!("https://api.githubcopilot.com/mcp"), json!("blocked")),
+            (json!("https://gw.example.com/mcp"), json!("approved")),
+        ]
+    );
+    // Taken back to pending, it is no longer in the profile.
+    call(
+        &gw.app,
+        "POST",
+        "/console/devices/mcp",
+        ADMIN_KEY,
+        Some(json!({"transport": "http", "target": "https://gw.example.com/mcp", "decision": "pending"})),
+    )
+    .await?;
+    let profile = agent(&gw.app, "GET", "/device/profile", &token, ADMIN_KEY, None).await?;
+    assert_eq!(profile.body["mcp"]["approved"], json!([]));
+
+    let decided: Vec<Value> = admin_records(&gw)?
+        .into_iter()
+        .filter(|r| r["action"] == "device_mcp_decided")
+        .collect();
+    assert_eq!(decided.len(), 4, "{decided:?}");
+    assert_eq!(decided[1]["code"], "invalid_request");
+    Ok(())
+}

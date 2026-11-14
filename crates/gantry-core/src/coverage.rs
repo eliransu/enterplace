@@ -40,6 +40,29 @@ pub struct Device {
     pub last_seen: String,
     #[serde(default)]
     pub tools: Vec<DeviceTool>,
+    /// `macos`, `linux` or `windows`; empty from an agent that does not say.
+    #[serde(default)]
+    pub os: String,
+    /// The MCP servers its tools are configured with.
+    #[serde(default)]
+    pub mcp: Vec<DeviceMcp>,
+}
+
+/// One MCP server a tool on a device is configured with, and the admin's decision on it.
+#[derive(Clone, Debug, Deserialize)]
+pub struct DeviceMcp {
+    pub tool: String,
+    pub server: String,
+    /// `http` or `stdio`.
+    pub transport: String,
+    /// The URL without query or login, or the command's file name.
+    pub target: String,
+    /// Whether it is Gantry's MCP gateway.
+    #[serde(default)]
+    pub via_gantry: bool,
+    /// `approved`, `blocked` or `pending`.
+    #[serde(default)]
+    pub decision: String,
 }
 
 /// One tool on a device. `state` is `not_installed`, `installed` (found, its endpoint not set or not readable),

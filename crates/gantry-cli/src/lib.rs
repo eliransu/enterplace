@@ -121,7 +121,8 @@ Commands:
         Requests per person and coding tool (from each record's user agent), with refusals and the last
         time seen. With --keys, every key holder who sent nothing is listed with last seen never.
         With --devices (devices.json from the console's Devices page, Gantry Enterprise), two more
-        columns: devices with the tool installed, and how many of them call a provider directly.
+        columns: devices with the tool installed, and how many of them call a provider directly; then
+        each device's MCP servers, whether each goes through Gantry, and the admin's decision.
   serve --unchecked
         Forward every request without checking it, on this machine only. For benchmarks.
         GANTRY_ADDR sets the address, GANTRY_UPSTREAM the server to forward to.
@@ -1629,6 +1630,33 @@ fn audit_coverage(path: &Path, keys: Option<&Path>, devices: Option<&Path>) -> R
             "{person}\t{}\t{tool}\t{}\t{}\t{}{more}",
             r.team, r.requests, r.refused, r.last_seen
         );
+    }
+    // Then each device's MCP servers, and whether each goes through Gantry's MCP gateway.
+    let servers: Vec<_> = devices
+        .iter()
+        .flatten()
+        .flat_map(|d| d.mcp.iter().map(move |m| (d, m)))
+        .collect();
+    if !servers.is_empty() {
+        println!("\ndevice\tperson\tos\ttool\tserver\ttransport\ttarget\tvia_gantry\tdecision");
+        for (d, m) in servers {
+            println!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                d.device_id,
+                d.person,
+                if d.os.is_empty() { "-" } else { &d.os },
+                m.tool,
+                m.server,
+                m.transport,
+                m.target,
+                if m.via_gantry { "yes" } else { "no" },
+                if m.decision.is_empty() {
+                    "pending"
+                } else {
+                    &m.decision
+                }
+            );
+        }
     }
     Ok(())
 }

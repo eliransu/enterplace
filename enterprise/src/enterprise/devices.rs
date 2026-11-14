@@ -98,6 +98,31 @@ CREATE TABLE enterprise_device_refusals (
 );
 ";
 
+/// The OS each device runs, the MCP servers its tools are configured with (from the agent's inventory), and the
+/// admin's decision on each server, by its transport and target: approved or blocked. A server with no decision is
+/// pending.
+pub const MIGRATION_3: &str = "
+ALTER TABLE enterprise_devices ADD COLUMN os text NOT NULL DEFAULT '';
+CREATE TABLE enterprise_device_mcp (
+    device_id text NOT NULL REFERENCES enterprise_devices (device_id) ON DELETE CASCADE,
+    tool text NOT NULL,
+    file text NOT NULL,
+    server text NOT NULL,
+    transport text NOT NULL,
+    target text NOT NULL,
+    via_gantry boolean NOT NULL,
+    PRIMARY KEY (device_id, tool, file, server)
+);
+CREATE TABLE enterprise_mcp_decisions (
+    transport text NOT NULL,
+    target text NOT NULL,
+    decision text NOT NULL,
+    decided_by text NOT NULL,
+    decided_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (transport, target)
+);
+";
+
 /// The header the agent sends the person's Gantry key in (the one `gantry login` saved), beside the enrolment token.
 pub const PERSON_HEADER: &str = "x-gantry-key";
 
@@ -130,6 +155,7 @@ pub fn register(extension: &mut gantry_server::Extension, db: Arc<Db>, keys: Pat
         .route("/devices/tokens", get(list_tokens).post(create_token_api))
         .route("/devices/tokens/{id}", delete(revoke_token_api))
         .route("/devices/devices/{id}", delete(remove_device_api))
+        .route("/devices/mcp", get(list_mcp_api).post(decide_mcp_api))
         .layer(Ext(devices));
 }
 
@@ -324,7 +350,7 @@ impl Devices {
         let rows = client
             .query(
                 &format!("SELECT d.device_id, d.hostname, d.os_user, d.person, d.team, d.agent_version, to_char(d.last_seen AT TIME ZONE 'UTC', {TIME}), \
-                 (d.last_seen < now() - interval '24 hours'), coalesce(t.tool, ''), coalesce(t.state, ''), coalesce(t.endpoints, '[]') \
+                 (d.last_seen < now() - interval '24 hours'), coalesce(t.tool, ''), coalesce(t.state, ''), coalesce(t.endpoints, '[]'), d.os \
                  FROM enterprise_devices d LEFT JOIN enterprise_device_tools t ON t.device_id = d.device_id ORDER BY d.person, d.device_id, t.tool"),
                 &[],
             )
@@ -337,7 +363,8 @@ impl Devices {
             if out.last().is_none_or(|d| d["device_id"] != id.as_str()) {
                 out.push(json!({
                     "device_id": id, "hostname": get(1), "os_user": get(2), "person": get(3), "team": get(4),
-                    "agent_version": get(5), "last_seen": get(6), "stale": r.try_get::<_, bool>(7).unwrap_or(false), "tools": [],
+                    "agent_version": get(5), "last_seen": get(6), "stale": r.try_get::<_, bool>(7).unwrap_or(false), "os": get(11),
+                    "tools": [], "mcp": [],
                 }));
             }
             let tool = get(8);
@@ -348,7 +375,151 @@ impl Devices {
                 tools.push(json!({ "tool": tool, "state": get(9), "endpoints": endpoints }));
             }
         }
+        let servers = client
+            .query(
+                "SELECT m.device_id, m.tool, m.server, m.transport, m.target, m.via_gantry, coalesce(x.decision, 'pending') \
+                 FROM enterprise_device_mcp m LEFT JOIN enterprise_mcp_decisions x ON x.transport = m.transport AND x.target = m.target \
+                 ORDER BY m.device_id, m.tool, m.server",
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        for r in &servers {
+            let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
+            let id = get(0);
+            if let Some(Value::Array(list)) = out
+                .iter_mut()
+                .find(|d| d["device_id"] == id.as_str())
+                .map(|d| &mut d["mcp"])
+            {
+                list.push(json!({
+                    "tool": get(1), "server": get(2), "transport": get(3), "target": get(4),
+                    "via_gantry": r.try_get::<_, bool>(5).unwrap_or(false), "decision": get(6),
+                }));
+            }
+        }
         Ok(out)
+    }
+
+    /// Every MCP server some device reported, once per transport and target: its names, the tools and devices that
+    /// have it, whether it goes through Gantry, and the admin's decision. Decided servers no device lists any more
+    /// are kept, so a block outlives the configuration it was made for.
+    async fn mcp_servers(&self) -> Result<Vec<Value>, String> {
+        let client = self.db.client().await?;
+        let rows = client
+            .query(
+                &format!("SELECT k.transport, k.target, coalesce(string_agg(DISTINCT m.server, ', '), ''), coalesce(string_agg(DISTINCT m.tool, ', '), ''), \
+                 count(DISTINCT m.device_id), coalesce(bool_and(m.via_gantry), false), coalesce(x.decision, 'pending'), coalesce(x.decided_by, ''), \
+                 coalesce(to_char(x.decided_at AT TIME ZONE 'UTC', {TIME}), '') \
+                 FROM (SELECT transport, target FROM enterprise_device_mcp UNION SELECT transport, target FROM enterprise_mcp_decisions) k \
+                 LEFT JOIN enterprise_device_mcp m ON m.transport = k.transport AND m.target = k.target \
+                 LEFT JOIN enterprise_mcp_decisions x ON x.transport = k.transport AND x.target = k.target \
+                 GROUP BY k.transport, k.target, x.decision, x.decided_by, x.decided_at ORDER BY k.target, k.transport"),
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
+                json!({
+                    "transport": get(0), "target": get(1), "servers": get(2), "tools": get(3),
+                    "devices": r.try_get::<_, i64>(4).unwrap_or(0), "via_gantry": r.try_get::<_, bool>(5).unwrap_or(false),
+                    "decision": get(6), "decided_by": get(7), "decided_at": get(8),
+                })
+            })
+            .collect())
+    }
+
+    /// Approves or blocks an MCP server (or puts it back to pending), recorded first.
+    async fn decide_mcp(
+        &self,
+        console: &Console,
+        admin: &Admin,
+        transport: &str,
+        target: &str,
+        decision: &str,
+    ) -> Result<(), (StatusCode, &'static str, String)> {
+        let action = "device_mcp_decided";
+        let details = json!({ "transport": transport, "target": target, "decision": decision });
+        let problem = if role_of(admin) == Role::Viewer {
+            Some((
+                StatusCode::FORBIDDEN,
+                "read_only",
+                "Your role is viewer. An owner or admin can approve or block MCP servers."
+                    .to_string(),
+            ))
+        } else if !matches!(transport, "http" | "stdio")
+            || target.is_empty()
+            || target.chars().count() > 500
+        {
+            Some((
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Name the server by transport (http or stdio) and target (its URL, or its command's file name), as the Devices page lists it.".to_string(),
+            ))
+        } else if !matches!(decision, "approved" | "blocked" | "pending") {
+            Some((
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                format!("{decision:?} is not a decision: send approved, blocked or pending."),
+            ))
+        } else {
+            None
+        };
+        if let Some((status, code, message)) = problem {
+            let _ = console
+                .audit(Some(admin), action, details, Some(code))
+                .await;
+            return Err((status, code, message));
+        }
+        let unavailable = |e: String| (StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", e);
+        console
+            .audit(Some(admin), action, details, None)
+            .await
+            .map_err(|e| unavailable(e.to_string()))?;
+        let client = self.db.client().await.map_err(unavailable)?;
+        let done = if decision == "pending" {
+            client
+                .execute(
+                    "DELETE FROM enterprise_mcp_decisions WHERE transport = $1 AND target = $2",
+                    &[&transport, &target],
+                )
+                .await
+        } else {
+            client
+                .execute(
+                    "INSERT INTO enterprise_mcp_decisions (transport, target, decision, decided_by) VALUES ($1, $2, $3, $4) \
+                     ON CONFLICT (transport, target) DO UPDATE SET decision = excluded.decision, decided_by = excluded.decided_by, decided_at = now()",
+                    &[&transport, &target, &decision, &admin.name],
+                )
+                .await
+        };
+        done.map(|_| ()).map_err(|e| unavailable(db_error(e)))
+    }
+
+    /// The decided servers, for the device profile: approved and blocked, each as {transport, target}.
+    async fn mcp_decisions(&self) -> Result<Value, String> {
+        let client = self.db.client().await?;
+        let rows = client
+            .query(
+                "SELECT transport, target, decision FROM enterprise_mcp_decisions ORDER BY target, transport",
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        let (mut approved, mut blocked) = (Vec::new(), Vec::new());
+        for r in &rows {
+            let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
+            let server = json!({ "transport": get(0), "target": get(1) });
+            if get(2) == "blocked" {
+                blocked.push(server);
+            } else {
+                approved.push(server);
+            }
+        }
+        Ok(json!({ "approved": approved, "blocked": blocked }))
     }
 
     /// Creates a token, recorded first. `Ok` is (id, token, expires_at).
@@ -513,7 +684,11 @@ async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response
         ),
         Err(e) => return fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     };
-    Json(json!({ "gateway_url": gateway, "tools": tools, "team": team, "person": person }))
+    let mcp = match d.mcp_decisions().await {
+        Ok(mcp) => mcp,
+        Err(e) => return fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
+    };
+    Json(json!({ "gateway_url": gateway, "tools": tools, "team": team, "person": person, "mcp": mcp }))
         .into_response()
 }
 
@@ -522,6 +697,49 @@ fn text_of(body: &Value, field: &str, max: usize) -> Option<String> {
         .as_str()
         .filter(|v| !v.is_empty() && v.chars().count() <= max)
         .map(str::to_string)
+}
+
+/// The OSes the agent reports, as it names them.
+const OSES: [&str; 3] = ["macos", "linux", "windows"];
+/// The most MCP servers kept for one device: a report listing more keeps the first ones.
+const MAX_MCP: usize = 200;
+
+/// One MCP server a tool on a device is configured with, as the agent's inventory reports it.
+struct McpServer {
+    tool: String,
+    file: String,
+    server: String,
+    transport: String,
+    target: String,
+    via_gantry: bool,
+}
+
+impl McpServer {
+    /// A well-formed inventory row; a row for a file that could not be read, or one with missing fields, is none.
+    fn from_report(row: &Value) -> Option<Self> {
+        let transport = text_of(row, "transport", 10).filter(|t| t == "http" || t == "stdio")?;
+        Some(Self {
+            tool: text_of(row, "tool", 50)?,
+            file: text_of(row, "file", 500).unwrap_or_default(),
+            server: text_of(row, "server", 200)?,
+            target: bare_target(&text_of(row, "target", 500)?),
+            transport,
+            via_gantry: row["via_gantry"].as_bool().unwrap_or(false),
+        })
+    }
+}
+
+/// A target without a query, fragment or login, so a token an old agent left in a URL is never stored.
+fn bare_target(target: &str) -> String {
+    let target = target.split(['?', '#']).next().unwrap_or_default();
+    match target.split_once("://") {
+        Some((scheme, rest)) => {
+            let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+            let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+            format!("{scheme}://{host}{path}")
+        }
+        None => target.to_string(),
+    }
 }
 
 async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Response {
@@ -582,6 +800,16 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
             ),
         );
     }
+    let os = text_of(&body, "os", 20).filter(|os| OSES.contains(&os.as_str()));
+    // An agent from before the inventory sends no `mcp`: its device keeps what it last listed.
+    let mcp: Option<Vec<McpServer>> = body.get("mcp").map(|list| {
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(McpServer::from_report)
+            .take(MAX_MCP)
+            .collect()
+    });
     let stored = async {
         let mut client = d.db.client().await?;
         let tx = client.transaction().await.map_err(db_error)?;
@@ -629,6 +857,31 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
         )
         .await
         .map_err(db_error)?;
+        if let Some(os) = &os {
+            tx.execute(
+                "UPDATE enterprise_devices SET os = $2 WHERE device_id = $1",
+                &[&device_id, os],
+            )
+            .await
+            .map_err(db_error)?;
+        }
+        if let Some(mcp) = &mcp {
+            tx.execute(
+                "DELETE FROM enterprise_device_mcp WHERE device_id = $1",
+                &[&device_id],
+            )
+            .await
+            .map_err(db_error)?;
+            for m in mcp {
+                tx.execute(
+                    "INSERT INTO enterprise_device_mcp (device_id, tool, file, server, transport, target, via_gantry) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
+                    &[&device_id, &m.tool, &m.file, &m.server, &m.transport, &m.target, &m.via_gantry],
+                )
+                .await
+                .map_err(db_error)?;
+            }
+        }
         for (tool, (state, endpoints, drift)) in &tools {
             tx.execute(
                 "INSERT INTO enterprise_device_tools (device_id, tool, state, endpoints) VALUES ($1, $2, $3, $4) \
@@ -802,6 +1055,47 @@ async fn remove_device_api(
     }
 }
 
+async fn list_mcp_api(
+    State(console): State<Console>,
+    Ext(d): Ext<Devices>,
+    headers: HeaderMap,
+) -> Response {
+    if api_admin(&console, &d, &headers).await.is_none() {
+        return not_admin();
+    }
+    match d.mcp_servers().await {
+        Ok(servers) => Json(json!({ "servers": servers })).into_response(),
+        Err(e) => fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
+    }
+}
+
+/// `{"transport": "http", "target": "https://mcp.example.com/mcp", "decision": "blocked"}`: approved, blocked, or
+/// pending to take a decision back.
+async fn decide_mcp_api(
+    State(console): State<Console>,
+    Ext(d): Ext<Devices>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if bearer(&headers).is_empty() && !same_origin(&headers) {
+        return foreign();
+    }
+    let Some(admin) = api_admin(&console, &d, &headers).await else {
+        return not_admin();
+    };
+    let body: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    let text = |k: &str| body[k].as_str().unwrap_or("").trim().to_string();
+    let (transport, target, decision) = (text("transport"), text("target"), text("decision"));
+    match d
+        .decide_mcp(&console, &admin, &transport, &target, &decision)
+        .await
+    {
+        Ok(()) => Json(json!({ "transport": transport, "target": target, "decision": decision }))
+            .into_response(),
+        Err((status, code, message)) => fail(status, code, &message),
+    }
+}
+
 async fn devices_json(
     State(console): State<Console>,
     Ext(d): Ext<Devices>,
@@ -941,6 +1235,58 @@ fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
     out + "</section>"
 }
 
+/// Each MCP server devices reported, with the tools and devices that have it, whether it goes through Gantry's MCP
+/// gateway, its decision, and the buttons that change it.
+fn mcp_list(servers: &[Value], can_edit: bool) -> String {
+    if servers.is_empty() {
+        return r#"<p class="t-small g-muted" style="margin: 0">No device has reported an MCP server yet. The device agent lists those configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed.</p>"#.into();
+    }
+    let mut out = String::from(r#"<section class="g-list">"#);
+    for m in servers {
+        let s = |k: &str| m[k].as_str().unwrap_or("").to_string();
+        let devices = m["devices"].as_i64().unwrap_or(0);
+        let mut meta = format!(
+            "{} · {} · {} · {devices} device{} · {}",
+            s("servers"),
+            s("transport"),
+            s("tools"),
+            if devices == 1 { "" } else { "s" },
+            if m["via_gantry"] == true {
+                "via Gantry"
+            } else {
+                "not via Gantry"
+            }
+        );
+        if !s("decided_by").is_empty() {
+            meta += &format!(
+                " · {} by {} at {}",
+                s("decision"),
+                s("decided_by"),
+                s("decided_at")
+            );
+        }
+        let mut end = html::tag("", &esc(&s("decision")), "");
+        if can_edit {
+            for (decision, label) in [("approved", "Approve"), ("blocked", "Block")] {
+                if s("decision") != decision {
+                    end += &form(
+                        "mcp_decide",
+                        &format!(
+                            "{}{}{}{}",
+                            hidden("transport", &s("transport")),
+                            hidden("target", &s("target")),
+                            hidden("decision", decision),
+                            small_button(label)
+                        ),
+                    );
+                }
+            }
+        }
+        out += &html::row(&esc(&s("target")), &esc(&meta), &end, true);
+    }
+    out + "</section>"
+}
+
 async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<String, String> {
     let can_edit = role_of(admin) != Role::Viewer;
     let tokens = d.tokens().await?;
@@ -1008,6 +1354,10 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
         out += &banner(notice, error);
     }
     out += &section("Coverage", &people(&traffic, &devices));
+    out += &section(
+        "MCP servers: approve or block what devices are configured with",
+        &mcp_list(&d.mcp_servers().await?, can_edit),
+    );
 
     let mut list = String::from(r#"<section class="g-list">"#);
     for t in &tokens {
@@ -1202,6 +1552,29 @@ async fn act(
                     false,
                 ),
                 Ok(false) => ("That token is already revoked.".to_string(), true),
+                Err((_, _, message)) => (message, true),
+            };
+            show(&console, &d, &admin, &uri, &notice, error).await
+        }
+        "mcp_decide" => {
+            let decision = form.get("decision").trim();
+            let (notice, error) = match d
+                .decide_mcp(
+                    &console,
+                    &admin,
+                    form.get("transport").trim(),
+                    form.get("target").trim(),
+                    decision,
+                )
+                .await
+            {
+                Ok(()) => (
+                    format!(
+                        "MCP server {} {decision}. Devices pick it up on their next check.",
+                        form.get("target").trim()
+                    ),
+                    false,
+                ),
                 Err((_, _, message)) => (message, true),
             };
             show(&console, &d, &admin, &uri, &notice, error).await

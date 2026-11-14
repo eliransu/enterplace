@@ -899,6 +899,40 @@ fn hostname() -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
+/// Marks each MCP server of the report with the admin's decision from the profile (`approved`, `blocked`, or
+/// `pending` when there is none), and says which blocked ones this user has configured. The agent does not edit the
+/// tools' MCP files: the person, or the device management tool, removes a blocked server.
+fn mcp_decided(report: &mut Value, decisions: &Value) -> Vec<String> {
+    let listed = |kind: &str, row: &Value| {
+        decisions[kind].as_array().is_some_and(|list| {
+            list.iter()
+                .any(|d| d["transport"] == row["transport"] && d["target"] == row["target"])
+        })
+    };
+    let mut warnings = Vec::new();
+    for row in report["mcp"].as_array_mut().into_iter().flatten() {
+        if row.get("server").is_none() {
+            continue;
+        }
+        let decision = if listed("blocked", row) {
+            warnings.push(format!(
+                "MCP server \"{}\" ({}) in {} is blocked by your Gantry admin. Remove it from {}.",
+                row["server"].as_str().unwrap_or(""),
+                row["target"].as_str().unwrap_or(""),
+                row["tool"].as_str().unwrap_or(""),
+                row["file"].as_str().unwrap_or("")
+            ));
+            "blocked"
+        } else if listed("approved", row) {
+            "approved"
+        } else {
+            "pending"
+        };
+        row["decision"] = decision.into();
+    }
+    warnings
+}
+
 fn once(agent: &ureq::Agent, opts: &Options) -> Result<(), String> {
     let cp = opts.control_plane.trim_end_matches('/');
     let auth = format!("Bearer {}", opts.token);
@@ -934,7 +968,10 @@ fn once(agent: &ureq::Agent, opts: &Options) -> Result<(), String> {
                 .collect()
         })
         .unwrap_or_default();
-    let report = cycle(&p, gateway, &manage, opts.dry_run)?;
+    let mut report = cycle(&p, gateway, &manage, opts.dry_run)?;
+    for warning in mcp_decided(&mut report, &profile["mcp"]) {
+        eprintln!("device agent: {warning}");
+    }
     if opts.dry_run {
         println!("would report {report}");
         return Ok(());
@@ -1275,6 +1312,33 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
+    }
+
+    #[test]
+    fn the_profile_marks_each_mcp_server_approved_blocked_or_pending() {
+        let mut report = json!({"mcp": [
+            {"tool": "cursor", "file": "/h/.cursor/mcp.json", "server": "github", "transport": "http", "target": "https://api.githubcopilot.com/mcp"},
+            {"tool": "claude-code", "file": "/h/.claude.json", "server": "gantry", "transport": "http", "target": "https://gw.example.com/mcp"},
+            {"tool": "zed", "file": "/h/.config/zed/settings.json", "server": "local", "transport": "stdio", "target": "srv"},
+            {"tool": "vscode", "file": "/h/mcp.json", "error": "the file is not JSON"}
+        ]});
+        let decisions = json!({
+            "approved": [{"transport": "http", "target": "https://gw.example.com/mcp"}],
+            "blocked": [{"transport": "http", "target": "https://api.githubcopilot.com/mcp"}]
+        });
+        let warnings = mcp_decided(&mut report, &decisions);
+        let decision = |i: usize| report["mcp"][i]["decision"].clone();
+        assert_eq!(
+            (decision(0), decision(1), decision(2), decision(3)),
+            (
+                json!("blocked"),
+                json!("approved"),
+                json!("pending"),
+                Value::Null
+            )
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("github") && warnings[0].contains("/h/.cursor/mcp.json"));
     }
 
     #[test]

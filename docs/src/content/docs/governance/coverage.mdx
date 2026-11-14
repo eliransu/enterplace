@@ -79,6 +79,14 @@ dan	web	-	0	0	never	1	0
 | `devices` | The person's enrolled devices with the tool installed. For tool `-`, every enrolled device of theirs, none with a tool |
 | `direct` | Of those, the devices where the tool is configured to call a provider directly |
 
+Then each device's MCP servers, whether each goes through Gantry's MCP gateway, and the admin's decision on it (see [MCP servers](/operations/devices/#mcp-servers)):
+
+```text
+device	person	os	tool	server	transport	target	via_gantry	decision
+mbp:ana	ana	macos	cursor	github	http	https://api.githubcopilot.com/mcp	no	blocked
+mbp:ana	ana	macos	claude-code	gantry	http	https://gantry.example.com/mcp	yes	approved
+```
+
 A tool with requests and `direct` 0 is covered. A tool with `direct` above 0 reaches a provider from at least one device, whatever its traffic says. A row with 0 requests and `devices` above 0 is installed and has never reached Gantry.
 
 Devices are matched to people by the Gantry key `gantry login` saved on the machine: the agent sends it, and the gateway takes the person from the key. A device whose user never ran `gantry login` is refused until someone does.

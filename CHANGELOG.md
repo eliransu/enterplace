@@ -7,6 +7,17 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Devices: MCP servers approved or blocked
+
+- The self-hosted `/device/report` takes the agent's `os` and its `mcp` inventory and keeps them (migration 3 of
+  namespace `enterprise.devices`: `enterprise_devices.os`, `enterprise_device_mcp`, `enterprise_mcp_decisions`). A
+  target's query or login is stripped before it is stored.
+- The Devices page lists every reported MCP server with its tools, devices, whether it goes through Gantry, and an
+  Approve or Block button; `GET` and `POST /console/devices/mcp` do the same by API. Each decision is an admin record
+  `device_mcp_decided`. The device profile carries the decisions (`mcp: {approved, blocked}`); the agent marks each
+  server of its report and warns about blocked ones it finds configured.
+- `gantry audit coverage --devices` prints each device's MCP servers, `via_gantry` and the decision.
+
 ### Routing resilience, continued
 
 - Providers take `headers_env` (headers sent with every request, values from the environment) and `proxy_env` (an

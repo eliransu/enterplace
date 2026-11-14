@@ -34,7 +34,11 @@ const SCIM: &[&str] = &[scim::MIGRATION];
 /// Entry 2 is the captured text of audit export (`capture`).
 const SIEM: &[&str] = &[siem::MIGRATION, capture::MIGRATION];
 /// Enrolment tokens, device profiles, and what the device agents report.
-const DEVICES: &[&str] = &[devices::MIGRATION, devices::MIGRATION_2];
+const DEVICES: &[&str] = &[
+    devices::MIGRATION,
+    devices::MIGRATION_2,
+    devices::MIGRATION_3,
+];
 /// Alert channels, rules and what fired. Runs after `SIEM`: alerting reads the records it ingests.
 const ALERTS: &[&str] = &[alerts::MIGRATION, alerts::DAILY];
 
