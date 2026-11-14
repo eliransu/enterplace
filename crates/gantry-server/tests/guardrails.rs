@@ -916,3 +916,102 @@ async fn buffer_stream_checks_a_streamed_answer_then_replays_it() -> TestResult 
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn custom_detectors_block_or_shadow_and_the_admin_api_backtests_them() -> TestResult {
+    let port = provider().await?;
+    let guards = "  - name: tickets\n    type: regex\n    action: block\n    patterns:\n      ticket_id: 'TKT-[0-9]{6}'\n  - name: words\n    type: keywords\n    action: block\n    shadow_until: 2999-01-01\n    keywords:\n      codename: [Project Falcon]\n";
+    // Maya, and an admin key for the backtest call.
+    let admin = "gantry_admin_0123456789abcdef0123456789";
+    let dir = std::env::temp_dir().join(format!("gantry-guard-{}-custom", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("gantry.policy.yaml");
+    std::fs::write(&path, policy(port, guards, "tickets, words"))?;
+    std::fs::write(
+        dir.join("gantry.keys.yaml"),
+        format!(
+            "keys:\n  - name: maya.cohen\n    team: payments\n    sha256: {}\n  - name: ops\n    team: platform\n    admin: true\n    sha256: {}\n",
+            sha256_hex(MAYA.as_bytes()),
+            sha256_hex(admin.as_bytes())
+        ),
+    )?;
+    let gw = gantry_server::governed(&path, None, &|_| Some("provider-secret".into()))?;
+    let s = Setup {
+        policy: path,
+        audit: dir.join("gantry-audit.jsonl"),
+        gw,
+    };
+    let gw = &s.gw;
+
+    let answer = send(gw, chat("close TKT-123456 please")?).await?;
+    assert_eq!(answer.status, StatusCode::FORBIDDEN, "{}", answer.body);
+    assert!(answer.body.contains("ticket_id (1)") && !answer.body.contains("TKT-123456"));
+    let record = last(&s)?;
+    assert_eq!(record["guardrails"][0]["detector"], "regex");
+    assert_eq!(record["guardrails"][0]["kind"], "ticket_id");
+
+    // In its shadow period the keyword list blocks nothing and records `shadow`.
+    let answer = send(gw, chat("how is project falcon going")?).await?;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let record = last(&s)?;
+    assert_eq!(record["guardrails"][0]["kind"], "codename");
+    assert_eq!(record["guardrails"][0]["action"], "shadow");
+    assert!(!std::fs::read_to_string(&s.audit)?.contains("falcon going"));
+
+    let backtest = |body: Value, key: &str| {
+        Request::post("/admin/guardrails/test")
+            .header(header::AUTHORIZATION, format!("Bearer {key}"))
+            .body(Body::from(body.to_string()))
+    };
+    let corpus = json!([
+        {"text": "TKT-000001", "expect": true},
+        {"text": "no ticket", "expect": false},
+        {"text": "TKT-000002 again", "expect": false}
+    ]);
+    let answer = send(
+        gw,
+        backtest(json!({"guardrail": "tickets", "corpus": corpus}), admin)?,
+    )
+    .await?;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let report: Value = serde_json::from_str(&answer.body)?;
+    assert_eq!(
+        (report["requests"].as_u64(), report["hits"].as_u64()),
+        (Some(3), Some(2))
+    );
+    assert_eq!(report["labelled"]["precision"], 50.0);
+    assert!(!answer.body.contains("TKT-000001"), "{}", answer.body);
+    // A definition not in the policy yet can be tried too.
+    let definition =
+        json!({"name": "ids", "type": "regex", "action": "warn", "patterns": {"emp": "E[0-9]{7}"}});
+    let answer = send(
+        gw,
+        backtest(
+            json!({"guardrail": definition, "corpus": [{"text": "E1234567"}]}),
+            admin,
+        )?,
+    )
+    .await?;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    assert!(answer.body.contains("\"hits\":1"), "{}", answer.body);
+    let answer = send(
+        gw,
+        backtest(json!({"guardrail": "tickets", "since": "7d"}), admin)?,
+    )
+    .await?;
+    assert_eq!(answer.status, StatusCode::CONFLICT, "{}", answer.body);
+    let answer = send(
+        gw,
+        backtest(json!({"guardrail": "nope", "corpus": corpus}), admin)?,
+    )
+    .await?;
+    assert_eq!(answer.status, StatusCode::NOT_FOUND, "{}", answer.body);
+    let answer = send(
+        gw,
+        backtest(json!({"guardrail": "tickets", "corpus": corpus}), MAYA)?,
+    )
+    .await?;
+    assert_eq!(answer.status, StatusCode::FORBIDDEN, "{}", answer.body);
+    Ok(())
+}

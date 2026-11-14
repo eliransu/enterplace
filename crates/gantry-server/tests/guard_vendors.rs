@@ -96,6 +96,17 @@ fn vendor_answer(path: &str, headers: &HeaderMap, body: &Value, key: &str) -> Op
                 "documentsAnalysis": []
             }))
         }
+        "/v1/projects/p1/locations/us-central1/templates/t1:sanitizeUserPrompt" if bearer => {
+            let state = if bad { "MATCH_FOUND" } else { "NO_MATCH_FOUND" };
+            Some(json!({"sanitizationResult": {
+                "filterMatchState": state,
+                "invocationResult": "SUCCESS",
+                "filterResults": {
+                    "pi_and_jailbreak": {"piAndJailbreakFilterResult": {"matchState": state}},
+                    "malicious_uris": {"maliciousUriFilterResult": {"matchState": "NO_MATCH_FOUND"}}
+                }
+            }}))
+        }
         "/v1/chat/completions" if bearer => Some(json!({
             "choices": [{"message": {"role": "assistant", "content": if bad { "unsafe\nS1" } else { "safe" }}}]
         })),
@@ -238,6 +249,14 @@ async fn each_vendor_is_asked_in_its_own_api_and_blocks_or_allows() -> TestResul
             format!("    url: {base}\n    key_env: {KEY_ENV}\n"),
             "/contentsafety/text:shieldPrompt",
             "prompt_injection",
+        ),
+        (
+            "model_armor",
+            format!(
+                "    url: {base}\n    key_env: {KEY_ENV}\n    project_id: p1\n    region: us-central1\n    template_id: t1\n"
+            ),
+            "/v1/projects/p1/locations/us-central1/templates/t1:sanitizeUserPrompt",
+            "pi_and_jailbreak",
         ),
         (
             "llama_guard",

@@ -1,6 +1,6 @@
 ---
 title: Guardrails
-description: Check requests and answers for secrets, personal data, prompt injection and unsafe content with built-in detectors, seven vendors or your own webhook.
+description: Check requests and answers for secrets, personal data, your own patterns and word lists, prompt injection and unsafe content with built-in detectors, eight vendors or your own webhook.
 sidebar:
   order: 5
 ---
@@ -48,7 +48,8 @@ Guardrails are defined once at the top level and named by rules. A change applie
 | Kind | Types | Runs |
 |---|---|---|
 | Built in | `secrets`, `pii` | Inside Gantry, no network call. |
-| Vendor | `openai_moderation`, `presidio`, `lakera`, `bedrock_guardrail`, `azure_content_safety`, `azure_prompt_shield`, `llama_guard` | Gantry calls the vendor's own API. No adapter needed. |
+| Custom | `regex`, `keywords` | Your patterns and word lists, inside Gantry, no network call. |
+| Vendor | `openai_moderation`, `presidio`, `lakera`, `bedrock_guardrail`, `azure_content_safety`, `azure_prompt_shield`, `llama_guard`, `model_armor` | Gantry calls the vendor's own API. No adapter needed. |
 | Webhook | `webhook` | Your service, speaking [Gantry's contract](/governance/guardrail-webhooks/). |
 
 ## Actions
@@ -56,12 +57,12 @@ Guardrails are defined once at the top level and named by rules. A change applie
 | `action` | Effect |
 |---|---|
 | `block` | Refuse the request with `guardrail_blocked` (403). For a vendor or webhook, obey the service: refuse when it refuses, mask when it masks. |
-| `mask` | Replace each finding with `[MASKED <kind>]` and forward the changed request. Built-in types and `presidio` only. |
+| `mask` | Replace each finding with `[MASKED <kind>]` and forward the changed request. Built-in, `regex` and `keywords` types and `presidio` only. |
 | `warn` | Forward unchanged and record what was found. Use it to see what a guardrail would catch before you enforce it. |
 
-`action` is required for `secrets` and `pii`. Vendors and webhooks default to `block`.
+`action` is required for `secrets`, `pii`, `regex` and `keywords`. Vendors and webhooks default to `block`.
 
-Every action records what was found: one entry per guardrail and kind with `guardrail`, `detector`, `kind`, `action` (`block`, `mask`, `warn` or `skipped`) and `count`. The matched text is never in a record, a refusal or Gantry's log. An empty list means the guardrails ran and found nothing.
+Every action records what was found: one entry per guardrail and kind with `guardrail`, `detector`, `kind`, `action` (`block`, `mask`, `warn`, `shadow` or `skipped`) and `count`. The matched text is never in a record, a refusal or Gantry's log. An empty list means the guardrails ran and found nothing.
 
 ### Order
 
@@ -73,27 +74,36 @@ Guardrails run before the cache, the rate limit and the budget. See [Order of ch
 
 | Type | Kinds found |
 |---|---|
-| `secrets` | `private_key` (the whole PEM or PGP block), `aws_access_key`, `github_token`, `slack_token`, `gantry_key`, `jwt`, `api_key` (`sk-...`) |
+| `secrets` | `private_key` (the whole PEM or PGP block), `aws_access_key`, `github_token`, `slack_token`, `gantry_key`, `jwt`, `gcp_service_account_key` (the `private_key_id` of a key file; its PEM block is a `private_key` too), `gcp_api_key` (`AIza...`), `azure_connection_string` (the `AccountKey=` or `SharedAccessKey=` part), `stripe_key` (`sk_` and `rk_`, live and test; never the public `pk_`), `twilio_api_key` (`SK...`), `sendgrid_key` (`SG.`), `openai_project_key` (`sk-proj-`, `sk-svcacct-`, `sk-admin-`), `anthropic_key` (`sk-ant-api03-`, `sk-ant-admin01-`), `api_key` (any other `sk-...`), `database_url` (a `postgres`, `mysql`, `mariadb`, `mongodb`, `redis`, `amqp` or `mssql` URL with a password that is not a placeholder such as `${DB_PASSWORD}` or `password`) |
 | `pii` | `email_address`, `phone_number`, `credit_card` (Luhn checked), `iban` (mod 97 checked), `israeli_id` (check digit), `us_ssn`, `medical_record_number` and `date_of_birth` (only after a label such as `MRN:` or `DOB:`) |
 
-These are pattern detectors. A password, a database URL with credentials, a key with no known prefix, a name, an address, or a date of birth or record number with no label is not found. Text that is encoded, split across messages, spelled out or translated is not found either. Any 9-digit number with a valid Israeli ID check digit, and some long digit runs that pass Luhn, are reported. Use a vendor such as Presidio for names, addresses and anything else beyond these patterns.
+These are pattern detectors. A password on its own, a key with no known prefix (a Twilio auth token is 32 bare hex digits), a name, an address, or a date of birth or record number with no label is not found. Text that is encoded, split across messages, spelled out or translated is not found either. Any 9-digit number with a valid Israeli ID check digit, and some long digit runs that pass Luhn, are reported. Use a vendor such as Presidio for names, addresses and anything else beyond these patterns.
 
 ### Measured precision and recall
 
 {/* detector-corpus-table:start */}
 
-Measured on the `gantry-detectors-v1` corpus.
+Measured on the `gantry-detectors-v2` corpus.
 
 | Kind | Type | Positives | Negatives | Precision | Recall |
 |---|---|---|---|---|---|
-| `private_key` | `secrets` | 42 | 40 | 100.0% | 100.0% |
+| `private_key` | `secrets` | 62 | 40 | 100.0% | 100.0% |
 | `aws_access_key` | `secrets` | 50 | 40 | 100.0% | 100.0% |
 | `github_token` | `secrets` | 50 | 40 | 100.0% | 100.0% |
 | `slack_token` | `secrets` | 40 | 40 | 97.6% | 100.0% |
 | `gantry_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
 | `jwt` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `gcp_service_account_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `gcp_api_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `azure_connection_string` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `stripe_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `twilio_api_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `sendgrid_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `openai_project_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `anthropic_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
 | `api_key` | `secrets` | 40 | 40 | 95.2% | 100.0% |
-| `email_address` | `pii` | 50 | 40 | 86.2% | 100.0% |
+| `database_url` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `email_address` | `pii` | 91 | 40 | 96.8% | 100.0% |
 | `phone_number` | `pii` | 50 | 40 | 80.4% | 90.0% |
 | `credit_card` | `pii` | 50 | 40 | 94.3% | 100.0% |
 | `iban` | `pii` | 42 | 40 | 100.0% | 95.2% |
@@ -104,21 +114,104 @@ Measured on the `gantry-detectors-v1` corpus.
 
 {/* detector-corpus-table:end */}
 
-`gantry-detectors-v1` is 1,223 labelled lines in the repository at `crates/gantry-core/tests/corpus/gantry-detectors-v1.jsonl` (Apache-2.0), made by `scripts/make_detector_corpus.py`. Each kind has realistic positives in prose, chat, code, logs and JSON, and hard negatives that look like it: public keys and certificates, IAM IDs, commit hashes, base64 JSON that is not a token, order numbers, timestamps, values with a broken checksum, and labels with no value. Every value is synthetic or a published example: AWS's example key, the card networks' test numbers, RFC 2606 mail domains, fictional phone ranges. A positive is a value a careful reader would report; precision counts a finding on any line, recall counts the values found.
+`gantry-detectors-v2` is 1,943 labelled lines in the repository at `crates/gantry-core/tests/corpus/gantry-detectors-v2.jsonl` (Apache-2.0), made by `scripts/make_detector_corpus.py`. It is v1 (1,223 lines, kept unchanged beside it) with `sk-proj-` and `sk-ant-` keys labelled with their own kinds, plus 40 positives and 40 hard negatives for each kind v2 added. Every key in it is random. Each kind has realistic positives in prose, chat, code, logs and JSON, and hard negatives that look like it: public keys and certificates, IAM IDs, commit hashes, base64 JSON that is not a token, order numbers, timestamps, values with a broken checksum, and labels with no value. Every value is synthetic or a published example: AWS's example key, the card networks' test numbers, RFC 2606 mail domains, fictional phone ranges. A positive is a value a careful reader would report; precision counts a finding on any line, recall counts the values found.
 
 `cargo test` measures the corpus and fails when this table differs from the measurement, or when a kind falls below its floor. A new corpus is a new version; v1 is not edited to move its numbers.
+
+The kinds v2 added were written together with their corpus rows, so their 100% is what the patterns reach on shapes their author thought of: publishable `pk_` keys, account SIDs, placeholders, password-less and placeholder database URLs, wrong lengths. Real traffic will find shapes the corpus lacks. Backtest a guardrail on your own examples before you enforce it (see [Backtest](#backtest-before-enforcing)).
 
 What the corpus shows the detectors miss or over-report:
 
 - `phone_number`: national formats without a country code outside the US and Israel (`07700 900123`, `0491 570 146`) are missed. Order numbers shaped like a US number (`123-456-7890`) are reported.
-- `email_address`: `git@github.com`, an image name such as `logo@2x.png`, and a token in a URL's login part are reported.
+- `email_address`: `git@github.com` and an image name such as `logo@2x.png` are reported. A login in a URL (`postgres://app:pw@db.example.com`) is not an address and is not reported.
 - `us_ssn`: an SSN without dashes is missed. Any number shaped like an issued SSN is reported, such as a part number.
 - `israeli_id`, `credit_card`: any 9-digit number with a valid check digit, and digit runs that pass Luhn (an IMEI, some millisecond timestamps), are reported. An ID written with its check digit apart (`12345678-2`) is missed.
 - `iban`: an IBAN in lowercase is missed.
 - `medical_record_number`, `date_of_birth`: a value after another label (`D.O.B.`, `birth date`, an HL7 `PID` segment) or a date written in words is missed. A labelled word (`MRN: UNKNOWN`) or `born on` before any date is reported.
 - `api_key`, `slack_token`: a URL slug starting `sk-` and a placeholder such as `xoxb-your-token` are reported.
 
-The corpus does not cover names, postal addresses, passwords, database URLs, secrets with no fixed prefix, or values that are encoded, split across messages, spelled out or translated. The detectors do not find those, so no number here speaks for them.
+The corpus does not cover names, postal addresses, passwords on their own, secrets with no fixed prefix, or values that are encoded, split across messages, spelled out or translated. The detectors do not find those, so no number here speaks for them.
+
+## Custom detectors: regex and keywords
+
+Your own patterns and word lists, run inside Gantry like the built-in detectors, with `block`, `mask` or `warn`, on requests, answers or both.
+
+```yaml
+guardrails:
+  - name: internal-ids
+    type: regex
+    action: mask
+    on: [request, answer]
+    patterns:
+      ticket_id: 'TKT-[0-9]{6}'
+      employee_id: '\bE[0-9]{7}\b'
+  - name: codenames
+    type: keywords
+    action: block
+    keywords:
+      unreleased: [Project Falcon, bluebird]
+      competitors: [Acme Corp]
+```
+
+Each entry's name is the finding's kind: it is what records show, what a refusal names, and what masking writes (`[MASKED ticket_id]`). A name uses letters, digits, dots, dashes and underscores, at most 64 characters. It never holds the matched text.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `patterns` | map | required for `regex` | Entry name to pattern. |
+| `keywords` | map | required for `keywords` | Entry name to a list of words and phrases. |
+| `case_sensitive` | bool | `false` | `keywords` only. Matching ignores ASCII case unless this is `true`. |
+| `whole_word` | bool | `true` | `keywords` only. A word matches only on its own, so `bluebird` does not match `bluebirds`. Set `false` to match inside words. |
+
+Patterns use RE2 syntax, read by Rust's `regex` crate: no lookaround and no backreferences, so every pattern runs in time linear in the text, whatever it is. `gantry check` refuses a pattern that does not compile, one larger than 1 MiB compiled (such as `x{1000}{1000}`), one that matches empty text, and one with a capturing group: findings are told apart by group, so write `(?:...)` for a group. Classes, `\b` and case folding are ASCII; literal text in any script still matches.
+
+In a keyword list, a phrase's spaces match any run of white space, so `Project Falcon` also matches `project   falcon` across a line break. Every keyword is literal text: `C++` means those three characters.
+
+## Shadow mode
+
+Add `shadow_until` to any guardrail, built-in, custom, vendor or webhook, to run it for a set period before it enforces anything:
+
+```yaml
+  - name: codenames
+    type: keywords
+    action: block
+    shadow_until: 2026-12-01
+    keywords:
+      unreleased: [Project Falcon]
+```
+
+Until that UTC date (or time, `2026-12-01T09:00:00Z`) the guardrail checks every request its rules give it and records what it finds with `action: shadow`, the kind and the count, and never blocks or masks. From that moment it acts as `action` says, with no reload. Count the `shadow` entries in the audit log to see what it would have stopped.
+
+## Backtest before enforcing
+
+Run a guardrail over examples before any request meets it. The guardrail must be defined under `guardrails:`; no rule needs to name it yet.
+
+```bash
+gantry guardrail test internal-ids --corpus examples.jsonl --policy gantry.policy.yaml
+```
+
+```text
+guardrail "internal-ids" (regex) on 120 requests: would hit 14 (11.7%).
+  ticket_id: 12
+  employee_id: 3
+samples (masked):
+  #3 /messages/0/content ticket_id TK******56
+labelled 120 examples: precision 92.9% (13 of 14 hits expected), recall 100.0% (13 of 13 expected hit)
+```
+
+The corpus has one JSON object per line: `{"text": "..."}` (read as one user message) or `{"body": {...}}` (a whole request body), with an optional `id` and an optional `expect` (`true`, `false`, or a list of kinds, where an empty list is `false`). Blank lines and lines starting with `#` are skipped, so the detector corpus above reads as one. With `expect` on some lines, the report gives precision and recall over those lines. Up to 20 matched spans are shown with all but their first and last two characters masked.
+
+The admin API does the same, for a guardrail a rule of the running policy uses, or for a definition not in the policy yet:
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/admin/guardrails/test \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+  -d '{"guardrail": {"name": "ids", "type": "regex", "action": "warn", "patterns": {"emp": "E[0-9]{7}"}},
+       "corpus": [{"text": "badge E1234567", "expect": true}, {"text": "no id here", "expect": false}]}'
+```
+
+It answers with `requests`, `hits`, `kinds`, `samples` and `labelled` (`precision`, `recall` and the four counts), and the call is recorded like every admin call.
+
+A backtest runs the `secrets`, `pii`, `regex` and `keywords` types. A vendor or webhook guardrail is refused, because a backtest would send every example to the service; use `shadow_until` for those. `--since 7d` (and `"since"` in the API) asks for recent traffic. The audit log holds no prompt text by design, so until request bodies are captured, Gantry says so and asks for a corpus.
 
 ## Vendors
 
@@ -130,6 +223,7 @@ The corpus does not cover names, postal addresses, passwords, database URLs, sec
 | `type` | string | required | A vendor type or `webhook`. |
 | `on_failure` | string | required | `fail_closed` refuses the request when the service is down, slow, answers an error status or something unreadable. `fail_open` forwards it and records `kind: unavailable`, `action: skipped`. |
 | `action` | string | `block` | `block` or `warn`. `mask` only for `presidio`. |
+| `shadow_until` | string | none | A UTC date or time before which findings are recorded as `shadow` and not obeyed. See [Shadow mode](#shadow-mode). |
 | `url` | string | per vendor | `https://`, or `http://` on `localhost`, `127.0.0.1` or `[::1]` only. |
 | `timeout_ms` | integer | `1000` | 1 to 30000. Covers every call the guardrail makes for one request. |
 | `key_env` | string | none | Environment variable holding the vendor's API key. |
@@ -271,6 +365,27 @@ guardrails:
 
       {conversation}
     on_failure: fail_open
+```
+
+</TabItem>
+<TabItem label="Google Model Armor">
+
+Calls `POST {url}/v1/projects/{project_id}/locations/{region}/templates/{template_id}:sanitizeUserPrompt` with `{"userPromptData": {"text": ...}}` for a request, and `:sanitizeModelResponse` with `{"modelResponseData": {"text": ...}}` for an answer (`on: [answer]`). Default `url` `https://modelarmor.{region}.rep.googleapis.com`. `project_id`, `region` (the Model Armor location, such as `us-central1`) and `template_id` required. The template holds the filter settings, made in the Google Cloud console.
+
+`key_env` required: a variable holding a Google OAuth access token, sent as `Authorization: Bearer`. It can be the same variable a Vertex AI provider uses. An access token lasts about an hour, so renew the variable (and reload) from your token source.
+
+The texts are joined, with a blank line between them, into one text. `filterMatchState: MATCH_FOUND` blocks. Each filter that matched is a finding: `pi_and_jailbreak`, `malicious_uris`, `sdp`, `csam`, and for responsible AI, each category that matched, such as `dangerous` or `harassment`. `NO_MATCH_FOUND` allows only when `invocationResult` is `SUCCESS`: a filter that did not run is a service failure, and `on_failure` decides. Cannot mask.
+
+```yaml
+guardrails:
+  - name: model-armor
+    type: model_armor
+    project_id: acme-prod
+    region: us-central1
+    template_id: strict
+    key_env: GOOGLE_ACCESS_TOKEN
+    on_failure: fail_closed
+    on: [request, answer]
 ```
 
 </TabItem>

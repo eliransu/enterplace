@@ -55,6 +55,12 @@ Commands:
   providers [--markdown]
         List the provider catalog: id, name, kind and URL. A policy provider may say `preset: <id>` in place
         of its url and kind. --markdown prints the reference page of the docs.
+  guardrail test <name> (--corpus <file.jsonl> | --since <7d>) [--policy <file>]
+        Run a guardrail the policy defines (secrets, pii, regex or keywords; a rule need not use it yet) over
+        examples before it goes live: how many requests it would hit, its kinds, up to 20 matched spans with all
+        but their first and last two characters masked, and precision and recall when the examples carry
+        expect: true or false. The corpus has one JSON object per line: {\"text\": \"...\"} or {\"body\": {...}}.
+        --since reads captured request bodies; the audit log holds no text, so without capture it says so.
   serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
         [--tls-cert <pem> --tls-key <pem>]
         Run the gateway: every request is identified, checked against the policy and recorded.
@@ -219,6 +225,25 @@ pub async fn run(args: &[String]) -> ExitCode {
             ),
             _ => None,
         },
+        ["guardrail", "test", rest @ ..] => {
+            match options(rest, &["--policy", "--corpus", "--since"]) {
+                Some((positional, named)) if positional.len() == 1 => Some(
+                    guardrail_test(
+                        positional[0],
+                        Path::new(
+                            named
+                                .get("--policy")
+                                .copied()
+                                .unwrap_or("gantry.policy.yaml"),
+                        ),
+                        named.get("--corpus").map(Path::new),
+                        named.get("--since").copied(),
+                    )
+                    .map_or_else(fail, |()| ExitCode::SUCCESS),
+                ),
+                _ => None,
+            }
+        }
         ["prices", rest @ ..] => match options(rest, &["--policy"]) {
             Some((positional, named)) if positional.len() == 1 => Some(
                 prices(positional[0], named.get("--policy").map(Path::new))
@@ -400,6 +425,9 @@ pub async fn run(args: &[String]) -> ExitCode {
             ),
             ["audit", "repair", ..] => Some("gantry audit repair [<file>] [--yes]"),
             ["providers", ..] => Some("gantry providers [--markdown]"),
+            ["guardrail", ..] => Some(
+                "gantry guardrail test <name> (--corpus <file.jsonl> | --since <7d>) [--policy <file>]",
+            ),
             ["init", ..] => Some("gantry init [--provider <id>] [--models <a,b>] [--out <policy file>]"),
             ["login", ..] => Some("gantry login <gantry url> [--no-browser]"),
             ["logout", ..] => Some("gantry logout"),
@@ -656,6 +684,85 @@ fn import_litellm(config: &Path, keys: Option<&Path>, out: &Path) -> Result<Exit
     }
     println!("See https://gantry-docs.eliran.me/migrate/from-litellm/. Checking it now:");
     Ok(check(out, None))
+}
+
+/// `gantry guardrail test`: a backtest of one defined guardrail, printed for a person.
+fn guardrail_test(
+    name: &str,
+    policy: &Path,
+    corpus: Option<&Path>,
+    since: Option<&str>,
+) -> Result<(), String> {
+    let text = std::fs::read_to_string(policy)
+        .map_err(|err| format!("{}: cannot be read: {err}", policy.display()))?;
+    let defined = gantry_core::guard::defined_in(&text)
+        .map_err(|errors| format!("{}: {}", policy.display(), errors.join(" ")))?;
+    let guard = defined.iter().find(|g| g.name == name).ok_or_else(|| {
+        let names: Vec<&str> = defined.iter().map(|g| g.name.as_str()).collect();
+        format!(
+            "{} defines no guardrail \"{name}\". It defines: {}.",
+            policy.display(),
+            if names.is_empty() {
+                "none".to_string()
+            } else {
+                names.join(", ")
+            }
+        )
+    })?;
+    if let Some(since) = since {
+        gantry_core::guard::since_seconds(since)?;
+        if corpus.is_none() {
+            return Err(gantry_core::guard::NO_CAPTURE.to_string());
+        }
+        eprintln!("warning: {}", gantry_core::guard::NO_CAPTURE);
+    }
+    let Some(corpus) = corpus else {
+        return Err("give the examples to test on: --corpus <file.jsonl>, one {\"text\": \"...\"} or {\"body\": {...}} per line.".into());
+    };
+    let rows = std::fs::read_to_string(corpus)
+        .map_err(|err| format!("{}: cannot be read: {err}", corpus.display()))?;
+    let samples =
+        gantry_core::guard::corpus(&rows).map_err(|err| format!("{}: {err}", corpus.display()))?;
+    let report = gantry_core::guard::backtest(guard, &samples)?;
+    print!("{}", backtest_text(&report));
+    Ok(())
+}
+
+fn backtest_text(report: &gantry_core::guard::Backtest) -> String {
+    let share = if report.requests == 0 {
+        0.0
+    } else {
+        100.0 * report.hits as f64 / report.requests as f64
+    };
+    let mut out = format!(
+        "guardrail \"{}\" ({}) on {}: would hit {} ({share:.1}%).\n",
+        report.guardrail,
+        report.detector,
+        count(report.requests as u64, "request"),
+        report.hits
+    );
+    for (kind, n) in &report.kinds {
+        out.push_str(&format!("  {kind}: {n}\n"));
+    }
+    if !report.samples.is_empty() {
+        out.push_str("samples (masked):\n");
+        for s in &report.samples {
+            out.push_str(&format!("  #{} {} {} {}\n", s.id, s.path, s.kind, s.masked));
+        }
+    }
+    if let Some(l) = &report.labelled {
+        out.push_str(&format!(
+            "labelled {}: precision {:.1}% ({} of {} hits expected), recall {:.1}% ({} of {} expected hit)\n",
+            count(l.examples as u64, "example"),
+            l.precision,
+            l.true_positives,
+            l.true_positives + l.false_positives,
+            l.recall,
+            l.true_positives,
+            l.true_positives + l.false_negatives
+        ));
+    }
+    out
 }
 
 fn prices(model: &str, policy: Option<&Path>) -> Result<(), String> {

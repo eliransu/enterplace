@@ -420,6 +420,7 @@ async fn gemini_refusals_are_recorded_and_never_sent() -> TestResult {
         action: Action::Block,
         check: Check::Secrets,
         on: gantry_core::guard::On::REQUEST,
+        shadow_until: None,
     }]);
     let gw = gateway(
         "gemini-refusals",
@@ -648,6 +649,7 @@ async fn responses_and_embeddings_are_governed_like_chat() -> TestResult {
             action: Action::Block,
             check: Check::Secrets,
             on: gantry_core::guard::On::REQUEST,
+            shadow_until: None,
         }]);
     let gw = gateway(
         "responses-governed",

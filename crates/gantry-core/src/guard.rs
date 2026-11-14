@@ -7,7 +7,7 @@
 //! A finding names its detector, its kind and the JSON path of the text it is in. It never carries the
 //! matched text, so nothing that is logged or audited can leak what the guardrail was there to stop.
 
-use std::{collections::BTreeMap, ops::Range, sync::OnceLock, time::Duration};
+use std::{borrow::Cow, collections::BTreeMap, ops::Range, sync::OnceLock, time::Duration};
 
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,10 @@ pub enum Action {
 pub enum GuardType {
     Secrets,
     Pii,
+    /// The policy's own regular expressions.
+    Regex,
+    /// The policy's own word and phrase lists.
+    Keywords,
     Webhook,
     OpenaiModeration,
     Presidio,
@@ -50,6 +54,7 @@ pub enum GuardType {
     AzureContentSafety,
     AzurePromptShield,
     LlamaGuard,
+    ModelArmor,
 }
 
 /// Which text a guardrail reads, as written in `on:`.
@@ -145,6 +150,24 @@ pub struct GuardrailFile {
     /// request, answer, or both.
     #[serde(default)]
     pub on: Option<Vec<Side>>,
+    /// regex: entry name to pattern. The name is the finding's kind.
+    #[serde(default)]
+    pub patterns: Option<BTreeMap<String, String>>,
+    /// keywords: entry name to the words and phrases it lists. The name is the finding's kind.
+    #[serde(default)]
+    pub keywords: Option<BTreeMap<String, Vec<String>>>,
+    /// keywords: match case exactly. Off by default.
+    #[serde(default)]
+    pub case_sensitive: Option<bool>,
+    /// keywords: match whole words only. On by default.
+    #[serde(default)]
+    pub whole_word: Option<bool>,
+    /// Until this UTC date or time the guardrail only records what it would have done (`action: shadow`).
+    #[serde(default)]
+    pub shadow_until: Option<String>,
+    /// model_armor: the Model Armor template that holds the filter settings.
+    #[serde(default)]
+    pub template_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,6 +231,8 @@ pub fn unset_webhook_env(rules: &[crate::policy::Rule], set: &dyn Fn(&str) -> bo
 pub enum Check {
     Secrets,
     Pii,
+    /// A `regex` or `keywords` guardrail, compiled.
+    Custom(Custom),
     Webhook(Webhook),
 }
 
@@ -220,16 +245,195 @@ pub struct Guardrail {
     pub check: Check,
     /// Whether it reads requests, answers, or both.
     pub on: On,
+    /// `shadow_until`: before this UTC date or time, findings are recorded as `shadow` and nothing is blocked or masked.
+    pub shadow_until: Option<String>,
 }
 
 impl Guardrail {
-    fn detector(&self) -> Option<&'static str> {
-        match self.check {
-            Check::Secrets => Some(SECRETS),
-            Check::Pii => Some(PII),
-            Check::Webhook(_) => None,
+    /// Whether it runs inside Gantry, with no call out.
+    fn local(&self) -> bool {
+        !matches!(self.check, Check::Webhook(_))
+    }
+
+    /// Whether it is still in its shadow period, read from the clock at each check.
+    pub fn shadowing(&self) -> bool {
+        self.shadow_until.as_deref().is_some_and(|until| {
+            !crate::policy::expiry_passed(
+                until,
+                &crate::audit::rfc3339(std::time::SystemTime::now()),
+            )
+        })
+    }
+
+    /// What it finds in these text parts, for a guardrail that runs inside Gantry. `builtin` is `scan` of the same
+    /// parts, done once for every built-in guardrail of a request.
+    fn findings(&self, parts: &[TextPart], builtin: &[Finding]) -> Vec<Finding> {
+        let of = |detector: &str| {
+            builtin
+                .iter()
+                .filter(|f| f.detector == detector)
+                .cloned()
+                .collect()
+        };
+        match &self.check {
+            Check::Secrets => of(SECRETS),
+            Check::Pii => of(PII),
+            Check::Custom(custom) => custom.scan(parts),
+            Check::Webhook(_) => Vec::new(),
         }
     }
+}
+
+/// A `regex` or `keywords` guardrail: every entry in one expression, read once per text.
+#[derive(Clone, Debug)]
+pub struct Custom {
+    /// `regex` or `keywords`: records carry it as the detector.
+    pub detector: &'static str,
+    /// The entry names, which are the finding kinds. Group i + 1 of `re` is entry i.
+    pub names: Vec<String>,
+    re: Regex,
+}
+
+impl PartialEq for Custom {
+    fn eq(&self, other: &Self) -> bool {
+        self.detector == other.detector
+            && self.names == other.names
+            && self.re.as_str() == other.re.as_str()
+    }
+}
+
+impl Eq for Custom {}
+
+impl Custom {
+    fn scan(&self, parts: &[TextPart]) -> Vec<Finding> {
+        let mut found = Vec::new();
+        for part in parts {
+            for caps in self.re.captures_iter(&part.text) {
+                let hit = caps
+                    .iter()
+                    .skip(1)
+                    .enumerate()
+                    .find_map(|(i, group)| Some((self.names.get(i)?, group?)));
+                if let Some((name, m)) = hit {
+                    found.push(Finding {
+                        detector: self.detector,
+                        kind: Cow::Owned(name.clone()),
+                        path: part.path.clone(),
+                        span: m.range(),
+                    });
+                }
+            }
+        }
+        found
+    }
+}
+
+/// The compiled size each custom pattern may reach, and the whole expression of one guardrail. The regex crate
+/// never backtracks, so time is linear in the text; this bounds the memory a pattern such as `a{1000}{1000}` takes.
+const PATTERN_LIMIT: usize = 1 << 20;
+const CUSTOM_LIMIT: usize = 16 << 20;
+
+/// An entry name: it is the finding's kind in records and in `[MASKED name]`, so the same safe characters as a
+/// webhook finding's kind.
+fn entry_name_ok(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+}
+
+/// Words and phrases as one pattern: each escaped, its inner spaces matching any run of white space, with word
+/// boundaries where the phrase starts or ends with a word character.
+fn keyword_pattern(words: &[String], whole_word: bool) -> String {
+    let word_char = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+    let alternatives: Vec<String> = words
+        .iter()
+        .map(|w| {
+            let body: Vec<String> = w.split_whitespace().map(regex::escape).collect();
+            let edge = |c| {
+                if whole_word && word_char(c) {
+                    r"\b"
+                } else {
+                    ""
+                }
+            };
+            format!(
+                "{}{}{}",
+                edge(w.trim().chars().next()),
+                body.join(r"\s+"),
+                edge(w.trim().chars().last())
+            )
+        })
+        .collect();
+    format!("(?:{})", alternatives.join("|"))
+}
+
+/// Compiles a `regex` or `keywords` guardrail. Each problem names the entry and the fix.
+fn custom(def: &GuardrailFile) -> Result<Custom, String> {
+    let name = &def.name;
+    let mut names = Vec::new();
+    let mut groups = Vec::new();
+    let build = |pattern: &str, limit: usize, fold: bool| {
+        // ASCII semantics, as the built-in detectors use: \b, \w and case folding are ASCII, and literal text in any
+        // script still matches.
+        RegexBuilder::new(pattern)
+            .unicode(false)
+            .case_insensitive(fold)
+            .size_limit(limit)
+            .dfa_size_limit(limit)
+            .build()
+    };
+    let (detector, fold) = if def.kind == GuardType::Regex {
+        let patterns = def.patterns.as_ref().filter(|p| !p.is_empty()).ok_or_else(|| {
+            format!("guardrail \"{name}\": a regex guardrail needs patterns, a map of names to patterns, for example patterns: {{ ticket_id: 'TKT-[0-9]{{6}}' }}.")
+        })?;
+        for (entry, pattern) in patterns {
+            let re = build(pattern, PATTERN_LIMIT, false).map_err(|err| {
+                format!("guardrail \"{name}\": pattern {entry} does not compile: {err}. Patterns use RE2 syntax (no lookaround, no backreferences), at most {} KiB compiled.", PATTERN_LIMIT >> 10)
+            })?;
+            if re.captures_len() > 1 {
+                return Err(format!(
+                    "guardrail \"{name}\": pattern {entry} has a capturing group. Write (?:...) for a group: findings are told apart by group, so a pattern may not add its own."
+                ));
+            }
+            if re.is_match("") {
+                return Err(format!(
+                    "guardrail \"{name}\": pattern {entry} matches empty text, so it would find something everywhere. Make it match at least one character."
+                ));
+            }
+            names.push(entry.clone());
+            groups.push(format!("({pattern})"));
+        }
+        ("regex", false)
+    } else {
+        let lists = def.keywords.as_ref().filter(|k| !k.is_empty()).ok_or_else(|| {
+            format!("guardrail \"{name}\": a keywords guardrail needs keywords, a map of names to lists, for example keywords: {{ codenames: [Project Falcon, bluebird] }}.")
+        })?;
+        let whole_word = def.whole_word.unwrap_or(true);
+        for (entry, words) in lists {
+            if words.is_empty() || words.iter().any(|w| w.trim().is_empty()) {
+                return Err(format!(
+                    "guardrail \"{name}\": keyword list {entry} is empty or holds an empty word. List at least one word, and no blank ones."
+                ));
+            }
+            names.push(entry.clone());
+            groups.push(format!("({})", keyword_pattern(words, whole_word)));
+        }
+        ("keywords", !def.case_sensitive.unwrap_or(false))
+    };
+    if let Some(bad) = names.iter().find(|n| !entry_name_ok(n)) {
+        return Err(format!(
+            "guardrail \"{name}\": entry name \"{bad}\" uses letters, digits, dots, dashes and underscores only, at most 64 characters. It is the kind written to records, so it never holds the text it finds."
+        ));
+    }
+    let re = build(&groups.join("|"), CUSTOM_LIMIT, fold).map_err(|err| {
+        format!("guardrail \"{name}\": its {} together do not compile: {err}. Split them across two guardrails.", if detector == "regex" { "patterns" } else { "keywords" })
+    })?;
+    Ok(Custom {
+        detector,
+        names,
+        re,
+    })
 }
 
 const DEFAULT_TIMEOUT_MS: u64 = 1000;
@@ -252,7 +456,7 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
             ));
         }
         let check = match def.kind {
-            GuardType::Secrets | GuardType::Pii => {
+            GuardType::Secrets | GuardType::Pii | GuardType::Regex | GuardType::Keywords => {
                 if def.url.is_some()
                     || def.timeout_ms.is_some()
                     || def.on_failure.is_some()
@@ -265,10 +469,16 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
                 if let Err(err) = vendor(def) {
                     errors.push(err);
                 }
-                if def.kind == GuardType::Secrets {
-                    Check::Secrets
-                } else {
-                    Check::Pii
+                match def.kind {
+                    GuardType::Secrets => Check::Secrets,
+                    GuardType::Pii => Check::Pii,
+                    _ => match custom(def) {
+                        Ok(custom) => Check::Custom(custom),
+                        Err(err) => {
+                            errors.push(err);
+                            continue;
+                        }
+                    },
                 }
             }
             _ => match webhook(def) {
@@ -279,7 +489,10 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
                 }
             },
         };
-        let remote = !matches!(def.kind, GuardType::Secrets | GuardType::Pii);
+        let remote = !matches!(
+            def.kind,
+            GuardType::Secrets | GuardType::Pii | GuardType::Regex | GuardType::Keywords
+        );
         let action = match (def.kind, def.action) {
             (GuardType::Presidio, Some(Action::Mask)) if def.anonymizer_url.is_none() => {
                 errors.push(format!(
@@ -288,7 +501,10 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
                 continue;
             }
             (GuardType::Presidio, Some(action)) => action,
-            (GuardType::Webhook | GuardType::BedrockGuardrail, Some(Action::Mask)) => {
+            (
+                GuardType::Webhook | GuardType::BedrockGuardrail | GuardType::ModelArmor,
+                Some(Action::Mask),
+            ) => {
                 errors.push(format!(
                     "guardrail \"{name}\": a {} guardrail does not take action: mask, because the service decides what to mask. Use block to obey its answer or warn to only record it.",
                     type_name(def.kind)
@@ -324,11 +540,20 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
                 answer: sides.contains(&Side::Answer),
             },
         };
+        if let Some(until) = &def.shadow_until {
+            if !crate::config::valid_expiry(until) {
+                errors.push(format!(
+                    "guardrail \"{name}\": shadow_until is \"{until}\". Write a UTC date or time, for example 2026-12-31 or 2026-12-31T18:00:00Z: until then it records what it would do and enforces nothing."
+                ));
+                continue;
+            }
+        }
         out.push(Guardrail {
             name: name.clone(),
             action,
             check,
             on,
+            shadow_until: def.shadow_until.clone(),
         });
     }
     if errors.is_empty() {
@@ -342,6 +567,8 @@ fn type_name(kind: GuardType) -> &'static str {
     match kind {
         GuardType::Secrets => "secrets",
         GuardType::Pii => "pii",
+        GuardType::Regex => "regex",
+        GuardType::Keywords => "keywords",
         GuardType::Webhook => "webhook",
         GuardType::OpenaiModeration => "openai_moderation",
         GuardType::Presidio => "presidio",
@@ -350,6 +577,7 @@ fn type_name(kind: GuardType) -> &'static str {
         GuardType::AzureContentSafety => "azure_content_safety",
         GuardType::AzurePromptShield => "azure_prompt_shield",
         GuardType::LlamaGuard => "llama_guard",
+        GuardType::ModelArmor => "model_armor",
     }
 }
 
@@ -367,6 +595,11 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         ("threshold", def.threshold.is_some()),
         ("anonymizer_url", def.anonymizer_url.is_some()),
         ("project_id", def.project_id.is_some()),
+        ("template_id", def.template_id.is_some()),
+        ("patterns", def.patterns.is_some()),
+        ("keywords", def.keywords.is_some()),
+        ("case_sensitive", def.case_sensitive.is_some()),
+        ("whole_word", def.whole_word.is_some()),
     ];
     let takes: &[&str] = match def.kind {
         GuardType::OpenaiModeration => &["key_env", "model"],
@@ -376,6 +609,9 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         GuardType::AzureContentSafety => &["key_env", "threshold"],
         GuardType::AzurePromptShield => &["key_env"],
         GuardType::LlamaGuard => &["key_env", "model", "prompt"],
+        GuardType::ModelArmor => &["key_env", "project_id", "region", "template_id"],
+        GuardType::Regex => &["patterns"],
+        GuardType::Keywords => &["keywords", "case_sensitive", "whole_word"],
         _ => &[],
     };
     if let Some((field, _)) = given.iter().find(|(f, on)| *on && !takes.contains(f)) {
@@ -402,6 +638,7 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
             | GuardType::Lakera
             | GuardType::AzureContentSafety
             | GuardType::AzurePromptShield
+            | GuardType::ModelArmor
     );
     if key_needed && def.key_env.is_none() {
         return Err(format!(
@@ -451,6 +688,31 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
             Vendor::AzureContentSafety { threshold }
         }
         GuardType::AzurePromptShield => Vendor::AzurePromptShield,
+        GuardType::ModelArmor => {
+            let region = required(
+                "region (the Model Armor location, such as us-central1)",
+                &def.region,
+            )?;
+            let project = required("project_id (the Google Cloud project)", &def.project_id)?;
+            let template = required("template_id", &def.template_id)?;
+            let plain = |v: &str| {
+                v.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            };
+            if let Some(bad) = [&region, &project, &template]
+                .into_iter()
+                .find(|v| !plain(v))
+            {
+                return Err(format!(
+                    "guardrail \"{name}\": \"{bad}\" is not a Google Cloud location, project or template ID. Use letters, digits, dashes and underscores only."
+                ));
+            }
+            Vendor::ModelArmor {
+                region,
+                project,
+                template,
+            }
+        }
         GuardType::LlamaGuard => {
             if def
                 .prompt
@@ -789,11 +1051,71 @@ const KINDS: &[Kind] = &[
         pattern: r"\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*",
         valid: any,
     },
+    // A service account key file names its key by a 40 hex digit ID; the PEM block in it is a private_key as well.
+    Kind {
+        detector: SECRETS,
+        kind: "gcp_service_account_key",
+        pattern: r#""private_key_id"\s*:\s*"[0-9a-f]{40}""#,
+        valid: any,
+    },
+    Kind {
+        detector: SECRETS,
+        kind: "gcp_api_key",
+        pattern: r"\bAIza[0-9A-Za-z_-]{35}",
+        valid: any,
+    },
+    // The key part of a storage account or Service Bus / Event Hubs connection string; the rest names the resource.
+    Kind {
+        detector: SECRETS,
+        kind: "azure_connection_string",
+        pattern: r"\b(?:AccountKey|SharedAccessKey)=[A-Za-z0-9+/]{30,}={0,2}",
+        valid: any,
+    },
+    // Secret and restricted keys only: a publishable pk_ key is meant to be public.
+    Kind {
+        detector: SECRETS,
+        kind: "stripe_key",
+        pattern: r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{24,99}\b",
+        valid: any,
+    },
+    // An API key SID: an account SID (AC...) is an identifier, and an auth token is 32 bare hex digits.
+    Kind {
+        detector: SECRETS,
+        kind: "twilio_api_key",
+        pattern: r"\bSK[0-9a-f]{32}\b",
+        valid: any,
+    },
+    Kind {
+        detector: SECRETS,
+        kind: "sendgrid_key",
+        pattern: r"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}",
+        valid: any,
+    },
+    // Before api_key: at one position the first pattern listed wins, so these get their own name.
+    Kind {
+        detector: SECRETS,
+        kind: "openai_project_key",
+        pattern: r"\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}",
+        valid: any,
+    },
+    Kind {
+        detector: SECRETS,
+        kind: "anthropic_key",
+        pattern: r"\bsk-ant-(?:api|admin)[0-9]{2}-[A-Za-z0-9_-]{20,}",
+        valid: any,
+    },
     Kind {
         detector: SECRETS,
         kind: "api_key",
         pattern: r"\bsk-[A-Za-z0-9_-]{20,}",
         valid: any,
+    },
+    // A URL with a password in it. The classes are ASCII on purpose: the combined expression is byte based.
+    Kind {
+        detector: SECRETS,
+        kind: "database_url",
+        pattern: r"\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|mssql|sqlserver)://[A-Za-z0-9._~%-]*:[A-Za-z0-9._~%!$&'()*+,;=-]{1,128}@[A-Za-z0-9.-]+",
+        valid: database_url_ok,
     },
     Kind {
         detector: PII,
@@ -914,6 +1236,24 @@ fn ssn_ok(text: &str) -> bool {
     area != "000" && area != "666" && !area.starts_with('9') && group != "00" && serial != "0000"
 }
 
+/// A password that is a placeholder (`${DB_PASSWORD}`, `$PASS`, `password`, `***`, `...`) is not a secret.
+fn database_url_ok(text: &str) -> bool {
+    let Some(password) = text
+        .split_once("://")
+        .and_then(|(_, rest)| rest.rsplit_once('@'))
+        .and_then(|(login, _)| login.split_once(':'))
+        .map(|(_, password)| password)
+    else {
+        return false;
+    };
+    let placeholder = [
+        "password", "passwd", "pass", "secret", "changeme", "xxx", "xxxx",
+    ];
+    !(password.starts_with(['$', '%', '<', '{', '*'])
+        || password.chars().all(|c| c == '*' || c == '.' || c == 'x')
+        || placeholder.contains(&password.to_ascii_lowercase().as_str()))
+}
+
 fn phone_ok(text: &str) -> bool {
     (7..=15).contains(&digits(text).len())
 }
@@ -943,7 +1283,8 @@ fn detectors() -> Result<&'static (Regex, Regex), String> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Finding {
     pub detector: &'static str,
-    pub kind: &'static str,
+    /// A built-in kind, or the name of a `regex` or `keywords` entry.
+    pub kind: Cow<'static, str>,
     /// JSON pointer to the text the finding is in.
     pub path: String,
     span: Range<usize>,
@@ -955,12 +1296,30 @@ pub fn scan(parts: &[TextPart]) -> Result<Vec<Finding>, String> {
     let mut found = Vec::new();
     for part in parts {
         let text = part.text.as_str();
-        found.extend(email.find_iter(text).map(|m| Finding {
-            detector: EMAIL.detector,
-            kind: EMAIL.kind,
-            path: part.path.clone(),
-            span: m.range(),
-        }));
+        // "postgres://app:pw@db.example.com" holds an address shape that is a URL's login, not a mail address.
+        // Looked for in the 256 bytes before the match only, so a long run of addresses costs no more than one each.
+        let in_url = |at: usize| {
+            let mut from = at.saturating_sub(256);
+            while !text.is_char_boundary(from) {
+                from -= 1;
+            }
+            let word = text[from..at]
+                .rsplit(|c: char| c.is_whitespace() || "\"'<>(),;=`".contains(c))
+                .next()
+                .unwrap_or("");
+            word.contains("://")
+        };
+        found.extend(
+            email
+                .find_iter(text)
+                .filter(|m| !in_url(m.start()))
+                .map(|m| Finding {
+                    detector: EMAIL.detector,
+                    kind: Cow::Borrowed(EMAIL.kind),
+                    path: part.path.clone(),
+                    span: m.range(),
+                }),
+        );
         // Where the next "-----END " is, found once and reused, so many headers cost one search, not one each.
         let mut next_end: Option<Option<usize>> = None;
         // The end of the last private key block: headers and anything else inside it are part of that finding.
@@ -998,7 +1357,7 @@ pub fn scan(parts: &[TextPart]) -> Result<Vec<Finding>, String> {
             }
             found.push(Finding {
                 detector: kind.detector,
-                kind: kind.kind,
+                kind: Cow::Borrowed(kind.kind),
                 path: part.path.clone(),
                 span: m.start()..end,
             });
@@ -1035,7 +1394,8 @@ pub struct AuditEntry {
     pub guardrail: String,
     pub detector: String,
     pub kind: String,
-    /// `block`, `mask`, `warn`, or `skipped` when a fail_open webhook did not answer.
+    /// `block`, `mask`, `warn`, `shadow` for a guardrail before its shadow_until, or `skipped` when a fail_open
+    /// webhook did not answer.
     pub action: &'static str,
     pub count: usize,
 }
@@ -1094,46 +1454,63 @@ fn check_side(body: Value, guards: &[Guardrail], side: Side) -> Verdict {
         blocked: None,
         audit: Vec::new(),
     };
-    if guards
+    let active: Vec<&Guardrail> = guards
         .iter()
-        .all(|g| !g.on.has(side) || g.detector().is_none())
-    {
+        .filter(|g| g.on.has(side) && g.local())
+        .collect();
+    if active.is_empty() {
         return verdict;
     }
-    let findings = match scan(&text_parts(&verdict.body)) {
-        Ok(findings) => findings,
-        Err(err) => {
-            // A check that cannot run must not wave the request through.
-            verdict.blocked = Some(Blocked {
-                guardrail: String::new(),
-                message: err,
-            });
-            return verdict;
+    let parts = text_parts(&verdict.body);
+    let builtin = if active
+        .iter()
+        .any(|g| matches!(g.check, Check::Secrets | Check::Pii))
+    {
+        match scan(&parts) {
+            Ok(findings) => findings,
+            Err(err) => {
+                // A check that cannot run must not wave the request through.
+                verdict.blocked = Some(Blocked {
+                    guardrail: String::new(),
+                    message: err,
+                });
+                return verdict;
+            }
         }
+    } else {
+        Vec::new()
     };
-    let mut masks: Vec<&Finding> = Vec::new();
-    for guard in guards.iter().filter(|g| g.on.has(side)) {
-        let Some(detector) = guard.detector() else {
-            continue;
-        };
-        let mine: Vec<&Finding> = findings.iter().filter(|f| f.detector == detector).collect();
+    let mut masks: Vec<Finding> = Vec::new();
+    for guard in active {
+        let mine = guard.findings(&parts, &builtin);
         if mine.is_empty() {
             continue;
         }
+        let detector = match &guard.check {
+            Check::Custom(custom) => custom.detector,
+            Check::Pii => PII,
+            _ => SECRETS,
+        };
         let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
         for f in &mine {
-            *kinds.entry(f.kind).or_default() += 1;
+            *kinds.entry(&f.kind).or_default() += 1;
         }
+        let shadow = guard.shadowing();
         verdict
             .audit
             .extend(kinds.iter().map(|(kind, count)| AuditEntry {
                 guardrail: guard.name.clone(),
                 detector: detector.to_string(),
                 kind: kind.to_string(),
-                action: action_word(guard.action),
+                action: if shadow {
+                    SHADOW
+                } else {
+                    action_word(guard.action)
+                },
                 count: *count,
             }));
         match guard.action {
+            _ if shadow => {}
             Action::Block if verdict.blocked.is_none() => {
                 let what: Vec<String> = kinds.iter().map(|(k, n)| format!("{k} ({n})")).collect();
                 let mut paths: Vec<&str> = mine.iter().map(|f| f.path.as_str()).collect();
@@ -1163,9 +1540,12 @@ fn check_side(body: Value, guards: &[Guardrail], side: Side) -> Verdict {
     verdict
 }
 
+/// The action a guardrail in its shadow period records: it would have acted, and did not.
+pub const SHADOW: &str = "shadow";
+
 /// Replaces each finding's span with `[MASKED kind]`. Only those spans change; the JSON stays valid
 /// because each string is rebuilt whole and written back as a string.
-fn apply_masks(body: &mut Value, masks: &[&Finding]) {
+fn apply_masks(body: &mut Value, masks: &[Finding]) {
     let mut by_path: BTreeMap<&str, Vec<&Finding>> = BTreeMap::new();
     for f in masks {
         by_path.entry(f.path.as_str()).or_default().push(f);
@@ -1363,9 +1743,12 @@ impl Verdict {
                 ));
             }
         };
-        let enforce = guard.action != Action::Warn;
+        let shadow = guard.shadowing();
+        let enforce = guard.action != Action::Warn && !shadow;
         let word = match (answer.action, enforce) {
-            (WebhookAction::Allow, _) | (_, false) => "warn",
+            (WebhookAction::Allow, _) => "warn",
+            (_, false) if shadow => SHADOW,
+            (_, false) => "warn",
             (WebhookAction::Block, true) => "block",
             (WebhookAction::Mask, true) => "mask",
         };
@@ -1412,6 +1795,232 @@ impl Verdict {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Backtest
+// ---------------------------------------------------------------------------------------------------------
+
+/// The guardrails a policy file defines under `guardrails:`, whether or not a rule uses them yet, so a new one can
+/// be backtested before any request meets it.
+pub fn defined_in(policy_text: &str) -> Result<Vec<Guardrail>, Vec<String>> {
+    #[derive(Deserialize)]
+    struct Only {
+        #[serde(default)]
+        guardrails: Vec<GuardrailFile>,
+    }
+    let only: Only = crate::config::from_yaml(policy_text)
+        .map_err(|err| vec![format!("the policy's guardrails: could not be read: {err}")])?;
+    guardrails(&only.guardrails)
+}
+
+/// One example to backtest on: a request body, and whether the guardrail should find something in it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sample {
+    pub id: String,
+    pub body: Value,
+    pub expect: Option<bool>,
+}
+
+/// Reads a corpus file: one JSON object per line, `{"text": "..."}` or `{"body": {...}}` with an optional `id` and
+/// an optional `expect` (true, false, or a list of kinds, where an empty list is false). Blank lines and lines
+/// starting with `#` are skipped, so the detector corpus reads as one.
+pub fn corpus(text: &str) -> Result<Vec<Sample>, String> {
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let n = i + 1;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let row: Value = serde_json::from_str(line)
+            .map_err(|err| format!("line {n} is not a JSON object: {err}"))?;
+        out.push(sample(&row, n).map_err(|why| format!("line {n}: {why}"))?);
+    }
+    Ok(out)
+}
+
+/// One corpus row, from a file or from the admin API. `n` names it when it has no `id`.
+pub fn sample(row: &Value, n: usize) -> Result<Sample, String> {
+    let body = match (row.get("text"), row.get("body")) {
+        (Some(Value::String(text)), None) => json_user(text),
+        (None, Some(body @ Value::Object(_))) => body.clone(),
+        _ => {
+            return Err(
+                "give either \"text\" (a string) or \"body\" (a request body object), not both"
+                    .into(),
+            );
+        }
+    };
+    let expect = match row.get("expect") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(Value::Array(kinds)) => Some(!kinds.is_empty()),
+        Some(_) => return Err("expect is true, false, or a list of kinds".into()),
+    };
+    let id = match row.get("id") {
+        Some(Value::String(id)) => id.clone(),
+        Some(Value::Number(id)) => id.to_string(),
+        _ => n.to_string(),
+    };
+    Ok(Sample { id, body, expect })
+}
+
+fn json_user(text: &str) -> Value {
+    serde_json::json!({"messages": [{"role": "user", "content": text}]})
+}
+
+/// What a guardrail would have done on a set of examples. Holds no matched text: each sample span is masked.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Backtest {
+    pub guardrail: String,
+    pub detector: String,
+    pub requests: usize,
+    /// Requests it would have found something in, so blocked, masked or warned about by its action.
+    pub hits: usize,
+    pub kinds: BTreeMap<String, usize>,
+    pub samples: Vec<SampleSpan>,
+    /// Set when at least one example says what it expects.
+    pub labelled: Option<Labelled>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SampleSpan {
+    pub id: String,
+    pub kind: String,
+    pub path: String,
+    /// The matched text with all but its first and last two characters replaced by `*`.
+    pub masked: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Labelled {
+    pub examples: usize,
+    pub true_positives: usize,
+    pub false_positives: usize,
+    pub false_negatives: usize,
+    pub true_negatives: usize,
+    /// Percent of the labelled requests it hit that should be hit.
+    pub precision: f64,
+    /// Percent of the labelled requests that should be hit that it hit.
+    pub recall: f64,
+}
+
+/// How many sample spans a backtest shows.
+const SAMPLE_SPANS: usize = 20;
+
+fn masked_span(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= 6 {
+        return "*".repeat(chars.len());
+    }
+    let n = chars.len();
+    format!(
+        "{}{}{}",
+        chars[..2].iter().collect::<String>(),
+        "*".repeat((n - 4).min(32)),
+        chars[n - 2..].iter().collect::<String>()
+    )
+}
+
+/// Runs a guardrail that works inside Gantry (secrets, pii, regex, keywords) over examples, as its rule would on
+/// requests. A vendor or webhook guardrail is refused: a backtest would send every example to the service.
+pub fn backtest(guard: &Guardrail, samples: &[Sample]) -> Result<Backtest, String> {
+    let detector = match &guard.check {
+        Check::Secrets => SECRETS,
+        Check::Pii => PII,
+        Check::Custom(custom) => custom.detector,
+        Check::Webhook(hook) => {
+            return Err(format!(
+                "guardrail \"{}\" is a {} guardrail. A backtest runs Gantry's own detectors (secrets, pii, regex, keywords) and would send every example to the service; try it with action: warn or shadow_until instead.",
+                guard.name,
+                hook.vendor.name()
+            ));
+        }
+    };
+    let mut report = Backtest {
+        guardrail: guard.name.clone(),
+        detector: detector.to_string(),
+        requests: samples.len(),
+        hits: 0,
+        kinds: BTreeMap::new(),
+        samples: Vec::new(),
+        labelled: None,
+    };
+    let (mut tp, mut fp, mut fneg, mut tn) = (0, 0, 0, 0);
+    for sample in samples {
+        let parts = text_parts(&sample.body);
+        let builtin = if matches!(guard.check, Check::Secrets | Check::Pii) {
+            scan(&parts)?
+        } else {
+            Vec::new()
+        };
+        let found = guard.findings(&parts, &builtin);
+        let hit = !found.is_empty();
+        report.hits += usize::from(hit);
+        for f in &found {
+            *report.kinds.entry(f.kind.to_string()).or_default() += 1;
+            if report.samples.len() < SAMPLE_SPANS {
+                let text = parts
+                    .iter()
+                    .find(|p| p.path == f.path)
+                    .and_then(|p| p.text.get(f.span.clone()))
+                    .unwrap_or_default();
+                report.samples.push(SampleSpan {
+                    id: sample.id.clone(),
+                    kind: f.kind.to_string(),
+                    path: f.path.clone(),
+                    masked: masked_span(text),
+                });
+            }
+        }
+        match (sample.expect, hit) {
+            (Some(true), true) => tp += 1,
+            (Some(false), true) => fp += 1,
+            (Some(true), false) => fneg += 1,
+            (Some(false), false) => tn += 1,
+            (None, _) => {}
+        }
+    }
+    let examples = tp + fp + fneg + tn;
+    if examples > 0 {
+        let percent = |n: usize, of: usize| {
+            if of == 0 {
+                100.0
+            } else {
+                100.0 * n as f64 / of as f64
+            }
+        };
+        report.labelled = Some(Labelled {
+            examples,
+            true_positives: tp,
+            false_positives: fp,
+            false_negatives: fneg,
+            true_negatives: tn,
+            precision: percent(tp, tp + fp),
+            recall: percent(tp, tp + fneg),
+        });
+    }
+    Ok(report)
+}
+
+/// `7d`, `24h` or `30m` as seconds, for `--since`.
+pub fn since_seconds(text: &str) -> Result<u64, String> {
+    let (n, unit) = text.split_at(text.len().saturating_sub(1));
+    let scale = match unit {
+        "d" => 86_400,
+        "h" => 3_600,
+        "m" => 60,
+        _ => 0,
+    };
+    match n.parse::<u64>() {
+        Ok(n) if n > 0 && scale > 0 => Ok(n * scale),
+        _ => Err(format!(
+            "--since is \"{text}\". Write a number and a unit, such as 7d, 24h or 30m."
+        )),
+    }
+}
+
+/// Why `--since` has nothing to read: the audit log holds no text by design, and this build keeps no request bodies.
+pub const NO_CAPTURE: &str = "a backtest over recent traffic reads captured request bodies, and this Gantry keeps none: the audit log holds no prompt text by design. Pass a corpus of examples instead (--corpus <file.jsonl>, or \"corpus\" in the admin API).";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1425,6 +2034,7 @@ mod tests {
             action,
             check,
             on: On::REQUEST,
+            shadow_until: None,
         }
     }
 
@@ -1474,13 +2084,13 @@ mod tests {
         json!({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": text}]})
     }
 
-    fn kinds(text: &str) -> Result<Vec<&'static str>, String> {
+    fn kinds(text: &str) -> Result<Vec<String>, String> {
         let parts = [TextPart {
             path: "/x".into(),
             role: "user".into(),
             text: text.into(),
         }];
-        Ok(scan(&parts)?.iter().map(|f| f.kind).collect())
+        Ok(scan(&parts)?.iter().map(|f| f.kind.to_string()).collect())
     }
 
     const GH: &str = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
@@ -1496,8 +2106,9 @@ mod tests {
             (GH, "github_token"),
             ("github_pat_11ABCDEFG0123456789_abcdefghij", "github_token"),
             ("xoxb-1234567890-abcdefghij", "slack_token"),
-            ("sk-proj-abcdefghijklmnopqrstuvwx", "api_key"),
-            ("sk-ant-api03-abcdefghijklmnopqrstu", "api_key"),
+            ("sk-proj-abcdefghijklmnopqrstuvwx", "openai_project_key"),
+            ("sk-ant-api03-abcdefghijklmnopqrstu", "anthropic_key"),
+            ("sk-abcdefghijklmnopqrstuvwx", "api_key"),
             ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc123def", "jwt"),
             (&gantry, "gantry_key"),
         ];
@@ -1505,6 +2116,283 @@ mod tests {
             assert_eq!(kinds(text)?, [kind], "{text}");
         }
         assert!(kinds("ask- the AKIA team, sk-short, gantry_xyz")?.is_empty());
+        Ok(())
+    }
+
+    /// The kinds v2 added. Values are built at run time so no file holds one whole.
+    #[test]
+    fn each_cloud_and_service_key_kind_is_found() -> TestResult {
+        let hex40 = "0123456789abcdef0123456789abcdef01234567";
+        let b64 = "q".repeat(86);
+        let cases = [
+            (
+                format!(r#"{{"type": "service_account", "private_key_id": "{hex40}"}}"#),
+                "gcp_service_account_key",
+            ),
+            (
+                format!("key=AIza{}", "Sy0_x-".repeat(5) + "abcde"),
+                "gcp_api_key",
+            ),
+            (
+                format!(
+                    "DefaultEndpointsProtocol=https;AccountName=acme;AccountKey={b64}==;EndpointSuffix=core.windows.net"
+                ),
+                "azure_connection_string",
+            ),
+            (
+                format!(
+                    "Endpoint=sb://acme.servicebus.windows.net/;SharedAccessKeyName=root;SharedAccessKey={}=",
+                    "Ab1".repeat(14)
+                ),
+                "azure_connection_string",
+            ),
+            (
+                format!("STRIPE={}_live_{}", "sk", "a1B2".repeat(6)),
+                "stripe_key",
+            ),
+            (format!("{}_test_{}", "rk", "Zz9".repeat(10)), "stripe_key"),
+            (
+                format!("TWILIO_API_KEY=SK{}", "0a".repeat(16)),
+                "twilio_api_key",
+            ),
+            (
+                format!("SG.{}.{}", "a".repeat(22), "b-".repeat(21) + "c"),
+                "sendgrid_key",
+            ),
+            (
+                format!("sk-svcacct-{}", "x".repeat(30)),
+                "openai_project_key",
+            ),
+            (
+                format!("sk-ant-admin01-{}", "y".repeat(30)),
+                "anthropic_key",
+            ),
+            (
+                "DATABASE_URL=postgres://app:s3cr3t-Pa55@db.internal:5432/app".to_string(),
+                "database_url",
+            ),
+            (
+                "mongodb+srv://svc:hunter2x@cluster0.example.net/prod".to_string(),
+                "database_url",
+            ),
+        ];
+        for (text, kind) in &cases {
+            assert_eq!(kinds(text)?, [*kind], "{text}");
+        }
+        let not_secrets = [
+            "postgres://db.internal:5432/app".to_string(),
+            "postgres://app@db.internal:5432/app".to_string(),
+            "postgres://app:${DB_PASSWORD}@db.internal/app".to_string(),
+            "mysql://root:password@localhost/test".to_string(),
+            format!("pk_live_{}", "a1B2".repeat(6)),
+            format!("AC{}", "0a".repeat(16)),
+            format!("{}_live_short", "sk"),
+            "AccountKey=<your key>".to_string(),
+            format!(r#""private_key_id": "{}""#, "0123"),
+        ];
+        for text in &not_secrets {
+            assert!(kinds(text)?.is_empty(), "{text}: {:?}", kinds(text));
+        }
+        Ok(())
+    }
+
+    fn custom_guard(yaml: &str) -> Result<Guardrail, String> {
+        let def: GuardrailFile = crate::config::from_yaml(yaml).map_err(|e| e.to_string())?;
+        guardrails(&[def])
+            .map_err(|e| e.join(" "))?
+            .pop()
+            .ok_or_else(|| "no guardrail".to_string())
+    }
+
+    #[test]
+    fn a_regex_guardrail_blocks_masks_and_warns_with_entry_names() -> TestResult {
+        let base = "name: tickets\ntype: regex\npatterns:\n  ticket_id: 'TKT-[0-9]{6}'\n  employee_id: '\\bE[0-9]{7}\\b'\n";
+        let body = || user("see TKT-123456 and E1234567, not TKT-12");
+        let block = custom_guard(&format!("{base}action: block\n"))?;
+        let v = check(body(), std::slice::from_ref(&block));
+        let blocked = v.blocked.ok_or("not blocked")?;
+        assert!(
+            blocked.message.contains("ticket_id (1)")
+                && blocked.message.contains("employee_id (1)")
+        );
+        assert!(!blocked.message.contains("TKT-123456"));
+        assert_eq!(v.audit.len(), 2);
+        assert_eq!(v.audit[0].detector, "regex");
+        let mask = custom_guard(&format!("{base}action: mask\n"))?;
+        let v = check(body(), &[mask]);
+        assert_eq!(
+            v.body["messages"][0]["content"],
+            "see [MASKED ticket_id] and [MASKED employee_id], not TKT-12"
+        );
+        let warn = custom_guard(&format!("{base}action: warn\non: [request, answer]\n"))?;
+        let reply = json!({"messages": [{"role": "assistant", "content": "TKT-000001"}]});
+        let v = check_reply(reply, &[warn]);
+        assert!(v.blocked.is_none() && !v.changed);
+        assert_eq!(
+            (v.audit[0].kind.as_str(), v.audit[0].action),
+            ("ticket_id", "warn")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn keywords_follow_case_and_word_boundary_options() -> TestResult {
+        let g = |opts: &str| {
+            custom_guard(&format!(
+                "name: words\ntype: keywords\naction: block\nkeywords:\n  codename: [Project Falcon, bluebird, C++]\n{opts}"
+            ))
+        };
+        let hits = |guard: &Guardrail, text: &str| {
+            check(user(text), std::slice::from_ref(guard))
+                .blocked
+                .is_some()
+        };
+        let default = g("")?;
+        assert!(hits(&default, "status of project   falcon?"));
+        assert!(hits(&default, "the BlueBird launch"));
+        assert!(hits(&default, "written in C++ mostly"));
+        assert!(!hits(&default, "bluebirds are birds"));
+        assert!(!hits(&default, "projectfalcon"));
+        let exact = g("case_sensitive: true\n")?;
+        assert!(!hits(&exact, "the BlueBird launch"));
+        assert!(hits(&exact, "the bluebird launch"));
+        let inside = g("whole_word: false\n")?;
+        assert!(hits(&inside, "bluebirds are birds"));
+        let v = check(user("Project Falcon"), &[default]);
+        assert_eq!(v.audit[0].kind, "codename");
+        assert_eq!(v.audit[0].detector, "keywords");
+        Ok(())
+    }
+
+    #[test]
+    fn bad_custom_detectors_are_each_explained() {
+        let cases = [
+            ("type: regex\naction: block", "needs patterns"),
+            (
+                "type: regex\naction: block\npatterns: {a: '(x)'}",
+                "capturing group",
+            ),
+            (
+                "type: regex\naction: block\npatterns: {a: 'x*'}",
+                "matches empty text",
+            ),
+            (
+                "type: regex\naction: block\npatterns: {a: '(?=x)'}",
+                "does not compile",
+            ),
+            (
+                "type: regex\naction: block\npatterns: {a: 'x{1000}{1000}'}",
+                "does not compile",
+            ),
+            (
+                "type: regex\naction: block\npatterns: {'bad name': x}",
+                "entry name",
+            ),
+            ("type: keywords\naction: block\nkeywords: {a: []}", "empty"),
+            (
+                "type: keywords\naction: block\nkeywords: {a: ['  ']}",
+                "empty",
+            ),
+            ("type: keywords\naction: block", "needs keywords"),
+            (
+                "type: secrets\naction: block\npatterns: {a: x}",
+                "patterns does not apply",
+            ),
+            (
+                "type: regex\naction: block\npatterns: {a: x}\nwhole_word: true",
+                "whole_word does not apply",
+            ),
+            (
+                "type: secrets\naction: block\nshadow_until: next week",
+                "shadow_until",
+            ),
+        ];
+        for (yaml, want) in cases {
+            let got = custom_guard(&format!("name: g\n{yaml}"))
+                .err()
+                .unwrap_or_default();
+            assert!(got.contains(want), "{yaml}: {got}");
+        }
+    }
+
+    #[test]
+    fn a_guardrail_in_its_shadow_period_records_and_never_enforces() -> TestResult {
+        let secret = "here is AKIAIOSFODNN7EXAMPLE";
+        let future =
+            custom_guard("name: g\ntype: secrets\naction: block\nshadow_until: 2999-01-01\n")?;
+        let v = check(user(secret), std::slice::from_ref(&future));
+        assert!(v.blocked.is_none() && !v.changed);
+        assert_eq!(v.audit[0].action, SHADOW);
+        assert_eq!(v.audit[0].count, 1);
+        let masker = custom_guard(
+            "name: g\ntype: secrets\naction: mask\nshadow_until: 2999-01-01T00:00:00Z\n",
+        )?;
+        assert!(!check(user(secret), &[masker]).changed);
+        let past =
+            custom_guard("name: g\ntype: secrets\naction: block\nshadow_until: 2020-01-01\n")?;
+        let v = check(user(secret), &[past]);
+        assert!(v.blocked.is_some());
+        assert_eq!(v.audit[0].action, "block");
+        // A remote guardrail in shadow: the service's block is recorded, not obeyed.
+        let mut remote = hook(OnFailure::FailClosed, Action::Block);
+        remote.shadow_until = Some("2999-01-01".into());
+        let mut v = check(two_messages(), &[]);
+        let sent = WebhookRequest::new("d", "p", "t", "/v1/chat/completions", &v.body);
+        v.merge_webhook(
+            &remote,
+            &sent,
+            Ok(br#"{"action":"block","findings":[{"kind":"pii"}]}"#),
+        );
+        assert!(v.blocked.is_none());
+        assert_eq!(v.audit[0].action, SHADOW);
+        Ok(())
+    }
+
+    #[test]
+    fn a_backtest_counts_hits_masks_samples_and_scores_labels() -> TestResult {
+        let guard = custom_guard(
+            "name: tickets\ntype: regex\naction: block\npatterns:\n  ticket_id: 'TKT-[0-9]{6}'\n",
+        )?;
+        let rows = concat!(
+            "# a comment\n",
+            "{\"text\": \"fix TKT-123456 today\", \"expect\": true}\n",
+            "{\"text\": \"nothing here\", \"expect\": false}\n",
+            "{\"text\": \"TKT-999999 and TKT-000001\", \"expect\": [\"ticket_id\"]}\n",
+            "{\"text\": \"ticket TKT 123456\", \"expect\": true}\n",
+            "{\"text\": \"old TKT-111111\", \"expect\": false}\n",
+            "{\"id\": \"raw\", \"body\": {\"messages\": [{\"role\": \"user\", \"content\": \"TKT-222222\"}]}}\n",
+        );
+        let samples = corpus(rows)?;
+        let report = backtest(&guard, &samples)?;
+        assert_eq!((report.requests, report.hits), (6, 4));
+        assert_eq!(report.kinds.get("ticket_id"), Some(&5));
+        assert_eq!(report.samples[0].masked, "TK******56");
+        assert_eq!(report.samples[0].path, "/messages/0/content");
+        assert_eq!(report.samples.last().map(|s| s.id.as_str()), Some("raw"));
+        let json = serde_json::to_string(&report)?;
+        assert!(!json.contains("TKT-123456"), "{json}");
+        let labelled = report.labelled.ok_or("no labels")?;
+        assert_eq!(
+            (
+                labelled.true_positives,
+                labelled.false_positives,
+                labelled.false_negatives,
+                labelled.true_negatives
+            ),
+            (2, 1, 1, 1)
+        );
+        assert!((labelled.precision - 200.0 / 3.0).abs() < 1e-9);
+        assert!((labelled.recall - 200.0 / 3.0).abs() < 1e-9);
+        assert!(corpus("{\"text\": 1}").is_err());
+        assert!(corpus("not json").is_err());
+        assert!(backtest(&hook(OnFailure::FailOpen, Action::Block), &samples).is_err());
+        assert_eq!(since_seconds("7d")?, 604_800);
+        assert!(since_seconds("7w").is_err() && since_seconds("d").is_err());
+        let defined = defined_in(
+            "version: 1\nproviders: []\nrules: []\nguardrails:\n  - name: s\n    type: secrets\n    action: warn\n",
+        )
+        .map_err(|e| e.join(" "))?;
+        assert_eq!(defined[0].name, "s");
         Ok(())
     }
 

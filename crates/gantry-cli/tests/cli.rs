@@ -1521,3 +1521,81 @@ fn providers_lists_the_catalog_with_id_name_kind_and_url() -> TestResult {
     assert!(text.contains("http://localhost:11434/v1 (local, needs allow_private: true)"));
     Ok(())
 }
+
+#[test]
+fn guardrail_test_backtests_a_defined_guardrail_on_a_corpus() -> TestResult {
+    let dir = workdir("guardrail-test")?;
+    let policy = path(&dir, "gantry.policy.yaml");
+    // A guardrail no rule uses yet: the point is to try it before it goes live. `gantry check` accepts it.
+    std::fs::write(
+        &policy,
+        format!(
+            "{POLICY}guardrails:\n  - name: tickets\n    type: regex\n    action: block\n    shadow_until: 2999-01-01\n    patterns:\n      ticket_id: 'TKT-[0-9]{{6}}'\n"
+        ),
+    )?;
+    let out = gantry(&["check", &policy], &[])?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let corpus = path(&dir, "corpus.jsonl");
+    std::fs::write(
+        &corpus,
+        "{\"text\": \"fix TKT-123456\", \"expect\": true}\n{\"text\": \"nothing\", \"expect\": false}\n{\"text\": \"TKT-654321\", \"expect\": false}\n",
+    )?;
+    let out = gantry(
+        &[
+            "guardrail",
+            "test",
+            "tickets",
+            "--policy",
+            &policy,
+            "--corpus",
+            &corpus,
+        ],
+        &[],
+    )?;
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    assert!(
+        stdout.contains("on 3 requests: would hit 2 (66.7%)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ticket_id: 2") && stdout.contains("TK******56"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("precision 50.0%") && stdout.contains("recall 100.0%"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("TKT-123456"), "{stdout}");
+    // --since needs captured bodies, which the audit log never holds; an unknown name lists the defined ones.
+    let out = gantry(
+        &[
+            "guardrail",
+            "test",
+            "tickets",
+            "--policy",
+            &policy,
+            "--since",
+            "7d",
+        ],
+        &[],
+    )?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("holds no prompt text"));
+    let out = gantry(
+        &[
+            "guardrail",
+            "test",
+            "nope",
+            "--policy",
+            &policy,
+            "--corpus",
+            &corpus,
+        ],
+        &[],
+    )?;
+    assert!(String::from_utf8(out.stderr)?.contains("It defines: tickets."));
+    let out = gantry(&["guardrail", "test"], &[])?;
+    assert!(String::from_utf8(out.stderr)?.contains("Usage: gantry guardrail test <name>"));
+    Ok(())
+}
