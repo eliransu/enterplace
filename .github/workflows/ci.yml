@@ -21,6 +21,9 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_PASSWORD: test
+          # The enterprise suite opens more than the default 100 connections. A service container takes no command,
+          # so initdb (Postgres 16 and later) writes the setting into postgresql.conf.
+          POSTGRES_INITDB_ARGS: "-c max_connections=300"
         ports:
           - 5432:5432
         options: >-
