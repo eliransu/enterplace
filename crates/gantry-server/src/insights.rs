@@ -291,10 +291,7 @@ fn clause(query: &Query) -> (String, Vec<Box<dyn ToSql + Sync + Send>>) {
     for (dimension, any) in &query.within {
         // The name goes in the SQL itself, so only a dimension Gantry defines is accepted; anything else matches
         // nothing rather than everything.
-        if gantry_core::insights::DIMENSIONS
-            .iter()
-            .any(|d| d.name == dimension)
-        {
+        if gantry_core::insights::dimensions().any(|d| d.name == dimension) {
             let term = format!("jsonb_exists_any(labels -> '{dimension}', CAST(? AS text[]))");
             add(&term, Box::new(any.clone()));
         } else {

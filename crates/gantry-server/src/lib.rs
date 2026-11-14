@@ -37,6 +37,7 @@ pub mod cloud;
 mod cloud_batch;
 mod cors;
 mod credentials;
+mod events;
 pub mod insights;
 mod jwt;
 mod manage;
@@ -55,6 +56,7 @@ pub use mcp::{McpRoute, McpSetup};
 pub use traces::TraceExport;
 
 pub use credentials::{MasterKey, credential_problems};
+pub use events::EventsPlugin;
 use http_body_util::BodyExt;
 use hyper_rustls::HttpsConnector;
 use hyper_util::{
@@ -400,6 +402,9 @@ pub struct Extension {
     pub admin: Option<Arc<dyn AdminApi>>,
     /// Rewrites requests before they are checked and sent, and answers before they are checked and returned.
     pub transform: Option<Arc<dyn Transform>>,
+    /// Judges every conversation as typed events (contract v2), in process: what a `type: events` guardrail's
+    /// service does over HTTP. For a vendor adapter or a licensed feature built into the binary.
+    pub events: Option<Arc<dyn EventsPlugin>>,
 }
 
 /// Who and what a transform is rewriting for.
@@ -623,7 +628,12 @@ struct AppState {
     admin_api: Option<Arc<dyn AdminApi>>,
     // The embedding binary's rewrite of requests and answers.
     transform: Option<Arc<dyn Transform>>,
+    // Events plugins: the binary's own, the queues of observing guardrails, and the sessions plugins ended.
+    events: Arc<events::Plugins>,
 }
+
+/// The client every call out is made with.
+type HttpClient = Client<HttpsConnector<HttpConnector>, Body>;
 
 impl AppState {
     fn version(&self) -> Arc<Snapshot> {
@@ -1045,6 +1055,7 @@ fn build(
         owned,
         admin_api: config.extension.admin.clone(),
         transform: config.extension.transform.clone(),
+        events: Arc::new(events::Plugins::new(config.extension.events.clone())),
     };
     let keep = Arc::new(state.clone());
     batch::spawn_poller(Arc::downgrade(&keep));
@@ -3921,6 +3932,13 @@ pub(crate) async fn handle(State(state): State<AppState>, mut request: Request) 
             Err(refusal) => respond(refusal),
         };
     }
+    // Events plugins see the answer the caller is about to get: after the answer guardrails masked it.
+    if let Some(turn) = response.extensions_mut().remove::<events::Carry>() {
+        response = match events::answer(&state, turn, response).await {
+            Ok(response) => response,
+            Err(refusal) => respond(refusal),
+        };
+    }
     if as_array && response.status().is_success() && is_type(&response, "text/event-stream") {
         response = events_as_array(response);
     }
@@ -4052,11 +4070,19 @@ async fn decide(
         .and_then(|v| v.to_str().ok())
         .filter(|v| !v.is_empty())
         .map(str::to_owned);
+    // What the caller says of its session, turn and application, read before Gantry's own headers are taken out.
+    let markers = events::markers(request.headers());
     let mut seen = Seen::default();
     let mut outcome = check(
         state, version, policy, request, &mut seen, &minted, client_ip,
     )
     .await;
+    // Gantry's own: a provider has no use for them.
+    if let Ok(Next::Forward(parts, _, _)) = &mut outcome {
+        for name in gantry_core::events::Markers::OWN {
+            parts.headers.remove(name);
+        }
+    }
     // What the guardrails found, when the rule has any: an empty list says they ran and found nothing.
     let mut found = None;
     let mut guards = seen.rule.map_or(&[][..], |rule| rule.guardrails.as_slice());
@@ -4193,6 +4219,61 @@ async fn decide(
         all.extend(found.take().unwrap_or_default());
         found = Some(all);
     }
+    let generates = gemini_native(&path)
+        .is_some_and(|(_, _, m)| matches!(m, "generateContent" | "streamGenerateContent"));
+    // Events plugins last: they see the request as it will be sent, after the transforms, the tool check and the
+    // guardrails. A rule with none, in a binary with none, skips all of it. On the model APIs the body is a
+    // conversation; on every other route (embeddings, completions, images, speech, a passthrough) it is the text
+    // Gantry finds in a JSON body, and a body with none sends nothing.
+    let conversational = matches!(path.as_str(), CHAT | MESSAGES | RESPONSES) || generates;
+    let mut plugins = events::Requested::default();
+    if events::active(state, guards)
+        && let (Some(person), Some(rule)) = (seen.person, seen.rule)
+        && let Ok(Next::Forward(parts, bytes, _)) = &mut outcome
+    {
+        let sender = events::Sender {
+            person,
+            rule,
+            decision,
+            path: &path,
+            model: seen.model.as_deref().unwrap_or_default(),
+            provider: seen
+                .provider
+                .and_then(|i| version.providers.get(i))
+                .map_or("", |p| p.name.as_str()),
+            user_agent: user_agent.as_deref(),
+            customer: seen.customer.as_deref(),
+            tags: &seen.tags,
+            observing: policy.observing(rule.shadow_until.as_deref()).is_some(),
+            chat: conversational,
+            answers: conversational
+                || path == COMPLETIONS
+                || [PASSTHROUGH, BEDROCK_PASSTHROUGH, VERTEX_PASSTHROUGH]
+                    .iter()
+                    .any(|prefix| path.starts_with(prefix)),
+        };
+        plugins = events::request(
+            state,
+            events::guards_for(state, guards),
+            &sender,
+            &markers,
+            parts,
+            bytes,
+        )
+        .await;
+        if observe {
+            let blocked = would_block(rule, &plugins.audit);
+            seen.would_refuse.extend(blocked);
+        }
+    }
+    if let Some(refusal) = plugins.refusal.take() {
+        outcome = Err(refusal);
+    }
+    if !plugins.audit.is_empty() {
+        found
+            .get_or_insert_with(Vec::new)
+            .append(&mut plugins.audit);
+    }
     // Limits come after the guardrails: the cache key and the budget's estimate are of the body that is sent, masked
     // if a guardrail masked it, and a request a guardrail blocks is never served from the cache or counted.
     outcome = match outcome {
@@ -4222,8 +4303,30 @@ async fn decide(
     };
     // Guardrails on the answer travel with the request (or a cached answer) to the end, where the answer is whole.
     let on_answer: Vec<Guardrail> = guards.iter().filter(|g| g.on.answer).cloned().collect();
-    let generates = gemini_native(&path)
-        .is_some_and(|(_, _, m)| matches!(m, "generateContent" | "streamGenerateContent"));
+    // The turn travels with the request to its answer, for the plugins and for the usage record.
+    match (&mut outcome, &plugins.session) {
+        (Ok(Next::Forward(parts, _, _)), Some(session)) => {
+            if let Some(meter) = parts.extensions.get::<spend::Meter>() {
+                meter.session(session);
+            }
+            if let Some(carry) = plugins.carry.take() {
+                // A response is recorded as its creator's with its turn, for the request that goes on from it.
+                if let Some(creator) = parts.extensions.get_mut::<batch::Creator>() {
+                    creator.answered_in(carry.turn_of());
+                }
+                parts.extensions.insert(carry);
+            }
+        }
+        (Ok(Next::Answer(response)), Some(session)) if seen.cache == Some("hit") => {
+            if let Some(hit) = seen.hit.as_mut() {
+                hit.session = Some(session.clone());
+            }
+            if let Some(carry) = plugins.carry.take() {
+                response.extensions_mut().insert(carry);
+            }
+        }
+        _ => {}
+    }
     let answer_tools = seen
         .rule
         .filter(|r| gantry_core::fntools::checked(&r.tools))
@@ -4333,6 +4436,13 @@ async fn decide(
         }
         if !seen.tags.is_empty() {
             record.insert("tags".into(), seen.tags.clone().into());
+        }
+        if let Some((session, turn)) = &plugins.session {
+            record.insert("session".into(), session.as_str().into());
+            record.insert("turn".into(), turn.as_str().into());
+        }
+        if !plugins.entries.is_empty() {
+            record.insert("events".into(), std::mem::take(&mut plugins.entries).into());
         }
         if let Some(prefix) = &seen.caller_key {
             // That the caller's own key was sent, and which: never the key.
@@ -5758,6 +5868,11 @@ pub(crate) async fn ask(
 
 /// One POST to a guardrail service; the answer's bytes, or why there are none.
 async fn post(state: &AppState, call: gantry_core::vendors::Call) -> Result<Vec<u8>, String> {
+    post_on(&state.client, call).await
+}
+
+/// `post` with the client alone, for a task that outlives the request and must not keep the gateway's state.
+async fn post_on(client: &HttpClient, call: gantry_core::vendors::Call) -> Result<Vec<u8>, String> {
     let mut request = Request::post(&call.url);
     for (name, value) in &call.headers {
         request = request.header(name.as_str(), value.as_str());
@@ -5765,8 +5880,7 @@ async fn post(state: &AppState, call: gantry_core::vendors::Call) -> Result<Vec<
     let request = request
         .body(Body::from(call.body))
         .map_err(|err| format!("the url or a header cannot be used: {err}"))?;
-    let response = state
-        .client
+    let response = client
         .request(request)
         .await
         .map_err(|err| format!("could not be reached: {err}"))?;
@@ -5795,6 +5909,7 @@ async fn send(
 ) -> Result<Response, Refusal> {
     let plan = parts.extensions.remove::<Plan>();
     let answer_check = parts.extensions.remove::<AnswerCheck>();
+    let turn = parts.extensions.remove::<events::Carry>();
     let mut creator = parts.extensions.remove::<batch::Creator>();
     // Gantry's, not the provider's. Dropped unused, it gives back its reservation.
     let mut admitted = parts
@@ -6086,6 +6201,9 @@ async fn send(
     };
     if let Some(check) = answer_check {
         response.extensions_mut().insert(check);
+    }
+    if let Some(turn) = turn {
+        response.extensions_mut().insert(turn);
     }
     if let Some(mut creator) = creator {
         creator.served_by(

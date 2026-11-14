@@ -78,6 +78,26 @@ pub const DIMENSIONS: &[Dimension] = &[
     },
 ];
 
+/// What links a request to its conversation: the session and the turn an events guardrail gave it. Filtered and
+/// grouped by like a dimension (`?session=ses_...`, `group_by=turn`), and not listed among the console's filters.
+pub const LINKS: &[Dimension] = &[
+    Dimension {
+        name: "session",
+        label: "Session",
+        field: "session",
+    },
+    Dimension {
+        name: "turn",
+        label: "Turn",
+        field: "turn",
+    },
+];
+
+/// Every field requests are filtered and grouped by.
+pub fn dimensions() -> impl Iterator<Item = &'static Dimension> {
+    DIMENSIONS.iter().chain(LINKS)
+}
+
 /// One request, as its audit records tell it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Row {
@@ -212,7 +232,7 @@ pub fn kinds(guardrails: Option<&Value>) -> Vec<String> {
 
 fn labels_of(record: &Value) -> BTreeMap<String, Vec<String>> {
     let mut labels = BTreeMap::new();
-    for dimension in DIMENSIONS {
+    for dimension in dimensions() {
         let values: Vec<String> = match record.get(dimension.field) {
             Some(Value::String(one)) if !one.is_empty() => vec![one.clone()],
             Some(Value::Array(many)) => many
@@ -455,7 +475,7 @@ impl Query {
             limit: 50,
             ..Self::default()
         };
-        for dimension in DIMENSIONS {
+        for dimension in dimensions() {
             let value = get(dimension.name).trim().to_string();
             if !value.is_empty() {
                 query.labels.push((dimension.name.to_string(), value));

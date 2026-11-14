@@ -14,7 +14,7 @@ use axum::{
 };
 use gantry_core::{
     config,
-    insights::{self, DIMENSIONS, Outcome, Pace, Query, Row, Stats},
+    insights::{self, DIMENSIONS, LINKS, Outcome, Pace, Query, Row, Stats},
     policy::Who,
 };
 use serde_json::json;
@@ -227,7 +227,11 @@ pub(crate) async fn requests_page(
         )
     };
     let mut filters = String::new();
-    for d in DIMENSIONS {
+    // The session an events guardrail gave a request is filtered by like a dimension; its turn is read in the row.
+    for d in DIMENSIONS
+        .iter()
+        .chain(LINKS.iter().filter(|d| d.name == "session"))
+    {
         let value = query
             .labels
             .iter()
@@ -275,7 +279,7 @@ pub(crate) async fn requests_page(
         .iter()
         .any(|(k, _)| k != "outcome" && k != "id");
     let filter_form = format!(
-        r#"<details{}><summary class="t-body">Filters: person, team, key, model, provider, tag, agent, code, finding, time, cost, latency</summary><form class="g-toolbar" method="get" action="/console/requests"><input type="hidden" name="outcome" value="{}">{filters}{}{}</form></details>"#,
+        r#"<details{}><summary class="t-body">Filters: person, team, key, model, provider, tag, agent, session, code, finding, time, cost, latency</summary><form class="g-toolbar" method="get" action="/console/requests"><input type="hidden" name="outcome" value="{}">{filters}{}{}</form></details>"#,
         if set { " open" } else { "" },
         esc(&query.outcome),
         button("Filter", "quiet", "submit", ""),
@@ -401,6 +405,7 @@ pub(crate) async fn requests_page(
 fn row_sheet(row: &Row, close: &str) -> String {
     let labels: Vec<(&str, String)> = DIMENSIONS
         .iter()
+        .chain(LINKS)
         .filter_map(|d| {
             row.labels
                 .get(d.name)

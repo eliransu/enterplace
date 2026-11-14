@@ -514,15 +514,19 @@ async fn session(
         .and_then(|p| crate::observed_guards(p, &open.rule.guardrails))
         .unwrap_or_else(|| open.rule.guardrails.clone());
     let mut found: Vec<guard::AuditEntry> = Vec::new();
+    // For events plugins: the turn the session is in (one per text of the caller's), and the next event's place in it.
+    let mut turn = (0usize, 0usize);
+    // Text is read when the rule has a guardrail, or the binary a plugin of its own.
+    let screened = !guards.is_empty() || crate::events::active(&state, &guards);
     let ended_by = loop {
         tokio::select! {
             message = down_rx.next() => match message {
                 Some(Ok(Down::Text(text))) => {
                     let mut text = text.as_str().to_string();
-                    if !guards.is_empty()
+                    if screened
                         && let Some((mut event, true, pointers)) = event_texts(api, &text, true)
                     {
-                        let verdict = screen(&state, &guards, &open, &decision, api, true, &event, &pointers).await;
+                        let verdict = screen(&state, &guards, &open, &decision, api, true, &event, &pointers, &mut turn).await;
                         found.extend(verdict.audit.iter().cloned());
                         if let Some(blocked) = verdict.blocked {
                             let message = format!("guardrail \"{}\" refused this text event, so it was not sent. Remove what it names and send it again.", blocked.guardrail);
@@ -560,10 +564,10 @@ async fn session(
             },
             message = up_rx.next() => match message {
                 Some(Ok(Up::Text(text))) => {
-                    if !guards.is_empty()
+                    if screened
                         && let Some((event, request, pointers)) = event_texts(api, text.as_str(), false)
                     {
-                        let verdict = screen(&state, &guards, &open, &decision, api, request, &event, &pointers).await;
+                        let verdict = screen(&state, &guards, &open, &decision, api, request, &event, &pointers, &mut turn).await;
                         found.extend(verdict.audit.iter().cloned());
                         if let Some(blocked) = verdict.blocked {
                             tell(&mut down_tx, api, &decision, guard::BLOCKED_CODE, &format!("guardrail \"{}\" refused what was said in this session, so it ends here.", blocked.guardrail)).await;
@@ -736,6 +740,7 @@ async fn screen(
     request: bool,
     event: &Value,
     pointers: &[String],
+    turn: &mut (usize, usize),
 ) -> guard::Verdict {
     let role = if request { "user" } else { "assistant" };
     let view = json!({
@@ -771,6 +776,74 @@ async fn screen(
         let answer = crate::ask(state, guardrail.action, hook, &sent).await;
         if let Some(cause) = verdict.merge_answer(guardrail, &sent, answer) {
             eprintln!("gantry: decision {decision}: in the realtime session: {cause}");
+        }
+    }
+    // Events plugins see each text as an event of the session: the connection is the session, and each text of the
+    // caller's starts a turn.
+    if verdict.blocked.is_none() && crate::events::active(state, guards) {
+        use gantry_core::events as core;
+        let plugins = crate::events::guards_for(state, guards);
+        let mut context = crate::events::context_of(
+            &open.person,
+            &axum::http::HeaderMap::new(),
+            decision,
+            decision,
+            api.path(),
+            open.model.as_deref().unwrap_or_default(),
+        );
+        if request {
+            *turn = (turn.0 + 1, 0);
+        }
+        context.turn_index = turn.0;
+        context.turn_id = core::turn_id(&context.session_id, turn.0, "", None);
+        context.customer = open.customer.clone();
+        context.tags = open.tags.clone();
+        let kind = if request {
+            core::Kind::RealtimeUserMessage
+        } else {
+            core::Kind::RealtimeAssistantMessage
+        };
+        let events: Vec<core::Event> = (0..pointers.len())
+            .filter_map(|i| {
+                let at = format!("/messages/{i}/content");
+                let text = verdict.body.pointer(&at)?.as_str()?.to_string();
+                let mut event = core::Event::text(kind, text);
+                event.at = vec![at];
+                let placed = event.placed(&context.turn_id, turn.1);
+                turn.1 += 1;
+                Some(placed)
+            })
+            .collect();
+        if let Some(refusal) = crate::events::refused_session(state, &plugins, &context) {
+            verdict.blocked = Some(guard::Blocked {
+                guardrail: "events".into(),
+                message: refusal.message,
+            });
+        } else {
+            let judged = crate::events::judge(
+                state,
+                &plugins,
+                &context,
+                "realtime",
+                &events,
+                None,
+                "this text",
+            )
+            .await;
+            verdict.audit.extend(judged.audit);
+            verdict.blocked = judged.blocked;
+            if verdict.blocked.is_none() && !judged.masks.is_empty() {
+                match core::apply_masks(&mut verdict.body, &events, &judged.masks) {
+                    Ok(changed) => verdict.changed |= changed,
+                    // Never pass on the unmasked text because the masked one could not be written.
+                    Err(_) => {
+                        verdict.blocked = Some(guard::Blocked {
+                            guardrail: "events".into(),
+                            message: "An events plugin's mask could not be written.".into(),
+                        });
+                    }
+                }
+            }
         }
     }
     // A transcript cannot be rewritten after it was spoken: what a guardrail masks there is only recorded.

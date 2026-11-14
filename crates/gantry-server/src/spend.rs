@@ -1397,6 +1397,8 @@ pub(crate) struct Admitted {
     tags: Vec<String>,
     /// The alias the caller sent, when it is not the model, for the usage record.
     alias: Option<String>,
+    /// The session and the turn an events guardrail gave the request, for the usage record.
+    pub(crate) session: Option<(String, String)>,
     /// Every budget counter the request counted against, to charge its cost to each.
     counted: Vec<(String, Period)>,
     /// Places held under `parallel:` limits until the answer ends.
@@ -1468,6 +1470,13 @@ pub(crate) struct Meter(Arc<Mutex<Option<Admitted>>>);
 impl Meter {
     pub(crate) fn take(&self) -> Option<Admitted> {
         locked(&self.0).take()
+    }
+
+    /// Names the session and the turn the request belongs to, for its usage record.
+    pub(crate) fn session(&self, session: &(String, String)) {
+        if let Some(admitted) = locked(&self.0).as_mut() {
+            admitted.session = Some(session.clone());
+        }
     }
 
     /// Makes a cacheable answer wait for the answer guardrails' pass before it is kept.
@@ -1560,6 +1569,7 @@ pub(crate) async fn admit(
         customer: ask.customer.map(str::to_string),
         tags: ask.tags.to_vec(),
         alias: (ask.sent != ask.model).then(|| ask.sent.to_string()),
+        session: None,
         counted: Vec::new(),
         parallel: Vec::new(),
         started: Instant::now(),
@@ -2672,6 +2682,10 @@ impl Admitted {
         }
         if let Some(alias) = &self.alias {
             record.insert("alias".into(), alias.as_str().into());
+        }
+        if let Some((session, turn)) = &self.session {
+            record.insert("session".into(), session.as_str().into());
+            record.insert("turn".into(), turn.as_str().into());
         }
         record.insert("model".into(), self.model.as_str().into());
         record.insert("provider".into(), self.provider.as_str().into());

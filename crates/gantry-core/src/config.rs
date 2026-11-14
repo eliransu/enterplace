@@ -147,6 +147,18 @@ const KNOWN: &[&str] = &[
     "case_sensitive",
     "whole_word",
     "shadow_until",
+    "applications",
+    "intent",
+    "mode",
+    "history",
+    "stream",
+    "chunk_chars",
+    "hold",
+    "session_end_seconds",
+    "secret_env",
+    "batch_url",
+    "queue",
+    "batch_size",
     // An alias's deployments sit under `deployments`, a free map, so provider, model and weight are not listed: as
     // known words they would be the nearest match for a misspelled "models".
     "aliases",
@@ -290,6 +302,17 @@ struct PolicyFile {
     trusted_proxies: Vec<String>,
     #[serde(default)]
     cors: Option<CorsFile>,
+    /// The applications rules name in `applications:`, each with what it is for.
+    #[serde(default)]
+    applications: Vec<ApplicationFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplicationFile {
+    name: String,
+    #[serde(default)]
+    intent: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -925,6 +948,8 @@ struct RuleFile {
     tags: Vec<String>,
     #[serde(default)]
     customers: Vec<String>,
+    #[serde(default)]
+    applications: Vec<String>,
     #[serde(default)]
     parallel: Option<i64>,
     #[serde(default)]
@@ -2661,6 +2686,26 @@ fn policy_rules(
 ) -> Vec<Rule> {
     let (lines, end) = rule_lines(text);
     let mut rules = Vec::new();
+    for (i, application) in parsed.applications.iter().enumerate() {
+        let name = &application.name;
+        if !valid_name(name) || parsed.applications[..i].iter().any(|a| a.name == *name) {
+            errors.push(format!(
+                "{}: applications names \"{name}\", which is defined twice or is not a name Gantry accepts. Give each application its own name in letters, digits, dots, dashes, underscores and @, at most 100 characters.",
+                file.display()
+            ));
+        }
+        if application
+            .intent
+            .as_deref()
+            .is_some_and(|i| !crate::events::intent_ok(i))
+        {
+            errors.push(format!(
+                "{}: application \"{name}\": intent is one line of at most {} characters saying what the application is for. Shorten it, and take out line breaks.",
+                file.display(),
+                crate::events::MAX_INTENT
+            ));
+        }
+    }
     for (i, rule) in parsed.rules.iter().enumerate() {
         let line = lines.get(i).copied().unwrap_or(0);
         let until = lines.get(i + 1).copied().unwrap_or(end);
@@ -2775,6 +2820,20 @@ fn policy_rules(
         if let Some(org) = &rule.org {
             check_org(&parsed.orgs, org, &at("org"), errors);
         }
+        let mut applications = Vec::new();
+        for name in &rule.applications {
+            let defined = parsed.applications.iter().find(|a| a.name == *name);
+            if name != "*" && defined.is_none() {
+                errors.push(format!(
+                    "{}: application \"{name}\" is not defined under applications. Define it there (- name: {name}, with an intent: line saying what it is for), or write \"*\" to take any name a caller sends in x-gantry-application.",
+                    at("applications")
+                ));
+            }
+            applications.push(crate::events::Application {
+                name: name.clone(),
+                intent: defined.and_then(|a| a.intent.clone()),
+            });
+        }
         rules.push(Rule {
             name: rule.name.clone(),
             line,
@@ -2797,6 +2856,7 @@ fn policy_rules(
             profiles: rule.profiles.clone(),
             tags: rule.tags.clone(),
             customers: rule.customers.clone(),
+            applications,
             overrides,
             shadow_until: shadow_of(
                 &rule.shadow_until,

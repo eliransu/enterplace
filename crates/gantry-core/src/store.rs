@@ -205,6 +205,14 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     fn probe_lease(&self, _deployment: String, _ttl: Duration) -> Pending<bool> {
         Box::pin(async { Ok(true) })
     }
+    /// The sessions events plugins ended and whose refusal still lasts, by the key each was ended under: when it
+    /// runs out and the guardrail that ended it. From memory, polled, so a request never waits on the store for it.
+    fn ended_sessions(&self) -> Arc<std::collections::HashMap<String, (Instant, String)>> {
+        Arc::default()
+    }
+    /// Ends a session for every gateway on the store, for `ttl`. Does not wait: retried while the database is
+    /// away. The others learn of it with their next poll.
+    fn end_events_session(&self, _key: String, _by: String, _ttl: Duration) {}
     /// Opens a console session, by the SHA-256 of its ID, for `who`, ending after `ttl`.
     fn open_session(&self, id_sha256: String, who: String, ttl: Duration) -> Pending<()>;
     /// Who a console session is for, or `None` when it is unknown, ended or expired.

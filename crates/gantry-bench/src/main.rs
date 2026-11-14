@@ -3,13 +3,13 @@
 use std::{process::ExitCode, time::Duration};
 
 use gantry_bench::{
-    BoxError, Load, Report, load_client, ramp, run_load, run_load_on, spawn_gateway,
-    spawn_mock_upstream_with_latency,
+    BoxError, Load, Report, load_client, ramp, run_load, run_load_on, spawn_events_sink,
+    spawn_gateway_watched, spawn_mock_upstream_with_latency,
 };
 
 const USAGE: &str = "\
-Usage: gantry-bench [--rps N] [--secs N] [--stream] [--messages] [--no-policy] [--upstream-ms N]
-                    [--max-p99-overhead-us N]
+Usage: gantry-bench [--rps N] [--secs N] [--stream] [--messages] [--no-policy] [--events]
+                    [--upstream-ms N] [--max-p99-overhead-us N]
 
 Runs a mock model server and the gateway in this process, sends the same load to each, and prints
 what the gateway adds, two ways:
@@ -17,7 +17,8 @@ what the gateway adds, two ways:
              It can be negative: both runs carry noise, and the difference is small.
   self-time  time the gateway reports spending on each request itself (its Server-Timing header).
 Defaults: --rps 5000 --secs 10. The gateway checks every request against a policy of 1,000 keys
-unless --no-policy is given. --messages sends to Claude Code's route, /v1/messages, which needs the policy.
+unless --no-policy is given. --events adds an events guardrail in observe mode to every rule, delivering
+to a plugin service in this process, and prints how many envelopes it received. --messages sends to Claude Code's route, /v1/messages, which needs the policy.
 --upstream-ms makes the mock wait N milliseconds before each answer, as a provider does (Bifrost's
 published setup: --rps 5000 --upstream-ms 1500). Self-time leaves that wait out.
 With --max-p99-overhead-us the exit code is 1 when added latency is above N microseconds at p99, or
@@ -34,6 +35,7 @@ struct Args {
     check_policy: bool,
     gate_us: Option<u64>,
     upstream: Duration,
+    events: bool,
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
@@ -47,6 +49,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         check_policy: true,
         gate_us: None,
         upstream: Duration::ZERO,
+        events: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -70,6 +73,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--stream" => args.load.stream = true,
             "--messages" => args.load.messages = true,
             "--no-policy" => args.check_policy = false,
+            "--events" => args.events = true,
             "--help" | "-h" => return Ok(None),
             other => return Err(format!("\"{other}\" is not an option.")),
         }
@@ -78,6 +82,9 @@ fn parse_args() -> Result<Option<Args>, String> {
         return Err(
             "--messages needs the policy: without it Gantry forwards the chat route only.".into(),
         );
+    }
+    if args.events && !args.check_policy {
+        return Err("--events needs the policy: an events guardrail is a rule's.".into());
     }
     Ok(Some(args))
 }
@@ -100,7 +107,12 @@ fn line(name: &str, r: &Report) {
 
 async fn run(args: &Args) -> Result<bool, BoxError> {
     let upstream = spawn_mock_upstream_with_latency("127.0.0.1:0".parse()?, args.upstream).await?;
-    let (gateway, audit) = spawn_gateway(upstream, args.check_policy).await?;
+    let sink = match args.events {
+        true => Some(spawn_events_sink().await?),
+        false => None,
+    };
+    let (gateway, audit) =
+        spawn_gateway_watched(upstream, args.check_policy, sink.as_ref().map(|s| s.0)).await?;
 
     println!(
         "{} requests per second for {} s, upstream waits {} ms, {}, policy check {}",
@@ -169,6 +181,16 @@ async fn run(args: &Args) -> Result<bool, BoxError> {
         }
     };
 
+    if let Some((_, received)) = &sink {
+        // Two envelopes a request: its events, and its answer's. What the queue could not hold was dropped, as
+        // observe mode promises, and is not waited for.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        println!(
+            "events     {} envelopes received by the plugin for {} requests (observe mode: queued, batched, dropped when the queue is full)",
+            received.load(std::sync::atomic::Ordering::Relaxed),
+            warm_sent + through.sent
+        );
+    }
     let complete = through.ok == through.sent && direct.ok == direct.sent;
     if !complete {
         println!(

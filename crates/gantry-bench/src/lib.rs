@@ -123,7 +123,7 @@ pub const BENCH_KEY: &str = "bench-key-0500";
 
 /// A policy of realistic size: 1,000 keys in 50 teams, each team allowed three models, every rule checking
 /// for secrets, so the gate measures the guardrail scan as well.
-fn bench_policy() -> Policy {
+fn bench_policy(events: Option<SocketAddr>) -> Policy {
     let mut policy = Policy::new();
     for team in 0..50 {
         policy = policy.with_models(
@@ -138,13 +138,71 @@ fn bench_policy() -> Policy {
             format!("team-{}", key % 50),
         );
     }
-    policy.with_guardrails(&[Guardrail {
+    let mut guards = vec![Guardrail {
         name: "no-secrets".into(),
         action: Action::Block,
         check: Check::Secrets,
         on: gantry_core::guard::On::REQUEST,
         shadow_until: None,
-    }])
+    }];
+    // An events guardrail in observe mode, with the defaults a policy file gives it: every request and every
+    // answer becomes an envelope on its queue, sent in the background.
+    if let Some(sink) = events {
+        use gantry_core::{events, guard};
+        guards.push(Guardrail {
+            name: "watcher".into(),
+            action: events::guard_action(events::Mode::Observe),
+            check: Check::Events(events::Events {
+                hook: guard::Webhook {
+                    url: format!("http://{sink}/events"),
+                    timeout: Duration::from_secs(1),
+                    on_failure: guard::OnFailure::FailOpen,
+                    headers_env: Vec::new(),
+                    vendor: guard::Vendor::Contract,
+                    key_env: None,
+                },
+                mode: events::Mode::Observe,
+                history: false,
+                stream: None,
+                session_end_seconds: 3600,
+                secret_env: None,
+                batch_url: Some(format!("http://{sink}/events")),
+                queue: 1024,
+                batch_size: 50,
+                retries: 2,
+            }),
+            on: guard::On {
+                request: false,
+                answer: false,
+            },
+            shadow_until: None,
+        });
+    }
+    policy.with_guardrails(&guards)
+}
+
+/// A plugin service for an events guardrail that takes every delivery and counts the envelopes in it.
+pub async fn spawn_events_sink() -> Result<(SocketAddr, Arc<AtomicU64>), BoxError> {
+    let received = Arc::new(AtomicU64::new(0));
+    let count = received.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let bound = listener.local_addr()?;
+    let app = Router::new().route(
+        "/events",
+        post(move |body: Bytes| {
+            let count = count.clone();
+            async move {
+                // Every envelope names its phase once, alone or in a batch.
+                let envelopes = body.windows(8).filter(|w| w == b"\"phase\":").count();
+                count.fetch_add(envelopes as u64, Ordering::Relaxed);
+                ([(header::CONTENT_TYPE, "application/json")], "{}")
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok((bound, received))
 }
 
 /// Starts the gateway in this process on the same accept loop the binary uses, forwarding to `upstream`,
@@ -154,6 +212,16 @@ fn bench_policy() -> Policy {
 pub async fn spawn_gateway(
     upstream: SocketAddr,
     check_policy: bool,
+) -> Result<(SocketAddr, Option<PathBuf>), BoxError> {
+    spawn_gateway_watched(upstream, check_policy, None).await
+}
+
+/// As [`spawn_gateway`]. With `events`, every rule of the policy also has an events guardrail in observe mode that
+/// delivers to the plugin service at that address ([`spawn_events_sink`]).
+pub async fn spawn_gateway_watched(
+    upstream: SocketAddr,
+    check_policy: bool,
+    events: Option<SocketAddr>,
 ) -> Result<(SocketAddr, Option<PathBuf>), BoxError> {
     static RUN: AtomicU64 = AtomicU64::new(0);
     let audit_path = check_policy.then(|| {
@@ -186,7 +254,7 @@ pub async fn spawn_gateway(
             ..gantry_server::ProviderRoute::default()
         }],
         upstream: Some(format!("http://{upstream}")),
-        policy: check_policy.then(bench_policy),
+        policy: check_policy.then(|| bench_policy(events)),
         audit,
         ..gantry_server::Config::default()
     };

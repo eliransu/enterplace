@@ -9,6 +9,8 @@ import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components'
 
 A `webhook` guardrail sends each request's text to your service and obeys its verdict: allow, block or mask. Use it for a company's own checks, or to put a guardrail vendor Gantry does not speak to directly behind a small adapter.
 
+This is contract v1. To follow a whole agent conversation (tool calls, tool results, reasoning and MCP calls as typed events, linked by session and turn), use contract v2: [plugin events](/governance/plugin-events/).
+
 ## Policy
 
 ```yaml title="gantry.policy.yaml"
@@ -182,6 +184,7 @@ To move the adapter or point it at another vendor, change `url` and save. The ne
 ## Related
 
 <CardGrid>
+	<LinkCard title="Plugin events" href="/governance/plugin-events/" description="Contract v2: the conversation as typed events, with session and turn." />
 	<LinkCard title="Guardrails" href="/governance/guardrails/" description="Built-in detectors, vendors, actions and answer checks." />
 	<LinkCard title="Audit records" href="/reference/audit-records/" description="The guardrails field in each record." />
 </CardGrid>

@@ -83,6 +83,8 @@ Fields present only in some cases:
 | `ip_not_allowed` | string | An `ip_not_allowed` refusal: `key` or `rule`, whichever `from` list refused it |
 | `outcome` | string | `would_refuse`: the request was forwarded, and observe mode or a `shadow_until` let through at least one decision against it. See [`would_refuse`](#would_refuse) |
 | `would_refuse` | array | What would have refused it: one entry per decision. See [`would_refuse`](#would_refuse) |
+| `session`, `turn` | string | The rule has an [events guardrail](/governance/plugin-events/): the conversation's session and turn. On the `usage` record too |
+| `events` | array | One entry per events guardrail: `guardrail`, `mode`, `events` (how many were sent), `action`, and `findings` by `kind`, `event_index`, `event_kind`, `event_id` and `severity`. Never content. See [What is recorded](/governance/plugin-events/#what-is-recorded) |
 | `guardrails` | array or string | The rule has guardrails. One entry per guardrail and kind found; an empty list means they ran and found nothing. The string `not_run: the body is audio` for a transcription |
 
 A `guardrails` entry:
@@ -186,7 +188,7 @@ Follows a request record, with the same `id`, when the request was forwarded and
 
 ## Answer guardrails
 
-Follows a request record, with the same `id`, when its rule has guardrails with `on: [answer]`.
+Follows a request record, with the same `id`, when its rule has guardrails with `on: [answer]`, and once more when it has an [events guardrail](/governance/plugin-events/): that record also has `events`, `session` and `turn`, as on the request record.
 
 ```json
 {"n":4,"event":"answer_guardrails","id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-13T00:53:12.902Z","verdict":"block","guardrails":[{"guardrail":"no-secrets","detector":"secrets","kind":"aws_access_key","action":"block","count":1}],"prev":"...","hash":"..."}
@@ -201,7 +203,7 @@ Follows a request record, with the same `id`, when its rule has guardrails with 
 
 ## Batch result guardrails
 
-Written when a caller downloads batch results (an OpenAI output file, an Anthropic message batch's results) and an `on: [answer]` guardrail of the batch owner's rule found something in a line. One record per such line, with the download's decision ID.
+Written when a caller downloads batch results (an OpenAI output file, an Anthropic message batch's results) and an `on: [answer]` guardrail of the batch owner's rule found something in a line. One record per such line, with the download's decision ID. An enforcing [events guardrail](/governance/plugin-events/#every-route-that-carries-content) of that rule writes one for each line it judged, with an `events` field as on a request record.
 
 ```json
 {"n":9,"event":"batch_result_guardrails","id":"01M7CX...","time":"2026-11-14T10:00:00.000Z","object_id":"file-out","line":2,"custom_id":"b","verdict":"block","guardrails":[{"guardrail":"answer-secrets","detector":"secrets","kind":"aws_access_key","action":"block","count":1}],"prev":"...","hash":"..."}

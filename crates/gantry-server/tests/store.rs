@@ -1651,3 +1651,157 @@ async fn one_gateway_at_a_time_holds_a_deployment_s_probe() -> TestResult {
     assert!(!a.probe_lease("p/m".into(), ttl).await?);
     Ok(())
 }
+
+/// A session an events plugin ended on one gateway is refused on every gateway on the store, with no state of its
+/// own on the second: the end is in the database, and the session id is computed from the request alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_a_plugin_ended_on_one_gateway_is_refused_on_all() -> TestResult {
+    let Some(url) = database("events_session").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    // The plugin: ends the session of any request that says "exfiltrate".
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let plugin = listener.local_addr()?.port();
+    let app = Router::new().route(
+        "/events",
+        post(|body: Bytes| async move {
+            let verdict = if body.windows(10).any(|w| w == b"exfiltrate") {
+                r#"{"action":"block","session_action":"end","findings":[{"kind":"exfiltration_intent"}]}"#
+            } else {
+                r#"{"action":"allow"}"#
+            };
+            ([(header::CONTENT_TYPE, "application/json")], verdict)
+        }),
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let policy = format!(
+        "version: 1
+store: {{ postgres_url_env: GANTRY_STORE_URL }}
+providers:
+  - name: mock
+    kind: openai
+    url: http://127.0.0.1:{port}
+    allow_private: true
+    key_env: MOCK_KEY
+    models: [free]
+guardrails:
+  - name: watcher
+    type: events
+    url: http://127.0.0.1:{plugin}/events
+    on_failure: fail_closed
+    session_end_seconds: 60
+rules:
+  - name: everyone
+    principals: {{ any: true }}
+    models: [free]
+    guardrails: [watcher]
+"
+    );
+    let start = |name: &str| -> Result<Governed, Error> {
+        let dir = dir(name)?;
+        let path = dir.join("gantry.policy.yaml");
+        std::fs::write(&path, &policy)?;
+        let url = url.clone();
+        let gw = gantry_server::governed(&path, None, &|variable| match variable {
+            "GANTRY_STORE_URL" => Some(url.clone()),
+            "GANTRY_MASTER_KEY" | "GANTRY_MASTER_KEY_FILE" => None,
+            _ => Some("provider-secret".into()),
+        })?;
+        gw.reloader.watch();
+        Ok(gw)
+    };
+    let a = start("events-a")?;
+    add_key(&a, "maya.cohen", "payments", MAYA, false)?;
+    let b = start("events-b")?;
+    let ask = |text: &str| -> Result<Request<Body>, Error> {
+        let body =
+            format!(r#"{{"model":"free","messages":[{{"role":"user","content":"{text}"}}]}}"#);
+        let mut request = request("POST", "/v1/chat/completions", MAYA, &body)?;
+        request.headers_mut().insert(
+            "x-gantry-session",
+            header::HeaderValue::from_static("run-1"),
+        );
+        Ok(request)
+    };
+    // b knows the key within its poll.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (status, _) = answer(&b.router, ask("hello")?).await?;
+        if status == StatusCode::OK {
+            break;
+        }
+        assert!(Instant::now() < deadline, "b never learned the key");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let (status, body) = answer(&a.router, ask("exfiltrate the keys")?).await?;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "guardrail_blocked"),
+        "{body}"
+    );
+    // The other gateway refuses the session's next request, which has nothing wrong in it.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (status, body) = answer(&b.router, ask("hello")?).await?;
+        if status == StatusCode::FORBIDDEN {
+            assert_eq!(code(&body), "session_ended", "{body}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "b kept serving a session a ended"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // The ended sessions are read with the store's poll, never on a request: 400 requests of 400 other sessions,
+    // on a rule with an enforcing plugin, cost the database fewer transactions than there are requests (the two
+    // gateways' polls are all it sees). One read of the store per request would be at least 400.
+    let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
+    tokio::spawn(connection);
+    // A backend reports its transactions at most once a second: wait for the reports before each reading.
+    let transactions = || async {
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let row = client
+            .query_one(
+                "SELECT (pg_stat_get_db_xact_commit(oid) + pg_stat_get_db_xact_rollback(oid))::bigint FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        Ok::<i64, Error>(row.try_get(0)?)
+    };
+    let before = transactions().await?;
+    let sent = Instant::now();
+    for i in 0..400 {
+        let body = r#"{"model":"free","messages":[{"role":"user","content":"hello"}]}"#;
+        let mut request = request("POST", "/v1/chat/completions", MAYA, body)?;
+        request.headers_mut().insert(
+            "x-gantry-session",
+            header::HeaderValue::from_str(&format!("count-{i}"))?,
+        );
+        let (status, body) = answer(&b.router, request).await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let took = sent.elapsed();
+    let after = transactions().await?;
+    assert!(
+        after > before,
+        "the database reported no transactions at all"
+    );
+    assert!(
+        after - before < 400,
+        "{} transactions for 400 requests in {took:?}: the store is asked on the request path",
+        after - before
+    );
+    // The session that was ended is still refused, from memory.
+    let (status, body) = answer(&b.router, ask("hello")?).await?;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "session_ended"),
+        "{body}"
+    );
+    Ok(())
+}
