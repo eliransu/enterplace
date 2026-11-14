@@ -425,7 +425,37 @@ fn route(
         accept_messages: provider.accept_messages,
         project_id: provider.project_id.clone(),
         chat_as_responses: provider.chat_as_responses,
+        oci: provider
+            .oci_signing
+            .as_ref()
+            .map(|oci| oci_signer(&provider.name, oci, &set))
+            .transpose()?,
     })
+}
+
+/// The OCI API signing key a provider names, read from its file or environment variable once, at start.
+fn oci_signer(
+    name: &str,
+    oci: &gantry_core::config::OciSigning,
+    set: &dyn Fn(&str) -> Option<String>,
+) -> Result<Arc<crate::oci::Signer>, String> {
+    let pem = match (&oci.key_file, &oci.key_env) {
+        (Some(path), _) => std::fs::read_to_string(path).map_err(|err| {
+            format!(
+                "provider \"{name}\" signs with the OCI API key in {}, which cannot be read: {err}. Fix the path or its permissions and start again.",
+                path.display()
+            )
+        })?,
+        (None, Some(variable)) => set(variable).ok_or_else(|| {
+            format!(
+                "provider \"{name}\" signs with the OCI API key in the environment variable {variable}, which is not set. Set it to the key's PEM text and start again."
+            )
+        })?,
+        (None, None) => return Err(format!("provider \"{name}\" has oci_signing without key_file or key_env. Add one.")),
+    };
+    crate::oci::Signer::from_pem(&oci.key_id(), &pem)
+        .map(Arc::new)
+        .map_err(|why| format!("provider \"{name}\": {why}"))
 }
 
 /// What a binary that embeds the gateway builds its additions from, once the files are checked and the store is open.

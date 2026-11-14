@@ -111,6 +111,10 @@ const KNOWN: &[&str] = &[
     "threshold",
     "anonymizer_url",
     "project_id",
+    "oci_signing",
+    "tenancy",
+    "user",
+    "fingerprint",
     "template_id",
     "case_sensitive",
     "whole_word",
@@ -551,6 +555,40 @@ struct ProviderFile {
     // openai or azure: chat completions requests for its models are sent to the Responses API, translated.
     #[serde(default)]
     chat_as_responses: Option<bool>,
+    // openai (OCI Generative AI): requests are signed with an OCI API signing key instead of carrying a key.
+    #[serde(default)]
+    oci_signing: Option<OciSigningFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OciSigningFile {
+    tenancy: String,
+    user: String,
+    fingerprint: String,
+    #[serde(default)]
+    key_file: Option<String>,
+    #[serde(default)]
+    key_env: Option<String>,
+}
+
+/// An OCI API signing key: the IDs that make its keyId, and where its private key (PEM) is. Requests are signed
+/// with OCI's HTTP signature (version 1, rsa-sha256).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OciSigning {
+    pub tenancy: String,
+    pub user: String,
+    pub fingerprint: String,
+    /// The private key's file, read at start; or, when None, the environment variable in `key_env`.
+    pub key_file: Option<PathBuf>,
+    pub key_env: Option<String>,
+}
+
+impl OciSigning {
+    /// `<tenancy OCID>/<user OCID>/<key fingerprint>`, as OCI's Authorization header names the key.
+    pub fn key_id(&self) -> String {
+        format!("{}/{}/{}", self.tenancy, self.user, self.fingerprint)
+    }
 }
 
 #[derive(Deserialize)]
@@ -1486,6 +1524,8 @@ pub struct Provider {
     pub project_id: Option<String>,
     /// Whether chat completions requests for its models are sent to the Responses API, translated both ways.
     pub chat_as_responses: bool,
+    /// Signs requests with an OCI API signing key, in place of a provider key.
+    pub oci_signing: Option<OciSigning>,
 }
 
 /// Everything `gantry serve` needs from the two files.
@@ -3091,6 +3131,36 @@ fn provider_options(
     if entry.chat_as_responses.is_some() && !matches!(kind, Some(Kind::OpenAi | Kind::Azure)) {
         only("chat_as_responses", "openai or azure", errors);
     }
+    if let Some(oci) = &entry.oci_signing {
+        if kind != Some(Kind::OpenAi) {
+            only("oci_signing", "openai (preset oci)", errors);
+        }
+        if entry.key_env.is_some() || entry.key_file.is_some() || entry.credential.is_some() {
+            errors.push(format!(
+                "{}: provider \"{}\" signs its requests with oci_signing, so it takes no key_env, key_file or credential. Keep oci_signing, or remove it and keep the API key.",
+                at("oci_signing"),
+                entry.name
+            ));
+        }
+        match (&oci.key_file, &oci.key_env) {
+            (Some(path), None) if !path.trim().is_empty() => {}
+            (None, Some(env))
+                if !env.is_empty()
+                    && env.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') => {}
+            _ => errors.push(format!(
+                "{}: oci_signing takes one of key_file (the path of the API signing key's PEM file, for example ~/.oci/oci_api_key.pem written out in full) or key_env (an environment variable that holds the PEM). The key itself never goes in this file.",
+                at("oci_signing")
+            )),
+        }
+        let ocid = |id: &str, of: &str| id.starts_with(&format!("ocid1.{of}."));
+        if !ocid(&oci.tenancy, "tenancy") || !ocid(&oci.user, "user") || oci.fingerprint.len() != 47
+        {
+            errors.push(format!(
+                "{}: oci_signing needs tenancy (ocid1.tenancy...), user (ocid1.user...) and fingerprint (aa:bb:..., 16 pairs) as the OCI console shows them under the user's API keys. Copy them from there.",
+                at("oci_signing")
+            ));
+        }
+    }
     if let Some(project) = &entry.project_id
         && (project.is_empty()
             || !project
@@ -3517,7 +3587,10 @@ fn providers(
             }
             // A model server on this machine or a private network, such as Ollama or vLLM, often takes no key.
             (None, false) if entry.allow_private && kind == Some(Kind::OpenAi) => {}
-            (None, false) if entry.key_file.is_some() || entry.credential.is_some() => {}
+            (None, false)
+                if entry.key_file.is_some()
+                    || entry.credential.is_some()
+                    || entry.oci_signing.is_some() => {}
             // Vertex AI signs in with Google's Application Default Credentials.
             (None, false) if kind.is_some_and(Kind::google_auth) => {}
             // Azure OpenAI signs in with Microsoft Entra ID without a key.
@@ -3638,6 +3711,13 @@ fn providers(
                 accept_messages: entry.accept_messages.unwrap_or(false),
                 project_id: entry.project_id.clone(),
                 chat_as_responses: entry.chat_as_responses.unwrap_or(false),
+                oci_signing: entry.oci_signing.as_ref().map(|oci| OciSigning {
+                    tenancy: oci.tenancy.clone(),
+                    user: oci.user.clone(),
+                    fingerprint: oci.fingerprint.clone(),
+                    key_file: oci.key_file.as_ref().map(PathBuf::from),
+                    key_env: oci.key_env.clone(),
+                }),
             });
         }
     }
@@ -4178,6 +4258,7 @@ pub fn same_connection(a: &Provider, b: &Provider) -> bool {
         && a.role_arn == b.role_arn
         && a.allow_private == b.allow_private
         && a.project_id == b.project_id
+        && a.oci_signing == b.oci_signing
 }
 
 /// What `gantry check` warns about in a policy that loads: observe mode, and models no provider serves.
@@ -5594,6 +5675,42 @@ rules:
         .ok_or("a sagemaker provider without endpoints loaded")?
         .join("\n");
         assert!(refused.contains("SageMaker endpoint"), "{refused}");
+        Ok(())
+    }
+
+    #[test]
+    fn an_oci_provider_signs_with_an_api_signing_key_instead_of_a_key() -> TestResult {
+        let policy = "version: 1\nproviders:\n  - name: oci\n    preset: oci\n    oci_signing:\n      tenancy: ocid1.tenancy.oc1..aaaa\n      user: ocid1.user.oc1..bbbb\n      fingerprint: 20:3b:97:13:55:1c:5b:0d:d3:37:d8:50:4e:c5:3a:34\n      key_env: OCI_API_KEY_PEM\n    models: [meta.llama-3.3-70b-instruct]\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n";
+        let loaded = check("oci-signing", policy, None)?.map_err(|e| e.join("\n"))?;
+        let oci = loaded.providers[0]
+            .oci_signing
+            .as_ref()
+            .ok_or("no oci_signing")?;
+        assert_eq!(
+            oci.key_id(),
+            "ocid1.tenancy.oc1..aaaa/ocid1.user.oc1..bbbb/20:3b:97:13:55:1c:5b:0d:d3:37:d8:50:4e:c5:3a:34"
+        );
+        assert_eq!(loaded.providers[0].key_env, "");
+        for (bad, says) in [
+            ("      key_env: OCI_API_KEY_PEM\n", "key_file"),
+            ("    preset: oci\n", "kind"),
+            ("      user: ocid1.user.oc1..bbbb\n", "user"),
+        ] {
+            let text = match bad {
+                "    preset: oci\n" => {
+                    policy.replace(bad, "    preset: oci\n    key_env: OCI_KEY\n")
+                }
+                _ => policy.replace(bad, ""),
+            };
+            let refused = check("oci-signing-bad", &text, None)?
+                .err()
+                .ok_or("a bad oci_signing loaded")?
+                .join("\n");
+            assert!(
+                refused.contains(says) || refused.contains("oci_signing"),
+                "{refused}"
+            );
+        }
         Ok(())
     }
 

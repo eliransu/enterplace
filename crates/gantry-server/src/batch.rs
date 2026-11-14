@@ -21,9 +21,13 @@
 //!
 //! - A response (OpenAI's `/v1/responses`) made through Gantry is its creator's: `GET`, `DELETE` and `cancel` on
 //!   `/v1/responses/<id>` reach it for them alone. A response a provider that does not speak Responses answered was
-//!   translated and kept nowhere; Gantry keeps it, in memory for an hour, when the request said `store: true`.
+//!   translated and kept nowhere; Gantry keeps it for an hour when the request said `store: true`. A background
+//!   response (`background: true`) reserves its estimate when it is created and is charged what it used once, when
+//!   Gantry first sees it end (read by its creator, or polled).
 //! - An async job (`POST /v1/async/<route>`) runs the request on the governed model route in the background and holds
-//!   its answer for its submitter, in memory, for an hour after it ends (`GET /v1/async/<route>/<id>`).
+//!   its answer for its submitter for an hour after it ends (`GET /v1/async/<route>/<id>`).
+//! - Held answers (async jobs, kept responses) are in the store with one (sealed under the master key when there is
+//!   one), so every replica serves them; without one they are in this process's memory.
 //!
 //! Who owns what is written to the audit log (`owned`, `owned_settled`, `owned_deleted` records). With a store it is
 //! also kept in Postgres (namespace `batches`), so every replica answers for every object; without one it is read
@@ -321,14 +325,28 @@ impl Owned {
 /// The table that keeps who owns what when the policy has a store, so every replica answers for every file, batch
 /// and job. Namespace `batches`.
 pub(crate) const NAMESPACE: &str = "batches";
-pub(crate) const MIGRATIONS: &[&str] = &["
+pub(crate) const MIGRATIONS: &[&str] = &[
+    "
 CREATE TABLE gantry_batches_owned (
     object_id text PRIMARY KEY,
     record jsonb NOT NULL,
     settled boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now()
 );
-"];
+",
+    // Answers held for their owner (async jobs, translated responses kept with store: true), so any replica serves
+    // them. `value` is sealed under the master key when the gateway has one (`sealed`), else the JSON as it is.
+    "
+CREATE TABLE gantry_batches_held (
+    id text PRIMARY KEY,
+    owner text NOT NULL,
+    expires bigint NOT NULL,
+    status integer NOT NULL,
+    value bytea NOT NULL,
+    sealed boolean NOT NULL
+);
+",
+];
 
 /// Every file, batch and job created through Gantry, by the provider's ID. With a store it is kept in Postgres and
 /// shared by every replica, the map in memory holding what this one has read. Without one it is this gateway's own,
@@ -337,10 +355,9 @@ CREATE TABLE gantry_batches_owned (
 pub(crate) struct Registry {
     map: Mutex<HashMap<String, Owned>>,
     pg: Option<Arc<crate::store::PgStore>>,
-    /// Answers Gantry holds for their owner: async jobs and translated responses kept with `store: true`. In this
-    /// process's memory only, never written anywhere: they hold text.
-    // ponytail: one replica's memory, so another replica answers 404 for them; keep them in the store (encrypted, as
-    // captured bodies are) when async jobs run behind more than one replica.
+    /// Answers Gantry holds for their owner: async jobs and translated responses kept with `store: true`. With a
+    /// store they are kept in its `gantry_batches_held` table (sealed under the master key when there is one), so
+    /// every replica serves them; without one, in this process's memory only.
     held: Mutex<HashMap<String, Held>>,
 }
 
@@ -355,6 +372,11 @@ struct Held {
 
 /// How long a held answer is kept: an hour, as long as Bifrost keeps an async result by default.
 const HOLD_SECONDS: u64 = 3600;
+
+/// What a held answer is sealed for, so a sealed value moved to another row does not open.
+fn held_name(id: &str) -> String {
+    format!("held:{id}")
+}
 
 impl Registry {
     /// Keeps ownership in the store's `batches` namespace, created here.
@@ -374,24 +396,101 @@ impl Registry {
         }
     }
 
-    fn hold(&self, id: &str, held: Held) {
+    async fn hold(&self, id: &str, held: Held) {
         let now = now_secs();
-        let mut map = self.held_map();
-        map.retain(|_, h| h.expires > now);
-        map.insert(id.to_string(), held);
+        let Some(pg) = &self.pg else {
+            let mut map = self.held_map();
+            map.retain(|_, h| h.expires > now);
+            map.insert(id.to_string(), held);
+            return;
+        };
+        let plain = held.value.to_string().into_bytes();
+        let (value, sealed) = match pg.master() {
+            Ok(key) => match key.seal(&held_name(id), &plain) {
+                Ok(value) => (value, true),
+                Err(err) => {
+                    eprintln!("gantry: the answer of {id} could not be sealed to keep it: {err}");
+                    return;
+                }
+            },
+            Err(_) => (plain, false),
+        };
+        let Some(client) = self.client().await else {
+            return;
+        };
+        let expires = i64::try_from(held.expires).unwrap_or(i64::MAX);
+        let status = i32::from(held.status.as_u16());
+        let _ = client
+            .execute(
+                "DELETE FROM gantry_batches_held WHERE expires <= $1",
+                &[&i64::try_from(now).unwrap_or(i64::MAX)],
+            )
+            .await;
+        if let Err(err) = client
+            .execute(
+                "INSERT INTO gantry_batches_held (id, owner, expires, status, value, sealed) VALUES ($1, $2, $3, $4, $5, $6) \
+                 ON CONFLICT (id) DO UPDATE SET owner = excluded.owner, expires = excluded.expires, status = excluded.status, value = excluded.value, sealed = excluded.sealed",
+                &[&id, &held.owner, &expires, &status, &value, &sealed],
+            )
+            .await
+        {
+            eprintln!("gantry: the answer of {id} could not be written to the store: {err}. Asking for it answers 404 until it is held again.");
+        }
     }
 
     /// What is held under `id` for `person`, if it has not expired. Someone else is told nothing is.
-    fn held(&self, id: &str, person: &Principal) -> Option<Held> {
+    async fn held(&self, id: &str, person: &Principal) -> Option<Held> {
         let now = now_secs();
-        self.held_map()
-            .get(id)
-            .filter(|h| h.expires > now && (h.owner == person.within(&person.name) || person.admin))
-            .cloned()
+        let mine = |h: &Held| h.owner == person.within(&person.name) || person.admin;
+        let Some(pg) = &self.pg else {
+            return self
+                .held_map()
+                .get(id)
+                .filter(|h| h.expires > now && mine(h))
+                .cloned();
+        };
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT owner, expires, status, value, sealed FROM gantry_batches_held WHERE id = $1 AND expires > $2",
+                &[&id, &i64::try_from(now).unwrap_or(i64::MAX)],
+            )
+            .await
+            .ok()??;
+        let value: Vec<u8> = row.try_get(3).ok()?;
+        let plain = if row.try_get::<_, bool>(4).ok()? {
+            match pg.master().and_then(|key| key.open(&held_name(id), &value)) {
+                Ok(plain) => plain,
+                Err(err) => {
+                    eprintln!(
+                        "gantry: the answer of {id} is held sealed and could not be opened: {err}"
+                    );
+                    return None;
+                }
+            }
+        } else {
+            value
+        };
+        let held = Held {
+            owner: row.try_get(0).ok()?,
+            expires: u64::try_from(row.try_get::<_, i64>(1).ok()?).ok()?,
+            status: StatusCode::from_u16(u16::try_from(row.try_get::<_, i32>(2).ok()?).ok()?)
+                .ok()?,
+            value: serde_json::from_slice(&plain).ok()?,
+        };
+        mine(&held).then_some(held)
     }
 
-    fn drop_held(&self, id: &str) {
-        self.held_map().remove(id);
+    async fn drop_held(&self, id: &str) {
+        if self.pg.is_none() {
+            self.held_map().remove(id);
+            return;
+        }
+        if let Some(client) = self.client().await {
+            let _ = client
+                .execute("DELETE FROM gantry_batches_held WHERE id = $1", &[&id])
+                .await;
+        }
     }
 
     fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Owned>> {
@@ -854,7 +953,7 @@ async fn serve(
             }
             Ok(json_answer(status, &value))
         }
-        Then::Async(job) => Ok(start_job(state, *job)),
+        Then::Async(job) => Ok(start_job(state, *job).await),
         Then::Bytes(status, kind, content) => {
             let mut response = (status, content).into_response();
             if let Some(kind) = kind {
@@ -1941,7 +2040,7 @@ async fn prepare<'a>(
                 };
                 let (status, value, deleted) = match &op {
                     Op::Response(_, what) if what.is_empty() => {
-                        let held = state.owned.held(&id, person).ok_or_else(gone)?;
+                        let held = state.owned.held(&id, person).await.ok_or_else(gone)?;
                         (held.status, held.value, None)
                     }
                     Op::Response(..) => {
@@ -1980,9 +2079,14 @@ async fn prepare<'a>(
                 _ => format!("/v1/responses/{id}"),
             };
             let target = responses_target(&version.providers[provider], &path, &query);
+            // Read whole, so a background response seen ended is charged what it used.
+            let streamed = query.contains("stream=true");
             let (method, then) = match &op {
                 Op::ResponseDelete(_) => (Method::DELETE, Then::Delete(id)),
-                Op::ResponseCancel(_) => (Method::POST, Then::Stream),
+                Op::ResponseCancel(_) => (Method::POST, Then::Read(id)),
+                Op::Response(_, what) if what.is_empty() && !streamed => {
+                    (Method::GET, Then::Read(id))
+                }
                 _ => (Method::GET, Then::Stream),
             };
             Ok(ready(provider, method, target, Bytes::new(), then))
@@ -2052,6 +2156,7 @@ async fn prepare<'a>(
             let held = state
                 .owned
                 .held(id, person)
+                .await
                 .filter(|_| id.starts_with("job_"))
                 .ok_or_else(|| not_yours("async job", id))?;
             extra.insert("object_id".into(), id.as_str().into());
@@ -3079,13 +3184,32 @@ async fn after(
             Ok(respond(body))
         }
         Then::Delete(id) => {
-            // A container deleted is charged for the minutes it lived until now.
-            if state
-                .owned
-                .get(&id)
-                .await
-                .is_some_and(|o| o.item == Item::Container)
+            let deleting = state.owned.get(&id).await;
+            if let Some(response) = deleting
+                .as_ref()
+                .filter(|o| o.item == Item::Response && o.purpose == BACKGROUND && !o.settled)
             {
+                // Deleted before Gantry saw it end: settled as the provider last said, else charged what it could
+                // have cost (it ran, and is billed, whether or not anyone reads it).
+                let last = match version
+                    .providers
+                    .iter()
+                    .find(|p| p.name == response.provider)
+                {
+                    Some(provider) => read_response(state, provider, &id).await,
+                    None => None,
+                };
+                let ended = last.filter(|o| ended(Item::Response, o));
+                settle(
+                    state,
+                    version,
+                    &id,
+                    &ended.unwrap_or_else(|| json!({"status": "incomplete"})),
+                )
+                .await;
+            }
+            // A container deleted is charged for the minutes it lived until now.
+            if deleting.is_some_and(|o| o.item == Item::Container) {
                 settle(
                     state,
                     version,
@@ -3175,23 +3299,26 @@ async fn forget(state: &AppState, decision: &str, id: &str, person: &str) {
     record.insert("why".into(), format!("deleted by {person}").into());
     write(state, record).await;
     state.owned.remove(id).await;
-    state.owned.drop_held(id);
+    state.owned.drop_held(id).await;
 }
 
 /// Starts an async job: the request runs on the governed model route (decided, guarded, budgeted and recorded as
 /// any other), and its answer is held for its owner for `ttl` seconds after it ends.
-fn start_job(state: &AppState, job: Job) -> Response {
+async fn start_job(state: &AppState, job: Job) -> Response {
     let pending = json!({"id": job.id, "object": "async_job", "status": "pending", "created_at": job.created});
-    state.owned.hold(
-        &job.id,
-        Held {
-            owner: job.owner.clone(),
-            // Until it ends, then `ttl` past that.
-            expires: job.created + crate::MAX_JOB_SECONDS + job.ttl,
-            status: StatusCode::ACCEPTED,
-            value: pending.clone(),
-        },
-    );
+    state
+        .owned
+        .hold(
+            &job.id,
+            Held {
+                owner: job.owner.clone(),
+                // Until it ends, then `ttl` past that.
+                expires: job.created + crate::MAX_JOB_SECONDS + job.ttl,
+                status: StatusCode::ACCEPTED,
+                value: pending.clone(),
+            },
+        )
+        .await;
     let running = state.clone();
     tokio::spawn(async move {
         let response = crate::handle(State(running.clone()), job.request).await;
@@ -3222,15 +3349,18 @@ fn start_job(state: &AppState, job: Job) -> Response {
         } else {
             "error"
         }] = answer;
-        running.owned.hold(
-            &job.id,
-            Held {
-                owner: job.owner,
-                expires: done + job.ttl,
-                status: StatusCode::OK,
-                value,
-            },
-        );
+        running
+            .owned
+            .hold(
+                &job.id,
+                Held {
+                    owner: job.owner,
+                    expires: done + job.ttl,
+                    status: StatusCode::OK,
+                    value,
+                },
+            )
+            .await;
     });
     json_answer(StatusCode::ACCEPTED, &pending)
 }
@@ -3250,16 +3380,40 @@ pub(crate) struct Creator {
     owned: Owned,
     /// The request said `store: true`: a translated answer is kept for the owner.
     store: bool,
+    /// The request said `background: true` (and did not stream): its usage is charged when it ends.
+    background: bool,
+    /// What the answer's settlement hands on when the response is still running. Shared because extensions are
+    /// cloned; taken once.
+    deferred: Arc<Mutex<Option<tokio::sync::oneshot::Receiver<spend::Deferred>>>>,
 }
 
-pub(crate) fn creator(person: &Principal, seen: &Seen<'_>, store: bool) -> Creator {
+pub(crate) fn creator(
+    person: &Principal,
+    seen: &Seen<'_>,
+    store: bool,
+    background: bool,
+) -> Creator {
     Creator {
         owned: Owned::new(Item::Response, "", person, seen, ""),
         store,
+        background,
+        deferred: Arc::default(),
     }
 }
 
 impl Creator {
+    /// A background response's settlement is handed here when its answer says it is still running.
+    pub(crate) fn defer(&mut self, admitted: &mut spend::Admitted) {
+        if !self.background {
+            return;
+        }
+        let (to, from) = tokio::sync::oneshot::channel();
+        admitted.defer(to);
+        if let Ok(mut slot) = self.deferred.lock() {
+            *slot = Some(from);
+        }
+    }
+
     /// The provider that answered, and whether it was translated (and so holds nothing to read back).
     pub(crate) fn served_by(&mut self, provider: &str, translated: bool) {
         self.owned.provider = provider.to_string();
@@ -3269,6 +3423,9 @@ impl Creator {
 
 /// What a response's `purpose` says when a provider that does not speak Responses answered it.
 const TRANSLATED: &str = "translated";
+
+/// What a response's `purpose` says when it runs in the background with its reservation held, until it is settled.
+const BACKGROUND: &str = "background";
 
 /// How long a response stays its creator's: as long as OpenAI keeps a stored one.
 const RESPONSE_DAYS: u64 = 30;
@@ -3353,20 +3510,40 @@ impl Watch {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
+        let deferred = creator
+            .deferred
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
         runtime.spawn(async move {
             let mut owned = creator.owned;
             owned.decision = decision;
             owned.expires_at = Some(now_secs() + RESPONSE_DAYS * 86_400);
+            // Settled with the answer unless it said the response is still running: then it holds its reservation
+            // until Gantry sees it end.
+            if let Some(Ok(left)) = match deferred {
+                Some(from) => Some(from.await),
+                None => None,
+            } {
+                owned.purpose = BACKGROUND.into();
+                owned.reserved = left.reserved;
+                owned.estimate = left.estimate;
+                owned.models = vec![left.model];
+                owned.lines = 1;
+            }
             if let Some(value) = kept {
-                state.owned.hold(
-                    &id,
-                    Held {
-                        owner: owned.owner(),
-                        expires: now_secs() + HOLD_SECONDS,
-                        status: StatusCode::OK,
-                        value,
-                    },
-                );
+                state
+                    .owned
+                    .hold(
+                        &id,
+                        Held {
+                            owner: owned.owner(),
+                            expires: now_secs() + HOLD_SECONDS,
+                            status: StatusCode::OK,
+                            value,
+                        },
+                    )
+                    .await;
             }
             write(&state, owned.record(&id)).await;
             state.owned.put(&id, owned).await;
@@ -3436,7 +3613,11 @@ fn ended(item: Item, object: &Value) -> bool {
         ),
         Item::Video => matches!(object["status"].as_str(), Some("completed" | "failed")),
         Item::Container => matches!(object["status"].as_str(), Some("expired" | "deleted")),
-        Item::File | Item::Response => false,
+        Item::Response => matches!(
+            object["status"].as_str(),
+            Some("completed" | "failed" | "cancelled" | "incomplete")
+        ),
+        Item::File => false,
     }
 }
 
@@ -3446,10 +3627,15 @@ type Outcome = (String, bool, Option<Usage>);
 /// Meters a batch that ended, once: one usage record per result line at batch prices, the reservation given back,
 /// and the files it wrote recorded as its owner's. A fine-tuning job that ended is recorded with its trained tokens.
 async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) {
-    let Some(item) = state.owned.get(id).await.map(|o| o.item) else {
+    let Some(found) = state.owned.get(id).await else {
         return;
     };
-    if !ended(item, object) {
+    let item = found.item;
+    // Only a background response holds anything to settle: any other was charged with its answer.
+    if found.settled
+        || (item == Item::Response && found.purpose != BACKGROUND)
+        || !ended(item, object)
+    {
         return;
     }
     let Some(owned) = state.owned.begin_settle(id).await else {
@@ -3548,6 +3734,49 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
         state.owned.settled(id).await;
         return;
     }
+    if item == Item::Response {
+        // Charged what the provider says it used, once: the first replica to mark it settled charges it.
+        let model = owned.models.first().cloned().unwrap_or_default();
+        let price = version
+            .policy
+            .as_ref()
+            .and_then(|p| price_for(&model, p.prices()));
+        let usage = Usage::from_body(object.to_string().as_bytes());
+        let mut extra = Map::new();
+        extra.insert("response".into(), id.into());
+        extra.insert("background".into(), true.into());
+        let counted = counted(version, &owned, &model);
+        let (charged, record) = spend::charge(
+            &state.spend,
+            spend::Line {
+                decision: &owned.decision,
+                person: &owned.person,
+                team: &owned.team,
+                key: &owned.key,
+                org: &owned.org,
+                customer: owned.customer.as_deref(),
+                tags: &owned.tags,
+                counted: &counted,
+                model: &model,
+                provider: &owned.provider,
+                version: (&version.policy_sha256, &version.keys_sha256),
+                price,
+                usage,
+                share: 1.0,
+                // Ended without usage: charged what it could have cost, as any answer that reports none.
+                unreported: owned.estimate.unwrap_or_default(),
+                succeeded: !matches!(object["status"].as_str(), Some("failed" | "cancelled")),
+                extra,
+            },
+        );
+        write(state, record).await;
+        release(state, &owned.reserved);
+        done.insert("status".into(), object["status"].clone());
+        done.insert("charged_usd".into(), charged.into());
+        write(state, done).await;
+        state.owned.settled(id).await;
+        return;
+    }
     if item == Item::FineTune {
         // OpenAI's job object names the tokens trained, and no price for them: they are recorded, not charged.
         done.insert("status".into(), object["status"].clone());
@@ -3633,6 +3862,28 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
     done.insert("charged_usd".into(), charged.into());
     write(state, done).await;
     state.owned.settled(id).await;
+}
+
+/// A response as the provider holds it now, or None when it cannot be read.
+async fn read_response(state: &AppState, provider: &Upstream, id: &str) -> Option<Value> {
+    let target = responses_target(provider, &format!("/v1/responses/{id}"), "");
+    let answer = fetch(
+        state,
+        provider,
+        Method::GET,
+        &target,
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await
+    .ok()?;
+    if !answer.status().is_success() {
+        return None;
+    }
+    let body = collect(answer.into_body(), crate::MAX_BODY_BYTES)
+        .await
+        .ok()?;
+    serde_json::from_slice(&body).ok()
 }
 
 async fn read_lines(state: &AppState, provider: &Upstream, target: &str) -> Result<Bytes, String> {
@@ -3735,7 +3986,15 @@ async fn poll(state: &AppState) {
     let now = now_secs();
     for (id, owned) in state.owned.all().await {
         if owned.item == Item::Response {
-            // Nothing to settle: a response's usage was its request's. It stays its creator's while it is kept.
+            // A background response nobody reads is still charged when it ends; any other's usage was its request's.
+            if owned.purpose == BACKGROUND
+                && !owned.settled
+                && let Some(provider) = version.providers.iter().find(|p| p.name == owned.provider)
+                && let Some(object) = read_response(state, provider, &id).await
+            {
+                settle(state, &version, &id, &object).await;
+            }
+            // It stays its creator's while it is kept.
             if owned.expires_at.is_some_and(|at| at <= now) {
                 state.owned.remove(&id).await;
             }

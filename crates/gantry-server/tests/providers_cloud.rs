@@ -2060,12 +2060,20 @@ async fn a_replicate_prediction_is_waited_for_and_answers_as_chat() -> TestResul
     let model = "meta/meta-llama-3-70b-instruct";
     let done = json!({"id": "p1", "status": "succeeded", "output": ["Hel", "lo"],
         "metrics": {"input_token_count": 7, "output_token_count": 2, "predict_time": 0.4}});
-    let replicate = mock(vec![
+    let replicate = mock(vec![]).await?;
+    let sse = "event: output\nid: 1\ndata: Hel\n\nevent: output\nid: 2\ndata: lo\n\nevent: done\ndata: {}\n\n";
+    replicate.replies.lock().map_err(|_| "poisoned")?.extend([
         Reply::Json(done.clone()),
-        Reply::Json(done),
+        // A streaming prediction: created at once, its text read from its stream URL, its counts from its get URL.
+        Reply::Json(json!({"id": "p2", "status": "starting", "urls": {
+            "stream": replicate.url("/stream/p2"), "get": replicate.url("/v1/predictions/p2")}})),
+        Reply::Bytes("text/event-stream", sse.as_bytes().to_vec()),
+        Reply::Json(
+            json!({"id": "p2", "status": "succeeded", "output": ["Hel", "lo"],
+            "metrics": {"input_token_count": 9, "output_token_count": 2}}),
+        ),
         Reply::Json(json!({"id": "p3", "status": "processing", "output": null})),
-    ])
-    .await?;
+    ]);
     let gw = gateway(
         "replicate",
         vec![route(
@@ -2094,17 +2102,29 @@ async fn a_replicate_prediction_is_waited_for_and_answers_as_chat() -> TestResul
     );
     let (_, usage) = records_of(&gw, &headers).await?;
     assert_eq!(tokens(&usage), (Some("reported"), Some(7), Some(2)));
+    // Streamed: the tokens arrive as Replicate's stream sends them, and the usage is metered from the prediction
+    // although the client did not ask to see it.
     let mut streamed = chat.clone();
     streamed["stream"] = true.into();
-    streamed["stream_options"] = json!({"include_usage": true});
     let (status, headers, text) = post(&gw, "/v1/chat/completions", &streamed).await?;
     assert_eq!(status, StatusCode::OK, "{text}");
+    let (_, sent, body) = replicate.nth(1)?;
+    assert!(sent.get("prefer").is_none());
+    assert_eq!(serde_json::from_slice::<Value>(&body)?["stream"], true);
+    let (target, sent, _) = replicate.nth(2)?;
+    assert_eq!(target, "/stream/p2");
+    assert_eq!(sent[header::ACCEPT], "text/event-stream");
+    assert_eq!(sent[header::AUTHORIZATION], "Bearer replicate-provider-key");
+    assert_eq!(replicate.nth(3)?.0, "/v1/predictions/p2");
     assert!(
-        text.contains("\"content\":\"Hello\"") && text.ends_with("data: [DONE]\n\n"),
+        text.contains("\"content\":\"Hel\"") && text.contains("\"content\":\"lo\""),
         "{text}"
     );
+    assert!(text.contains("\"finish_reason\":\"stop\""), "{text}");
+    assert!(!text.contains("\"usage\""), "{text}");
+    assert!(text.ends_with("data: [DONE]\n\n"), "{text}");
     let (_, usage) = records_of(&gw, &headers).await?;
-    assert_eq!(tokens(&usage), (Some("reported"), Some(7), Some(2)));
+    assert_eq!(tokens(&usage), (Some("reported"), Some(9), Some(2)));
     // Not done after the wait: Replicate cancels it, and the caller is told why.
     let (status, _, text) = post(&gw, "/v1/chat/completions", &chat).await?;
     assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{text}");
@@ -2118,7 +2138,7 @@ async fn a_replicate_prediction_is_waited_for_and_answers_as_chat() -> TestResul
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
     assert!(text.contains("tools"), "{text}");
-    assert_eq!(replicate.hits.load(Ordering::SeqCst), 3);
+    assert_eq!(replicate.hits.load(Ordering::SeqCst), 5);
     Ok(())
 }
 
@@ -2263,5 +2283,245 @@ async fn a_video_takes_an_input_reference_image_with_its_prompt_guarded() -> Tes
         body["instances"][0]["image"]["bytesBase64Encoded"],
         eventstream::base64_encode(b"\x89PNG\r\n\x1a\nIMG")
     );
+    Ok(())
+}
+
+// 11. Background responses, OCI request signing and Triton's generate extension.
+
+fn priced(input: f64, output: f64, max_output: u64) -> gantry_core::usage::Price {
+    gantry_core::usage::Price {
+        input,
+        output,
+        cache_read: None,
+        cache_write: None,
+        cache_write_1h: None,
+        long_context: None,
+        max_output: Some(max_output),
+        max_context: None,
+        per_image: None,
+        per_second: None,
+        per_call: None,
+        source: Default::default(),
+    }
+}
+
+fn budgeted(policy: Policy, prices: &[(&str, gantry_core::usage::Price)]) -> Policy {
+    let mut map = gantry_core::usage::PriceOverrides::new();
+    for (model, price) in prices {
+        map.insert((*model).into(), price.clone());
+    }
+    policy
+        .with_rule_change(|rule| {
+            rule.limits.budgets = vec![gantry_core::policy::Cap {
+                budget: gantry_core::policy::Budget {
+                    usd: 10.0,
+                    per: gantry_core::policy::Period::Day,
+                },
+                models: Vec::new(),
+                from: None,
+                shadow_until: None,
+            }];
+        })
+        .with_prices(map)
+}
+
+#[tokio::test]
+async fn a_background_response_is_charged_its_usage_once_when_it_is_seen_done() -> TestResult {
+    let queued = json!({"id": "resp_bg", "object": "response", "status": "queued", "background": true, "model": "gpt-4o", "output": []});
+    let running = json!({"id": "resp_bg", "object": "response", "status": "in_progress", "background": true, "model": "gpt-4o", "output": []});
+    let done = json!({"id": "resp_bg", "object": "response", "status": "completed", "background": true, "model": "gpt-4o",
+        "output": [], "usage": {"input_tokens": 1000, "output_tokens": 100}});
+    let openai = mock(vec![
+        Reply::Json(queued),
+        Reply::Json(running),
+        Reply::Json(done),
+    ])
+    .await?;
+    let gw = gateway(
+        "responses-background",
+        vec![route("openai", Kind::OpenAi, openai.url(""), &["gpt-4o"])],
+        budgeted(everyone(), &[("gpt-4o", priced(2.0, 10.0, 1000))]),
+    )?;
+    let (status, headers, text) = post(
+        &gw,
+        "/v1/responses",
+        &json!({"model": "gpt-4o", "input": "a long task", "background": true, "max_output_tokens": 500}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    // Queued: nothing used yet, so nothing charged; its reservation is held until it ends.
+    let (_, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(usage["usage"], "background");
+    assert_eq!(usage["charged_usd"], 0.0);
+    let settled = |gw: &Gateway| -> Result<Vec<Value>, Box<dyn std::error::Error>> {
+        Ok(all_records(gw)?
+            .into_iter()
+            .filter(|r| r["event"] == "usage" && r["response"] == "resp_bg")
+            .collect())
+    };
+    let (status, _, text) = eventually(&gw, "/v1/responses/resp_bg").await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert!(text.contains("in_progress"), "{text}");
+    assert!(settled(&gw)?.is_empty(), "charged before it ended");
+    for _ in 0..2 {
+        let (status, _, text) = get(&gw, "/v1/responses/resp_bg", MAYA).await?;
+        assert_eq!(status, StatusCode::OK, "{text}");
+    }
+    let mut charged = Vec::new();
+    for _ in 0..100 {
+        charged = settled(&gw)?;
+        if !charged.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(charged.len(), 1, "charged once: {charged:?}");
+    assert_eq!(
+        tokens(&charged[0]),
+        (Some("reported"), Some(1000), Some(100))
+    );
+    // 1,000 input tokens at $2 and 100 output tokens at $10 per million.
+    assert!(close(
+        charged[0]["charged_usd"].as_f64().unwrap_or(-1.0),
+        0.003
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn oci_requests_are_signed_with_the_api_signing_key() -> TestResult {
+    use ring::signature::{RSA_PKCS1_2048_8192_SHA256, RsaKeyPair, UnparsedPublicKey};
+    let pem = include_str!("cloud/oci-test-key.pem");
+    let oci = mock(vec![Reply::Json(json!({"id": "c1", "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 1}}))])
+    .await?;
+    let key_id = "ocid1.tenancy.oc1..aaaa/ocid1.user.oc1..bbbb/20:3b:97:13:55:1c:5b:0d:d3:37:d8:50:4e:c5:3a:34";
+    let gw = gateway(
+        "oci-signed",
+        vec![ProviderRoute {
+            key: None,
+            oci: Some(Arc::new(gantry_server::oci::Signer::from_pem(key_id, pem)?)),
+            ..route(
+                "oci",
+                Kind::OpenAi,
+                oci.url("/20231130/actions/v1"),
+                &["meta.llama-3.3-70b-instruct"],
+            )
+        }],
+        everyone(),
+    )?;
+    let chat = json!({"model": "meta.llama-3.3-70b-instruct", "messages": [{"role": "user", "content": "hi"}]});
+    let (status, _, text) = post(&gw, "/v1/chat/completions", &chat).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, sent, body) = oci.first()?;
+    assert_eq!(target, "/20231130/actions/v1/chat/completions");
+    let auth = sent[header::AUTHORIZATION].to_str()?;
+    let field = |name: &str| -> Result<String, Box<dyn std::error::Error>> {
+        Ok(auth
+            .split(&format!("{name}=\""))
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .ok_or(format!("no {name} in {auth}"))?
+            .to_string())
+    };
+    assert!(auth.starts_with("Signature version=\"1\","), "{auth}");
+    assert_eq!(field("keyId")?, key_id);
+    assert_eq!(field("algorithm")?, "rsa-sha256");
+    let signed = field("headers")?;
+    assert_eq!(
+        signed,
+        "date (request-target) host content-length content-type x-content-sha256"
+    );
+    // The signature covers what was sent: rebuilt from the request the provider got, it verifies with the public key.
+    let lines: Vec<String> = signed
+        .split(' ')
+        .map(|name| -> Result<String, Box<dyn std::error::Error>> {
+            Ok(match name {
+                "(request-target)" => format!("(request-target): post {target}"),
+                _ => format!("{name}: {}", sent[name].to_str()?),
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    assert_eq!(sent["content-length"], body.len().to_string().as_str());
+    let digest = ring::digest::digest(&ring::digest::SHA256, &body);
+    assert_eq!(
+        eventstream::base64_decode(sent["x-content-sha256"].to_str()?).as_deref(),
+        Some(digest.as_ref())
+    );
+    let der: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+    let pair = RsaKeyPair::from_pkcs8(&eventstream::base64_decode(&der).ok_or("pem")?)
+        .map_err(|_| "key")?;
+    let signature = eventstream::base64_decode(&field("signature")?).ok_or("signature")?;
+    UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, pair.public().as_ref())
+        .verify(lines.join("\n").as_bytes(), &signature)
+        .map_err(|_| "the signature does not verify")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn triton_generate_through_passthrough_is_metered_from_its_token_counts() -> TestResult {
+    let stream = concat!(
+        "data: {\"model_name\":\"llama\",\"text_output\":\"Hel\",\"num_input_tokens\":12,\"num_output_tokens\":1}\n\n",
+        "data: {\"model_name\":\"llama\",\"text_output\":\"lo\",\"num_input_tokens\":12,\"num_output_tokens\":2}\n\n",
+    );
+    let triton = mock(vec![
+        Reply::Json(json!({"model_name": "llama", "model_version": "1", "text_output": "Hi there", "num_input_tokens": 12, "num_output_tokens": 3})),
+        Reply::Bytes("text/event-stream; charset=utf-8", stream.as_bytes().to_vec()),
+    ])
+    .await?;
+    let policy = budgeted(
+        everyone().with_rule_change(|rule| {
+            rule.passthrough = vec![gantry_core::policy::Passthrough {
+                provider: "triton".into(),
+                paths: vec!["/v2/models".into()],
+            }];
+        }),
+        &[("llama", priced(1.0, 2.0, 100))],
+    );
+    let gw = gateway(
+        "triton-generate",
+        vec![ProviderRoute {
+            key: None,
+            ..route("triton", Kind::OpenAi, triton.url(""), &["llama"])
+        }],
+        policy,
+    )?;
+    let generate = json!({"text_input": "hi", "parameters": {"max_tokens": 16, "return_num_input_tokens": true, "return_num_output_tokens": true}});
+    let (status, headers, text) = post(
+        &gw,
+        "/passthrough/triton/v2/models/llama/generate",
+        &generate,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(triton.first()?.0, "/v2/models/llama/generate");
+    let (decision, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(decision["model"], "llama");
+    assert_eq!(tokens(&usage), (Some("reported"), Some(12), Some(3)));
+    assert!(close(cost(&usage), (12.0 + 6.0) / 1e6));
+    let (status, headers, text) = post(
+        &gw,
+        "/passthrough/triton/v2/models/llama/generate_stream",
+        &generate,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (_, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(
+        tokens(&usage),
+        (Some("reported"), Some(12), Some(3)),
+        "{usage} {text}"
+    );
+    // A model without a price under a budget cannot be counted: refused, never sent.
+    let (status, _, text) = post(
+        &gw,
+        "/passthrough/triton/v2/models/unpriced/generate",
+        &generate,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    assert!(text.contains("no_price"), "{text}");
+    assert_eq!(triton.hits.load(Ordering::SeqCst), 2);
     Ok(())
 }

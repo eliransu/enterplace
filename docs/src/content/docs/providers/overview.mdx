@@ -119,6 +119,7 @@ See [Translation](/routing/translation/).
 | `model_ids` | map | none | `bedrock`, `bedrock_converse`: model name to Bedrock model ID. |
 | `role_arn` | string | none | `bedrock`, `bedrock_converse`: an IAM role to sign as. |
 | `project_id` | string | none | `watsonx` only, required: the watsonx.ai project. |
+| `oci_signing` | map | none | `openai` (preset `oci`): `tenancy`, `user`, `fingerprint`, and `key_file` or `key_env` of an OCI API signing key; requests are signed with it instead of a key. See [OCI](/providers/sagemaker-and-replicate/#request-signing-with-an-api-signing-key). |
 
 Any field Gantry does not know is an error in `gantry check`, never ignored. See [Policy file](/governance/policy/).
 

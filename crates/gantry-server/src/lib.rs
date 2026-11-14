@@ -40,6 +40,7 @@ pub mod insights;
 mod jwt;
 mod mcp;
 mod metrics;
+pub mod oci;
 mod policy_api;
 mod realtime;
 mod reload;
@@ -251,6 +252,8 @@ pub struct ProviderRoute {
     pub project_id: Option<String>,
     /// Chat completions requests for its models are sent to the Responses API, translated both ways.
     pub chat_as_responses: bool,
+    /// OCI Generative AI: requests are signed with this API signing key instead of carrying a provider key.
+    pub oci: Option<Arc<oci::Signer>>,
 }
 
 /// What the server needs to start.
@@ -496,6 +499,7 @@ struct Upstream {
     accept_messages: bool,
     project_id: Option<String>,
     chat_as_responses: bool,
+    oci: Option<Arc<oci::Signer>>,
 }
 
 impl Upstream {
@@ -618,6 +622,7 @@ pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError
         accept_messages: route.accept_messages,
         project_id: route.project_id.clone(),
         chat_as_responses: route.chat_as_responses,
+        oci: route.oci.clone(),
     })
 }
 
@@ -668,6 +673,7 @@ fn build(
             accept_messages: false,
             project_id: None,
             chat_as_responses: false,
+            oci: None,
         });
     }
     let console = config.console;
@@ -1788,9 +1794,13 @@ async fn check<'a>(
             seen.translated = shape != Shape::Sent;
             if path == RESPONSES {
                 // The response it gets is the caller's: theirs alone to read back, delete or cancel.
-                let store = serde_json::from_slice::<serde_json::Value>(&bytes)
-                    .is_ok_and(|b| b["store"] == true);
-                parts.extensions.insert(batch::creator(person, seen, store));
+                let sent = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or_default();
+                parts.extensions.insert(batch::creator(
+                    person,
+                    seen,
+                    sent["store"] == true,
+                    sent["background"] == true && sent["stream"] != true,
+                ));
             }
             let mut bytes = bytes;
             if from_responses {
@@ -2329,6 +2339,9 @@ async fn passthrough<'a>(
             native.strip_prefix("/model/")?.split('/').next()?
         } else if p.kind.google_auth() {
             native.split("/models/").nth(1)?.split([':', '/']).next()?
+        } else if let Some(rest) = native.strip_prefix("/v2/models/") {
+            // KServe v2 (Triton): the model is the path segment after /v2/models/.
+            rest.split('/').next()?
         } else {
             return None;
         };
@@ -4438,7 +4451,7 @@ async fn send(
 ) -> Result<Response, Refusal> {
     let plan = parts.extensions.remove::<Plan>();
     let answer_check = parts.extensions.remove::<AnswerCheck>();
-    let creator = parts.extensions.remove::<batch::Creator>();
+    let mut creator = parts.extensions.remove::<batch::Creator>();
     // Gantry's, not the provider's. Dropped unused, it gives back its reservation.
     let mut admitted = parts
         .extensions
@@ -4587,6 +4600,7 @@ async fn send(
     }
     let response = last.unwrap_or_else(|| Err(unknown_route()))?;
     let response = native(
+        &state.client,
         &version.providers[served],
         plan.as_ref(),
         &served_model,
@@ -4604,6 +4618,9 @@ async fn send(
                 .as_ref()
                 .and_then(|p| gantry_core::usage::price_for(&served_model, p.prices()));
             admitted.served_by(&version.providers[served].name, &served_model, price);
+            if let Some(creator) = creator.as_mut() {
+                creator.defer(&mut admitted);
+            }
             spend::Metered::wrap(response, admitted)
         }
         None => response,
@@ -4890,9 +4907,16 @@ fn outbound(
                 .get(model)
                 .map_or(model, String::as_str);
             let (body, _) = native_body(provider, model, bytes, op)?;
-            // Waited for, and cancelled by Replicate if it runs longer, so nothing keeps billing after the answer.
-            headers.insert("prefer", HeaderValue::from_static("wait=60"));
-            headers.insert("cancel-after", HeaderValue::from_static("60s"));
+            if serde_json::from_slice::<serde_json::Value>(&body).is_ok_and(|b| b["stream"] == true)
+            {
+                // Created at once and read from its stream URL (`native`); cancelled by Replicate if it runs longer
+                // than a stream should, so a caller who left does not keep it billing.
+                headers.insert("cancel-after", HeaderValue::from_static("300s"));
+            } else {
+                // Waited for, and cancelled by Replicate if it runs longer, so nothing keeps billing after the answer.
+                headers.insert("prefer", HeaderValue::from_static("wait=60"));
+                headers.insert("cancel-after", HeaderValue::from_static("60s"));
+            }
             let url = match id.split_once(':') {
                 Some(_) => format!("{}/predictions", provider.url),
                 None => {
@@ -5105,6 +5129,18 @@ fn outbound(
     }
     if provider.kind.aws() {
         sign_for_bedrock(provider, &parts.method, &uri, &body, &mut headers)?;
+    }
+    // The caller's own key, when a rule allows it, goes in place of the signature.
+    if let (Some(signer), None) = (&provider.oci, plan.and_then(|p| p.caller_key.as_ref())) {
+        signer
+            .sign(&parts.method, &uri, &body, &mut headers)
+            .map_err(|why| {
+                Refusal::new(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_failed",
+                    format!("Gantry could not sign the request for OCI: {why}. Tell your Gantry admin to check the provider's oci_signing key."),
+                )
+            })?;
     }
     let mut request = axum::http::Request::new(Body::from(body));
     *request.method_mut() = parts.method.clone();
@@ -5360,6 +5396,7 @@ fn json_body(mut response: Response, body: Vec<u8>) -> Response {
 /// and token count answers of providers that translate them in the caller's format, so that usage is read from one
 /// shape and everything after this reads the same. A passthrough answer is the provider's own and left as it is.
 async fn native(
+    client: &Client<HttpsConnector<HttpConnector>, Body>,
     provider: &Upstream,
     plan: Option<&Plan>,
     model: &str,
@@ -5393,6 +5430,15 @@ async fn native(
         let created = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
+        let asked: serde_json::Value = serde_json::from_slice(request).unwrap_or_default();
+        if asked["stream"] == true {
+            let key = match plan.and_then(|p| p.caller_key.as_ref()) {
+                Some(caller) => key_header(provider.kind, caller).ok(),
+                None => provider.key.clone(),
+            };
+            return replicate_stream(client, provider, key, &prediction, model, created, response)
+                .await;
+        }
         let finished = matches!(
             prediction["status"].as_str(),
             Some("starting" | "processing")
@@ -5409,20 +5455,6 @@ async fn native(
                     err.to_string(),
                 )
             })?;
-        let asked: serde_json::Value = serde_json::from_slice(request).unwrap_or_default();
-        if asked["stream"] == true {
-            let stream = gantry_core::replicate::completion_to_stream(
-                &completion,
-                translate::include_usage(&asked),
-            );
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/event-stream"),
-            );
-            response.headers_mut().remove(header::CONTENT_LENGTH);
-            *response.body_mut() = Body::from(stream);
-            return Ok(response);
-        }
         return Ok(json_body(response, completion.to_string().into_bytes()));
     }
     if provider.kind.aws() {
@@ -5531,6 +5563,153 @@ async fn native(
     Ok(json_body(response, reshaped.to_string().into_bytes()))
 }
 
+/// A streaming prediction read from its `urls.stream` (server-sent events) and passed on as chat chunks while the
+/// model writes. When the stream is done, the prediction (`urls.get`) is read once for its token counts, which end
+/// the stream as its usage chunk. The key goes only to Replicate's own hosts (or the provider's).
+async fn replicate_stream(
+    client: &Client<HttpsConnector<HttpConnector>, Body>,
+    provider: &Upstream,
+    key: Option<(HeaderName, HeaderValue)>,
+    prediction: &serde_json::Value,
+    model: &str,
+    created: u64,
+    mut response: Response,
+) -> Result<Response, Refusal> {
+    let failed =
+        |message: String| Refusal::new(StatusCode::BAD_GATEWAY, "upstream_failed", message);
+    let host_of = |url: &str| {
+        url.parse::<Uri>()
+            .ok()
+            .and_then(|u| u.host().map(String::from))
+    };
+    let ours = host_of(&provider.url);
+    let trusted = |url: &str| {
+        host_of(url).is_some_and(|host| {
+            host == "replicate.com"
+                || host.ends_with(".replicate.com")
+                || Some(&host) == ours.as_ref()
+        })
+    };
+    let Some(stream_url) = prediction["urls"]["stream"].as_str().filter(|u| trusted(u)) else {
+        return Err(failed(format!(
+            "Replicate gave no stream URL for model \"{model}\": the model does not stream. Send the request without \"stream\": true."
+        )));
+    };
+    let get_url = prediction["urls"]["get"]
+        .as_str()
+        .filter(|u| trusted(u))
+        .map(String::from);
+    let request = |url: &str, accept: &'static str| {
+        let mut request = axum::http::Request::new(Body::empty());
+        *request.uri_mut() = url
+            .parse::<Uri>()
+            .map_err(|_| failed("Replicate gave a URL that cannot be read.".into()))?;
+        request
+            .headers_mut()
+            .insert(header::ACCEPT, HeaderValue::from_static(accept));
+        if let Some((name, value)) = &key {
+            request.headers_mut().insert(name.clone(), value.clone());
+        }
+        Ok::<_, Refusal>(request)
+    };
+    let events = client
+        .request(request(stream_url, "text/event-stream")?)
+        .await
+        .map_err(|err| {
+            failed(format!(
+                "Replicate's stream could not be reached: {err}. Try again."
+            ))
+        })?;
+    if !events.status().is_success() {
+        return Err(failed(format!(
+            "Replicate's stream answered {}. Try again.",
+            events.status()
+        )));
+    }
+    let metrics = get_url.map(|url| (client.clone(), request(&url, "application/json")));
+    let converter = gantry_core::replicate::PredictionStream::new(
+        prediction["id"].as_str().unwrap_or("replicate"),
+        model,
+        created,
+    );
+    let state = (Some(Body::new(events.into_body())), converter, metrics);
+    let body =
+        futures_util::stream::unfold(state, |(upstream, mut converter, metrics)| async move {
+            let mut upstream = upstream?;
+            let mut pending = Vec::new();
+            while let Some(Ok(frame)) = upstream.frame().await {
+                let Ok(data) = frame.into_data() else {
+                    continue;
+                };
+                let out = converter.feed(&data);
+                // Replicate keeps the connection open a while after `done`: the answer ends here, with
+                // the text that came in the same frame.
+                if converter.done() {
+                    pending = out;
+                    break;
+                }
+                if !out.is_empty() {
+                    return Some((
+                        Ok::<_, std::convert::Infallible>(Bytes::from(out)),
+                        (Some(upstream), converter, metrics),
+                    ));
+                }
+            }
+            let mut usage = None;
+            if converter.done() {
+                if let Some((client, Ok(request))) = metrics {
+                    if let Ok(answer) = client.request(request).await {
+                        if let Ok(body) = answer.into_body().collect().await {
+                            let prediction: serde_json::Value =
+                                serde_json::from_slice(&body.to_bytes()).unwrap_or_default();
+                            usage = gantry_core::replicate::usage(&prediction);
+                        }
+                    }
+                }
+            }
+            let mut last = pending;
+            last.extend(converter.finish(usage));
+            Some((Ok(Bytes::from(last)), (None, converter, None)))
+        });
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    response.headers_mut().remove(header::CONTENT_LENGTH);
+    *response.body_mut() = Body::from_stream(body);
+    Ok(response)
+}
+
+/// A Replicate stream for a client that did not ask for usage: the usage chunk Gantry metered is dropped.
+fn without_usage_chunk(response: Response) -> Response {
+    let mut line = Vec::new();
+    map_body(response, "text/event-stream", move |input| {
+        let mut out = Vec::new();
+        let keep = |line: &[u8], out: &mut Vec<u8>| {
+            let usage_only = line.starts_with(b"data: {")
+                && serde_json::from_slice::<serde_json::Value>(&line[6..])
+                    .is_ok_and(|e| e["usage"].is_object() && e["choices"] == serde_json::json!([]));
+            if !usage_only {
+                out.extend_from_slice(line);
+                out.push(b'\n');
+            }
+        };
+        match input {
+            Some(mut bytes) => {
+                while let Some(end) = bytes.iter().position(|&b| b == b'\n') {
+                    line.extend_from_slice(&bytes[..end]);
+                    bytes = &bytes[end + 1..];
+                    keep(&std::mem::take(&mut line), &mut out);
+                }
+                line.extend_from_slice(bytes);
+            }
+            None if !line.is_empty() => keep(&std::mem::take(&mut line), &mut out),
+            None => {}
+        }
+        Ok(out)
+    })
+}
+
 /// An answer in the provider's own format (by the `kind` of provider that gave it: messages, Gemini, Converse,
 /// Cohere, watsonx) as a chat completions one, when the request was translated. `include_usage` is set then: whether
 /// the client asked for usage in its stream. `model` is the caller's name for the model, for answers that carry none.
@@ -5543,8 +5722,17 @@ async fn to_chat(
 ) -> Result<Response, Refusal> {
     // Gemini may send no responseId; a strict chat client refuses "id": null, and the decision ID is unique.
     let fallback_id = format!("chatcmpl-{decision}");
-    // A Replicate prediction was made a chat answer already (`native`).
-    let Some(include_usage) = include_usage.filter(|_| kind != Kind::Replicate) else {
+    // A Replicate prediction was made a chat answer already (`native`), its stream with the usage it metered.
+    if kind == Kind::Replicate {
+        return Ok(
+            if include_usage == Some(false) && is_type(&response, "text/event-stream") {
+                without_usage_chunk(response)
+            } else {
+                response
+            },
+        );
+    }
+    let Some(include_usage) = include_usage else {
         return Ok(response);
     };
     let created = std::time::SystemTime::now()

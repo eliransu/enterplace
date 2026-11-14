@@ -46,7 +46,7 @@ one repository. How a release is made: RELEASING.md.
   is LiteLLM's (MIT price map), and the docs say so. Sora 2 is shut down at OpenAI since 2026-09-24; its prices stay.
 - `GET`, `DELETE` and `cancel` on `/v1/responses/<id>`, and `GET /v1/responses/<id>/input_items`, for the response's
   creator alone (others get 404), at OpenAI or Azure. A response translated for another provider is kept by Gantry,
-  for an hour in memory, when the request says `"store": true`.
+  for an hour, when the request says `"store": true`.
 - Async jobs: `POST /v1/async/<route>` runs a model request in the background on the governed route and
   `GET /v1/async/<route>/<id>` reads its answer, held for its submitter for an hour (`x-gantry-async-ttl`).
 - Azure: images, transcription, speech and legacy completions on deployment paths, and the v1 API (a `url` ending in
@@ -56,6 +56,22 @@ one repository. How a release is made: RELEASING.md.
   and `replicate` (predictions translated from chat, waited for and cancelled after 60 seconds). Presets `sagemaker`,
   `replicate`, `oci` (OCI Generative AI, API key) and `triton` (Triton's OpenAI-compatible frontend).
 - A Bedrock stream through signed passthrough is charged the usage its events report, not its reservation.
+- With a store, async job answers and translated responses kept with `store: true` are kept in Postgres (table
+  `gantry_batches_held`, namespace `batches`, migration 2), sealed under the master key when there is one, so any
+  replica answers for them; without a store they stay in the memory of the replica that took them.
+- Background responses (`background: true`): the queued answer charges nothing and keeps its reservation; what the
+  response used is charged once, the first time Gantry sees it ended (read by its creator, cancelled, deleted, or polled
+  once a minute), on one replica only with a store.
+- Replicate streams live: `stream: true` creates the prediction with `"stream": true` and passes each event of its
+  `urls.stream` on as a chat chunk, with usage read from the prediction when it is done. Input fields follow each
+  model family's schema on Replicate (Meta, IBM Granite, Anthropic, Google, OpenAI), and a field a family has no
+  place for is refused by name. **Changed:** `temperature`, `top_p`, `seed` and `stop` to an Anthropic model on
+  Replicate, and `seed` and `stop` to a Google or OpenAI one, are now refused instead of sent.
+- OCI Generative AI request signing: `oci_signing` (tenancy, user, fingerprint, and `key_file` or `key_env`) signs
+  each request with an OCI API signing key, in place of an API key.
+- Triton's generate extension through passthrough (`/v2/models/<model>/generate` and `/generate_stream`): the model
+  is decided from the path and metered from its `num_input_tokens` and `num_output_tokens` when it reports them; an
+  unpriced one under a budget is refused with `no_price`.
 - Files written into a container are read by the request guardrails, and files read back from one by the answer
   guardrails, when they are text. Video requests take an `input_reference` image, as multipart or JSON, with the
   prompt guarded; Veo gets the image in its instance.

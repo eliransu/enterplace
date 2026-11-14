@@ -51,6 +51,9 @@ impl Usage {
         if answer["usageMetadata"].is_object() {
             return Some(Self::from_gemini(&answer["usageMetadata"]));
         }
+        if let Some(triton) = Self::from_triton(&answer) {
+            return Some(triton);
+        }
         let usage = &answer["usage"];
         if !usage.is_object() {
             return None;
@@ -72,6 +75,21 @@ impl Usage {
         let mut found = Self::default();
         found.merge_anthropic(usage);
         Some(found)
+    }
+
+    /// Reads the token counts of a Triton generate answer, which a model reports as its `num_input_tokens` and
+    /// `num_output_tokens` outputs (vLLM's backend, when the request sets `return_num_input_tokens` and
+    /// `return_num_output_tokens`). None when it reports neither.
+    pub fn from_triton(answer: &Value) -> Option<Self> {
+        let input = answer["num_input_tokens"].as_u64();
+        let output = answer["num_output_tokens"].as_u64();
+        (answer.get("text_output").is_some() && (input.is_some() || output.is_some())).then(|| {
+            Self {
+                input: input.unwrap_or_default(),
+                output: output.unwrap_or_default(),
+                ..Self::default()
+            }
+        })
     }
 
     /// Reads an OpenAI `usage` object.
@@ -303,6 +321,19 @@ impl UsageScanner {
         }
         // Most events carry text, not usage, and need no parsing. A quoted key cannot occur inside a JSON
         // string, where quotes are escaped, so this never skips a line that holds usage.
+        // Triton's generate_stream: each response counts the tokens it added, and the prompt.
+        let has = |key: &[u8]| data.windows(key.len()).any(|w| w == key);
+        if has(b"\"num_output_tokens\"") || has(b"\"num_input_tokens\"") {
+            if let Some(more) = serde_json::from_slice::<Value>(data)
+                .ok()
+                .and_then(|event| Usage::from_triton(&event))
+            {
+                let usage = self.usage.get_or_insert_default();
+                usage.input = usage.input.max(more.input);
+                usage.output += more.output;
+            }
+            return;
+        }
         if !data.windows(7).any(|w| w == b"\"usage\"")
             && !data.windows(15).any(|w| w == b"\"usageMetadata\"")
         {
