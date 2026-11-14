@@ -29,6 +29,18 @@ async fn openai_session(mut socket: WebSocket) {
         let ServerMessage::Text(text) = message else {
             continue;
         };
+        // A text item is answered with the transcript of saying it back, so a test controls what the model "said".
+        if text.contains("conversation.item.create") {
+            let said = serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|e| e["item"]["content"][0]["text"].as_str().map(String::from))
+                .unwrap_or_default();
+            let done = serde_json::json!({"type": "response.output_audio_transcript.done", "transcript": said});
+            let _ = socket
+                .send(ServerMessage::Text(done.to_string().into()))
+                .await;
+            continue;
+        }
         if text.contains("setup") {
             let _ = socket
                 .send(ServerMessage::Text(r#"{"setupComplete":{}}"#.into()))
@@ -74,6 +86,10 @@ struct Gateway {
 }
 
 async fn gateway(name: &str, budget: &str) -> Result<Gateway, Error> {
+    gateway_with(name, "", budget).await
+}
+
+async fn gateway_with(name: &str, top: &str, budget: &str) -> Result<Gateway, Error> {
     let port = provider().await?;
     let dir = std::env::temp_dir().join(format!("gantry-realtime-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -99,7 +115,7 @@ providers:
 prices:
   rt-model: {{ input: 1000, output: 2000 }}
   live-model: {{ input: 1000, output: 2000 }}
-rules:
+{top}rules:
   - name: data
     principals: {{ team: data }}
     models: [rt-model, live-model]
@@ -343,5 +359,62 @@ async fn a_gemini_live_session_is_decided_on_its_setup_and_metered() -> Result<(
     .await?;
     assert_eq!(usage["input_tokens"], 100);
     assert_eq!(usage["output_tokens"], 50);
+    Ok(())
+}
+
+fn item(text: &str) -> Message {
+    let event = serde_json::json!({"type": "conversation.item.create", "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}});
+    Message::Text(event.to_string().into())
+}
+
+#[tokio::test]
+async fn guardrails_drop_a_blocked_text_event_and_end_the_session_on_a_blocked_transcript()
+-> Result<(), Error> {
+    let top = "guardrails:\n  - name: no-secrets\n    type: secrets\n    action: block\n  - name: no-pii-said\n    type: pii\n    action: block\n    on: [answer]\n";
+    let gw = gateway_with(
+        "guarded",
+        top,
+        "    guardrails: [no-secrets, no-pii-said]\n",
+    )
+    .await?;
+    let mut socket = connect(gw.port, "/v1/realtime?model=rt-model", DANA).await?;
+
+    // A caller's text event with a secret is dropped: an error comes back and the session goes on.
+    socket
+        .send(item("deploy with AKIAIOSFODNN7EXAMPLE"))
+        .await?;
+    let error = next_text(&mut socket).await?.ok_or("no error event")?;
+    assert!(
+        error.contains("guardrail_blocked") && !error.contains("AKIA"),
+        "{error}"
+    );
+    socket.send(item("hello")).await?;
+    let said = next_text(&mut socket).await?.ok_or("no transcript")?;
+    assert!(
+        said.contains("output_audio_transcript.done") && said.contains("hello"),
+        "{said}"
+    );
+
+    // The model saying an address (the transcript) ends the session.
+    socket.send(item("mail maya@corp.example.com")).await?;
+    let mut ended = false;
+    while let Some(text) = next_text(&mut socket).await? {
+        ended |= text.contains("guardrail_blocked");
+    }
+    assert!(ended, "the session was not ended by the guardrail");
+    let session = wait_for(&gw.audit, |r| r["event"] == "realtime_session").await?;
+    assert_eq!(session["ended_by"], "guardrail");
+    let kinds: Vec<&str> = session["guardrails"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e["kind"].as_str())
+        .collect();
+    assert_eq!(kinds, ["aws_access_key", "email_address"]);
+    let text = std::fs::read_to_string(&gw.audit)?;
+    assert!(
+        !text.contains("maya@corp") && !text.contains("AKIA"),
+        "no content is recorded"
+    );
     Ok(())
 }

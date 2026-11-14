@@ -4398,7 +4398,7 @@ async fn transformed(
     (out, None)
 }
 
-async fn ask(
+pub(crate) async fn ask(
     state: &AppState,
     action: guard::Action,
     hook: &guard::Webhook,

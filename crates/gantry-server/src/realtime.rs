@@ -8,6 +8,13 @@
 //! usage record each. A kill switch, checked every second, or a budget a response spent ends the session. The session
 //! is recorded when it ends: who, which model, how long, how many responses, what they cost, and why it ended. Never
 //! its content.
+//!
+//! The rule's guardrails read each text the session carries: the caller's text events (`conversation.item.create`,
+//! instructions, Gemini's `clientContent` and `realtimeInput.text`) and the transcripts of what was said (OpenAI's
+//! input transcription and output transcript, Gemini's input and output transcription and model text). A caller's text
+//! event a guardrail blocks is dropped, with an error event (OpenAI) or the end of the session (Gemini, which has no
+//! error event); one it masks goes on masked. A transcript is of speech already heard, so a block there ends the
+//! session. What they found is recorded with the session, without the text.
 
 use std::{
     sync::Arc,
@@ -31,6 +38,7 @@ use futures_util::{SinkExt, StreamExt};
 use gantry_core::{
     audit,
     config::Kind,
+    guard::{self, Guardrail},
     policy::{Policy, Principal, Rule},
     usage::{Usage, price_for},
 };
@@ -124,6 +132,8 @@ struct Open {
     budget_shadow: Option<&'static str>,
     /// What observe mode let through at connect, for Gemini's record, written once the setup names the model.
     would_refuse: Vec<Value>,
+    /// What the guardrails found in the session's texts, for its record.
+    found: Vec<guard::AuditEntry>,
 }
 
 async fn open(
@@ -343,6 +353,7 @@ async fn admit<'a>(
         user_agent: batch::user_agent_of(headers),
         budget_shadow,
         would_refuse: seen.would_refuse.clone(),
+        found: Vec::new(),
     })
 }
 
@@ -497,11 +508,44 @@ async fn session(
         .collect();
     let mut tick = tokio::time::interval(KILL_CHECK);
     let (mut responses, mut charged) = (0usize, 0.0);
+    let guards: Vec<Guardrail> = version
+        .policy
+        .as_ref()
+        .and_then(|p| crate::observed_guards(p, &open.rule.guardrails))
+        .unwrap_or_else(|| open.rule.guardrails.clone());
+    let mut found: Vec<guard::AuditEntry> = Vec::new();
     let ended_by = loop {
         tokio::select! {
             message = down_rx.next() => match message {
                 Some(Ok(Down::Text(text))) => {
-                    if up_tx.send(Up::Text(text.as_str().into())).await.is_err() {
+                    let mut text = text.as_str().to_string();
+                    if !guards.is_empty()
+                        && let Some((mut event, true, pointers)) = event_texts(api, &text, true)
+                    {
+                        let verdict = screen(&state, &guards, &open, &decision, api, true, &event, &pointers).await;
+                        found.extend(verdict.audit.iter().cloned());
+                        if let Some(blocked) = verdict.blocked {
+                            let message = format!("guardrail \"{}\" refused this text event, so it was not sent. Remove what it names and send it again.", blocked.guardrail);
+                            if api == Api::Gemini {
+                                tell(&mut down_tx, api, &decision, guard::BLOCKED_CODE, &message).await;
+                                break "guardrail";
+                            }
+                            let event = json!({ "type": "error", "error": { "type": "gantry_error", "code": guard::BLOCKED_CODE, "message": format!("{message} Decision {decision}."), "decision": decision } });
+                            if down_tx.send(Down::Text(event.to_string().into())).await.is_err() {
+                                break "client";
+                            }
+                            continue;
+                        }
+                        if verdict.changed {
+                            for (i, pointer) in pointers.iter().enumerate() {
+                                if let (Some(slot), Some(masked)) = (event.pointer_mut(pointer), verdict.body.pointer(&format!("/messages/{i}/content"))) {
+                                    *slot = masked.clone();
+                                }
+                            }
+                            text = event.to_string();
+                        }
+                    }
+                    if up_tx.send(Up::Text(text.into())).await.is_err() {
                         break "provider";
                     }
                 }
@@ -516,6 +560,16 @@ async fn session(
             },
             message = up_rx.next() => match message {
                 Some(Ok(Up::Text(text))) => {
+                    if !guards.is_empty()
+                        && let Some((event, request, pointers)) = event_texts(api, text.as_str(), false)
+                    {
+                        let verdict = screen(&state, &guards, &open, &decision, api, request, &event, &pointers).await;
+                        found.extend(verdict.audit.iter().cloned());
+                        if let Some(blocked) = verdict.blocked {
+                            tell(&mut down_tx, api, &decision, guard::BLOCKED_CODE, &format!("guardrail \"{}\" refused what was said in this session, so it ends here.", blocked.guardrail)).await;
+                            break "guardrail";
+                        }
+                    }
                     let usage = usage_of(api, text.as_str());
                     if down_tx.send(Down::Text(text.as_str().into())).await.is_err() {
                         break "client";
@@ -574,6 +628,7 @@ async fn session(
         }
     };
     let _ = up_tx.send(Up::Close(None)).await;
+    open.found = found;
     end(
         &state,
         &version,
@@ -588,6 +643,141 @@ async fn session(
         ended_by,
     )
     .await;
+}
+
+/// The text a realtime event carries for the guardrails: the event, whether it is request side (the caller's words,
+/// or the transcript of them) and the JSON pointers of its texts. `None` for an event with no text they read.
+fn event_texts(api: Api, text: &str, from_caller: bool) -> Option<(Value, bool, Vec<String>)> {
+    let event: Value = serde_json::from_str(text).ok()?;
+    let mut pointers = Vec::new();
+    let list = |v: &Value| v.as_array().map_or(0, Vec::len);
+    let request = match (api, from_caller) {
+        (Api::OpenAi, true) => {
+            match event["type"].as_str() {
+                Some("conversation.item.create") => {
+                    for j in 0..list(&event["item"]["content"]) {
+                        if event["item"]["content"][j]["text"].is_string() {
+                            pointers.push(format!("/item/content/{j}/text"));
+                        }
+                    }
+                }
+                Some("session.update") if event["session"]["instructions"].is_string() => {
+                    pointers.push("/session/instructions".into());
+                }
+                Some("response.create") if event["response"]["instructions"].is_string() => {
+                    pointers.push("/response/instructions".into());
+                }
+                _ => {}
+            }
+            true
+        }
+        (Api::OpenAi, false) => match event["type"].as_str() {
+            Some("conversation.item.input_audio_transcription.completed") => {
+                pointers.push("/transcript".into());
+                true
+            }
+            Some("response.output_audio_transcript.done" | "response.audio_transcript.done") => {
+                pointers.push("/transcript".into());
+                false
+            }
+            Some("response.output_text.done" | "response.text.done") => {
+                pointers.push("/text".into());
+                false
+            }
+            _ => false,
+        },
+        (Api::Gemini, true) => {
+            for i in 0..list(&event["clientContent"]["turns"]) {
+                for j in 0..list(&event["clientContent"]["turns"][i]["parts"]) {
+                    if event["clientContent"]["turns"][i]["parts"][j]["text"].is_string() {
+                        pointers.push(format!("/clientContent/turns/{i}/parts/{j}/text"));
+                    }
+                }
+            }
+            if event["realtimeInput"]["text"].is_string() {
+                pointers.push("/realtimeInput/text".into());
+            }
+            true
+        }
+        (Api::Gemini, false) => {
+            let content = &event["serverContent"];
+            if content["inputTranscription"]["text"].is_string() {
+                // The caller's speech: checked as a request, alone.
+                return Some((
+                    event,
+                    true,
+                    vec!["/serverContent/inputTranscription/text".into()],
+                ));
+            }
+            if content["outputTranscription"]["text"].is_string() {
+                pointers.push("/serverContent/outputTranscription/text".into());
+            }
+            // ponytail: model text and transcripts arrive in pieces, each read alone; a finding split across two is
+            // missed. Join them per turn when that matters.
+            for j in 0..list(&content["modelTurn"]["parts"]) {
+                if content["modelTurn"]["parts"][j]["text"].is_string() {
+                    pointers.push(format!("/serverContent/modelTurn/parts/{j}/text"));
+                }
+            }
+            false
+        }
+    };
+    (!pointers.is_empty()).then_some((event, request, pointers))
+}
+
+/// The rule's guardrails that read this side, on the texts at `pointers`: built-in ones, then each webhook in order.
+#[allow(clippy::too_many_arguments)]
+async fn screen(
+    state: &AppState,
+    guards: &[Guardrail],
+    open: &Open,
+    decision: &str,
+    api: Api,
+    request: bool,
+    event: &Value,
+    pointers: &[String],
+) -> guard::Verdict {
+    let role = if request { "user" } else { "assistant" };
+    let view = json!({
+        "messages": pointers
+            .iter()
+            .map(|p| json!({"role": role, "content": event.pointer(p).cloned().unwrap_or_default()}))
+            .collect::<Vec<_>>()
+    });
+    let mut verdict = if request {
+        guard::check(view, guards)
+    } else {
+        guard::check_reply(view, guards)
+    };
+    for guardrail in guards {
+        let guard::Check::Webhook(hook) = &guardrail.check else {
+            continue;
+        };
+        let reads = if request {
+            guardrail.on.request
+        } else {
+            guardrail.on.answer
+        };
+        if !reads || verdict.blocked.is_some() {
+            continue;
+        }
+        let sent = guard::WebhookRequest::new(
+            decision,
+            &open.person.name,
+            &open.person.team,
+            api.path(),
+            &verdict.body,
+        );
+        let answer = crate::ask(state, guardrail.action, hook, &sent).await;
+        if let Some(cause) = verdict.merge_answer(guardrail, &sent, answer) {
+            eprintln!("gantry: decision {decision}: in the realtime session: {cause}");
+        }
+    }
+    // A transcript cannot be rewritten after it was spoken: what a guardrail masks there is only recorded.
+    if !request {
+        verdict.changed = false;
+    }
+    verdict
 }
 
 /// Reads a Gemini Live client's first message, decides the model its setup names, and records the decision.
@@ -753,6 +943,12 @@ async fn end(
     record.insert("responses".into(), responses.into());
     record.insert("charged_usd".into(), charged.into());
     record.insert("ended_by".into(), ended_by.into());
+    if !open.found.is_empty() {
+        record.insert(
+            "guardrails".into(),
+            serde_json::to_value(&open.found).unwrap_or_default(),
+        );
+    }
     record.insert(
         "policy_sha256".into(),
         version.policy_sha256.as_str().into(),
@@ -848,4 +1044,37 @@ async fn dial(
     .map_err(|_| "the provider did not accept the WebSocket in time".to_string())?
     .map(|(socket, _)| socket)
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    #[test]
+    fn gemini_live_texts_and_transcripts_are_found_on_their_side() {
+        let client = r#"{"clientContent":{"turns":[{"role":"user","parts":[{"text":"hi"},{"inlineData":{}}]}]},"realtimeInput":{"text":"there"}}"#;
+        let found = event_texts(Api::Gemini, client, true).map(|(_, r, p)| (r, p));
+        assert_eq!(
+            found,
+            Some((
+                true,
+                vec![
+                    "/clientContent/turns/0/parts/0/text".to_string(),
+                    "/realtimeInput/text".to_string()
+                ]
+            ))
+        );
+        let heard = r#"{"serverContent":{"inputTranscription":{"text":"my card"}}}"#;
+        assert_eq!(
+            event_texts(Api::Gemini, heard, false).map(|(_, r, _)| r),
+            Some(true)
+        );
+        let said = r#"{"serverContent":{"outputTranscription":{"text":"ok"},"modelTurn":{"parts":[{"text":"ok"}]}}}"#;
+        assert_eq!(
+            event_texts(Api::Gemini, said, false).map(|(_, r, p)| (r, p.len())),
+            Some((false, 2))
+        );
+        assert!(event_texts(Api::Gemini, r#"{"setupComplete":{}}"#, false).is_none());
+        assert!(event_texts(Api::OpenAi, r#"{"type":"response.create"}"#, true).is_none());
+    }
 }
