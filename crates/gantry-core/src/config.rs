@@ -59,6 +59,8 @@ const KNOWN: &[&str] = &[
     "budget",
     "usd",
     "per",
+    "sliding",
+    "per_org",
     "rate",
     "rpm",
     "cache",
@@ -624,7 +626,7 @@ struct PassthroughFile {
 #[serde(deny_unknown_fields)]
 struct BudgetFile {
     usd: f64,
-    per: String,
+    per: PerFile,
     #[serde(default)]
     tz: Option<String>,
     /// In a rule or a profile: count only these models.
@@ -633,6 +635,30 @@ struct BudgetFile {
     /// In a rule or a profile: until then the budget records what it would refuse and refuses nothing.
     #[serde(default)]
     shadow_until: Option<String>,
+}
+
+/// A budget's `per`: a calendar period (`month`, `6h`), or `{ sliding: 24h }` for a sliding window.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PerFile {
+    Calendar(String),
+    Sliding(SlidingFile),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SlidingFile {
+    sliding: String,
+}
+
+impl PerFile {
+    /// As [`Period::parse`] reads it.
+    fn text(&self) -> String {
+        match self {
+            PerFile::Calendar(per) => per.clone(),
+            PerFile::Sliding(s) => format!("sliding {}", s.sliding),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1128,7 +1154,7 @@ pub fn issuable_expiry(text: &str) -> Result<(), String> {
 
 /// Reads a budget's `per`, `tz` and `usd`, or says what is wrong with them. `at` names where the budget is written.
 fn budget_of(budget: &BudgetFile, at: &str, errors: &mut Vec<String>) -> Option<Budget> {
-    let per = match Period::parse(&budget.per, budget.tz.as_deref()) {
+    let per = match Period::parse(&budget.per.text(), budget.tz.as_deref()) {
         Ok(per) => Some(per),
         Err(problem) => {
             errors.push(format!("{at}: {problem}"));
@@ -5877,6 +5903,30 @@ roles:
         assert!(!role.may(crate::policy::Permission::IssueKeys));
         assert!(
             matches!(policy.decide(&who, "o3"), Decision::Allow(r) if r.name == "acme-payments")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_sliding_budget_loads_beside_a_calendar_one_and_a_wrong_one_is_named() -> TestResult {
+        let sliding = HIERARCHY.replace(
+            "{ tag: search, budget: { usd: 300, per: week } }",
+            "{ tag: search, budget: [{ usd: 300, per: week }, { usd: 80, per: { sliding: 24h } }] }",
+        );
+        let loaded = check("sliding", &sliding, None)?.map_err(|e| e.join("\n"))?;
+        let tag = loaded
+            .policy
+            .scope_limits()
+            .iter()
+            .find(|l| l.name == "search")
+            .ok_or("no tag entry")?;
+        let pers: Vec<String> = tag.budgets.iter().map(|b| b.per.word()).collect();
+        assert_eq!(pers, ["week", "sliding:24h"]);
+        let bad = sliding.replace("{ sliding: 24h }", "{ sliding: 3mo }");
+        let errors = errors(check("sliding-bad", &bad, None)?)?;
+        assert!(
+            errors.contains("A sliding window is a fixed length"),
+            "{errors}"
         );
         Ok(())
     }

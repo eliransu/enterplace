@@ -182,6 +182,9 @@ async fn records_carry_the_agent_and_latency_and_a_failed_upstream_is_an_error()
             .is_some_and(|c| c.starts_with("upstream_")),
         "{failed}"
     );
+    // A failure that was not retried still names its provider, so provider_errors alerts count it.
+    assert_eq!(failed["provider"], "gone", "{failed}");
+    assert_eq!(failed["tries"], 1, "{failed}");
     gw.log.flush();
     let rows = gantry_core::insights::fold_chain(&audit)?;
     let row = rows.iter().find(|r| r.id == id).ok_or("no row")?;

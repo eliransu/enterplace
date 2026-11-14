@@ -428,6 +428,8 @@ pub struct Host<'a> {
     /// request log). A binary that removes records from the disk, as one shipping sealed segments elsewhere does,
     /// removes none past it: the copier reads them from the disk, so their rows would never be copied.
     pub request_index: Option<Arc<std::sync::atomic::AtomicU64>>,
+    /// The policy in force, after every reload. Empty while `extend` runs: read it later.
+    pub policy_now: crate::PolicyNow,
 }
 
 /// The request index of every gateway on the store, and where bodies are kept, when there are.
@@ -590,6 +592,7 @@ pub fn governed_with(
     // First run: no one can sign in to the console yet, so a one-time link makes the first admin.
     let setup =
         (!loaded.policy.entries().any(|(_, p)| p.admin)).then(|| gantry_core::id::random_hex(24));
+    let policy_now = crate::PolicyNow::default();
     let extension = extend(Host {
         postgres: postgres.as_ref(),
         keys: &loaded.keys_path,
@@ -597,6 +600,7 @@ pub fn governed_with(
         audit: &log,
         audit_path: &loaded.audit_path,
         request_index,
+        policy_now: policy_now.clone(),
     })?;
     let config = Config {
         providers,
@@ -631,6 +635,7 @@ pub fn governed_with(
         loaded.keys_file_found.then(|| loaded.keys_sha256.clone()),
     );
     let (router, reloader, metrics) = build(config, |live| {
+        policy_now.set(live);
         Some(Arc::new(Reloader {
             policy_path: policy_path.to_path_buf(),
             keys_path: loaded.keys_path.clone(),

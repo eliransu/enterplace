@@ -38,7 +38,17 @@ pub(crate) fn quiet(
     url: &str,
     features: &[&str],
 ) -> Result<(Gateway, Arc<Exporter>), Error> {
-    let gw = gateway_with(
+    quiet_policy(test, url, features, POLICY)
+}
+
+/// `quiet`, serving `policy`.
+pub(crate) fn quiet_policy(
+    test: &str,
+    url: &str,
+    features: &[&str],
+    policy: &str,
+) -> Result<(Gateway, Arc<Exporter>), Error> {
+    let gw = gateway_policy(
         test,
         url,
         &licensed(features),
@@ -47,6 +57,7 @@ pub(crate) fn quiet(
             ("GANTRY_EXPORT_TICK_MS", "3600000"),
             ("HOSTNAME", "pod-0"),
         ],
+        policy,
     )?;
     let exporter = registry()
         .lock()

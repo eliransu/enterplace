@@ -415,6 +415,25 @@ struct Snapshot {
 /// The version in use. Requests take a snapshot of it. A reload puts a new one in place.
 type Live = Arc<RwLock<Arc<Snapshot>>>;
 
+/// The policy in force now, reloads included, for a binary that embeds the gateway (an alert on a share of a
+/// budget asks `Policy::applied`). Answers `None` until the gateway is built, and when it serves without a policy.
+#[derive(Clone, Default)]
+pub struct PolicyNow(Arc<std::sync::OnceLock<Live>>);
+
+impl PolicyNow {
+    pub fn with<R>(&self, read: impl FnOnce(&Policy) -> R) -> Option<R> {
+        let snapshot = match self.0.get()?.read() {
+            Ok(live) => live.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        snapshot.policy.as_ref().map(read)
+    }
+
+    fn set(&self, live: &Live) {
+        let _ = self.0.set(live.clone());
+    }
+}
+
 #[derive(Clone)]
 struct AppState {
     // One pooled client for the life of the process: connections to the provider are reused across requests.
@@ -2805,6 +2824,13 @@ fn upstream_failed(
     record.insert("time".into(), gantry_core::audit::timestamp().into());
     record.insert("status".into(), failure.status.as_u16().into());
     record.insert("code".into(), failure.code.into());
+    if let Some(tried) = failure.record.as_deref() {
+        for field in ["provider", "tries"] {
+            if let Some(value) = tried.get(field) {
+                record.insert(field.into(), value.clone());
+            }
+        }
+    }
     record.insert(
         "latency_ms".into(),
         u64::try_from(arrived.elapsed().as_millis())
@@ -4241,7 +4267,19 @@ async fn send(
     if attempts.len() > 1 {
         record_attempts(state, decision, &attempts);
     }
-    let response = last.unwrap_or_else(|| Err(unknown_route()))?;
+    let response = match last {
+        Some(Ok(response)) => response,
+        // No provider answered: the upstream error record names the last one tried and how many tries there were,
+        // so the request log and provider_errors alerts count it whether or not it was retried.
+        Some(Err(mut failure)) => {
+            failure.record = Some(Box::new(serde_json::json!({
+                "provider": attempts.last().map(|(p, _)| p.as_str()).unwrap_or_default(),
+                "tries": attempts.len(),
+            })));
+            return Err(failure);
+        }
+        None => return Err(unknown_route()),
+    };
     let response = native(&version.providers[served], response).await?;
     // Usage is read in the provider's format (Bedrock's already decoded) before any translation, and settled with
     // the provider that answered, a fallback included.

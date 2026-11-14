@@ -162,7 +162,7 @@ pub fn extend_with(
         );
         match registered {
             Ok(exporter) if alerts_on => {
-                alerts::register(&mut extension, &exporter, &env);
+                alerts::register(&mut extension, &exporter, &env, host.policy_now.clone());
             }
             Ok(_) => {}
             Err(err) => eprintln!("warning: audit export, retention and alerts are off: {err}"),
@@ -345,20 +345,31 @@ pub(crate) mod testing {
     }
 
     /// `gateway`, with the enterprise features reading `env` as their environment.
+    /// The policy of every test gateway: one provider, one rule for everyone.
+    pub const POLICY: &str = "version: 1\nstore: { postgres_url_env: GANTRY_STORE_URL }\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\nrules:\n  - name: all\n    principals: { any: true }\n    models: [m]\n";
+
     pub fn gateway_with(
         test: &str,
         url: &str,
         status: &Status,
         vars: &[(&str, &str)],
     ) -> Result<Gateway, Error> {
+        gateway_policy(test, url, status, vars, POLICY)
+    }
+
+    /// `gateway_with`, serving `policy_text`.
+    pub fn gateway_policy(
+        test: &str,
+        url: &str,
+        status: &Status,
+        vars: &[(&str, &str)],
+        policy_text: &str,
+    ) -> Result<Gateway, Error> {
         let dir = std::env::temp_dir().join(format!("gantry-ent-{}-{test}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
         let policy = dir.join("gantry.policy.yaml");
-        std::fs::write(
-            &policy,
-            "version: 1\nstore: { postgres_url_env: GANTRY_STORE_URL }\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\nrules:\n  - name: all\n    principals: { any: true }\n    models: [m]\n",
-        )?;
+        std::fs::write(&policy, policy_text)?;
         let url = url.to_string();
         let env = move |variable: &str| match variable {
             "GANTRY_STORE_URL" => Some(url.clone()),

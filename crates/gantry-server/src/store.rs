@@ -1022,6 +1022,9 @@ impl Inner {
     }
 
     async fn reserve(&self, bucket: &Bucket, usd: f64, limit: f64) -> Result<Reserve, String> {
+        if bucket.per.sliding {
+            return self.reserve_sliding(bucket, usd, limit).await;
+        }
         let client = self.client()?;
         let per = bucket.per.word();
         let params: [(&(dyn tokio_postgres::types::ToSql + Sync), Type); 5] = [
@@ -1056,6 +1059,71 @@ impl Inner {
             (row.try_get(0).unwrap_or(0.0), row.try_get(1).unwrap_or(0.0))
         });
         Ok(Reserve::Over { spent, reserved })
+    }
+
+    /// `reserve` for a sliding window: the sum of its slots from the window's start, and the hold in the current
+    /// slot. Several slots cannot be checked by one row lock, so an advisory lock on the counter orders the gateways,
+    /// taken in the first statement of one round trip so the sum is read after it (each statement of a simple query
+    /// reads afresh). Slots wholly before the window that hold nothing are deleted on the way.
+    async fn reserve_sliding(
+        &self,
+        bucket: &Bucket,
+        usd: f64,
+        limit: f64,
+    ) -> Result<Reserve, String> {
+        if !usd.is_finite() || !limit.is_finite() {
+            return Err(format!(
+                "a reservation of {usd} against a limit of {limit} is not a number of dollars"
+            ));
+        }
+        let client = self.client()?;
+        let per = bucket.per.word();
+        let hash = id::sha256(format!("{}\n{per}", bucket.scope).as_bytes());
+        let lock = i64::from_be_bytes([
+            hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7],
+        ]);
+        let text = |value: &str| {
+            format!(
+                "convert_from(decode('{}', 'hex'), 'UTF8')",
+                id::hex(value.as_bytes())
+            )
+        };
+        let (scope, per, slot, from) = (
+            text(&bucket.scope),
+            text(&per),
+            text(&bucket.period),
+            text(&bucket.per.window_start_label(&bucket.period)),
+        );
+        let sql = format!(
+            "SELECT pg_advisory_xact_lock({lock}); \
+             DELETE FROM gantry_spend WHERE scope = {scope} AND per = {per} AND period < {from} AND reserved <= 0; \
+             WITH used AS (SELECT coalesce(sum(CASE WHEN period >= {from} THEN spent ELSE 0 END), 0) AS spent, \
+               coalesce(sum(reserved), 0) AS reserved FROM gantry_spend WHERE scope = {scope} AND per = {per}), \
+             got AS (INSERT INTO gantry_spend AS s (scope, per, period, reserved) \
+               SELECT {scope}, {per}, {slot}, {usd}::float8 FROM used WHERE used.spent + used.reserved + {usd}::float8 <= {limit}::float8 \
+               ON CONFLICT (scope, per, period) DO UPDATE SET reserved = s.reserved + excluded.reserved RETURNING 1) \
+             SELECT (SELECT count(*) FROM got), used.spent, used.reserved FROM used"
+        );
+        let answers = client
+            .simple_query(&sql)
+            .await
+            .map_err(|err| err.to_string())?;
+        let row = answers
+            .iter()
+            .rev()
+            .find_map(|answer| match answer {
+                tokio_postgres::SimpleQueryMessage::Row(row) => Some(row),
+                _ => None,
+            })
+            .ok_or("the sliding reservation returned no row")?;
+        let number = |at: usize| row.get(at).and_then(|v| v.parse::<f64>().ok());
+        Ok(match number(0) {
+            Some(n) if n > 0.0 => Reserve::Done,
+            _ => Reserve::Over {
+                spent: number(1).unwrap_or(0.0),
+                reserved: number(2).unwrap_or(0.0),
+            },
+        })
     }
 
     async fn settle(&self, changes: &[Change]) -> Result<(), String> {
