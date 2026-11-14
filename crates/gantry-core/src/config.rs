@@ -108,6 +108,7 @@ const KNOWN: &[&str] = &[
     "anonymizer_url",
     "project_id",
     "template_id",
+    "pack",
     "case_sensitive",
     "whole_word",
     "shadow_until",

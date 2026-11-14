@@ -168,6 +168,9 @@ pub struct GuardrailFile {
     /// model_armor: the Model Armor template that holds the filter settings.
     #[serde(default)]
     pub template_id: Option<String>,
+    /// secrets: `gitleaks` reads with Gitleaks' default rule set in place of Gantry's own secrets detector.
+    #[serde(default)]
+    pub pack: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -230,6 +233,8 @@ pub fn unset_webhook_env(rules: &[crate::policy::Rule], set: &dyn Fn(&str) -> bo
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Check {
     Secrets,
+    /// `type: secrets` with `pack: gitleaks`: Gitleaks' default rules.
+    Gitleaks,
     Pii,
     /// A `regex` or `keywords` guardrail, compiled.
     Custom(Custom),
@@ -272,11 +277,29 @@ impl Guardrail {
         };
         match &self.check {
             Check::Secrets => of(SECRETS),
+            Check::Gitleaks => gitleaks_findings(parts),
             Check::Pii => of(PII),
             Check::Custom(custom) => custom.scan(parts),
             Check::Webhook(_) => Vec::new(),
         }
     }
+}
+
+/// The Gitleaks pack's findings. A pack that cannot run reports nothing here: `check_side` refuses first, because it
+/// loads the pack before any guardrail reads a request.
+fn gitleaks_findings(parts: &[TextPart]) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for part in parts {
+        for (kind, span) in crate::gitleaks::scan(&part.text).unwrap_or_default() {
+            found.push(Finding {
+                detector: GITLEAKS,
+                kind: Cow::Borrowed(kind),
+                path: part.path.clone(),
+                span,
+            });
+        }
+    }
+    found
 }
 
 /// A `regex` or `keywords` guardrail: every entry in one expression, read once per text.
@@ -465,7 +488,16 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
                     errors.push(err);
                 }
                 match def.kind {
-                    GuardType::Secrets => Check::Secrets,
+                    GuardType::Secrets => match def.pack.as_deref() {
+                        None => Check::Secrets,
+                        Some("gitleaks") => Check::Gitleaks,
+                        Some(other) => {
+                            errors.push(format!(
+                                "guardrail \"{name}\": pack is \"{other}\". The one pack is gitleaks (Gitleaks' default rule set); remove pack: for Gantry's own secrets detector."
+                            ));
+                            continue;
+                        }
+                    },
                     GuardType::Pii => Check::Pii,
                     _ => match custom(def) {
                         Ok(custom) => Check::Custom(custom),
@@ -595,6 +627,7 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         ("keywords", def.keywords.is_some()),
         ("case_sensitive", def.case_sensitive.is_some()),
         ("whole_word", def.whole_word.is_some()),
+        ("pack", def.pack.is_some()),
     ];
     let takes: &[&str] = match def.kind {
         GuardType::OpenaiModeration => &["key_env", "model"],
@@ -607,6 +640,7 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         GuardType::ModelArmor => &["key_env", "project_id", "region", "template_id"],
         GuardType::Regex => &["patterns"],
         GuardType::Keywords => &["keywords", "case_sensitive", "whole_word"],
+        GuardType::Secrets => &["pack"],
         _ => &[],
     };
     if let Some((field, _)) = given.iter().find(|(f, on)| *on && !takes.contains(f)) {
@@ -1015,6 +1049,7 @@ fn content(value: Option<&Value>, path: &str, role: &str, parts: &mut Vec<TextPa
 // ---------------------------------------------------------------------------------------------------------
 
 const SECRETS: &str = "secrets";
+const GITLEAKS: &str = "gitleaks";
 const PII: &str = "pii";
 
 struct Kind {
@@ -1489,6 +1524,16 @@ fn check_side(body: Value, guards: &[Guardrail], side: Side) -> Verdict {
         return verdict;
     }
     let parts = text_parts(&verdict.body);
+    if active.iter().any(|g| g.check == Check::Gitleaks)
+        && let Err(err) = crate::gitleaks::rule_count()
+    {
+        // A check that cannot run must not wave the request through.
+        verdict.blocked = Some(Blocked {
+            guardrail: String::new(),
+            message: err,
+        });
+        return verdict;
+    }
     let builtin = if active
         .iter()
         .any(|g| matches!(g.check, Check::Secrets | Check::Pii))
@@ -1516,6 +1561,7 @@ fn check_side(body: Value, guards: &[Guardrail], side: Side) -> Verdict {
         let detector = match &guard.check {
             Check::Custom(custom) => custom.detector,
             Check::Pii => PII,
+            Check::Gitleaks => GITLEAKS,
             _ => SECRETS,
         };
         let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
@@ -1970,6 +2016,7 @@ fn masked_span(text: &str) -> String {
 pub fn backtest(guard: &Guardrail, samples: &[Sample]) -> Result<Backtest, String> {
     let detector = match &guard.check {
         Check::Secrets => SECRETS,
+        Check::Gitleaks => GITLEAKS,
         Check::Pii => PII,
         Check::Custom(custom) => custom.detector,
         Check::Webhook(hook) => {
