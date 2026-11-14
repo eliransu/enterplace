@@ -38,6 +38,8 @@ pub(crate) struct Metrics {
     spend: Mutex<BTreeMap<(String, String), f64>>,
     /// (team, kind): US dollars caching saved, `answer` for Gantry's answer cache, `prompt` for a provider's.
     saved: Mutex<BTreeMap<(String, &'static str), f64>>,
+    /// (provider, status): a pool key set aside and the next one tried.
+    key_switches: Mutex<BTreeMap<(String, String), u64>>,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -81,6 +83,12 @@ impl Metrics {
             .or_default()
             .clone();
         histogram.observe(took);
+    }
+
+    pub(crate) fn key_switched(&self, provider: &str, status: &str) {
+        *locked(&self.key_switches)
+            .entry((provider.to_string(), status.to_string()))
+            .or_default() += 1;
     }
 
     pub(crate) fn overhead(&self, took: Duration) {
@@ -179,6 +187,24 @@ impl Metrics {
                 "gantry_cache_saved_usd{{team=\"{}\",kind=\"{kind}\"}} {}",
                 label(team),
                 usd_text(*usd)
+            );
+        }
+        out.push_str("# HELP gantry_provider_key_switches_total Pool keys set aside after a 401, 403 or 429, by provider and status.\n# TYPE gantry_provider_key_switches_total counter\n");
+        for ((provider, status), n) in locked(&self.key_switches).iter() {
+            let _ = writeln!(
+                out,
+                "gantry_provider_key_switches_total{{provider=\"{}\",status=\"{}\"}} {n}",
+                label(provider),
+                label(status)
+            );
+        }
+        out.push_str("# HELP gantry_deployment_up 1 when the last health probe of a deployment got an answer, 0 when it did not.\n# TYPE gantry_deployment_up gauge\n");
+        for (deployment, probed) in state.pool.probes() {
+            let _ = writeln!(
+                out,
+                "gantry_deployment_up{{deployment=\"{}\"}} {}",
+                label(&deployment),
+                u8::from(probed.up)
             );
         }
         out

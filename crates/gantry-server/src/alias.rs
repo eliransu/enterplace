@@ -24,7 +24,45 @@ pub(crate) struct Pool {
     /// With a store, a deployment that fails here is passed over by every gateway, and one that failed on another
     /// gateway is passed over here.
     store: Option<Arc<dyn gantry_core::store::Store>>,
+    /// Each key of each provider's key pool, by `provider/fingerprint`.
+    keys: Mutex<HashMap<String, Keyed>>,
+    /// The last health probe of each probed deployment.
+    probes: Mutex<HashMap<String, Probed>>,
 }
+
+/// One key of a pool: when it may be used again (after a 401, 403 or 429), and how many requests it was sent.
+#[derive(Default)]
+struct Keyed {
+    out_until: Option<Instant>,
+    uses: u64,
+}
+
+/// A health probe's last outcome.
+#[derive(Clone, Debug)]
+pub(crate) struct Probed {
+    pub(crate) up: bool,
+    /// When it was sent, for the next one's turn.
+    pub(crate) at: Instant,
+    /// When it was sent, as a timestamp for /readyz.
+    pub(crate) time: String,
+    /// The status or refusal code it got.
+    pub(crate) outcome: String,
+}
+
+/// How long a key answered 401 or 403 is set aside: a key that was revoked stays revoked, and one put right is
+/// back within the hour. A new key (another fingerprint) is used at once.
+// ponytail: fixed; a setting when someone needs another.
+const KEY_QUARANTINE: Duration = Duration::from_secs(3600);
+
+/// How long a key answered 429 without a Retry-After rests.
+const KEY_REST: Duration = Duration::from_secs(60);
+
+/// A deployment whose provider says less than this share of its rate limit is left goes after the others.
+// ponytail: fixed at 5%; a setting per alias when someone needs another.
+const HEADROOM: f64 = 0.05;
+
+/// How long a provider's rate-limit headers are believed: its windows are about a minute.
+const HEADROOM_FOR: Duration = Duration::from_secs(60);
 
 /// A deployment's circuit: closed (no failure since the last answer), open (cooling down), or half open (the
 /// cooldown is over and one request is out probing it).
@@ -40,6 +78,10 @@ struct Deployed {
     base: Duration,
     /// Time to first byte of its last answers here, in milliseconds, oldest first.
     latency: std::collections::VecDeque<u32>,
+    /// Share of recent attempts that failed, as a moving average: each attempt moves it a fifth of the way.
+    errors: f64,
+    /// The smallest share of its rate limits its provider said was left, and when.
+    headroom: Option<(f64, Instant)>,
 }
 
 /// What a request brings to the choice of deployment besides the alias.
@@ -184,8 +226,17 @@ impl Pool {
                 }
             }
         };
-        let (mut warm, cold): (Vec<usize>, Vec<usize>) =
+        let (warm, cold): (Vec<usize>, Vec<usize>) =
             eligible.iter().copied().partition(|i| !cooling(i));
+        // A deployment nearly out of its provider's rate limit goes after those with room, before those cooling.
+        let tight = |i: &usize| {
+            deployments
+                .get(&name_of(*i))
+                .and_then(|s| s.headroom)
+                .is_some_and(|(left, at)| left < HEADROOM && now.duration_since(at) < HEADROOM_FOR)
+        };
+        let (mut warm, full): (Vec<usize>, Vec<usize>) = warm.into_iter().partition(|i| !tight(i));
+        let cold: Vec<usize> = full.into_iter().chain(cold).collect();
         if let Some(probe) = probe {
             warm.retain(|i| *i != probe);
             warm.extend(cold);
@@ -287,6 +338,23 @@ impl Pool {
                 };
                 (first, why)
             }
+            Balance::Adaptive => {
+                let latency = routing.map(|store| store.latency());
+                let p90 = |i: &usize| match &latency {
+                    Some(latency) => latency.get(&name_of(*i)).copied(),
+                    None => deployments
+                        .get(&name_of(*i))
+                        .and_then(|s| percentile(&s.latency, 90)),
+                };
+                let errors = |i: &usize| deployments.get(&name_of(*i)).map_or(0.0, |s| s.errors);
+                let cost = |i: &usize| ask.cost.get(*i).copied().flatten();
+                let parts: Vec<(f64, f64, Option<f64>)> = warm
+                    .iter()
+                    .map(|i| (f64::from(p90(i).unwrap_or(0)), errors(i), cost(i)))
+                    .collect();
+                let (first, why) = adaptive(&alias.weights, &parts);
+                (first, why)
+            }
         };
         let mut why = why;
         if let Some(first) = first {
@@ -351,6 +419,7 @@ impl Pool {
     pub(crate) fn failed(&self, deployment: &str, cooldown: Duration) {
         let mut deployments = locked(&self.deployments);
         let state = deployments.entry(deployment.to_string()).or_default();
+        state.errors = state.errors * (1.0 - ERROR_STEP) + ERROR_STEP;
         state.failures = state.failures.saturating_add(1);
         let factor = 1u32
             .checked_shl(state.failures - 1)
@@ -370,12 +439,202 @@ impl Pool {
             state.cool_until = None;
             state.failures = 0;
             state.probe_since = None;
+            state.errors *= 1.0 - ERROR_STEP;
         }
         // Writes only when the deployment is cooling down on the store's list, so a normal answer costs nothing.
         if let Some(store) = &self.store {
             store.warmed(deployment);
         }
     }
+}
+
+impl Pool {
+    /// Reads a provider's rate-limit headers off an answer of `deployment`: OpenAI's `x-ratelimit-*` and Anthropic's
+    /// `anthropic-ratelimit-*`. The smallest share left of any limit it names is what counts.
+    pub(crate) fn rate_limits(&self, deployment: &str, headers: &axum::http::HeaderMap) {
+        let Some(left) = headroom(headers) else {
+            return;
+        };
+        locked(&self.deployments)
+            .entry(deployment.to_string())
+            .or_default()
+            .headroom = Some((left, Instant::now()));
+    }
+
+    /// Which key of `provider`'s pool to send with: in turn, or the least used, passing over keys set aside. When
+    /// every key is set aside, the one back soonest. `None` for a provider without a pool.
+    pub(crate) fn key(&self, provider: &str, ids: &[String], least_used: bool) -> Option<usize> {
+        if ids.is_empty() {
+            return None;
+        }
+        let now = Instant::now();
+        let mut keys = locked(&self.keys);
+        let name = |id: &String| format!("{provider}/{id}");
+        let out = |k: &Keyed| k.out_until.is_some_and(|until| until > now);
+        let ready: Vec<usize> = (0..ids.len())
+            .filter(|i| !keys.get(&name(&ids[*i])).is_some_and(out))
+            .collect();
+        let picked = if ready.is_empty() {
+            (0..ids.len()).min_by_key(|i| keys.get(&name(&ids[*i])).and_then(|k| k.out_until))
+        } else if least_used {
+            ready
+                .iter()
+                .copied()
+                .min_by_key(|i| keys.get(&name(&ids[*i])).map_or(0, |k| k.uses))
+        } else {
+            // In turn over the whole pool, from where the last pick left off, so a key set aside hands over to the
+            // one after it.
+            let mut turns = locked(&self.turns);
+            let turn = turns.entry(format!("key\n{provider}")).or_default();
+            let start = usize::try_from(*turn).unwrap_or(0) % ids.len();
+            let at = (0..ids.len())
+                .map(|step| (start + step) % ids.len())
+                .find(|i| ready.contains(i));
+            *turn = at.map_or(*turn, |at| at as u64 + 1);
+            at
+        }?;
+        keys.entry(name(&ids[picked])).or_default().uses += 1;
+        Some(picked)
+    }
+
+    /// A key of a pool got `status`. A 401 or 403 sets it aside for an hour, a 429 for its Retry-After or a minute.
+    /// Returns whether another key can be tried now: the request then moves on to it.
+    pub(crate) fn key_answered(
+        &self,
+        provider: &str,
+        ids: &[String],
+        at: usize,
+        status: axum::http::StatusCode,
+        retry_after: Option<u64>,
+    ) -> bool {
+        let rest = match status.as_u16() {
+            401 | 403 => KEY_QUARANTINE,
+            429 => retry_after.map_or(KEY_REST, |s| Duration::from_secs(s.min(3600))),
+            _ => return false,
+        };
+        let Some(id) = ids.get(at) else {
+            return false;
+        };
+        let now = Instant::now();
+        let mut keys = locked(&self.keys);
+        keys.entry(format!("{provider}/{id}"))
+            .or_default()
+            .out_until = Some(now + rest);
+        ids.iter().any(|other| {
+            keys.get(&format!("{provider}/{other}"))
+                .is_none_or(|k| k.out_until.is_none_or(|until| until <= now))
+        })
+    }
+
+    /// A health probe of `deployment` got `outcome`.
+    pub(crate) fn probed(&self, deployment: &str, up: bool, outcome: String) {
+        locked(&self.probes).insert(
+            deployment.to_string(),
+            Probed {
+                up,
+                at: Instant::now(),
+                time: gantry_core::audit::timestamp(),
+                outcome,
+            },
+        );
+    }
+
+    /// The last probe of each probed deployment, by name.
+    pub(crate) fn probes(&self) -> Vec<(String, Probed)> {
+        let mut all: Vec<(String, Probed)> = locked(&self.probes)
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        all
+    }
+
+    /// Whether `deployment` is due a probe every `every`.
+    pub(crate) fn probe_due(&self, deployment: &str, every: Duration) -> bool {
+        locked(&self.probes)
+            .get(deployment)
+            .is_none_or(|p| p.at.elapsed() >= every)
+    }
+}
+
+/// How far one attempt moves a deployment's error rate.
+const ERROR_STEP: f64 = 0.2;
+
+/// The smallest share left of the rate limits a provider's answer names, if it names any.
+pub(crate) fn headroom(headers: &axum::http::HeaderMap) -> Option<f64> {
+    let number = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<f64>().ok())
+    };
+    [
+        (
+            "x-ratelimit-remaining-requests",
+            "x-ratelimit-limit-requests",
+        ),
+        ("x-ratelimit-remaining-tokens", "x-ratelimit-limit-tokens"),
+        (
+            "anthropic-ratelimit-requests-remaining",
+            "anthropic-ratelimit-requests-limit",
+        ),
+        (
+            "anthropic-ratelimit-tokens-remaining",
+            "anthropic-ratelimit-tokens-limit",
+        ),
+        (
+            "anthropic-ratelimit-input-tokens-remaining",
+            "anthropic-ratelimit-input-tokens-limit",
+        ),
+        (
+            "anthropic-ratelimit-output-tokens-remaining",
+            "anthropic-ratelimit-output-tokens-limit",
+        ),
+    ]
+    .iter()
+    .filter_map(|(left, limit)| {
+        let (left, limit) = (number(left)?, number(limit)?);
+        (limit > 0.0).then(|| (left / limit).clamp(0.0, 1.0))
+    })
+    .min_by(f64::total_cmp)
+}
+
+/// The position of the lowest adaptive score among `parts` (p90 latency in ms, error rate, price per million
+/// tokens), and why. Latency and cost are scaled to 0..1 against the highest of the candidates; the error rate is
+/// one already. A deployment not measured yet counts as fastest, so each is measured; one with no price counts as
+/// the dearest, as lowest_cost has it.
+pub(crate) fn adaptive(
+    weights: &gantry_core::config::Weights,
+    parts: &[(f64, f64, Option<f64>)],
+) -> (Option<usize>, String) {
+    let most = |values: &mut dyn Iterator<Item = f64>| values.fold(0.0, f64::max);
+    let slowest = most(&mut parts.iter().map(|p| p.0));
+    let dearest = most(&mut parts.iter().filter_map(|p| p.2));
+    let scale = |value: f64, top: f64| if top > 0.0 { value / top } else { 0.0 };
+    let score = |p: &(f64, f64, Option<f64>)| {
+        weights.latency * scale(p.0, slowest)
+            + weights.errors * p.1
+            + weights.cost * p.2.map_or(1.0, |c| scale(c, dearest))
+    };
+    let first = parts
+        .iter()
+        .enumerate()
+        .min_by(|a, b| score(a.1).total_cmp(&score(b.1)))
+        .map(|(at, _)| at);
+    let why = match first.and_then(|at| parts.get(at)) {
+        Some(p) => format!(
+            "adaptive: score {:.2} (p90 {} ms, errors {:.0}%, {})",
+            score(p),
+            p.0,
+            p.1 * 100.0,
+            p.2.map_or_else(
+                || "no price".to_string(),
+                |c| format!("${c} per million tokens")
+            )
+        ),
+        None => "adaptive: no deployment to score".to_string(),
+    };
+    (first, why)
 }
 
 /// The boundary of a `multipart/form-data` content type. A second boundary parameter is refused: parsers differ on
@@ -608,15 +867,12 @@ mod tests {
                     provider: format!("p{i}"),
                     model: "m".into(),
                     weight: *w,
-                    region: None,
-                    for_: None,
+                    ..Deployment::default()
                 })
                 .collect(),
             balance,
             cooldown_seconds: 30,
-            context_window_fallback: None,
-            content_policy_fallback: None,
-            session_affinity: false,
+            ..Alias::default()
         }
     }
 
@@ -800,6 +1056,103 @@ mod tests {
             order(&pool, &smart, &[0, 1], after + Duration::from_secs(11))[0],
             0
         );
+    }
+
+    #[test]
+    fn adaptive_weighs_latency_errors_and_cost_and_remembers_errors_after_the_circuit_closes() {
+        let weights = gantry_core::config::Weights::default();
+        // Fast and cheap wins; then, with cost weighed out, the fast one even when dear.
+        let (first, why) = adaptive(
+            &weights,
+            &[(400.0, 0.0, Some(10.0)), (100.0, 0.0, Some(1.0))],
+        );
+        assert_eq!(first, Some(1), "{why}");
+        let latency_only = gantry_core::config::Weights {
+            latency: 1.0,
+            errors: 0.0,
+            cost: 0.0,
+        };
+        assert_eq!(
+            adaptive(
+                &latency_only,
+                &[(400.0, 0.0, Some(1.0)), (100.0, 0.0, Some(10.0))]
+            )
+            .0,
+            Some(1)
+        );
+        // An unpriced deployment counts as the dearest, never as free.
+        assert_eq!(
+            adaptive(
+                &weights,
+                &[
+                    (100.0, 0.0, None),
+                    (100.0, 0.0, Some(5.0)),
+                    (100.0, 0.0, Some(1.0))
+                ]
+            )
+            .0,
+            Some(2)
+        );
+        let pool = Pool::default();
+        let smart = alias(Balance::Adaptive, &[1, 1]);
+        for _ in 0..3 {
+            pool.failed("p0/m", Duration::from_secs(30));
+        }
+        pool.answered("p0/m");
+        let (order, why) = pool.order(&smart, &[0, 1], Instant::now(), &Ask::default());
+        assert_eq!(
+            order[0], 1,
+            "its circuit is closed, and its error rate still counts: {why}"
+        );
+        assert!(why.starts_with("adaptive: score"), "{why}");
+    }
+
+    #[test]
+    fn key_pools_rotate_or_take_the_least_used_and_set_keys_aside() {
+        use axum::http::StatusCode;
+        let pool = Pool::default();
+        let ids: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let picks: Vec<Option<usize>> = (0..4).map(|_| pool.key("p", &ids, false)).collect();
+        assert_eq!(picks, [Some(0), Some(1), Some(2), Some(0)]);
+        // b is refused: set aside, and another key can be tried.
+        assert!(pool.key_answered("p", &ids, 1, StatusCode::UNAUTHORIZED, None));
+        let picks: Vec<Option<usize>> = (0..3).map(|_| pool.key("p", &ids, false)).collect();
+        assert!(!picks.contains(&Some(1)), "{picks:?}");
+        // A 500 is the provider's failure, not the key's.
+        assert!(!pool.key_answered("p", &ids, 0, StatusCode::INTERNAL_SERVER_ERROR, None));
+        // With every key aside, the one back soonest is used rather than none.
+        assert!(pool.key_answered("p", &ids, 0, StatusCode::TOO_MANY_REQUESTS, Some(5)));
+        assert!(!pool.key_answered("p", &ids, 2, StatusCode::TOO_MANY_REQUESTS, Some(60)));
+        assert_eq!(pool.key("p", &ids, false), Some(0));
+        let least = Pool::default();
+        least.key("q", &ids, true);
+        least.key("q", &ids, true);
+        assert_eq!(least.key("q", &ids, true), Some(2));
+        assert_eq!(pool.key("p", &[], false), None);
+    }
+
+    #[test]
+    fn rate_limit_headers_give_the_smallest_share_left() {
+        let mut headers = axum::http::HeaderMap::new();
+        assert_eq!(headroom(&headers), None);
+        headers.insert(
+            "x-ratelimit-remaining-requests",
+            "50".parse()
+                .unwrap_or_else(|_| axum::http::HeaderValue::from_static("0")),
+        );
+        headers.insert(
+            "x-ratelimit-limit-requests",
+            axum::http::HeaderValue::from_static("100"),
+        );
+        headers.insert(
+            "x-ratelimit-remaining-tokens",
+            axum::http::HeaderValue::from_static("1000"),
+        );
+        headers.insert(
+            "x-ratelimit-limit-tokens",
+            axum::http::HeaderValue::from_static("100000"),
+        );
+        assert_eq!(headroom(&headers), Some(0.01));
     }
 
     #[test]

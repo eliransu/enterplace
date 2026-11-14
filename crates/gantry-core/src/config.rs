@@ -172,6 +172,18 @@ const KNOWN: &[&str] = &[
     "to",
     "days",
     "viewers",
+    "timeouts",
+    "connect_ms",
+    "first_byte_ms",
+    "total_ms",
+    "idle_ms",
+    "key_balance",
+    "fallbacks",
+    "fallback_on",
+    "weights",
+    "latency",
+    "errors",
+    "cost",
     // Last, so a misspelled "models" (one letter off both) is still offered "models", the word far more often meant.
     "mode",
 ];
@@ -402,6 +414,14 @@ struct AliasFile {
     name: String,
     deployments: Vec<DeploymentFile>,
     #[serde(default)]
+    timeouts: Option<TimeoutsFile>,
+    #[serde(default)]
+    fallbacks: Vec<String>,
+    #[serde(default)]
+    fallback_on: Option<Vec<String>>,
+    #[serde(default)]
+    weights: Option<WeightsFile>,
+    #[serde(default)]
     balance: Option<String>,
     #[serde(default)]
     cooldown_seconds: Option<u64>,
@@ -424,6 +444,74 @@ struct DeploymentFile {
     region: Option<String>,
     #[serde(default, rename = "for")]
     for_: Option<ForFile>,
+    #[serde(default)]
+    when: Option<WhenFile>,
+    #[serde(default)]
+    timeouts: Option<TimeoutsFile>,
+    #[serde(default)]
+    probe: Option<ProbeFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TimeoutsFile {
+    #[serde(default)]
+    connect_ms: Option<u64>,
+    #[serde(default)]
+    first_byte_ms: Option<u64>,
+    #[serde(default)]
+    total_ms: Option<u64>,
+    #[serde(default)]
+    idle_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WhenFile {
+    #[serde(default)]
+    team: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    customer: Option<String>,
+    #[serde(default)]
+    min_prompt_tokens: Option<u64>,
+    #[serde(default)]
+    max_prompt_tokens: Option<u64>,
+    #[serde(default)]
+    tools: Option<bool>,
+    #[serde(default)]
+    images: Option<bool>,
+    #[serde(default)]
+    header: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProbeFile {
+    every_seconds: u64,
+    #[serde(default)]
+    with: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WeightsFile {
+    #[serde(default)]
+    latency: Option<f64>,
+    #[serde(default)]
+    errors: Option<f64>,
+    #[serde(default)]
+    cost: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PoolKeyFile {
+    #[serde(default)]
+    key_env: Option<String>,
+    #[serde(default)]
+    credential: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -447,6 +535,8 @@ pub enum Balance {
     LowestLatency,
     /// The one whose model is cheapest by its price (input plus output per million tokens).
     LowestCost,
+    /// The lowest score of latency, error rate and cost, each scaled against the others and weighted.
+    Adaptive,
 }
 
 impl Balance {
@@ -456,6 +546,7 @@ impl Balance {
             Balance::LeastBusy => "least_busy",
             Balance::LowestLatency => "lowest_latency",
             Balance::LowestCost => "lowest_cost",
+            Balance::Adaptive => "adaptive",
         }
     }
 }
@@ -467,8 +558,115 @@ pub enum For {
     Tag(String),
 }
 
-/// One place an alias can send a request: a provider and the model it is known by there.
+/// Time limits on one request to a provider, in milliseconds. `None` takes the next level's: a deployment's, then
+/// its alias's, then its provider's, then the gateway's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Timeouts {
+    /// For the TCP connection.
+    pub connect_ms: Option<u64>,
+    /// For the answer's headers, from sending.
+    pub first_byte_ms: Option<u64>,
+    /// For the whole answer, body included, from sending.
+    pub total_ms: Option<u64>,
+    /// Between two pieces of a streamed answer.
+    pub idle_ms: Option<u64>,
+}
+
+impl Timeouts {
+    /// Each field of `self`, or of `other` where `self` has none.
+    pub fn or(self, other: Timeouts) -> Timeouts {
+        Timeouts {
+            connect_ms: self.connect_ms.or(other.connect_ms),
+            first_byte_ms: self.first_byte_ms.or(other.first_byte_ms),
+            total_ms: self.total_ms.or(other.total_ms),
+            idle_ms: self.idle_ms.or(other.idle_ms),
+        }
+    }
+}
+
+/// What a request must have for a deployment kept for it. Every condition set must hold.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct When {
+    pub team: Option<String>,
+    pub tag: Option<String>,
+    pub customer: Option<String>,
+    /// The prompt's size in tokens, estimated as its body's bytes over four.
+    pub min_prompt_tokens: Option<u64>,
+    pub max_prompt_tokens: Option<u64>,
+    /// Whether the request offers tools.
+    pub tools: Option<bool>,
+    /// Whether the request holds an image.
+    pub images: Option<bool>,
+    /// A request header and the value it must have.
+    pub header: Option<(String, String)>,
+}
+
+/// How a deployment is checked in the background, so a dead one is passed over before a caller finds it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Probe {
+    pub every_seconds: u64,
+    /// `models` lists the provider's models; `chat` sends a one-token request.
+    pub chat: bool,
+}
+
+/// The weights of `balance: adaptive`. Each part of the score is scaled to 0..1 against the other deployments.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Weights {
+    pub latency: f64,
+    pub errors: f64,
+    pub cost: f64,
+}
+
+impl Default for Weights {
+    fn default() -> Self {
+        Weights {
+            latency: 1.0,
+            errors: 1.0,
+            cost: 1.0,
+        }
+    }
+}
+
+impl Eq for Weights {}
+
+/// Which failures of an alias's deployments send a request on to its `fallbacks`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FallbackOn {
+    RateLimit,
+    ServerError,
+    Timeout,
+    Unreachable,
+    ContextWindow,
+    ContentPolicy,
+}
+
+impl FallbackOn {
+    pub const ALL: [(&'static str, FallbackOn); 6] = [
+        ("rate_limit", FallbackOn::RateLimit),
+        ("server_error", FallbackOn::ServerError),
+        ("timeout", FallbackOn::Timeout),
+        ("unreachable", FallbackOn::Unreachable),
+        ("context_window", FallbackOn::ContextWindow),
+        ("content_policy", FallbackOn::ContentPolicy),
+    ];
+    /// What `fallbacks` are taken on when `fallback_on` is not written: every failure that may clear elsewhere.
+    pub const DEFAULT: [FallbackOn; 4] = [
+        FallbackOn::RateLimit,
+        FallbackOn::ServerError,
+        FallbackOn::Timeout,
+        FallbackOn::Unreachable,
+    ];
+}
+
+/// Where one key of a provider's key pool is read from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeySource {
+    Env(String),
+    Credential(String),
+}
+
+/// One place an alias can send a request: a provider and the model it is known by there.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Deployment {
     pub provider: String,
     pub model: String,
@@ -478,10 +676,14 @@ pub struct Deployment {
     /// Kept for one team or tag. A request that matches some kept deployments goes only to those; one that
     /// matches none goes to the deployments kept for nobody.
     pub for_: Option<For>,
+    /// Kept for requests that meet every condition here, as `for_` is.
+    pub when: Option<When>,
+    pub timeouts: Timeouts,
+    pub probe: Option<Probe>,
 }
 
 /// A model name callers send that Gantry serves from one or more deployments.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Alias {
     pub name: String,
     pub deployments: Vec<Deployment>,
@@ -494,6 +696,13 @@ pub struct Alias {
     pub content_policy_fallback: Option<String>,
     /// One session of one person (a coding agent's conversation) stays on one deployment while it answers.
     pub session_affinity: bool,
+    /// For each of its deployments, unless the deployment says otherwise.
+    pub timeouts: Timeouts,
+    /// Models or aliases tried in turn when every deployment failed in a way `fallback_on` names.
+    pub fallbacks: Vec<String>,
+    pub fallback_on: Vec<FallbackOn>,
+    /// For `balance: adaptive`.
+    pub weights: Weights,
 }
 
 /// How long a failed deployment is passed over when its alias does not say.
@@ -543,6 +752,12 @@ struct ProviderFile {
     accept_chat: Option<bool>,
     #[serde(default)]
     accept_messages: Option<bool>,
+    #[serde(default)]
+    timeouts: Option<TimeoutsFile>,
+    #[serde(default)]
+    keys: Vec<PoolKeyFile>,
+    #[serde(default)]
+    key_balance: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1391,6 +1606,12 @@ pub struct Provider {
     pub accept_chat: bool,
     /// Whether messages requests (Claude Code) for its models are translated to the chat completions API.
     pub accept_messages: bool,
+    /// For every request to it, unless an alias or deployment says otherwise.
+    pub timeouts: Timeouts,
+    /// A pool of keys used in turn, in place of `key_env`, `key_file` or `credential`.
+    pub keys: Vec<KeySource>,
+    /// Picks the key with the fewest requests sent, not the next in turn.
+    pub least_used_key: bool,
 }
 
 /// Everything `gantry serve` needs from the two files.
@@ -1432,6 +1653,26 @@ pub fn describe(providers: &[Provider]) -> String {
 /// Where the keys file is when no path is given: beside the policy file.
 pub fn keys_path_for(policy_path: &Path) -> PathBuf {
     policy_path.with_file_name("gantry.keys.yaml")
+}
+
+/// Whether `model` is `pattern`, where each `*` in the pattern stands for any run of characters (`gpt-*`,
+/// `claude-*-5`). A pattern with no `*` matches only itself.
+pub fn model_matches(pattern: &str, model: &str) -> bool {
+    let Some((head, rest)) = pattern.split_once('*') else {
+        return pattern == model;
+    };
+    let Some(mut left) = model.strip_prefix(head) else {
+        return false;
+    };
+    let mut pieces: Vec<&str> = rest.split('*').collect();
+    let tail = pieces.pop().unwrap_or_default();
+    for piece in pieces {
+        match left.find(piece) {
+            Some(at) => left = &left[at + piece.len()..],
+            None => return false,
+        }
+    }
+    left.len() >= tail.len() && left.ends_with(tail)
 }
 
 /// A name that is safe to write into a YAML file and an audit record without quoting.
@@ -2760,7 +3001,8 @@ fn check_prices(
             .collect();
         let until = lines.get(i + 1).copied().unwrap_or(end);
         let line = line_of_key(text, "budget", rule.line, until);
-        for model in reached {
+        // A pattern reaches models not known yet: one with no price is refused when it is asked for (`no_price`).
+        for model in reached.into_iter().filter(|m| !m.contains('*')) {
             if price_for(model, &parsed.prices).is_none() {
                 errors.push(format!(
                     "{}:{line}: rule \"{}\" has a budget in dollars, and model \"{model}\" has no price, so its spend could not be counted. Add its price in US dollars per million tokens under prices:, for example\nprices:\n  {model}: {{ input: 3, output: 15 }}\nor take the model out of the rule.",
@@ -2853,12 +3095,78 @@ fn aliases(
                     None
                 }
             };
+            let when = d.when.as_ref().map(|w| When {
+                team: w.team.clone(),
+                tag: w.tag.clone(),
+                customer: w.customer.clone(),
+                min_prompt_tokens: w.min_prompt_tokens,
+                max_prompt_tokens: w.max_prompt_tokens,
+                tools: w.tools,
+                images: w.images,
+                header: w
+                    .header
+                    .as_ref()
+                    .and_then(|h| h.iter().next())
+                    .map(|(name, value)| (name.to_ascii_lowercase(), value.clone())),
+            });
+            if let Some(w) = &d.when {
+                let empty = w.team.is_none()
+                    && w.tag.is_none()
+                    && w.customer.is_none()
+                    && w.min_prompt_tokens.is_none()
+                    && w.max_prompt_tokens.is_none()
+                    && w.tools.is_none()
+                    && w.images.is_none()
+                    && w.header.is_none();
+                if empty {
+                    errors.push(format!("{at}: when has no condition, so it would keep the deployment for every request. Add team, tag, customer, min_prompt_tokens, max_prompt_tokens, tools, images or header, or remove it."));
+                }
+                if w.header.as_ref().is_some_and(|h| h.len() != 1) {
+                    errors.push(format!("{at}: when.header names one header and its value, for example `header: {{ x-tier: gold }}`."));
+                }
+                if let (Some(min), Some(max)) = (w.min_prompt_tokens, w.max_prompt_tokens)
+                    && min > max
+                {
+                    errors.push(format!("{at}: when.min_prompt_tokens ({min}) is above max_prompt_tokens ({max}), so no request could match. Swap them."));
+                }
+                if d.for_.is_some() {
+                    errors.push(format!("{at}: a deployment takes for or when, not both. Move the team or tag into when."));
+                }
+            }
+            let probe = match &d.probe {
+                None => None,
+                Some(p) => {
+                    if !(5..=3600).contains(&p.every_seconds) {
+                        errors.push(format!("{at}: probe.every_seconds is how often the deployment is checked, 5 to 3600."));
+                    }
+                    let chat = match p.with.as_deref() {
+                        None | Some("models") => {
+                            if !matches!(provider.kind, Kind::OpenAi | Kind::Anthropic) {
+                                errors.push(format!("{at}: probe with models lists the models of an openai or anthropic provider, and \"{}\" is of kind {}. Write `with: chat` to send it a one-token request instead.", provider.name, provider.kind.word()));
+                            }
+                            false
+                        }
+                        Some("chat") => true,
+                        Some(other) => {
+                            errors.push(format!("{at}: probe.with is \"{other}\". Write models (list the provider's models, free) or chat (a one-token request, billed by the provider)."));
+                            false
+                        }
+                    };
+                    Some(Probe {
+                        every_seconds: p.every_seconds,
+                        chat,
+                    })
+                }
+            };
             deployments.push(Deployment {
                 provider: d.provider.clone(),
                 model: d.model.clone(),
                 weight,
                 region: d.region.clone(),
                 for_,
+                when,
+                timeouts: timeouts(d.timeouts.as_ref(), &at, errors),
+                probe,
             });
         }
         let balance = match entry.balance.as_deref() {
@@ -2866,8 +3174,9 @@ fn aliases(
             Some("least_busy") => Balance::LeastBusy,
             Some("lowest_latency") => Balance::LowestLatency,
             Some("lowest_cost") => Balance::LowestCost,
+            Some("adaptive") => Balance::Adaptive,
             Some(other) => {
-                errors.push(format!("{at}: balance is \"{other}\". Write round_robin (in turn, by weight), least_busy (fewest requests in flight), lowest_latency (fastest first byte lately) or lowest_cost (cheapest by price)."));
+                errors.push(format!("{at}: balance is \"{other}\". Write round_robin (in turn, by weight), least_busy (fewest requests in flight), lowest_latency (fastest first byte lately), lowest_cost (cheapest by price) or adaptive (latency, error rate and cost, weighted)."));
                 Balance::RoundRobin
             }
         };
@@ -2890,6 +3199,58 @@ fn aliases(
                 ));
             }
         }
+        let served = |target: &String| {
+            providers
+                .iter()
+                .any(|p| p.models.iter().any(|m| model_matches(m, target)))
+                || parsed.aliases.iter().any(|a| a.name == *target)
+        };
+        for target in &entry.fallbacks {
+            if *target == entry.name || !served(target) {
+                errors.push(format!(
+                    "{at}: fallbacks names \"{target}\". Name another model a provider serves, or another alias."
+                ));
+            }
+        }
+        let fallback_on = match &entry.fallback_on {
+            None => FallbackOn::DEFAULT.to_vec(),
+            Some(words) => words
+                .iter()
+                .filter_map(|word| {
+                    let found = FallbackOn::ALL.iter().find(|(w, _)| w == word).map(|(_, on)| *on);
+                    if found.is_none() {
+                        errors.push(format!("{at}: fallback_on lists \"{word}\". Write any of rate_limit, server_error, timeout, unreachable, context_window and content_policy."));
+                    }
+                    found
+                })
+                .collect(),
+        };
+        if entry.fallback_on.is_some() && entry.fallbacks.is_empty() {
+            errors.push(format!("{at}: fallback_on says when to take the fallbacks, and the alias has none. Add fallbacks: [<model or alias>, ...], or remove fallback_on."));
+        }
+        let weights = match &entry.weights {
+            None => Weights::default(),
+            Some(w) => {
+                let weights = Weights {
+                    latency: w.latency.unwrap_or(1.0),
+                    errors: w.errors.unwrap_or(1.0),
+                    cost: w.cost.unwrap_or(1.0),
+                };
+                let parts = [weights.latency, weights.errors, weights.cost];
+                if parts.iter().any(|p| !(0.0..=100.0).contains(p))
+                    || parts.iter().all(|p| *p == 0.0)
+                {
+                    errors.push(format!(
+                        "{at}: weights are latency, errors and cost, each 0 to 100, not all 0."
+                    ));
+                }
+                if balance != Balance::Adaptive {
+                    errors.push(format!("{at}: weights apply to balance: adaptive only. Set balance: adaptive, or remove weights."));
+                }
+                weights
+            }
+        };
+        let alias_timeouts = timeouts(entry.timeouts.as_ref(), &at, errors);
         if errors.len() == before {
             out.push(Alias {
                 name: entry.name.clone(),
@@ -2899,6 +3260,10 @@ fn aliases(
                 context_window_fallback: entry.context_window_fallback.clone(),
                 content_policy_fallback: entry.content_policy_fallback.clone(),
                 session_affinity: entry.session_affinity,
+                timeouts: alias_timeouts,
+                fallbacks: entry.fallbacks.clone(),
+                fallback_on,
+                weights,
             });
         }
     }
@@ -3069,6 +3434,101 @@ fn provider_options(
 }
 
 /// Checks that `entry`'s fallback names another provider that speaks the same API and can serve each of its models.
+/// The longest any timeout may be: a day.
+const MAX_TIMEOUT_MS: u64 = 86_400_000;
+
+/// A `timeouts:` block, each value checked.
+fn timeouts(file: Option<&TimeoutsFile>, at: &str, errors: &mut Vec<String>) -> Timeouts {
+    let Some(file) = file else {
+        return Timeouts::default();
+    };
+    for (word, value) in [
+        ("connect_ms", file.connect_ms),
+        ("first_byte_ms", file.first_byte_ms),
+        ("total_ms", file.total_ms),
+        ("idle_ms", file.idle_ms),
+    ] {
+        if value.is_some_and(|ms| !(1..=MAX_TIMEOUT_MS).contains(&ms)) {
+            errors.push(format!(
+                "{at}: timeouts.{word} is in milliseconds, 1 to {MAX_TIMEOUT_MS} (a day)."
+            ));
+        }
+    }
+    if let (Some(first), Some(total)) = (file.first_byte_ms, file.total_ms)
+        && total < first
+    {
+        errors.push(format!(
+            "{at}: timeouts.total_ms ({total}) is shorter than first_byte_ms ({first}), so the first byte could never be waited for. Make total_ms at least first_byte_ms."
+        ));
+    }
+    Timeouts {
+        connect_ms: file.connect_ms,
+        first_byte_ms: file.first_byte_ms,
+        total_ms: file.total_ms,
+        idle_ms: file.idle_ms,
+    }
+}
+
+/// A provider's `keys:` pool, each entry checked: one source each, and never with `key_env`, `key_file` or
+/// `credential` beside it.
+fn key_pool(
+    entry: &ProviderFile,
+    bedrock: bool,
+    store: bool,
+    at: &dyn Fn(&str) -> String,
+    errors: &mut Vec<String>,
+) -> Vec<KeySource> {
+    if entry.keys.is_empty() {
+        return Vec::new();
+    }
+    if bedrock {
+        errors.push(format!(
+            "{}: a bedrock provider takes no keys. Gantry signs its requests with AWS credentials. Remove the keys list.",
+            at("keys")
+        ));
+        return Vec::new();
+    }
+    if entry.key_env.is_some() || entry.key_file.is_some() || entry.credential.is_some() {
+        errors.push(format!(
+            "{}: provider \"{}\" has a keys list and key_env, key_file or credential beside it. Put every key in the keys list and remove the others.",
+            at("keys"),
+            entry.name
+        ));
+    }
+    let mut out = Vec::new();
+    for key in &entry.keys {
+        match (&key.key_env, &key.credential) {
+            (Some(env), None)
+                if !env.is_empty() && env.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') =>
+            {
+                out.push(KeySource::Env(env.clone()));
+            }
+            (None, Some(name)) if valid_name(name) && store => {
+                out.push(KeySource::Credential(name.clone()));
+            }
+            (None, Some(_)) if !store => errors.push(format!(
+                "{}: a key of provider \"{}\" names a credential, and credentials are kept in the store, which this policy does not name. Add `store: {{ postgres_url_env: DATABASE_URL }}`, or use `key_env:`.",
+                at("keys"),
+                entry.name
+            )),
+            _ => errors.push(format!(
+                "{}: each entry of keys is `{{ key_env: <environment variable> }}` or `{{ credential: <name of a credential in the store> }}`, exactly one of them. The key itself never goes in this file.",
+                at("keys")
+            )),
+        }
+    }
+    let mut seen = out.clone();
+    seen.sort_by_key(|k| format!("{k:?}"));
+    if seen.windows(2).any(|pair| pair[0] == pair[1]) {
+        errors.push(format!(
+            "{}: provider \"{}\" lists the same key twice. List each once.",
+            at("keys"),
+            entry.name
+        ));
+    }
+    out
+}
+
 fn check_fallback(
     entry: &ProviderFile,
     kind: Kind,
@@ -3316,7 +3776,10 @@ fn providers(
             }
             // A model server on this machine or a private network, such as Ollama or vLLM, often takes no key.
             (None, false) if entry.allow_private && kind == Some(Kind::OpenAi) => {}
-            (None, false) if entry.key_file.is_some() || entry.credential.is_some() => {}
+            (None, false)
+                if entry.key_file.is_some()
+                    || entry.credential.is_some()
+                    || !entry.keys.is_empty() => {}
             // Vertex AI signs in with Google's Application Default Credentials.
             (None, false) if matches!(kind, Some(Kind::Vertex | Kind::VertexAnthropic)) => {}
             (None, false) => errors.push(format!(
@@ -3414,6 +3877,19 @@ fn providers(
                 ));
             }
         }
+        let keys = key_pool(entry, bedrock, parsed.store.is_some(), &at, errors);
+        let least_used_key = match entry.key_balance.as_deref() {
+            None | Some("round_robin") => false,
+            Some("least_used") => true,
+            Some(other) => {
+                errors.push(format!(
+                    "{}: key_balance is \"{other}\". Write round_robin (each key in turn) or least_used (the key with the fewest requests sent).",
+                    at("key_balance")
+                ));
+                false
+            }
+        };
+        let timeouts = timeouts(entry.timeouts.as_ref(), &at("timeouts"), errors);
         if let Some(kind) = kind {
             check_fallback(entry, kind, &models, &parsed.providers, &at, errors);
             out.push(Provider {
@@ -3433,6 +3909,9 @@ fn providers(
                 retries: entry.retries.unwrap_or(0),
                 accept_chat: entry.accept_chat.unwrap_or(false),
                 accept_messages: entry.accept_messages.unwrap_or(false),
+                timeouts,
+                keys,
+                least_used_key,
             });
         }
     }
@@ -3998,6 +4477,18 @@ pub fn warnings(policy_path: &Path, loaded: &Loaded) -> Vec<String> {
 
 /// A warning for each model a rule names that no provider serves. Requests for it are refused, so it is
 /// probably a typo or a provider not added yet, but it is not an error: the rule still decides correctly.
+/// Whether `model` is `<provider>/<name>` for a provider that serves `<name>`, by name or pattern.
+pub fn served_by_prefix(providers: &[Provider], model: &str) -> bool {
+    model.split_once('/').is_some_and(|(provider, name)| {
+        providers.iter().any(|p| {
+            p.name == provider
+                && p.models
+                    .iter()
+                    .any(|m| model_matches(m, name) || model_matches(name, m))
+        })
+    })
+}
+
 pub fn unserved_models(policy_path: &Path, loaded: &Loaded) -> Vec<String> {
     let mut warnings = Vec::new();
     for rule in loaded.policy.rule_list() {
@@ -4006,8 +4497,12 @@ pub fn unserved_models(policy_path: &Path, loaded: &Loaded) -> Vec<String> {
         };
         let models_line = line_of_key(&loaded.policy_text, "models", rule.line, usize::MAX);
         for model in models {
-            if !loaded.providers.iter().any(|p| p.models.contains(model))
-                && !loaded.aliases.iter().any(|a| a.name == *model)
+            if !loaded.providers.iter().any(|p| {
+                p.models
+                    .iter()
+                    .any(|m| model_matches(m, model) || model_matches(model, m))
+            }) && !loaded.aliases.iter().any(|a| a.name == *model)
+                && !served_by_prefix(&loaded.providers, model)
             {
                 warnings.push(format!(
                     "warning: {}:{models_line}: rule \"{}\" names model \"{model}\", which no provider serves, so requests for it are refused with unknown_model. Add it to a provider's models, or check the spelling.",
@@ -4030,11 +4525,6 @@ pub fn unserved_models(policy_path: &Path, loaded: &Loaded) -> Vec<String> {
             if model.trim() != model {
                 warnings.push(format!(
                     "{at} lists model \"{model}\" with spaces at its start or end, and no client sends that name. Remove the spaces."
-                ));
-            }
-            if model.contains('*') {
-                warnings.push(format!(
-                    "{at} lists model \"{model}\". A provider lists exact names, so \"*\" here is not a pattern: only a request for exactly \"{model}\" reaches it."
                 ));
             }
             let folded = model.trim().to_lowercase();
@@ -4875,7 +5365,7 @@ rules:
     }
 
     #[test]
-    fn near_duplicate_and_starred_model_names_are_warned_about() -> TestResult {
+    fn near_duplicate_model_names_are_warned_about_and_patterns_are_not() -> TestResult {
         let odd = GOOD.replace(
             "models: [gpt-4o-mini, gpt-4o]",
             "models: [gpt-4o-mini, gpt-4o, GPT-4o, \" gpt-x\", \"gpt-*\"]",
@@ -4893,7 +5383,8 @@ rules:
             warnings.contains("spaces at its start or end"),
             "{warnings}"
         );
-        assert!(warnings.contains("is not a pattern"), "{warnings}");
+        // `gpt-*` is a pattern now, not a mistake.
+        assert!(!warnings.contains("gpt-*"), "{warnings}");
         let plain = unserved_models(
             &path,
             &check("plain", GOOD, None)?.map_err(|e| e.join("\n"))?,
@@ -5937,6 +6428,187 @@ roles:
             errors.contains("role \"auditor\" is not defined under roles"),
             "{errors}"
         );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod resilience_tests {
+    use super::*;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn model_patterns_match_runs_of_characters() {
+        assert!(model_matches("gpt-*", "gpt-5"));
+        assert!(model_matches("gpt-*", "gpt-"));
+        assert!(!model_matches("gpt-*", "o3"));
+        assert!(model_matches("claude-*-5", "claude-sonnet-5"));
+        assert!(!model_matches("claude-*-5", "claude-sonnet-4"));
+        assert!(model_matches("*", "anything"));
+        assert!(model_matches("a*b*c", "aXbYc"));
+        assert!(!model_matches("a*b*c", "aXcYb"));
+        assert!(!model_matches("ab*ba", "aba"));
+        assert!(model_matches("exact", "exact"));
+        assert!(!model_matches("exact", "exactly"));
+    }
+
+    fn load_text(
+        name: &str,
+        text: &str,
+    ) -> Result<Result<Loaded, Vec<String>>, Box<dyn std::error::Error>> {
+        let dir =
+            std::env::temp_dir().join(format!("gantry-resilience-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("gantry.policy.yaml");
+        std::fs::write(&path, text)?;
+        Ok(load(&path, None))
+    }
+
+    const BASE: &str = "version: 1
+providers:
+  - name: east
+    kind: openai
+    url: https://api.openai.com
+    keys: [{ key_env: EAST_A }, { key_env: EAST_B }]
+    key_balance: least_used
+    timeouts: { connect_ms: 1000, first_byte_ms: 20000, total_ms: 60000, idle_ms: 5000 }
+    models: [gpt-*]
+  - name: claude
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_KEY
+    models: [claude-sonnet-5-5]
+aliases:
+  - name: smart
+    balance: adaptive
+    weights: { latency: 2, errors: 1, cost: 0 }
+    timeouts: { first_byte_ms: 10000 }
+    fallbacks: [claude-sonnet-5-5]
+    fallback_on: [rate_limit, timeout]
+    deployments:
+      - { provider: east, model: gpt-4o, probe: { every_seconds: 30 } }
+      - provider: east
+        model: gpt-4o-mini
+        timeouts: { first_byte_ms: 3000 }
+        when: { max_prompt_tokens: 2000, tools: false, header: { X-Tier: free } }
+rules:
+  - name: all
+    principals: { any: true }
+    models: [smart, gpt-*]
+";
+
+    #[test]
+    fn resilience_settings_load() -> TestResult {
+        let loaded = load_text("good", BASE)?.map_err(|e| e.join("\n"))?;
+        let east = &loaded.providers[0];
+        assert_eq!(
+            east.keys,
+            [
+                KeySource::Env("EAST_A".into()),
+                KeySource::Env("EAST_B".into())
+            ]
+        );
+        assert!(east.least_used_key);
+        assert_eq!(east.timeouts.idle_ms, Some(5000));
+        let smart = &loaded.aliases[0];
+        assert_eq!(smart.balance, Balance::Adaptive);
+        assert_eq!(smart.weights.latency, 2.0);
+        assert_eq!(smart.fallbacks, ["claude-sonnet-5-5"]);
+        assert_eq!(
+            smart.fallback_on,
+            [FallbackOn::RateLimit, FallbackOn::Timeout]
+        );
+        assert_eq!(
+            smart.deployments[0].probe,
+            Some(Probe {
+                every_seconds: 30,
+                chat: false
+            })
+        );
+        let when = smart.deployments[1].when.clone().unwrap_or_default();
+        assert_eq!(when.header, Some(("x-tier".into(), "free".into())));
+        assert_eq!(when.tools, Some(false));
+        assert_eq!(smart.deployments[1].timeouts.first_byte_ms, Some(3000));
+        Ok(())
+    }
+
+    #[test]
+    fn wrong_resilience_settings_are_named() -> TestResult {
+        for (from, to, says) in [
+            (
+                "first_byte_ms: 20000, total_ms: 60000",
+                "first_byte_ms: 20000, total_ms: 10",
+                "shorter than first_byte_ms",
+            ),
+            (
+                "connect_ms: 1000",
+                "connect_ms: 0",
+                "timeouts.connect_ms is in milliseconds",
+            ),
+            (
+                "key_balance: least_used",
+                "key_balance: random",
+                "key_balance is \"random\"",
+            ),
+            (
+                "keys: [{ key_env: EAST_A }, { key_env: EAST_B }]",
+                "keys: [{ key_env: EAST_A }, { key_env: EAST_A }]",
+                "the same key twice",
+            ),
+            (
+                "keys: [{ key_env: EAST_A }, { key_env: EAST_B }]",
+                "keys: [{ credential: x }]",
+                "credentials are kept in the store",
+            ),
+            (
+                "keys: [{ key_env: EAST_A }, { key_env: EAST_B }]",
+                "key_env: K\n    keys: [{ key_env: EAST_A }]",
+                "keys list and key_env",
+            ),
+            (
+                "fallbacks: [claude-sonnet-5-5]",
+                "fallbacks: [nothing]",
+                "fallbacks names \"nothing\"",
+            ),
+            (
+                "fallback_on: [rate_limit, timeout]",
+                "fallback_on: [sometimes]",
+                "fallback_on lists \"sometimes\"",
+            ),
+            (
+                "balance: adaptive",
+                "balance: round_robin",
+                "weights apply to balance: adaptive only",
+            ),
+            (
+                "every_seconds: 30",
+                "every_seconds: 1",
+                "probe.every_seconds",
+            ),
+            (
+                "every_seconds: 30",
+                "every_seconds: 30, with: sometimes",
+                "probe.with is \"sometimes\"",
+            ),
+            ("tools: false,", "", "keeps"),
+            (
+                "max_prompt_tokens: 2000",
+                "max_prompt_tokens: 2000, min_prompt_tokens: 5000",
+                "is above max_prompt_tokens",
+            ),
+        ] {
+            assert!(BASE.contains(from), "{from}");
+            let text = BASE.replace(from, to);
+            match load_text("bad", &text)? {
+                Ok(_) if says == "keeps" => {}
+                Ok(_) => return Err(format!("{to} was accepted").into()),
+                Err(errors) => {
+                    let errors = errors.join("\n");
+                    assert!(errors.contains(says), "{to}: {errors}");
+                }
+            }
+        }
         Ok(())
     }
 }

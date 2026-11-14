@@ -1,0 +1,68 @@
+---
+title: Key pools
+description: Give a provider several API keys, spread requests across them, and move to the next key when one is revoked or out of quota.
+sidebar:
+  order: 8
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A provider with `keys:` sends each request with one key of the pool. A key the provider refuses is set aside and the request is sent again at once with the next key, so a revoked key or an exhausted quota does not reach the caller.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    keys:
+      - { key_env: OPENAI_KEY_TEAM_A }
+      - { key_env: OPENAI_KEY_TEAM_B }
+      - { key_env: OPENAI_KEY_TEAM_C }
+    key_balance: least_used
+    models: [gpt-4o]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [gpt-4o]
+```
+
+## Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `keys` | list | none | Each entry is `{ key_env: <variable> }` or `{ credential: <name> }` (a provider credential in the [store](/operations/store/)). Replaces `key_env`, `key_file` and `credential` on the provider. |
+| `key_balance` | string | `round_robin` | `round_robin` takes the keys in turn. `least_used` takes the key that has sent the fewest requests through this gateway. |
+
+`gantry check` refuses a pool beside `key_env`, `key_file` or `credential`, an entry with both or neither source, a key listed twice, a credential without a store, and a pool on a `bedrock` provider. `gantry serve` refuses to start when a key's variable is not set.
+
+## Behavior
+
+| The provider answers | The key | The request |
+|---|---|---|
+| 401 or 403 | Set aside for an hour | Sent again at once with the next key |
+| 429 | Rests for the answer's `Retry-After` seconds (at most 3600), or 60 seconds | Sent again at once with the next key |
+| anything else | Stays in turn | Handled as usual (retries, cooldowns, fallbacks) |
+
+- A switch to the next key does not use up one of the provider's `retries`.
+- When every key is set aside, the one back soonest is used: the caller gets the provider's own answer, never a refusal of Gantry's for lack of a key.
+- A key is named by the first 8 hex characters of its SHA-256 everywhere: the attempts record, the server log, metrics. No part of a key is ever written.
+- A new key (another hash) is used at once after a reload, even if the key it replaced was set aside.
+- Batches and realtime sessions use the pool's first key.
+
+Every switch is recorded:
+
+```json
+{"event":"attempts","id":"01M7...","attempts":[{"provider":"openai","outcome":"401","key":"9f2c41aa"},{"provider":"openai","outcome":"200","key":"03be7d11"}]}
+```
+
+and counted in `gantry_provider_key_switches_total{provider="openai",status="401"}`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Provider credentials" href="/governance/provider-credentials/" description="Keys kept sealed in the store." />
+	<LinkCard title="Retries and fallbacks" href="/routing/retries-and-fallbacks/" description="What happens after the pool." />
+</CardGrid>

@@ -55,14 +55,52 @@ Team `legal` reaches only `azure-eu`. Everyone else gets the fastest of the two 
 | `least_busy` | The fewest requests in flight through this gateway | `least_busy: 2 in flight` |
 | `lowest_latency` | The lowest 90th percentile time to first byte over its last 32 answers on this gateway, or with a [store](/operations/store/#session-pins-and-latency) over the last 32 answers on each gateway, pooled, so every replica ranks deployments on the same numbers. A deployment not measured yet goes first, so each is measured before it is judged | `lowest_latency: p90 time to first byte 412 ms` |
 | `lowest_cost` | The cheapest by its model's [price](/routing/pricing/), input plus output per million tokens. A deployment with no price goes after every priced one | `lowest_cost: $2.75 per million tokens in and out` |
+| `adaptive` | The lowest score of latency, error rate and cost, weighted. See [Adaptive](#adaptive) | `adaptive: score 0.42 (p90 412 ms, errors 3%, $2.75 per million tokens)` |
 
 Before any balance: a deployment cooling down after a failure is passed over, and once its cooldown ends one request probes it (`probe: ...`). The rest of the deployments follow as the chain of fallbacks, cooling ones last.
 
+**Rate limits.** A deployment whose provider said in its last answer, within the last minute, that less than 5% of a rate limit is left goes after the deployments with room, before those cooling down. Gantry reads OpenAI's `x-ratelimit-remaining-requests` and `x-ratelimit-remaining-tokens` against their `x-ratelimit-limit-*`, and Anthropic's `anthropic-ratelimit-*-remaining` against `anthropic-ratelimit-*-limit`. This applies under every balance, so traffic moves off a nearly exhausted key before it starts getting 429s.
+
 The 90th percentile is used rather than the average, so one slow answer does not move a deployment, while a deployment that stays slow loses its place within 32 answers. Each gateway measures its own path to the provider.
+
+## Adaptive
+
+`balance: adaptive` scores each deployment that is not cooling down and picks the lowest:
+
+```text
+score = weights.latency * (p90 / slowest p90) + weights.errors * error rate + weights.cost * (price / dearest price)
+```
+
+- **Latency** is the p90 time to first byte that `lowest_latency` uses, shared through the store when there is one. A deployment not measured yet counts as fastest, so each is measured.
+- **Error rate** is a moving average of the deployment's attempts on this gateway: each failure (no answer, a timeout, a 429 or a 5xx) moves it a fifth of the way to 1, each answer a fifth of the way to 0. It is remembered after the circuit closes, so a deployment that just came back gets less traffic until it has answered for a while.
+- **Cost** is its model's price, input plus output per million tokens. A deployment with no price counts as the dearest.
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o, gpt-4o-mini]
+aliases:
+  - name: smart
+    balance: adaptive
+    weights: { latency: 2, errors: 3, cost: 1 }
+    deployments:
+      - { provider: openai, model: gpt-4o }
+      - { provider: openai, model: gpt-4o-mini }
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [smart]
+```
+
+Each weight is 0 to 100, not all 0. `gantry check` refuses `weights` on any other balance.
 
 ## Tags and teams pick deployments
 
-A deployment with `for: { tag: <tag> }` or `for: { team: <team> }` is kept for those requests.
+A deployment with `for: { tag: <tag> }` or `for: { team: <team> }` is kept for those requests. [`when:`](/routing/conditional-routing/) keeps a deployment by more conditions the same way.
 
 - A request whose team or tags match some kept deployments goes only to those, balanced among them.
 - A request that matches none goes to the deployments kept for nobody.

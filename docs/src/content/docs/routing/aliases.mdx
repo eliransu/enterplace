@@ -54,7 +54,14 @@ rules:
 | `deployments[].weight` | integer | `1` | 1 to 1000. How often this deployment is picked against the others. |
 | `deployments[].region` | string | none | A region label such as `eu`. A rule with `regions:` reaches only deployments labelled with one. See [Residency](/routing/strategies/#residency-regions). |
 | `deployments[].for` | map | none | `{ team: <team> }` or `{ tag: <tag> }`: kept for those requests. See [Tags and teams](/routing/strategies/#tags-and-teams-pick-deployments). |
-| `balance` | string | `round_robin` | `round_robin`, `least_busy`, `lowest_latency` or `lowest_cost`. See [Routing strategies](/routing/strategies/). |
+| `deployments[].when` | map | none | Conditions on the request (team, tag, customer, prompt size, tools, images, a header): kept for requests that meet them. See [Conditional routing](/routing/conditional-routing/). |
+| `deployments[].timeouts` | map | the alias's | Time limits for this deployment. See [Timeouts](/routing/timeouts/). |
+| `deployments[].probe` | map | none | A background health check. See [Health probes](/routing/health-probes/). |
+| `balance` | string | `round_robin` | `round_robin`, `least_busy`, `lowest_latency`, `lowest_cost` or `adaptive`. See [Routing strategies](/routing/strategies/). |
+| `weights` | map | `{ latency: 1, errors: 1, cost: 1 }` | For `balance: adaptive`. See [Adaptive](/routing/strategies/#adaptive). |
+| `timeouts` | map | the providers' | Time limits for every deployment that sets none. See [Timeouts](/routing/timeouts/). |
+| `fallbacks` | list | none | Models or aliases tried in turn when every deployment failed. See [Alias fallbacks](/routing/retries-and-fallbacks/#alias-fallbacks). |
+| `fallback_on` | list | `[rate_limit, server_error, timeout, unreachable]` | Which failures move a request on to `fallbacks`. |
 | `session_affinity` | boolean | `false` | Keep a coding agent's session on one deployment while it answers. See [Session affinity](/routing/strategies/#session-affinity-for-coding-agents). |
 | `cooldown_seconds` | integer | `30` | 0 to 3600. How long a failed deployment is passed over after its first failure. Each further failure doubles it, up to 16 times. |
 | `context_window_fallback` | string | none | A model or alias to send a request to when a deployment says the prompt is too long. |
@@ -68,15 +75,15 @@ Aliases change without a restart, as rules do.
 
 **Picking.** `round_robin` takes deployments in turn, each as often as its `weight`. `least_busy` takes the one with the fewest requests in flight through this Gantry process, counted until the answer has been passed on. The other deployments follow in the order written.
 
-**Cooldown.** A deployment that fails (no connection, a timeout, a 429 or a 5xx) is passed over for `cooldown_seconds`, and the request goes on to the next deployment at once, with each provider's own `retries`. When every deployment is cooling down, they are still tried in order: an alias never refuses a request only because each deployment failed once.
+**Cooldown.** A deployment that fails (no connection, a [timeout](/routing/timeouts/), a 429 or a 5xx, or a failed [health probe](/routing/health-probes/)) is passed over for `cooldown_seconds`, and the request goes on to the next deployment at once, with each provider's own `retries`. When every deployment is cooling down, they are still tried in order: an alias never refuses a request only because each deployment failed once.
 
 **Circuit breaker.** Each deployment has a circuit. A failure opens it for `cooldown_seconds`; each failure after that doubles the time, up to 16 times `cooldown_seconds`. When the time is up, the circuit is half open: one request probes the deployment, tried there first, while every other request still passes it over. If the probe gets an answer, the circuit closes and the backoff starts over; if it fails, the circuit opens again for longer. A probe that never comes back (its caller left) does not hold the deployment out: after another `cooldown_seconds` a new probe goes. So a deployment that dies gets a probe now and then, not its share of the traffic, and callers are served by the others. `tests/routing.rs` holds this to a chaos check: one deployment of three dies under traffic from ten callers at once, no caller sees an error, and the dead one gets only probes. Cooldown and in-flight counts live in memory and survive reloads. With a [store](/operations/store/#cooldowns), a cooldown is shared: a deployment that fails on one replica is passed over by every replica within about a second, until its cooldown ends or it answers on any replica. In-flight counts for `least_busy` stay per replica. Session pins and the latency `lowest_latency` ranks on are shared through the store too.
 
 **The model sent.** The JSON body's `model` is replaced with the deployment's `model` (the form field `model` for an audio upload). Nothing else in the body changes. The deployment's model need not be in the provider's `models`; listing it also lets callers ask for it by name.
 
-**Same API.** All deployments of an alias take the same requests: `openai` and `azure`, `anthropic` and `bedrock`, or `gemini` and `vertex`.
+**Same API.** All deployments of an alias take the same requests: `openai` and `azure`, `anthropic` and `bedrock`, or `gemini` and `vertex`. To reach the other API, name a model or alias of it in `fallbacks`.
 
-**Named fallbacks.** When a deployment answers 4xx with a context window error (OpenAI's `context_length_exceeded`, Anthropic's "prompt is too long", or a message naming the maximum context length), the request goes to `context_window_fallback`. When it answers with a content policy error (`content_policy_violation` or Azure's `content_filter`), it goes to `content_policy_fallback`. Each takes the same API and translation as the request, and its own fallbacks are not followed. Any other 4xx goes to the caller unchanged.
+**Named fallbacks.** When a deployment answers 4xx with a context window error (OpenAI's `context_length_exceeded`, Anthropic's "prompt is too long", or a message naming the maximum context length), the request goes to `context_window_fallback`. When it answers with a content policy error (`content_policy_violation` or Azure's `content_filter`), it goes to `content_policy_fallback`. Each may speak the other API (the request is translated as it is sent), and its own fallbacks are not followed. Any other 4xx goes to the caller unchanged.
 
 ## Audit records and cost
 

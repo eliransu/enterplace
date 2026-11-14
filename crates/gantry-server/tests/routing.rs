@@ -120,15 +120,12 @@ fn smart(balance: Balance, deployments: &[(&str, &str, u32)]) -> Alias {
                 provider: p.to_string(),
                 model: m.to_string(),
                 weight: *w,
-                region: None,
-                for_: None,
+                ..Deployment::default()
             })
             .collect(),
         balance,
         cooldown_seconds: 30,
-        context_window_fallback: None,
-        content_policy_fallback: None,
-        session_affinity: false,
+        ..Alias::default()
     }
 }
 

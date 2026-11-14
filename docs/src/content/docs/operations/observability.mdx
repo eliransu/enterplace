@@ -31,6 +31,8 @@ Metrics: http://127.0.0.1:9464/metrics
 |---|---|---|---|
 | `gantry_requests_total` | counter | `route`, `verdict`, `code`, `provider` | Every decision, as the audit log records it |
 | `gantry_upstream_responses_total` | counter | `provider`, `outcome` | Every attempt at a provider, retries and fallbacks included |
+| `gantry_provider_key_switches_total` | counter | `provider`, `status` | A [key pool](/routing/key-pools/) key set aside after a 401, 403 or 429 |
+| `gantry_deployment_up` | gauge | `deployment` | 1 when the last [health probe](/routing/health-probes/) of the deployment got an answer, 0 when not |
 | `gantry_upstream_seconds` | histogram | `provider` | Time from sending to a provider to its answer's headers |
 | `gantry_overhead_seconds` | histogram | none | Gantry's own time on a forwarded request: identify, decide, guardrails, record, and handing the answer back. The same figure as the `Server-Timing: gantry;dur=` header |
 | `gantry_audit_write_seconds` | histogram | none | Time of each write to the audit log. Under load one write carries many records |

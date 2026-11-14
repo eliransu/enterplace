@@ -1,0 +1,76 @@
+---
+title: Timeouts
+description: Set connect, first-byte, total and idle time limits per provider, alias and deployment, so a slow provider fails over instead of holding callers.
+sidebar:
+  order: 6
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A provider that hangs holds every caller sent to it. Time limits turn a hang into a failure, and a failure moves the request on to the next deployment or fallback.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o, gpt-4o-mini]
+    timeouts: { connect_ms: 2000, first_byte_ms: 60000 }
+  - name: azure
+    kind: azure
+    url: https://acme.openai.azure.com
+    key_env: AZURE_KEY
+    api_version: 2024-10-21
+    models: [gpt-4o-azure]
+    deployments: { gpt-4o: prod-gpt-4o, gpt-4o-azure: prod-gpt-4o }
+aliases:
+  - name: smart
+    timeouts: { first_byte_ms: 20000, idle_ms: 30000 }
+    deployments:
+      - provider: openai
+        model: gpt-4o
+        timeouts: { first_byte_ms: 8000 }
+      - { provider: azure, model: gpt-4o }
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [smart]
+```
+
+A request for `smart` gives `openai` 8 seconds to start answering. If it does not, the request goes to `azure` with 20 seconds (the alias's), and `openai` cools down.
+
+## Fields
+
+`timeouts:` goes on a provider, an alias or an alias's deployment. Each value is in milliseconds, 1 to 86400000.
+
+| Field | Gateway default | Description |
+|---|---|---|
+| `connect_ms` | `5000` | For the TCP and TLS connection to the provider. |
+| `first_byte_ms` | `120000` | From sending to the answer's headers. Capped at `total_ms`. |
+| `total_ms` | `1800000` | From sending to the end of the answer, body included. |
+| `idle_ms` | `300000` | Between two pieces of the answer once it has started, for example two events of a stream. |
+
+Each field is looked up on its own: the deployment's, then its alias's, then its provider's, then the gateway's default. A request for a model that is not an alias uses its provider's, then the gateway's.
+
+`gantry check` refuses a value out of range and a `total_ms` shorter than `first_byte_ms`.
+
+## Behavior
+
+**Before the answer starts.** A connect or first-byte timeout is a failure like a 5xx: the provider's `retries` apply, then the next deployment, the provider's `fallback`, or the alias's [`fallbacks`](/routing/retries-and-fallbacks/#alias-fallbacks). An alias's deployment that timed out [cools down](/routing/aliases/#behavior). The attempts record says `upstream_timeout` (first byte) or `upstream_unreachable` (connect).
+
+**After the answer starts.** Nothing is tried again once a byte has reached the caller. When `total_ms` or `idle_ms` passes, Gantry cuts the answer off: the caller's stream breaks as it would if the provider broke it, and an alias's deployment cools down, so the next request goes elsewhere. The server log names the provider and which limit passed.
+
+<Aside type="note">
+`idle_ms` counts a stream's keep-alive comments and ping events as pieces, so a reasoning model that sends them while it thinks is not cut off.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Retries and fallbacks" href="/routing/retries-and-fallbacks/" description="What a timeout moves the request on to." />
+	<LinkCard title="Health probes" href="/routing/health-probes/" description="Find a dead deployment before a caller does." />
+</CardGrid>

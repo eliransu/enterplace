@@ -1,0 +1,79 @@
+---
+title: Health probes
+description: Check deployments in the background so one that is down is passed over before any caller is sent to it, on every replica.
+sidebar:
+  order: 7
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Without a probe, a deployment is found down by the first request sent to it. With `probe:`, Gantry checks it on a schedule and cools it down when it fails, so callers go to the others from the start.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o]
+  - name: local
+    kind: openai
+    url: http://10.0.0.5:8000
+    allow_private: true
+    models: [llama-4]
+aliases:
+  - name: smart
+    deployments:
+      - provider: local
+        model: llama-4
+        probe: { every_seconds: 15 }
+      - provider: openai
+        model: gpt-4o
+        probe: { every_seconds: 60, with: chat }
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [smart]
+```
+
+## Fields
+
+`probe:` goes on an alias's deployment.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `every_seconds` | integer | required | 5 to 3600. How often the deployment is checked. |
+| `with` | string | `models` | `models` sends `GET /v1/models` (no tokens, no charge). `chat` sends a one-token request to the deployment's model, which the provider bills. |
+
+`with: models` works on `openai` and `anthropic` providers. Other kinds need `with: chat`; `gantry check` says so.
+
+## Behavior
+
+- A probe that gets no answer, a 429 or a 5xx marks the deployment down: it cools down for its alias's `cooldown_seconds`, doubling on each further failure, as a failed request would make it.
+- A probe that gets any other answer marks it up and closes its circuit, so a deployment that came back is used again without waiting for its cooldown.
+- A probe has the deployment's [time limits](/routing/timeouts/) and its provider's key (the next key of a [key pool](/routing/key-pools/)).
+- With a [store](/operations/store/#cooldowns), a cooldown is shared: a deployment one replica finds down is passed over by every replica within about a second. Each replica sends its own probes.
+
+## Where to see it
+
+`GET /readyz` lists each probed deployment under `checks.deployments`. A down deployment does not make the gateway unready: it still serves through the others.
+
+```json
+"deployments": {"ready": true, "probed": {"local/llama-4": {"up": false, "checked": "2026-11-14T09:30:02.114Z", "outcome": "upstream_unreachable"}}}
+```
+
+`GET /metrics` has `gantry_deployment_up{deployment="local/llama-4"}`, 1 or 0.
+
+<Aside type="note">
+Probes are not written to the audit log. A `with: chat` probe's tokens appear on the provider's bill, not in Gantry's spend.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Aliases" href="/routing/aliases/" description="Cooldowns and the circuit breaker a probe drives." />
+	<LinkCard title="Health checks" href="/operations/operations/" description="/healthz and /readyz." />
+</CardGrid>
