@@ -3,15 +3,15 @@ resolver = "3"
 members = ["crates/gantry-core", "crates/gantry-server", "crates/gantry-cli", "crates/gantry-bench", "crates/gantry-console"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
 
 [workspace.dependencies]
-gantry-core = { path = "crates/gantry-core", version = "0.0.1" }
-gantry-server = { path = "crates/gantry-server", version = "0.0.1" }
-gantry-console = { path = "crates/gantry-console", version = "0.0.1" }
+gantry-core = { path = "crates/gantry-core", version = "0.1.0" }
+gantry-server = { path = "crates/gantry-server", version = "0.1.0" }
+gantry-console = { path = "crates/gantry-console", version = "0.1.0" }
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio", "server-auto", "server-graceful", "service"] }

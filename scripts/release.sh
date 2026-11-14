@@ -9,6 +9,8 @@
 #   scripts/release.sh reproduce builds the linux tarballs twice from scratch and fails unless both are the same bytes
 #   scripts/release.sh sign      writes SHA256SUMS and provenance.json in dist/ and signs both (scripts/signing.py)
 #   scripts/release.sh verify    checks dist/ against the signatures and the public key in release/allowed_signers
+#   scripts/release.sh bump X.Y.Z [repo]  sets the version in Cargo.toml and Cargo.lock and dates its CHANGELOG section
+#                                today, in this repository or in [repo] (../gantry-enterprise); see RELEASING.md there
 # Builds use the last commit's time as SOURCE_DATE_EPOCH unless it is set, so a rebuild of a commit is identical.
 # <src> is the source hash `gantry version` prints. Each tarball gets a .sha256 and a .BUILD file (the version line),
 # and the tarballs of the targets a run builds are deleted first, so a stale one cannot survive a partial run.
@@ -96,8 +98,16 @@ case "${1:-}" in
   verify)
     exec python3 scripts/signing.py verify dist
     ;;
+  bump)
+    [ -n "${2:-}" ] || { echo "usage: scripts/release.sh bump X.Y.Z [repository]" >&2; exit 2; }
+    repo=${3:-.}
+    python3 scripts/version.py --root "$repo" --bump "$2"
+    # Only the workspace's own entries change in Cargo.lock; no dependency moves.
+    (cd "$repo" && { cargo update --workspace --offline -q 2>/dev/null || cargo update --workspace -q; })
+    python3 scripts/version.py --root "$repo"
+    ;;
   *)
-    sed -n '2,16p' "$0"
+    sed -n '2,18p' "$0"
     exit 2
     ;;
 esac
