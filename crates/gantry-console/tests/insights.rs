@@ -106,6 +106,11 @@ fn setup(name: &str) -> Result<Setup, Error> {
             ..Entry::default()
         });
         r.insert("user_agent".into(), "claude-cli/2.0.1".into());
+        // An events guardrail gave the payments request its session and turn.
+        if team == "payments" {
+            r.insert("session".into(), "ses_0123456789abcdef01234567".into());
+            r.insert("turn".into(), "turn_0123456789abcdef".into());
+        }
         r
     };
     log.append_record(&decision(
@@ -248,6 +253,22 @@ async fn the_request_log_filters_and_proves_each_row() -> TestResult {
         page.contains("Read the kept body")
             && page.contains("/console/audit?record=01PAY0000000000000000000001")
     );
+    // The row's detail names its session and its turn, and the session is one more text filter.
+    assert!(
+        page.contains("ses_0123456789abcdef01234567") && page.contains("turn_0123456789abcdef"),
+        "the session and the turn are in the row's detail"
+    );
+    assert!(page.contains(r#"name="session""#) && page.contains(r#"placeholder="Session""#));
+    let (_, _, page) = send(
+        &s.app,
+        get(
+            "/console/requests?session=ses_0123456789abcdef01234567",
+            &cookie,
+        )?,
+    )
+    .await?;
+    assert!(page.contains("01PAY") && !page.contains("01SRC"));
+    assert!(page.contains(r#"name="session" value="ses_0123456789abcdef01234567""#));
 
     // A record changed on disk no longer proves: its row says so.
     let text = std::fs::read_to_string(&s.audit)?.replace("dana.levi", "dana.levy");

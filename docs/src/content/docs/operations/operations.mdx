@@ -292,6 +292,7 @@ With the policy on (the default: 1,000 keys and a `secrets` guardrail that block
 | `--stream` | off | Streamed answers |
 | `--messages` | off | Send to `/v1/messages`. Needs the policy |
 | `--no-policy` | off | Measure forwarding alone |
+| `--events` | off | Add an [events guardrail](/governance/plugin-events/#overhead) in observe mode to every rule, delivering to a plugin service in the same process. Needs the policy |
 | `--upstream-ms N` | 0 | The mock waits N milliseconds before each answer, as a provider does. Each target is then warmed by raising the rate over 5 seconds, and the two runs are 35 seconds apart. See [Performance](/operations/performance/) |
 | `--max-p99-overhead-us N` | none | Exit 1 when added latency at p99 is above N microseconds, or when the mock alone has a p99 above N (too noisy to measure) |
 

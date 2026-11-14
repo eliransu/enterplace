@@ -831,7 +831,7 @@ async fn answer(
         asked
             .extra
             .insert("turn".into(), context.turn_id.as_str().into());
-        if let Some(refusal) = crate::events::refused_session(&mcp.app, &plugins, &context).await {
+        if let Some(refusal) = crate::events::refused_session(&mcp.app, &plugins, &context) {
             return Err(refusal);
         }
         let mut call = core::Event::mcp_call(

@@ -213,6 +213,10 @@ struct Owned {
     cloud: Value,
     /// Seconds since the epoch when it was created through Gantry.
     created: u64,
+    /// For events plugins. A response: the session and turn it was answered in (`events::Carry::turn_of`), for a
+    /// request that names it in `previous_response_id`. A batch or its output file: the decision its lines were
+    /// checked under when that is not its own, as `{"checked": ...}`. Null otherwise.
+    events: Value,
 }
 
 impl Owned {
@@ -244,7 +248,13 @@ impl Owned {
             settled: false,
             cloud: Value::Null,
             created: now_secs(),
+            events: Value::Null,
         }
+    }
+
+    /// The decision its lines were checked under: a batch is the session of its lines' events by it.
+    fn checked(&self) -> &str {
+        self.events["checked"].as_str().unwrap_or(&self.decision)
     }
 
     fn record(&self, id: &str) -> Map<String, Value> {
@@ -288,6 +298,9 @@ impl Owned {
             record.insert("cloud".into(), self.cloud.clone());
         }
         record.insert("created".into(), self.created.into());
+        if !self.events.is_null() {
+            record.insert("events".into(), self.events.clone());
+        }
         record
     }
 
@@ -316,6 +329,7 @@ impl Owned {
             settled: false,
             cloud: record["cloud"].clone(),
             created: record["created"].as_u64().unwrap_or_default(),
+            events: record["events"].clone(),
         };
         Some((record["object_id"].as_str()?.to_string(), owned))
     }
@@ -1486,7 +1500,7 @@ async fn prepare<'a>(
                     Op::File(_) => Cloud::File(id),
                     Op::FileContent(_) => {
                         let guard = (file.purpose == "batch_output")
-                            .then(|| result_guards(policy, &file, &id, Results::OpenAi))
+                            .then(|| result_guards(state, policy, &file, &id, Results::OpenAi))
                             .flatten();
                         Cloud::Content(id, guard)
                     }
@@ -1504,7 +1518,7 @@ async fn prepare<'a>(
                 Op::File(_) => (Method::GET, format!("/v1/files/{id}"), Then::Read(id)),
                 Op::FileContent(_) => {
                     let then = (file.purpose == "batch_output")
-                        .then(|| result_guards(policy, &file, &id, Results::OpenAi))
+                        .then(|| result_guards(state, policy, &file, &id, Results::OpenAi))
                         .flatten()
                         .map_or(Then::Stream, Then::Guard);
                     (Method::GET, format!("/v1/files/{id}/content"), then)
@@ -1564,7 +1578,7 @@ async fn prepare<'a>(
             let (method, target, then) = match op {
                 Op::MessageBatch(_) => (Method::GET, base, Then::Read(id)),
                 Op::MessageBatchResults(_) => {
-                    let then = result_guards(policy, &batch, &id, Results::Anthropic)
+                    let then = result_guards(state, policy, &batch, &id, Results::Anthropic)
                         .map_or(Then::Stream, Then::Guard);
                     (Method::GET, format!("{base}/results"), then)
                 }
@@ -1663,6 +1677,8 @@ async fn prepare<'a>(
             )
             .await?;
             let mut created = Owned::new(Item::Batch, &file.provider, person, seen, decision);
+            // The lines were checked at the file's upload: their events' session follows from that decision.
+            created.events = json!({ "checked": file.checked() });
             created.purpose = file.model_of.get("").cloned().unwrap_or_default();
             created.models = file.models.clone();
             created.lines = file.lines;
@@ -2842,9 +2858,24 @@ fn owner_of(policy: &Policy, owned: &Owned) -> Principal {
         })
 }
 
+/// The session and turn the caller's own response `id` was answered in, when Gantry recorded them.
+pub(crate) async fn turn_of(
+    state: &AppState,
+    person: &Principal,
+    id: &str,
+) -> Option<(String, gantry_core::events::Prior)> {
+    let found = state
+        .owned
+        .get(id)
+        .await
+        .filter(|o| o.item == Item::Response && o.reachable_by(person))?;
+    crate::events::prior_of(&found.events)
+}
+
 /// What checks a batch's results on the way to the caller: the `on: [answer]` guardrails of the owner's rule
-/// (as observe mode runs them), and whose results they are. None when that rule runs none on answers.
+/// (as observe mode runs them), its events plugins, and whose results they are. None when that rule has neither.
 fn result_guards(
+    state: &AppState,
     policy: &Policy,
     owned: &Owned,
     object_id: &str,
@@ -2852,17 +2883,20 @@ fn result_guards(
 ) -> Option<Box<GuardResults>> {
     let who = owner_of(policy, owned);
     let rule = policy.rule_for(&who)?;
-    let guards: Vec<_> = crate::observed_guards(policy, &rule.guardrails)
-        .unwrap_or_else(|| rule.guardrails.clone())
-        .into_iter()
-        .filter(|g| g.on.answer)
-        .collect();
-    (!guards.is_empty()).then(|| {
+    let all =
+        crate::observed_guards(policy, &rule.guardrails).unwrap_or_else(|| rule.guardrails.clone());
+    let plugins = crate::events::guards_for(state, &all);
+    let guards: Vec<_> = all.into_iter().filter(|g| g.on.answer).collect();
+    (!guards.is_empty() || !plugins.is_empty()).then(|| {
         Box::new(GuardResults {
             object_id: object_id.to_string(),
             guards,
+            plugins,
             person: who.name,
             team: who.team,
+            org: who.org,
+            checked: owned.checked().to_string(),
+            model: owned.models.first().cloned().unwrap_or_default(),
             api,
         })
     })
@@ -2881,8 +2915,14 @@ enum Results {
 struct GuardResults {
     object_id: String,
     guards: Vec<gantry_core::guard::Guardrail>,
+    /// The rule's events guardrails and the binary's own plugin: each line's answer is an event of its turn.
+    plugins: Vec<gantry_core::guard::Guardrail>,
     person: String,
     team: String,
+    org: String,
+    /// The decision the batch's lines were checked under: the session of their events.
+    checked: String,
+    model: String,
     api: Results,
 }
 
@@ -2924,16 +2964,42 @@ async fn guard_results(
             Results::OpenAi => "/v1/batches",
             Results::Anthropic => "/v1/messages/batches",
         };
-        let (verdict, found) = crate::check_answer(
-            state,
-            &check.guards,
-            &check.person,
-            &check.team,
-            path,
-            decision,
-            &answer,
-        )
-        .await;
+        let (mut verdict, mut found) = if check.guards.is_empty() {
+            (Ok(answer.clone()), Vec::new())
+        } else {
+            crate::check_answer(
+                state,
+                &check.guards,
+                &check.person,
+                &check.team,
+                path,
+                decision,
+                &answer,
+            )
+            .await
+        };
+        // The events plugins see the answer the caller is about to get: after the answer guardrails masked it.
+        let mut plugins = Vec::new();
+        if !check.plugins.is_empty()
+            && let Ok(after) = &mut verdict
+        {
+            let of = crate::events::Line {
+                person: &check.person,
+                team: &check.team,
+                org: &check.org,
+                checked: &check.checked,
+                custom_id: line["custom_id"].as_str().unwrap_or_default(),
+                decision,
+                route: path,
+                model: answer["model"].as_str().unwrap_or(&check.model),
+            };
+            let lined = crate::events::batch_result(state, &check.plugins, &of, after).await;
+            found.extend(lined.audit);
+            plugins = lined.entries;
+            if let Some((_, message)) = lined.refused {
+                verdict = Err(message);
+            }
+        }
         let word = match &verdict {
             Err(_) => "block",
             Ok(after) if *after != answer => "mask",
@@ -2958,7 +3024,7 @@ async fn guard_results(
                 }
             }
         }
-        if !found.is_empty() {
+        if !found.is_empty() || plugins.iter().any(|e| e["mode"] != "observe") {
             let mut record = Map::new();
             record.insert("event".into(), "batch_result_guardrails".into());
             record.insert("id".into(), decision.into());
@@ -2971,6 +3037,9 @@ async fn guard_results(
                 "guardrails".into(),
                 serde_json::to_value(&found).unwrap_or_default(),
             );
+            if !plugins.is_empty() {
+                record.insert("events".into(), plugins.into());
+            }
             if !write(state, record).await {
                 return Err(Refusal::new(
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -3022,11 +3091,11 @@ async fn check_lines(
         refusal
     };
     let observe = policy.mode() == gantry_core::policy::Mode::Observe;
-    let guards: Vec<_> = crate::observed_guards(policy, &rule.guardrails)
-        .unwrap_or_else(|| rule.guardrails.clone())
-        .into_iter()
-        .filter(|g| g.on.request)
-        .collect();
+    let all =
+        crate::observed_guards(policy, &rule.guardrails).unwrap_or_else(|| rule.guardrails.clone());
+    // Events plugins see each line as the request of a turn of its own, in the batch's session.
+    let plugins = crate::events::guards_for(state, &all);
+    let guards: Vec<_> = all.into_iter().filter(|g| g.on.request).collect();
     // A budget of the rule, the key or any scope of the limits: list may count these lines, so each needs its most.
     let budgeted = !rule.limits.budgets.is_empty()
         || person.budget.is_some()
@@ -3109,6 +3178,44 @@ async fn check_lines(
             }
         } else {
             checked.masked.push(None);
+        }
+        if !plugins.is_empty() {
+            let mut line = match checked.masked.last() {
+                Some(Some(masked)) => masked.clone(),
+                _ => body.clone(),
+            };
+            let of = crate::events::Line {
+                person: &person.name,
+                team: &person.team,
+                org: &person.org,
+                checked: decision,
+                custom_id: &custom_id,
+                decision,
+                route,
+                model: &model,
+            };
+            let lined = crate::events::batch_line(state, &plugins, &of, &mut line).await;
+            if observe {
+                checked
+                    .would_refuse
+                    .extend(crate::would_block(rule, &lined.audit));
+            }
+            if !lined.audit.is_empty() || lined.entries.iter().any(|e| e["mode"] != "observe") {
+                checked.found.push(json!({
+                    word: n,
+                    "guardrails": serde_json::to_value(&lined.audit).unwrap_or_default(),
+                    "events": lined.entries,
+                }));
+            }
+            if let Some((code, message)) = lined.refused {
+                return Err(at(n, Refusal::new(StatusCode::FORBIDDEN, code, message)));
+            }
+            if lined.changed {
+                bytes = Bytes::from(line.to_string());
+                if let Some(last) = checked.masked.last_mut() {
+                    *last = Some(line);
+                }
+            }
         }
         // An alias is estimated at its first deployment's price; its batch is charged at the one that ran it.
         let priced = state
@@ -4016,6 +4123,11 @@ impl Creator {
         }
     }
 
+    /// The session and turn the response is answered in, for an events plugin's view of the request after it.
+    pub(crate) fn answered_in(&mut self, turn: Value) {
+        self.owned.events = turn;
+    }
+
     /// The provider that answered, and whether it was translated (and so holds nothing to read back).
     pub(crate) fn served_by(&mut self, provider: &str, translated: bool) {
         self.owned.provider = provider.to_string();
@@ -4105,6 +4217,10 @@ impl Watch {
         let Some(id) = self.id.take() else {
             return;
         };
+        // The request after this one goes on in its turn, after the answer's events.
+        let said = self.kept.as_ref().map_or(0, |answer| {
+            gantry_core::events::answer_events(answer, "", 0).len() as u64
+        });
         let kept = self
             .kept
             .take()
@@ -4119,6 +4235,9 @@ impl Watch {
             .and_then(|mut slot| slot.take());
         runtime.spawn(async move {
             let mut owned = creator.owned;
+            if let Some(next) = owned.events["next"].as_u64() {
+                owned.events["next"] = (next + said).into();
+            }
             owned.decision = decision;
             owned.expires_at = Some(now_secs() + RESPONSE_DAYS * 86_400);
             // Settled with the answer unless it said the response is still running: then it holds its reservation

@@ -88,8 +88,10 @@ The first of these that the request has names the session:
 The value is hashed together with the person, and the id is `ses_` and 24 hex characters. A session id a client treats as a secret is never passed on, and two people who send the same value are two sessions. Sources 6 and 7 name an end user, not a conversation, so the first user message is hashed in: each conversation of that user is its own session.
 
 <Aside type="tip">
-An agent you write should send `x-gantry-session` with an id of its own for the run. Source 8 works with no change to the client, and gives one session to two conversations of the same key that open with the same words. A Responses API client that chains calls with `previous_response_id` sends no history, so it needs `x-gantry-session` (or `prompt_cache_key`) to stay in one session.
+An agent you write should send `x-gantry-session` with an id of its own for the run. Source 8 works with no change to the client, and gives one session to two conversations of the same key that open with the same words.
 </Aside>
+
+A Responses API request that names a `previous_response_id` holds only what is new, so nothing in it says which conversation it is. Gantry records each response it creates as its caller's, with the session and turn it was answered in, and a request that goes on from one takes them from there before it looks at any header: a tool's result alone stays in the turn of the call it answers, indexed after that answer, and a new user message starts the session's next turn. No header is needed. A `previous_response_id` Gantry does not know as the caller's (created before the guardrail, or not through Gantry) falls back to the table above.
 
 `x-gantry-session`, `x-gantry-turn`, `x-gantry-application` and `x-gantry-application-intent` are Gantry's own and are not sent to the provider.
 
@@ -151,7 +153,7 @@ Gantry sends `POST <url>` with `Content-Type: application/json`. It sends only t
 | `contract` | integer | `2`. |
 | `guardrail` | string | The guardrail's name in the policy, so one service can serve several. |
 | `mode` | string | `enforce` or `observe`. In `observe` the answer's body is not read. |
-| `phase` | string | `request`, `answer`, `stream` (a window of a streamed answer), `mcp` or `realtime`. |
+| `phase` | string | `request`, `answer`, `stream` (a window of a streamed answer), `mcp`, `realtime`, `batch` (a line of a batch, or a job's request) or `batch_result` (a line of a batch's results). |
 | `session_id`, `turn_id`, `turn_index` | | See above. `turn_index` is 0 for MCP calls and requests with no user message. |
 | `decision_id` | string | The request's id in Gantry's audit log. A request and its answer share it. |
 | `person`, `team` | string | Who sent the request. |
@@ -248,8 +250,10 @@ A window of a streamed answer is an `assistant_message` with `partial: true`:
 
 ```json
 { "event_id": "evt_...", "event_index": 3, "turn_id": "turn_...", "kind": "assistant_message", "last_in_turn": false,
-  "content": "the text since the window before", "partial": true, "window": 2 }
+  "content": "the text since the window before", "partial": true, "window": 2, "held": true }
 ```
+
+`held: true` is on an event that waits for this verdict before it reaches the caller (`stream.hold`): a window, a streamed answer's tool call, and the whole message of a streamed answer shorter than one window. A held event can be masked.
 
 ## The verdict
 
@@ -285,11 +289,13 @@ Unknown fields are refused, so a misspelled field fails loudly.
 
 The refusal names the guardrail and the finding kinds, never the `reason`: `Guardrail "watcher" refused this request: the plugin found blocked_tool (1). ...`.
 
-What can be masked: `system_prompt`, `user_message`, `tool_result` and realtime text in a request; `assistant_message`, `reasoning` and a `tool_call`'s `arguments` in a whole answer; an MCP call's `arguments` and an MCP result's `content`. Tool definitions and windows of a streamed answer cannot. Where an event's text came from several text blocks, the masked text is written to the first and the others become `[masked]`. Where the provider holds JSON (a Gemini function response), the masked content must be JSON of the same type. A mask that cannot be written refuses the request (502): the unmasked text is never what goes on.
+What can be masked: `system_prompt`, `user_message`, `tool_result` and realtime text in a request; `assistant_message`, `reasoning` and a `tool_call`'s `arguments` in a whole answer; an MCP call's `arguments` and an MCP result's `content`. Tool definitions cannot, and neither can a part of a streamed answer that is not `held` (see [Streamed answers](#streamed-answers)). Where an event's text came from several text blocks, the masked text is written to the first and the others become `[masked]`. Gemini holds a tool's result as a JSON object (`functionResponse.response`): masked content that is a JSON object replaces it, and any other text is sent as `{"output": "<the text>"}`, the key Gemini documents for a function's output, so a plain `[masked]` is never refused. A tool call's input, and a Converse tool result given as JSON, take JSON of the same type only. A mask that cannot be written refuses the request (502): the unmasked text is never what goes on.
 
-`session_action: end` takes effect with any action, in `enforce` mode. The session's next requests, on the model routes and through the MCP gateway, are refused with `session_ended` (403) and the provider is not called, until `session_end_seconds` have passed. With a [store](/operations/store/), every replica refuses it.
+`session_action: end` takes effect with any action, in `enforce` mode. The session's next requests, on every route that sends events and through the MCP gateway, are refused with `session_ended` (403) and the provider is not called, until `session_end_seconds` have passed. With a [store](/operations/store/), every replica refuses it within a second: the gateway that ended it refuses at once, and the others read ended sessions with the store's 500 ms poll, as they read kill switches. No request waits on the store for it.
 
-When a rule has several events guardrails they are asked in order, the first block ends the asking, and each sees the events as they were sent, not as an earlier plugin masked them.
+### Several plugins on one rule
+
+A rule's events guardrails are asked one after another, in the order of the rule's `guardrails` list; a binary's [own plugin](#a-plugin-inside-the-binary) is asked last. Each enforcing plugin sees the events as the enforcing plugins before it masked them (a masked event has the new content and a new `event_id`, and the same `event_index`), and what goes on is the events as the last one left them. The first block ends the asking: the plugins after it are not asked. An observing plugin is sent the events as they are at its place in the list, and changes nothing. Put a redactor before a judge that should not see what it redacts.
 
 ### Failures
 
@@ -351,14 +357,74 @@ rules:
 
 Without `stream`, a streamed answer goes to the caller as it comes, and its events are sent when it ends. A block then can only end the stream with an error event after the text.
 
-With `stream: { chunk_chars: <n> }`, every `n` characters of the model's text are sent as a `partial` `assistant_message` in an envelope with `phase: stream`, holding the text since the window before. When the stream ends, the whole answer follows as events in an envelope with `phase: answer`: the full `assistant_message` (with `last_in_turn`), its `reasoning`, its `tool_call`s.
+With `stream: { chunk_chars: <n> }`, every `n` characters of the model's text are sent as a `partial` `assistant_message` in an envelope with `phase: stream`, holding the text since the window before. When the stream ends, the whole answer follows as events in an envelope with `phase: answer`: the full `assistant_message` (with `last_in_turn`), its `reasoning`, its `tool_call`s. This is the same on every API that streams as server-sent events: chat completions, Anthropic messages, the Responses API and Gemini's `streamGenerateContent`.
 
-| `hold` | The caller's tokens | A block |
-|---|---|---|
-| `false` (default) | Go on at once. Windows are judged beside the stream. | Ends the stream where the verdict lands. Text before it was sent. |
-| `true` | Each window waits for its verdict. The end of the stream, tool calls included, waits for the last one. | Ends the stream before the blocked window. Blocked text and blocked tool calls never reach the caller. |
+| `hold` | The caller's tokens | A block | A mask |
+|---|---|---|---|
+| `false` (default) | Go on at once. Windows are judged beside the stream. | Ends the stream where the verdict lands. Text before it was sent. | Cannot be given: a `mask` of a window that is not held is a verdict that does not fit, and `on_failure` applies. A `mask` of the whole answer at the end ends the stream with the error event. |
+| `true` | Each window waits for its verdict. From the first tool call on, everything waits for the verdict on the whole answer. | Ends the stream before the blocked window. Blocked text and blocked tool calls never reach the caller. | The window reaches the caller with the plugin's text, and the stream goes on. A tool call reaches the caller with the plugin's arguments. |
 
-A block ends the stream with an error event in the caller's API (`code: guardrail_blocked` on chat completions, `permission_error` on messages, a Google error on Gemini), and the provider's stream is dropped. A `mask` verdict ends a stream like a block, since text already sent cannot be rewritten. With `hold: true` the caller's first token waits for the first window, so choose `chunk_chars` for the delay you accept: 200 to 500 is a sentence or two.
+A block ends the stream with an error event in the caller's API, and the provider's stream is dropped:
+
+| API | The event that ends the stream |
+|---|---|
+| Chat completions | `data: {"error": {"type": "gantry_error", "code": "guardrail_blocked", "message": "..."}}` |
+| Anthropic messages | `event: error` with `{"type": "error", "error": {"type": "permission_error", "message": "..."}}` |
+| Responses API | `event: error` with `{"type": "error", "code": "guardrail_blocked", "message": "..."}` |
+| Gemini | `data: {"error": {"code": 403, "status": "PERMISSION_DENIED", "details": [{"reason": "guardrail_blocked"}]}}` |
+
+With `hold: true` the caller's first token waits for the first window, so choose `chunk_chars` for the delay you accept: 200 to 500 is a sentence or two.
+
+### Masks in a held stream
+
+A held window is masked like any event: `{"event": <its event_index>, "content": "<the new text>"}`. The caller gets the new text in the window's first delta and the window's other deltas empty, in a stream that is otherwise the provider's. The Responses API repeats a text whole in its closing events (`response.output_text.done`, `response.output_item.done`, `response.completed`): those copies carry the masked text too, so the original never follows its mask. The text left when the stream ends is the last window, when there were windows before it. The `phase: answer` envelope that follows holds the answer as the caller got it, masks included.
+
+At the end of a held stream, in the `phase: answer` envelope, a `tool_call` is `held` and its `arguments` can be masked: they reach the caller whole in the call's first arguments delta. The whole `assistant_message` is `held` only when none of it was sent yet (an answer shorter than one window). A `mask` of an event that is not `held`, such as `reasoning` or a message whose windows were already sent, ends the stream with the error event: mask the windows as they come.
+
+### What hold: false cannot promise
+
+Without hold nothing waits, so a verdict can only stop what comes after it:
+
+- Text of a blocked window, and the text after it up to the moment the verdict lands, may be with the caller.
+- A tool call is with the caller before the verdict on it. The stream still ends with the error event, so a client that acts only on a stream that ended well does not run it, and a client that runs a tool call as soon as it has parsed it does. Use `hold: true` on any rule whose callers run tools.
+- Nothing can be masked.
+
+## Every route that carries content
+
+On the model APIs (chat completions, messages, the Responses API, `generateContent`) the body is a conversation, and an enforcing plugin must be able to read it. Every other governed route sends events for the text Gantry finds in its JSON body, in the same envelope, with the route in `route`:
+
+| Route | What is an event |
+|---|---|
+| `/v1/embeddings`, `/v1/moderations`, `/v1/audio/speech` | Each text of `input`, a `user_message`. A list of texts is one turn. The vectors or the audio that come back are not events. |
+| `/v1/completions` | Each `prompt`, a `user_message`; the answer's text, an `assistant_message`. A streamed completion is judged whole when it ends. |
+| `/v1/images/generations` | The `prompt`, a `user_message`. |
+| Token counting (`/v1/messages/count_tokens`, `:countTokens`) | The conversation, as on the model route: the text leaves for the provider here too. |
+| Gemini `:embedContent` | The text parts of `content`. |
+| A [passthrough](/governance/policy/#passthrough) | A JSON body with `messages`, `input`, `contents` or `prompt` in one of the shapes above, and a JSON or server-sent answer in one. A body with none of them sends nothing. |
+| Batches (`/v1/files` with purpose `batch`, `/v1/messages/batches`) | Each line, when it is uploaded: `phase: batch`. Each line of the results, when the caller reads them: `phase: batch_result`. |
+| Jobs (`/v1/videos`) | The request's `prompt`, when the job is created: `phase: batch`. |
+| [Realtime sessions](/governance/guardrails/#realtime-sessions), the [MCP gateway](/governance/mcp-gateway/) | Text events and transcripts; tool calls and results. |
+
+`allow`, `block`, `mask` and `session_action: end` are obeyed on each of them as on a model route.
+
+A batch is one session, and each line is a turn of it, named by the line's `custom_id`: the ids follow from the person, the decision the lines were checked under and the `custom_id`, so a line and its result share a `turn_id` hours apart with nothing kept between. A line a plugin blocks refuses the upload and names the line. A result line a plugin blocks is replaced with an error in the provider's shape, as an answer guardrail does it, and the other lines are returned. The events of a result line count their `event_index` from 0 again.
+
+## Overhead
+
+A rule with no events guardrail pays nothing. An observing guardrail parses the request and the answer into events and puts two envelopes on its queue; delivery is in the background. An enforcing one adds its service's answer time at each point it is asked, and nothing else: ended sessions are read from memory, with or without a [store](/operations/store/#sessions-an-events-plugin-ended).
+
+`gantry-bench --events` measures the observing case: the [bench](/operations/operations/#bench) policy (1,000 keys, a `secrets` guardrail on every rule) with an events guardrail in observe mode added to every rule, delivering batches to a plugin service in the same process. The CI gate's load, 1,000 chat requests a second for 5 seconds, three runs of each on one machine (2026-11-14, an Apple laptop that was also running other builds, load average 9 to 22):
+
+| Policy | Added at p50 | Added at p99 | Gateway self-time, p50 | Gate (1,000 us at p99) |
+|---|---|---|---|---|
+| Bench policy | 216 to 226 us | 441 to 481 us | 109 to 113 us | 3 of 3 runs pass |
+| Bench policy and an observing events guardrail | 132 to 302 us | 363 to 751 us, and 3,727 us in one run | 53 to 156 us | 2 of 3 runs pass |
+
+Every envelope was delivered in each run (12,000 for 6,000 requests, the warm-up included) and none was dropped. The gate takes one pass in three as a pass, so it holds with the guardrail on. The run that missed it had its tail in the gateway's own time while the machine was busiest, and the plugin service and the batch sender share the bench's process and CPU, so read the difference between the two rows as an upper bound: about 80 us at p50 in the slower runs. Measure your own with:
+
+```sh
+cargo run --release -p gantry-bench -- --rps 1000 --secs 5 --events --max-p99-overhead-us 1000
+```
 
 ## Applications
 
@@ -490,9 +556,14 @@ A binary that embeds Gantry sets `Extension::events` to an `EventsPlugin`: the s
 ## Limits
 
 - Images, audio and files are not events. Their text parts are.
-- Routes other than chat completions, messages, Responses and `generateContent` (embeddings, images, audio, batches, passthrough) send no events. Use a [webhook guardrail](/governance/guardrail-webhooks/) for their text.
-- A realtime session sends events for its text and transcripts when its rule has at least one guardrail; the binary's own plugin alone does not see realtime text.
-- With a store, a rule with an enforcing events guardrail reads the store once per request, to learn whether another replica ended the session.
+- A body that is a form (audio to transcribe, an image to edit or vary) sends no events, and neither do rerank requests (`query`, `documents`) or Gemini's `batchEmbedContents`. Use a [webhook guardrail](/governance/guardrail-webhooks/) for their text.
+- A Bedrock passthrough's streamed answer is a binary event stream and is passed on unread; its request is read. Streams are read as server-sent events only.
+- Without `stream.hold`, a streamed tool call reaches the caller before the verdict on it, and nothing in a stream can be masked: see [What hold: false cannot promise](#what-hold-false-cannot-promise).
+- In a held stream, `reasoning` and a message whose windows were already sent cannot be masked at the end. A streamed completion (`/v1/completions`) has no windows.
+- A request that goes on from a `previous_response_id` does not hold the earlier tool call, so its `tool_result` has the `call_id` and no `name`. A Responses `conversation` id does not carry a session: send `x-gantry-session`.
+- A batch result line's events count from 0 in the line's turn, because the line's request is not at hand when the results are read.
+- A Converse tool result given as `json` takes a mask that is JSON of the same type only.
+- A session a plugin ends is refused by the other replicas within a second, not at once.
 
 ## Related
 

@@ -34,6 +34,30 @@ one repository. How a release is made: RELEASING.md.
 - `examples/plugins/event-printer`: a reference plugin in one Python file that prints the event stream and blocks
   a tool call by name. Docs: governance/plugin-events.
 
+### Plugin events: every stream, every route, masks in held streams
+
+- Streamed answers are shown to events plugins in windows on Anthropic messages, the Responses API and Gemini's
+  `streamGenerateContent` as on chat completions, and a block ends the stream with each API's own error event.
+- With `stream.hold: true`, a `mask` verdict on a window rewrites the window and the stream goes on, where it used
+  to end the stream. A streamed tool call waits for the verdict on the whole answer: a blocked one never reaches the
+  caller, and a masked one reaches the caller with the plugin's arguments. Events that can still be masked carry
+  `held: true`. Without hold a mask of a window is a verdict that does not fit, and `on_failure` applies.
+- A masked Gemini tool result that is not a JSON object is sent as `{"output": "<the text>"}`, where the request
+  used to be refused with a 502.
+- Several events guardrails on one rule run in the order of the rule's `guardrails` list, and each sees the events
+  as the ones before it masked them.
+- A Responses API request with `previous_response_id` takes its session and turn from the response Gantry recorded
+  as the caller's, so a chain stays one session with no header.
+- Embeddings, completions, speech, moderations, image prompts, token counting, known-shape passthrough bodies, each
+  line of a batch (`phase: batch`), each line of its results (`phase: batch_result`) and a video job's prompt are
+  events, and verdicts on them are obeyed.
+- The sessions a plugin ended are read from the store with its 500 ms poll, not on each request: an enforcing
+  plugin with a store costs no store round trip per request. Other replicas refuse an ended session within a second.
+- An observing plugin's answer record is no longer waited for before the answer is returned.
+- A binary's own plugin (`Extension::events`) sees realtime text on a rule with no guardrail.
+- The console's Requests page filters by session, and a row's detail shows its session and turn.
+- `gantry-bench --events` measures the gateway with an events guardrail in observe mode on every rule.
+
 ### Fixed: a parallel place comes back with the answer
 
 - A request's place under a `parallel` limit (key or `limits:`) is given back as soon as its answer has ended, not

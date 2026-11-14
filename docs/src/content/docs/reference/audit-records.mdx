@@ -203,7 +203,7 @@ Follows a request record, with the same `id`, when its rule has guardrails with 
 
 ## Batch result guardrails
 
-Written when a caller downloads batch results (an OpenAI output file, an Anthropic message batch's results) and an `on: [answer]` guardrail of the batch owner's rule found something in a line. One record per such line, with the download's decision ID.
+Written when a caller downloads batch results (an OpenAI output file, an Anthropic message batch's results) and an `on: [answer]` guardrail of the batch owner's rule found something in a line. One record per such line, with the download's decision ID. An enforcing [events guardrail](/governance/plugin-events/#every-route-that-carries-content) of that rule writes one for each line it judged, with an `events` field as on a request record.
 
 ```json
 {"n":9,"event":"batch_result_guardrails","id":"01M7CX...","time":"2026-11-14T10:00:00.000Z","object_id":"file-out","line":2,"custom_id":"b","verdict":"block","guardrails":[{"guardrail":"answer-secrets","detector":"secrets","kind":"aws_access_key","action":"block","count":1}],"prev":"...","hash":"..."}

@@ -132,6 +132,10 @@ Neither costs a database call on the request path. A replica reads the pins and 
 
 Without a store, each gateway keeps its own pins and measurements, as before.
 
+### Sessions an events plugin ended
+
+When an [events plugin](/governance/plugin-events/) ends a session, the replica that was told refuses the session at once and writes its end to the store: the SHA-256 of a text made from the session id, the guardrail's name, and when the refusal runs out. The other replicas read the ended sessions from memory, refreshed with the 500 ms poll when one more ends, so they refuse the session within a second and no request waits on the database for it.
+
 ### Console sessions
 
 A console session is a row in the store, read on every console page. A session opened on one replica is found by all, and signing out deletes the row, so the session ends on every replica at once. Removing an admin key or a person's single sign-on access ends their sessions on every replica as it already did on one: the key is gone from every replica within 2 seconds, and the policy is read on each page. A row holds the SHA-256 of the session ID, so reading the database does not let anyone sign in. Sessions in the store rather than signed cookies: no signing key to share between replicas, and a sign-out takes effect at once, with no list of ended sessions to keep. Console pages are not on the request path, so the lookup adds nothing to API requests.

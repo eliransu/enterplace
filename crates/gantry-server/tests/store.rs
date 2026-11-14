@@ -1756,5 +1756,52 @@ rules:
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+
+    // The ended sessions are read with the store's poll, never on a request: 400 requests of 400 other sessions,
+    // on a rule with an enforcing plugin, cost the database fewer transactions than there are requests (the two
+    // gateways' polls are all it sees). One read of the store per request would be at least 400.
+    let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
+    tokio::spawn(connection);
+    // A backend reports its transactions at most once a second: wait for the reports before each reading.
+    let transactions = || async {
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let row = client
+            .query_one(
+                "SELECT (pg_stat_get_db_xact_commit(oid) + pg_stat_get_db_xact_rollback(oid))::bigint FROM pg_database WHERE datname = current_database()",
+                &[],
+            )
+            .await?;
+        Ok::<i64, Error>(row.try_get(0)?)
+    };
+    let before = transactions().await?;
+    let sent = Instant::now();
+    for i in 0..400 {
+        let body = r#"{"model":"free","messages":[{"role":"user","content":"hello"}]}"#;
+        let mut request = request("POST", "/v1/chat/completions", MAYA, body)?;
+        request.headers_mut().insert(
+            "x-gantry-session",
+            header::HeaderValue::from_str(&format!("count-{i}"))?,
+        );
+        let (status, body) = answer(&b.router, request).await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let took = sent.elapsed();
+    let after = transactions().await?;
+    assert!(
+        after > before,
+        "the database reported no transactions at all"
+    );
+    assert!(
+        after - before < 400,
+        "{} transactions for 400 requests in {took:?}: the store is asked on the request path",
+        after - before
+    );
+    // The session that was ended is still refused, from memory.
+    let (status, body) = answer(&b.router, ask("hello")?).await?;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "session_ended"),
+        "{body}"
+    );
     Ok(())
 }

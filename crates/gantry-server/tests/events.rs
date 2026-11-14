@@ -72,6 +72,128 @@ type Sent = Arc<Mutex<Vec<Value>>>;
 
 const USAGE: &str = r#"{"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}"#;
 
+/// A streamed answer as each API sends it. Its words are twelve innocent sentences, the code word, then more; with
+/// `tool`, a few words and then a call of `get_weather`, its arguments in two pieces.
+fn stream_of(api: &str, tool: bool) -> Vec<String> {
+    let pieces: Vec<String> = if tool {
+        vec!["Let me ".into(), "check. ".into()]
+    } else {
+        let mut pieces: Vec<String> = (0..12).map(|i| format!("Sentence {i} is fine. ")).collect();
+        pieces.push("The code word is BANANA. ".into());
+        pieces.extend((0..6).map(|i| format!("After {i}. ")));
+        pieces
+    };
+    let whole = pieces.concat();
+    let arguments = ["{\"city\":", "\"Paris\"}"];
+    let data = |event: Value| format!("data: {event}\n\n");
+    let named = |event: Value| {
+        format!(
+            "event: {}\ndata: {event}\n\n",
+            event["type"].as_str().unwrap_or_default()
+        )
+    };
+    let mut out = Vec::new();
+    match api {
+        "chat" => {
+            let chunk = |delta: Value| {
+                data(
+                    json!({"id": "c", "model": "model-a", "choices": [{"index": 0, "delta": delta, "finish_reason": null}]}),
+                )
+            };
+            out.extend(pieces.iter().map(|p| chunk(json!({"content": p}))));
+            if tool {
+                out.push(chunk(json!({"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": ""}}]})));
+                out.extend(arguments.iter().map(|a| {
+                    chunk(json!({"tool_calls": [{"index": 0, "function": {"arguments": a}}]}))
+                }));
+            }
+            out.push("data: [DONE]\n\n".into());
+        }
+        "messages" => {
+            out.push(named(json!({"type": "message_start", "message": {"id": "m", "type": "message", "role": "assistant", "model": "claude-a", "content": [], "usage": {"input_tokens": 5, "output_tokens": 0}}})));
+            out.push(named(json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})));
+            out.extend(pieces.iter().map(|p| {
+                named(json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": p}}))
+            }));
+            out.push(named(json!({"type": "content_block_stop", "index": 0})));
+            if tool {
+                out.push(named(json!({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}})));
+                out.extend(arguments.iter().map(|a| {
+                    named(json!({"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": a}}))
+                }));
+                out.push(named(json!({"type": "content_block_stop", "index": 1})));
+            }
+            out.push(named(json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}})));
+            out.push(named(json!({"type": "message_stop"})));
+        }
+        "responses" => {
+            let message = json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": whole}]});
+            let call = json!({"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": arguments.concat()});
+            out.push(named(json!({"type": "response.created", "response": {"id": "r", "object": "response", "status": "in_progress", "model": "model-a", "output": []}})));
+            out.push(named(json!({"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "role": "assistant", "content": []}})));
+            out.extend(pieces.iter().map(|p| {
+                named(json!({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": p}))
+            }));
+            out.push(named(json!({"type": "response.output_text.done", "output_index": 0, "content_index": 0, "text": whole})));
+            out.push(named(
+                json!({"type": "response.output_item.done", "output_index": 0, "item": message}),
+            ));
+            let mut output = vec![message];
+            if tool {
+                out.push(named(json!({"type": "response.output_item.added", "output_index": 1, "item": {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": ""}})));
+                out.extend(arguments.iter().map(|a| {
+                    named(json!({"type": "response.function_call_arguments.delta", "output_index": 1, "delta": a}))
+                }));
+                out.push(named(json!({"type": "response.function_call_arguments.done", "output_index": 1, "arguments": arguments.concat()})));
+                out.push(named(
+                    json!({"type": "response.output_item.done", "output_index": 1, "item": call}),
+                ));
+                output.push(call);
+            }
+            out.push(named(json!({"type": "response.completed", "response": {"id": "r", "object": "response", "status": "completed", "model": "model-a", "output": output, "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10}}})));
+        }
+        _ => {
+            // Gemini ends its events with CRLF pairs.
+            let chunk = |parts: Value, last: bool| {
+                let mut candidate =
+                    json!({"index": 0, "content": {"role": "model", "parts": parts}});
+                let mut event = json!({});
+                if last {
+                    candidate["finishReason"] = "STOP".into();
+                    event["usageMetadata"] = json!({"promptTokenCount": 5, "candidatesTokenCount": 5, "totalTokenCount": 10});
+                }
+                event["candidates"] = json!([candidate]);
+                format!("data: {event}\r\n\r\n")
+            };
+            out.extend(pieces.iter().map(|p| chunk(json!([{"text": p}]), false)));
+            out.push(if tool {
+                chunk(json!([{"functionCall": {"id": "call_1", "name": "get_weather", "args": {"city": "Paris"}}}]), true)
+            } else {
+                chunk(json!([{"text": ""}]), true)
+            });
+        }
+    }
+    out
+}
+
+/// A stream sent an event at a time, 10 ms apart, as a model's tokens arrive.
+fn trickle(events: Vec<String>) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    tokio::spawn(async move {
+        for event in events {
+            if tx.send(Bytes::from(event)).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    });
+    (
+        [(header::CONTENT_TYPE, "text/event-stream")],
+        Body::new(Trickle(rx)),
+    )
+        .into_response()
+}
+
 /// The provider, on all four APIs: asked about the weather it calls `get_weather`, given the tool's result it
 /// answers in words, and anything else it answers "ok". A chat request with `stream` gets twelve innocent
 /// sentences, the code word, then more, 10 ms apart.
@@ -86,6 +208,13 @@ async fn provider() -> Result<(u16, Sent), Error> {
     };
     let has = |body: &Value, needle: &str| body.to_string().contains(needle);
     let (a, b, c, d) = (sent.clone(), sent.clone(), sent.clone(), sent.clone());
+    let (e, f, g, h, i) = (
+        sent.clone(),
+        sent.clone(),
+        sent.clone(),
+        sent.clone(),
+        sent.clone(),
+    );
     let app = Router::new()
         .route(
             "/v1/chat/completions",
@@ -94,25 +223,7 @@ async fn provider() -> Result<(u16, Sent), Error> {
                 async move {
                     let body = keep(&sent, &body);
                     if body["stream"] == true {
-                        let (tx, rx) = tokio::sync::mpsc::channel(4);
-                        tokio::spawn(async move {
-                            let chunk = |piece: &str| {
-                                format!("data: {}\n\n", json!({"id": "c", "model": "model-a", "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": null}]}))
-                            };
-                            let mut pieces: Vec<String> =
-                                (0..12).map(|i| format!("Sentence {i} is fine. ")).collect();
-                            pieces.push("The code word is BANANA. ".into());
-                            pieces.extend((0..6).map(|i| format!("After {i}. ")));
-                            for piece in pieces {
-                                if tx.send(Bytes::from(chunk(&piece))).await.is_err() {
-                                    return;
-                                }
-                                tokio::time::sleep(Duration::from_millis(10)).await;
-                            }
-                            let _ = tx.send(Bytes::from("data: [DONE]\n\n")).await;
-                        });
-                        return ([(header::CONTENT_TYPE, "text/event-stream")], Body::new(Trickle(rx)))
-                            .into_response();
+                        return trickle(stream_of("chat", has(&body, "weather")));
                     }
                     let message = if has(&body, "\"role\":\"tool\"") {
                         json!({"role": "assistant", "content": "It is 18C in Paris."})
@@ -132,6 +243,9 @@ async fn provider() -> Result<(u16, Sent), Error> {
                 let sent = b.clone();
                 async move {
                     let body = keep(&sent, &body);
+                    if body["stream"] == true {
+                        return trickle(stream_of("messages", has(&body, "weather")));
+                    }
                     let content = if has(&body, "tool_result") {
                         json!([{"type": "text", "text": "It is 18C in Paris."}])
                     } else {
@@ -147,6 +261,9 @@ async fn provider() -> Result<(u16, Sent), Error> {
                 let sent = c.clone();
                 async move {
                     let body = keep(&sent, &body);
+                    if body["stream"] == true {
+                        return trickle(stream_of("responses", has(&body, "weather")));
+                    }
                     let output = if has(&body, "function_call_output") {
                         json!([{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "It is 18C in Paris."}]}])
                     } else {
@@ -158,10 +275,13 @@ async fn provider() -> Result<(u16, Sent), Error> {
         )
         .route(
             "/v1beta/models/{call}",
-            post(move |body: Bytes| {
+            post(move |axum::extract::Path(call): axum::extract::Path<String>, body: Bytes| {
                 let sent = d.clone();
                 async move {
                     let body = keep(&sent, &body);
+                    if call.contains("streamGenerateContent") {
+                        return trickle(stream_of("gemini", has(&body, "weather")));
+                    }
                     let parts = if has(&body, "functionResponse") {
                         json!([{"text": "It is 18C in Paris."}])
                     } else {
@@ -169,6 +289,70 @@ async fn provider() -> Result<(u16, Sent), Error> {
                     };
                     json_answer(json!({"candidates": [{"index": 0, "finishReason": "STOP", "content": {"role": "model", "parts": parts}}], "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 5, "totalTokenCount": 10}}))
                 }
+            }),
+        )
+        // The routes that are not conversations, and a route only a passthrough reaches.
+        .route(
+            "/v1/embeddings",
+            post(move |body: Bytes| {
+                let sent = e.clone();
+                async move {
+                    keep(&sent, &body);
+                    json_answer(json!({"object": "list", "model": "model-a", "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}], "usage": {"prompt_tokens": 5, "total_tokens": 5}}))
+                }
+            }),
+        )
+        .route(
+            "/v1/completions",
+            post(move |body: Bytes| {
+                let sent = f.clone();
+                async move {
+                    keep(&sent, &body);
+                    json_answer(json!({"id": "c", "object": "text_completion", "model": "model-a", "choices": [{"index": 0, "text": "The code word is BANANA.", "finish_reason": "stop"}], "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}}))
+                }
+            }),
+        )
+        .route(
+            "/v1/images/generations",
+            post(move |body: Bytes| {
+                let sent = g.clone();
+                async move {
+                    keep(&sent, &body);
+                    json_answer(json!({"created": 1, "data": [{"b64_json": "aGk="}]}))
+                }
+            }),
+        )
+        .route(
+            "/v1/custom",
+            post(move |body: Bytes| {
+                let sent = h.clone();
+                async move {
+                    keep(&sent, &body);
+                    json_answer(json!({"choices": [{"index": 0, "message": {"role": "assistant", "content": "custom ok"}}]}))
+                }
+            }),
+        )
+        .route(
+            "/v1/messages/batches",
+            post(move |body: Bytes| {
+                let sent = i.clone();
+                async move {
+                    keep(&sent, &body);
+                    json_answer(json!({"id": "msgbatch_1", "type": "message_batch", "processing_status": "in_progress"}))
+                }
+            }),
+        )
+        .route(
+            "/v1/messages/batches/msgbatch_1/results",
+            axum::routing::get(|| async {
+                let line = |id: &str, text: &str| {
+                    json!({"custom_id": id, "result": {"type": "succeeded", "message": {"id": "m", "type": "message", "role": "assistant", "model": "claude-a", "content": [{"type": "text", "text": text}], "usage": {"input_tokens": 5, "output_tokens": 5}}}})
+                };
+                format!(
+                    "{}\n{}\n",
+                    line("a", "It is sunny."),
+                    line("b", "The code word is BANANA.")
+                )
             }),
         );
     Ok((serve(app).await?, sent))
@@ -181,6 +365,10 @@ struct Behave {
     block_tool: Option<String>,
     /// Masks every tool result with "[masked]".
     mask_results: bool,
+    /// Masks an event whose text holds the first, writing the second in its place.
+    swap: Option<(String, String)>,
+    /// Masks a tool call of this tool: its city becomes "[masked]".
+    mask_tool: Option<String>,
     /// Blocks an event whose text holds this.
     block_text: Option<String>,
     /// Blocks an event whose text holds this, and ends the session.
@@ -204,6 +392,13 @@ impl Plugin {
     fn set(&self, change: impl FnOnce(&mut Behave)) {
         if let Ok(mut behave) = self.behave.lock() {
             change(&mut behave);
+        }
+    }
+
+    /// Forgets the envelopes received so far.
+    fn forget(&self) {
+        if let Ok(mut all) = self.envelopes.lock() {
+            all.clear();
         }
     }
 
@@ -299,11 +494,20 @@ async fn plugin() -> Result<(u16, Plugin), Error> {
                 }
                 let masked: Vec<Value> = events
                     .iter()
-                    .filter(|e| {
-                        behave.mask_results
-                            && matches!(e["kind"].as_str(), Some("tool_result" | "mcp_tool_result"))
+                    .filter_map(|e| {
+                        let kind = e["kind"].as_str().unwrap_or_default();
+                        let text = e["content"].as_str().unwrap_or_default();
+                        if behave.mask_results && matches!(kind, "tool_result" | "mcp_tool_result") {
+                            return Some(json!({"event": e["event_index"], "content": "[masked]"}));
+                        }
+                        if kind == "tool_call" && e["name"].as_str() == behave.mask_tool.as_deref() {
+                            return Some(json!({"event": e["event_index"], "arguments": {"city": "[masked]"}}));
+                        }
+                        let (from, to) = behave.swap.as_ref()?;
+                        text.contains(from.as_str()).then(|| {
+                            json!({"event": e["event_index"], "content": text.replace(from.as_str(), to)})
+                        })
                     })
-                    .map(|e| json!({"event": e["event_index"], "content": "[masked]"}))
                     .collect();
                 if masked.is_empty() {
                     json_answer(json!({"action": "allow"}))
@@ -761,25 +965,26 @@ async fn a_tool_result_the_plugin_masks_is_sent_masked() -> TestResult {
     for api in ["chat", "messages", "responses", "gemini"] {
         let (path, _, second) = turn(api);
         let (status, answer) = send(&s.gw, path, &second).await?;
-        // Gemini holds a tool's result as a JSON object, and "[masked]" is not one: the request is refused, never
-        // sent with the result as it was.
-        if api == "gemini" {
-            assert_eq!(status, StatusCode::BAD_GATEWAY, "{answer}");
-            continue;
-        }
         assert_eq!(status, StatusCode::OK, "{api}: {answer}");
-        let got = sent
+        let last = sent
             .lock()
             .map(|all| all.last().cloned().unwrap_or_default())
-            .unwrap_or_default()
-            .to_string();
+            .unwrap_or_default();
+        // Gemini holds a tool's result as a JSON object, and "[masked]" is not one: it is sent as the function's
+        // output in the documented shape, never refused and never sent as it was.
+        if api == "gemini" {
+            assert_eq!(
+                last["contents"][2]["parts"][0]["functionResponse"]["response"],
+                json!({"output": "[masked]"}),
+                "{last}"
+            );
+        }
+        let got = last.to_string();
         assert!(
             got.contains("[masked]") && !got.contains("18C"),
             "{api}: {got}"
         );
     }
-    let got = sent.lock().map(|all| all.len()).unwrap_or(0);
-    assert_eq!(got, 3, "the Gemini request was not sent");
     let all = records(&s)?;
     let first = all
         .iter()
@@ -1446,4 +1651,834 @@ fn a_policy_with_a_wrong_events_guardrail_names_the_fix() {
             .contains("at least 20")
     );
     assert_eq!(check("    mode: observe\n"), "");
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Streams on every API, masks in held streams, tool calls in streams
+// ---------------------------------------------------------------------------------------------------------
+
+const APIS: [&str; 4] = ["chat", "messages", "responses", "gemini"];
+
+/// A streamed request on each API, with `text` as the user's.
+fn streaming(api: &str, text: &str) -> (&'static str, Value) {
+    match api {
+        "chat" => (
+            "/v1/chat/completions",
+            json!({"model": "model-a", "stream": true, "messages": [{"role": "user", "content": text}]}),
+        ),
+        "messages" => (
+            "/v1/messages",
+            json!({"model": "claude-a", "max_tokens": 100, "stream": true, "messages": [{"role": "user", "content": text}]}),
+        ),
+        "responses" => (
+            "/v1/responses",
+            json!({"model": "model-a", "stream": true, "input": text}),
+        ),
+        _ => (
+            "/v1beta/models/gemini-a:streamGenerateContent?alt=sse",
+            json!({"contents": [{"role": "user", "parts": [{"text": text}]}]}),
+        ),
+    }
+}
+
+/// The JSON of each `data:` line the caller got.
+fn datas(stream: &str) -> Vec<Value> {
+    stream
+        .lines()
+        .filter_map(|line| serde_json::from_str(line.strip_prefix("data:")?.trim()).ok())
+        .collect()
+}
+
+/// The model's words as the caller heard them: every text delta of the stream, joined.
+fn heard(stream: &str) -> String {
+    let mut out = String::new();
+    for event in datas(stream) {
+        for piece in [
+            event["choices"][0]["delta"]["content"].as_str(),
+            event["delta"]["text"].as_str(),
+            event["delta"]
+                .as_str()
+                .filter(|_| event["type"] == "response.output_text.delta"),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            out.push_str(piece);
+        }
+        for part in event["candidates"][0]["content"]["parts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            out.push_str(part["text"].as_str().unwrap_or_default());
+        }
+    }
+    out
+}
+
+/// The last event of a stream, as text.
+fn last_event(stream: &str) -> String {
+    stream
+        .trim_end()
+        .rsplit("\n\n")
+        .next()
+        .unwrap_or_default()
+        .rsplit("\r\n\r\n")
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Whether a stream's last event is a refusal in the shape of its API's own errors.
+fn refused_in_shape(api: &str, last: &str) -> bool {
+    let event = datas(last).pop().unwrap_or_default();
+    match api {
+        "chat" => event["error"]["code"] == "guardrail_blocked",
+        "messages" => {
+            last.starts_with("event: error")
+                && event["type"] == "error"
+                && event["error"]["type"] == "permission_error"
+        }
+        "responses" => {
+            last.starts_with("event: error")
+                && event["type"] == "error"
+                && event["code"] == "guardrail_blocked"
+        }
+        _ => {
+            event["error"]["status"] == "PERMISSION_DENIED"
+                && event["error"]["details"][0]["reason"] == "guardrail_blocked"
+        }
+    }
+}
+
+fn stream_windows(plugin: &Plugin, from: usize) -> Vec<Value> {
+    plugin
+        .envelopes()
+        .into_iter()
+        .skip(from)
+        .filter(|e| e["phase"] == "stream")
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_stream_is_windowed_and_stopped_in_each_api_s_own_error_shape() -> TestResult {
+    let (provider, _) = provider().await?;
+    let (port, plugin) = plugin().await?;
+    let s = setup(
+        "stream-apis",
+        &policy(
+            provider,
+            port,
+            &format!("{ENFORCE}    stream: {{ chunk_chars: 60, hold: true }}\n"),
+            "",
+            "",
+        ),
+    )?;
+    for api in APIS {
+        let (path, body) = streaming(api, "tell me");
+        plugin.set(|b| b.block_text = Some("BANANA".into()));
+        let before = plugin.envelopes().len();
+        let (status, text) = send_with(&s.gw, path, &[], &body).await?;
+        assert_eq!(status, StatusCode::OK, "{api}: {text}");
+        let said = heard(&text);
+        assert!(said.starts_with("Sentence 0 is fine."), "{api}: {text}");
+        assert!(
+            !text.contains("BANANA") && !text.contains("After"),
+            "{api}: {text}"
+        );
+        let last = last_event(&text);
+        assert!(refused_in_shape(api, &last), "{api}: {last}");
+        assert!(
+            last.contains("stopped the model's answer partway"),
+            "{api}: {last}"
+        );
+        // The windows were events of the answer, held, each the text since the one before.
+        let windows = stream_windows(&plugin, before);
+        assert!(windows.len() >= 2, "{api}: {windows:?}");
+        let first = &windows[0]["events"][0];
+        assert_eq!(first["kind"], "assistant_message", "{api}");
+        assert_eq!(
+            (&first["partial"], &first["held"]),
+            (&json!(true), &json!(true)),
+            "{api}"
+        );
+        assert!(
+            first["content"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("Sentence 0")),
+            "{api}"
+        );
+        assert_eq!(windows[1]["events"][0]["window"], 1, "{api}");
+        assert!(
+            windows[1]["events"][0]["content"]
+                .as_str()
+                .is_some_and(|c| !c.contains("Sentence 0")),
+            "{api}"
+        );
+
+        // With nothing to block, the whole stream arrives as the provider sent it, and the answer ends the turn.
+        plugin.set(|b| b.block_text = None);
+        let (_, text) = send_with(&s.gw, path, &[], &body).await?;
+        assert_eq!(text, stream_of(api, false).concat(), "{api}");
+        let last = plugin.envelopes().pop().ok_or("no envelope")?;
+        assert_eq!(last["phase"], "answer", "{api}");
+        assert_eq!(last["events"][0]["last_in_turn"], true, "{api}");
+        assert!(
+            last["events"][0]["content"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("Sentence 0") && c.ends_with("After 5. ")),
+            "{api}: {last}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_window_the_plugin_masks_in_a_held_stream_reaches_the_caller_masked() -> TestResult {
+    let (provider, _) = provider().await?;
+    let (port, plugin) = plugin().await?;
+    plugin.set(|b| b.swap = Some(("BANANA".into(), "[fruit]".into())));
+    let s = setup(
+        "stream-mask",
+        &policy(
+            provider,
+            port,
+            &format!("{ENFORCE}    stream: {{ chunk_chars: 60, hold: true }}\n"),
+            "",
+            "",
+        ),
+    )?;
+    for api in APIS {
+        let (path, body) = streaming(api, "tell me");
+        let (status, text) = send_with(&s.gw, path, &[], &body).await?;
+        assert_eq!(status, StatusCode::OK, "{api}: {text}");
+        // The stream went on to its end, with the mask where the code word was: in the deltas, and in every whole
+        // copy of the text a closing event carries.
+        assert!(!text.contains("BANANA"), "{api}: {text}");
+        let said = heard(&text);
+        assert!(
+            said.starts_with("Sentence 0 is fine.")
+                && said.contains("The code word is [fruit]. ")
+                && said.ends_with("After 5. "),
+            "{api}: {said}"
+        );
+        assert_eq!(
+            last_event(&text),
+            last_event(&stream_of(api, false).concat()).replace("BANANA", "[fruit]"),
+            "{api}"
+        );
+        // The whole answer the plugin sees at the end is the answer the caller got.
+        let last = plugin.envelopes().pop().ok_or("no envelope")?;
+        assert_eq!(last["phase"], "answer", "{api}");
+        assert!(
+            last["events"][0]["content"]
+                .as_str()
+                .is_some_and(|c| c.contains("[fruit]") && !c.contains("BANANA")),
+            "{api}: {last}"
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let answers: Vec<Value> = records(&s)?
+        .into_iter()
+        .filter(|r| r["event"] == "answer_guardrails")
+        .collect();
+    assert_eq!(answers.len(), 4, "{answers:?}");
+    assert!(
+        answers.iter().all(|r| r["verdict"] == "mask"),
+        "{answers:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mask_of_a_window_that_was_not_held_ends_the_stream() -> TestResult {
+    let (provider, _) = provider().await?;
+    let (port, plugin) = plugin().await?;
+    plugin.set(|b| b.swap = Some(("BANANA".into(), "[fruit]".into())));
+    let s = setup(
+        "stream-mask-free",
+        &policy(
+            provider,
+            port,
+            &format!("{ENFORCE}    stream: {{ chunk_chars: 60 }}\n"),
+            "",
+            "",
+        ),
+    )?;
+    let (path, body) = streaming("messages", "tell me");
+    let (status, text) = send_with(&s.gw, path, &[], &body).await?;
+    assert_eq!(status, StatusCode::OK);
+    // The text was already on its way, so it cannot be rewritten: a mask is a verdict the plugin cannot give
+    // here, and the guardrail fails closed.
+    assert!(!text.contains("message_stop"), "{text}");
+    assert!(refused_in_shape("messages", &last_event(&text)), "{text}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn with_hold_a_streamed_tool_call_waits_for_the_plugin_on_every_api() -> TestResult {
+    let (provider, _) = provider().await?;
+    let (port, plugin) = plugin().await?;
+    let s = setup(
+        "stream-tool",
+        &policy(
+            provider,
+            port,
+            &format!("{ENFORCE}    stream: {{ chunk_chars: 60, hold: true }}\n"),
+            "",
+            "",
+        ),
+    )?;
+    for api in APIS {
+        let (path, body) = streaming(api, "What is the weather in Paris?");
+        // Blocked: no part of the tool call reaches the caller, not its name and not its arguments.
+        plugin.set(|b| {
+            b.block_tool = Some("get_weather".into());
+            b.mask_tool = None;
+            b.swap = None;
+        });
+        let (status, text) = send_with(&s.gw, path, &[], &body).await?;
+        assert_eq!(status, StatusCode::OK, "{api}: {text}");
+        assert!(
+            !text.contains("get_weather") && !text.contains("Paris"),
+            "{api}: {text}"
+        );
+        assert!(refused_in_shape(api, &last_event(&text)), "{api}: {text}");
+        let call = plugin.envelopes().pop().ok_or("no envelope")?;
+        let event = call["events"]
+            .as_array()
+            .and_then(|events| events.iter().find(|e| e["kind"] == "tool_call"))
+            .cloned()
+            .ok_or("no tool call event")?;
+        assert_eq!(
+            (&event["name"], &event["arguments"], &event["held"]),
+            (
+                &json!("get_weather"),
+                &json!({"city": "Paris"}),
+                &json!(true)
+            ),
+            "{api}"
+        );
+
+        // Masked: the call reaches the caller with the plugin's arguments, and the words before it with the
+        // plugin's words, in a stream that is otherwise the provider's.
+        plugin.set(|b| {
+            b.block_tool = None;
+            b.mask_tool = Some("get_weather".into());
+            b.swap = Some(("check".into(), "look".into()));
+        });
+        let (status, text) = send_with(&s.gw, path, &[], &body).await?;
+        assert_eq!(status, StatusCode::OK, "{api}: {text}");
+        assert!(
+            text.contains("get_weather") && !text.contains("Paris") && !text.contains("check"),
+            "{api}: {text}"
+        );
+        assert_eq!(heard(&text), "Let me look. ", "{api}: {text}");
+        let events = datas(&text);
+        let arguments: Value = match api {
+            "chat" => {
+                let joined: String = events
+                    .iter()
+                    .filter_map(|e| {
+                        e["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"].as_str()
+                    })
+                    .collect();
+                serde_json::from_str(&joined)?
+            }
+            "messages" => {
+                let joined: String = events
+                    .iter()
+                    .filter_map(|e| e["delta"]["partial_json"].as_str())
+                    .collect();
+                serde_json::from_str(&joined)?
+            }
+            "responses" => {
+                let done = events
+                    .iter()
+                    .find(|e| e["type"] == "response.completed")
+                    .ok_or("no response.completed")?;
+                let joined: String = events
+                    .iter()
+                    .filter(|e| e["type"] == "response.function_call_arguments.delta")
+                    .filter_map(|e| e["delta"].as_str())
+                    .collect();
+                let whole = done["response"]["output"][1]["arguments"]
+                    .as_str()
+                    .unwrap_or_default();
+                assert_eq!(joined, whole, "the deltas and the whole response agree");
+                assert_eq!(
+                    done["response"]["output"][0]["content"][0]["text"],
+                    "Let me look. "
+                );
+                serde_json::from_str(whole)?
+            }
+            _ => events
+                .iter()
+                .find_map(|e| {
+                    e["candidates"][0]["content"]["parts"][0]["functionCall"]
+                        .get("args")
+                        .cloned()
+                })
+                .ok_or("no functionCall")?,
+        };
+        assert_eq!(arguments, json!({"city": "[masked]"}), "{api}: {text}");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_hold_a_streamed_tool_call_is_sent_before_the_plugin_refuses_it() -> TestResult {
+    let (provider, _) = provider().await?;
+    let (port, plugin) = plugin().await?;
+    plugin.set(|b| b.block_tool = Some("get_weather".into()));
+    let s = setup(
+        "stream-tool-free",
+        &policy(
+            provider,
+            port,
+            &format!("{ENFORCE}    stream: {{ chunk_chars: 60 }}\n"),
+            "",
+            "",
+        ),
+    )?;
+    let (path, body) = streaming("chat", "What is the weather in Paris?");
+    let (status, text) = send_with(&s.gw, path, &[], &body).await?;
+    assert_eq!(status, StatusCode::OK);
+    // What hold: false cannot promise: the call was with the caller when the verdict came. The stream still ends
+    // with the refusal, so a client that waits for the end of the stream does not run it.
+    assert!(text.contains("get_weather"), "{text}");
+    assert!(refused_in_shape("chat", &last_event(&text)), "{text}");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Several plugins on one rule
+// ---------------------------------------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_run_in_the_rule_s_order_and_each_sees_the_masks_of_the_ones_before() -> TestResult
+{
+    let (provider, sent) = provider().await?;
+    let (first_port, first) = plugin().await?;
+    let (second_port, second) = plugin().await?;
+    first.set(|b| b.mask_results = true);
+    second.set(|b| b.swap = Some(("masked".into(), "seen by the second".into())));
+    let two = |order: &str| {
+        policy(provider, first_port, ENFORCE, "", "")
+            .replace(
+                "rules:\n",
+                &format!(
+                    "  - name: second\n    type: events\n    url: http://127.0.0.1:{second_port}/events\n    timeout_ms: 2000\n{ENFORCE}rules:\n"
+                ),
+            )
+            .replace("guardrails: [watcher]", &format!("guardrails: [{order}]"))
+    };
+    let (path, _, body) = turn("chat");
+    let last_sent = || {
+        sent.lock()
+            .map(|all| all.last().cloned().unwrap_or_default())
+            .unwrap_or_default()
+    };
+    let result_seen = |plugin: &Plugin| {
+        plugin
+            .events()
+            .into_iter()
+            .find(|e| e[2] == "tool_result")
+            .map(|e| e[3].clone())
+            .unwrap_or_default()
+    };
+
+    // watcher, then second: the second reads the first's mask, and its own mask of that is what is sent.
+    let s = setup("order-a", &two("watcher, second"))?;
+    let (status, answer) = send(&s.gw, path, &body).await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(result_seen(&first), "{\"temp\":\"18C\"}");
+    assert_eq!(result_seen(&second), "[masked]");
+    assert_eq!(
+        last_sent()["messages"][3]["content"],
+        "[seen by the second]"
+    );
+    let record = decisions(&s)?.pop().ok_or("no decision record")?;
+    let names: Vec<&Value> = record["events"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|e| &e["guardrail"])
+        .collect();
+    assert_eq!(names, ["watcher", "second"], "{record}");
+
+    // second, then watcher: the second reads the result as it was and finds nothing to do.
+    first.forget();
+    second.forget();
+    let s = setup("order-b", &two("second, watcher"))?;
+    let (status, answer) = send(&s.gw, path, &body).await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(result_seen(&second), "{\"temp\":\"18C\"}");
+    assert_eq!(result_seen(&first), "{\"temp\":\"18C\"}");
+    assert_eq!(last_sent()["messages"][3]["content"], "[masked]");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Responses chains
+// ---------------------------------------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_responses_chain_keeps_its_session_and_turn_with_no_header() -> TestResult {
+    let (provider, _) = provider().await?;
+    let (port, plugin) = plugin().await?;
+    let s = setup("chain", &policy(provider, port, ENFORCE, "", ""))?;
+    let path = "/v1/responses";
+    // The question: the model calls the tool. The provider names every response "r".
+    let (status, answer) = send(
+        &s.gw,
+        path,
+        &json!({"model": "model-a", "instructions": "Be brief.", "input": "What is the weather in Paris?"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    // The tool's result, sent alone: the conversation so far is the provider's to remember.
+    let next =
+        |input: Value| json!({"model": "model-a", "previous_response_id": "r", "input": input});
+    let result = json!([{"type": "function_call_output", "call_id": "call_1", "output": "{\"temp\":\"18C\"}"}]);
+    let recorded = |n: usize| {
+        let s = &s;
+        async move {
+            // A response is recorded as its creator's when its answer ends, just after the caller has it.
+            for _ in 0..50 {
+                let owned = records(s)?.iter().filter(|r| r["event"] == "owned").count();
+                if owned >= n {
+                    return Ok::<(), Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err("the response was not recorded as its creator's".into())
+        }
+    };
+    recorded(1).await?;
+    let (status, answer) = send(&s.gw, path, &next(result)).await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    recorded(2).await?;
+    // A new question in the same chain.
+    let (status, answer) = send(&s.gw, path, &next(json!("And in Rome? Any weather?"))).await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+
+    let all = plugin.envelopes();
+    assert_eq!(all.len(), 6, "three requests and their answers: {all:?}");
+    assert!(
+        all.iter().all(|e| e["session_id"] == all[0]["session_id"]),
+        "one session, from the stored responses alone"
+    );
+    // The tool's result and the answer to it are in the question's turn, after the model's tool call.
+    assert_eq!(all[0]["turn_index"], 1);
+    for envelope in &all[1..4] {
+        assert_eq!(envelope["turn_id"], all[0]["turn_id"], "{envelope}");
+    }
+    let index = |n: usize| all[n]["events"][0]["event_index"].as_u64().unwrap_or(99);
+    assert_eq!(
+        all[0]["events"].as_array().map_or(0, Vec::len),
+        2,
+        "the system prompt and the question"
+    );
+    assert_eq!(
+        (index(1), all[1]["events"][0]["kind"].as_str()),
+        (2, Some("tool_call"))
+    );
+    assert_eq!(
+        (index(2), all[2]["events"][0]["kind"].as_str()),
+        (3, Some("tool_result"))
+    );
+    assert_eq!(all[2]["events"][0]["call_id"], "call_1");
+    assert_eq!(
+        (index(3), all[3]["events"][0]["kind"].as_str()),
+        (4, Some("assistant_message"))
+    );
+    // The new question is the session's second turn.
+    assert_eq!(all[4]["turn_index"], 2);
+    assert_ne!(all[4]["turn_id"], all[0]["turn_id"]);
+    assert_eq!(all[4]["events"][0]["kind"], "user_message");
+    assert_eq!(all[5]["turn_id"], all[4]["turn_id"]);
+    // The records carry them too, so the request log groups the chain.
+    let sessions: Vec<Value> = decisions(&s)?
+        .iter()
+        .map(|r| r["session"].clone())
+        .collect();
+    assert_eq!(sessions, vec![all[0]["session_id"].clone(); 3]);
+
+    // A response Gantry does not know as the caller's: the headers and the body decide, as without the field.
+    let (status, _) = send_with(
+        &s.gw,
+        path,
+        &[("x-gantry-session", "mine")],
+        &json!({"model": "model-a", "previous_response_id": "resp_unknown", "input": "hello"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send_with(
+        &s.gw,
+        "/v1/chat/completions",
+        &[("x-gantry-session", "mine")],
+        &json!({"model": "model-a", "messages": [{"role": "user", "content": "hello"}]}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let all = plugin.envelopes();
+    assert_ne!(all[6]["session_id"], all[0]["session_id"]);
+    assert_eq!(all[6]["session_id"], all[8]["session_id"]);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Every route that carries content
+// ---------------------------------------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn embeddings_completions_images_and_a_passthrough_send_their_text_as_events() -> TestResult {
+    let (provider, sent) = provider().await?;
+    let (port, plugin) = plugin().await?;
+    let s = setup(
+        "routes",
+        &policy(
+            provider,
+            port,
+            ENFORCE,
+            "    passthrough:\n      - { provider: mock-openai, paths: [/v1/custom] }\n",
+            "",
+        ),
+    )?;
+    let texts = |envelope: &Value| -> Vec<Value> {
+        envelope["events"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|e| json!([e["kind"], e["content"]]))
+            .collect()
+    };
+    let user = |text: &str| json!(["user_message", text]);
+
+    // Embeddings: every input is an event of one turn. The vectors that come back are not.
+    let (status, answer) = send(
+        &s.gw,
+        "/v1/embeddings",
+        &json!({"model": "model-a", "input": ["alpha", "beta"]}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let all = plugin.envelopes();
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_eq!(
+        (&all[0]["phase"], &all[0]["route"]),
+        (&json!("request"), &json!("/v1/embeddings"))
+    );
+    assert_eq!(texts(&all[0]), [user("alpha"), user("beta")]);
+
+    // Completions: the prompt, and the text that answers it.
+    let (status, answer) = send(
+        &s.gw,
+        "/v1/completions",
+        &json!({"model": "model-a", "prompt": "Once upon a time"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let all = plugin.envelopes();
+    assert_eq!(all.len(), 3, "{all:?}");
+    assert_eq!(texts(&all[1]), [user("Once upon a time")]);
+    assert_eq!(all[2]["phase"], "answer");
+    assert_eq!(
+        texts(&all[2]),
+        [json!(["assistant_message", "The code word is BANANA."])]
+    );
+    assert_eq!(all[2]["turn_id"], all[1]["turn_id"]);
+
+    // An image's prompt.
+    let (status, answer) = send(
+        &s.gw,
+        "/v1/images/generations",
+        &json!({"model": "model-a", "prompt": "a lighthouse at dusk"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let all = plugin.envelopes();
+    assert_eq!(all.len(), 4, "{all:?}");
+    assert_eq!(texts(&all[3]), [user("a lighthouse at dusk")]);
+
+    // A passthrough whose body is a shape Gantry knows, and its answer.
+    let (status, answer) = send(
+        &s.gw,
+        "/passthrough/mock-openai/v1/custom",
+        &json!({"model": "model-a", "messages": [{"role": "user", "content": "through the side door"}]}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let all = plugin.envelopes();
+    assert_eq!(all.len(), 6, "{all:?}");
+    assert_eq!(texts(&all[4]), [user("through the side door")]);
+    assert_eq!(texts(&all[5]), [json!(["assistant_message", "custom ok"])]);
+    // A passthrough body with no text Gantry reads sends nothing.
+    let (status, _) = send(
+        &s.gw,
+        "/passthrough/mock-openai/v1/custom",
+        &json!({"model": "model-a", "shape": "unknown"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(plugin.envelopes().len(), 6);
+
+    // The verdicts are obeyed there as on a chat route: a block refuses, and nothing is sent.
+    let before = sent.lock().map(|all| all.len()).unwrap_or(0);
+    plugin.set(|b| b.block_text = Some("forbidden".into()));
+    let (status, answer) = send(
+        &s.gw,
+        "/v1/embeddings",
+        &json!({"model": "model-a", "input": "a forbidden text"}),
+    )
+    .await?;
+    assert_eq!(
+        (status, code(&answer)),
+        (StatusCode::FORBIDDEN, "guardrail_blocked"),
+        "{answer}"
+    );
+    assert_eq!(sent.lock().map(|all| all.len()).unwrap_or(0), before);
+    // A mask is what the provider gets.
+    plugin.set(|b| {
+        b.block_text = None;
+        b.swap = Some(("secret".into(), "[masked]".into()));
+    });
+    let (status, answer) = send(
+        &s.gw,
+        "/v1/embeddings",
+        &json!({"model": "model-a", "input": ["plain", "a secret plan"]}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let got = sent
+        .lock()
+        .map(|all| all.last().cloned().unwrap_or_default())
+        .unwrap_or_default();
+    assert_eq!(got["input"], json!(["plain", "a [masked] plan"]));
+    // And a completions answer the plugin blocks is withheld.
+    plugin.set(|b| {
+        b.swap = None;
+        b.block_text = Some("BANANA".into());
+    });
+    let (status, answer) = send(
+        &s.gw,
+        "/v1/completions",
+        &json!({"model": "model-a", "prompt": "Once upon a time"}),
+    )
+    .await?;
+    assert_eq!(
+        (status, code(&answer)),
+        (StatusCode::FORBIDDEN, "guardrail_blocked"),
+        "{answer}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_line_of_a_batch_and_each_line_of_its_results_is_an_event_of_the_line_s_turn()
+-> TestResult {
+    let (provider, sent) = provider().await?;
+    let (port, plugin) = plugin().await?;
+    let s = setup("batch", &policy(provider, port, ENFORCE, "", ""))?;
+    let line = |id: &str, text: &str| json!({"custom_id": id, "params": {"model": "claude-a", "max_tokens": 100, "messages": [{"role": "user", "content": text}]}});
+    // A line the plugin blocks refuses the batch, naming the line, and nothing is uploaded.
+    plugin.set(|b| b.block_text = Some("forbidden".into()));
+    let (status, answer) = send(
+        &s.gw,
+        "/v1/messages/batches",
+        &json!({"requests": [line("a", "hello"), line("b", "a forbidden thing")]}),
+    )
+    .await?;
+    // The messages API's own error shape.
+    assert_eq!(
+        (status, answer["gantry_code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("guardrail_blocked")),
+        "{answer}"
+    );
+    assert!(
+        answer["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("request 2 of the batch")),
+        "{answer}"
+    );
+    assert_eq!(sent.lock().map(|all| all.len()).unwrap_or(0), 0);
+
+    // A line the plugin masks is uploaded masked.
+    plugin.set(|b| {
+        b.block_text = None;
+        b.swap = Some(("secret".into(), "[masked]".into()));
+    });
+    let from = plugin.envelopes().len();
+    let (status, answer) = send(
+        &s.gw,
+        "/v1/messages/batches",
+        &json!({"requests": [line("a", "What is the weather?"), line("b", "a secret plan")]}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let uploaded = sent
+        .lock()
+        .map(|all| all.last().cloned().unwrap_or_default())
+        .unwrap_or_default();
+    assert_eq!(
+        uploaded["requests"][1]["params"]["messages"][0]["content"],
+        "a [masked] plan"
+    );
+    let lines: Vec<Value> = plugin.envelopes().into_iter().skip(from).collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines.iter().all(|e| e["phase"] == "batch"));
+    assert_eq!(lines[0]["events"][0]["content"], "What is the weather?");
+    // The batch is the session, and each line a turn of it.
+    assert_eq!(lines[0]["session_id"], lines[1]["session_id"]);
+    assert_ne!(lines[0]["turn_id"], lines[1]["turn_id"]);
+
+    // The results: each line's answer is an event of that line's turn, and one the plugin blocks is replaced with
+    // an error in the provider's shape.
+    plugin.set(|b| {
+        b.swap = None;
+        b.block_text = Some("BANANA".into());
+    });
+    let from = plugin.envelopes().len();
+    let response =
+        s.gw.router
+            .clone()
+            .oneshot(
+                Request::get("/v1/messages/batches/msgbatch_1/results")
+                    .header("authorization", format!("Bearer {MAYA}"))
+                    .body(Body::empty())?,
+            )
+            .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await?.to_bytes();
+    let text = String::from_utf8_lossy(&bytes);
+    let got: Vec<Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    assert_eq!(got.len(), 2, "{text}");
+    assert_eq!(
+        got[0]["result"]["message"]["content"][0]["text"],
+        "It is sunny."
+    );
+    assert_eq!(got[1]["result"]["type"], "errored", "{text}");
+    assert_eq!(
+        got[1]["result"]["error"]["error"]["type"],
+        "permission_error"
+    );
+    assert!(!text.contains("BANANA"), "{text}");
+    let results: Vec<Value> = plugin.envelopes().into_iter().skip(from).collect();
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert!(results.iter().all(|e| e["phase"] == "batch_result"));
+    assert_eq!(results[0]["session_id"], lines[0]["session_id"]);
+    assert_eq!(results[0]["turn_id"], lines[0]["turn_id"]);
+    assert_eq!(results[1]["turn_id"], lines[1]["turn_id"]);
+    assert_eq!(results[0]["events"][0]["kind"], "assistant_message");
+    let blocked = records(&s)?
+        .into_iter()
+        .find(|r| r["event"] == "batch_result_guardrails" && r["custom_id"] == "b")
+        .ok_or("no record of the blocked result line")?;
+    assert_eq!(blocked["verdict"], "block");
+    assert_eq!(blocked["events"][0]["action"], "block");
+    Ok(())
 }

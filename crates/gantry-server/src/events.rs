@@ -364,10 +364,10 @@ pub(crate) struct Judged {
     pub masks: Vec<Masked>,
 }
 
-/// Shows `events` to each plugin in order: an observing one gets them queued, an enforcing one is asked and
-/// obeyed, and the first to block ends the asking. A plugin that ends the session ends it here.
-/// ponytail: each plugin sees the events as they were, not as a plugin before it masked them; the masks of all are
-/// written, the last one's last. Chain them in one service if the second must read the first's redactions.
+/// Shows `events` to each plugin in the order of the rule's list (the binary's own last): an observing one gets
+/// them queued, an enforcing one is asked and obeyed, and the first to block ends the asking. Each sees the events
+/// as the enforcing plugins before it masked them, and the masks of all are written in that order. A plugin that
+/// ends the session ends it here.
 pub(crate) async fn judge(
     state: &AppState,
     guards: &[Guardrail],
@@ -381,6 +381,7 @@ pub(crate) async fn judge(
     if events.is_empty() {
         return out;
     }
+    let mut events = std::borrow::Cow::Borrowed(events);
     for guardrail in guards {
         let Some(settings) = settings(guardrail) else {
             continue;
@@ -417,10 +418,13 @@ pub(crate) async fn judge(
             &guardrail.name,
             settings,
             guardrail.shadowing(),
-            events,
+            &events,
             outcome,
             what,
         );
+        if !settled.masks.is_empty() {
+            events = std::borrow::Cow::Owned(core::masked_events(&events, &settled.masks));
+        }
         if let Some(cause) = &settled.cause {
             eprintln!("gantry: decision {}: {cause}", context.decision_id);
         }
@@ -464,40 +468,34 @@ fn end_session(state: &AppState, session: &str, lasts: Duration, by: &str) {
             );
         }
     }
-    // With a store every replica refuses the session: it is written once, and each replica asks.
+    // With a store every replica refuses the session: it is written once, and each replica reads it with its poll.
     if let Some(store) = state.pool.store() {
-        let written = store.open_session(ended_key(session), format!("events:{by}"), lasts);
-        let session = session.to_string();
-        tokio::spawn(async move {
-            if let Err(err) = written.await {
-                // A session ended twice is already in the table, which is what was wanted.
-                if !err.contains("duplicate") {
-                    eprintln!(
-                        "gantry: the end of session {session} could not be written to the store ({err}); other replicas keep serving it."
-                    );
-                }
-            }
-        });
+        store.end_events_session(ended_key(session), by.to_string(), lasts);
     }
 }
 
-/// The guardrail that ended a session, while its refusal lasts.
-async fn ended_by(state: &AppState, session: &str) -> Option<String> {
+/// The guardrail that ended a session, while its refusal lasts. From memory: what this gateway ended, and what the
+/// store's poll last read of the others, so no request waits on the store for it.
+fn ended_by(state: &AppState, session: &str) -> Option<String> {
+    let now = Instant::now();
     {
         let mut ended = locked(&state.events.ended);
         match ended.get(session) {
-            Some((until, by)) if *until > Instant::now() => return Some(by.clone()),
+            Some((until, by)) if *until > now => return Some(by.clone()),
             Some(_) => {
                 ended.remove(session);
             }
             None => {}
         }
     }
-    // ponytail: one read of the store per request of a rule with an enforcing plugin. A polled copy in memory, as
-    // kill switches have, when that read shows up in a profile.
-    let store = state.pool.store()?;
-    let who = store.session(ended_key(session)).await.ok()??;
-    Some(who.strip_prefix("events:").unwrap_or(&who).to_string())
+    let ended = state.pool.store()?.ended_sessions();
+    if ended.is_empty() {
+        return None;
+    }
+    ended
+        .get(&ended_key(session))
+        .filter(|(until, _)| *until > now)
+        .map(|(_, by)| by.clone())
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -510,6 +508,36 @@ pub(crate) struct Carry {
     guards: Arc<Vec<Guardrail>>,
     context: Context,
     next_index: usize,
+    /// One of the model APIs, whose answer an enforcing plugin must be able to read: an answer that is not JSON
+    /// is refused. On the other routes an answer Gantry cannot read as events is passed on as it is.
+    chat: bool,
+    /// The route answers in words (a model API, completions, a passthrough): the answer is read for events.
+    answers: bool,
+}
+
+impl Carry {
+    /// The turn, as the record of a stored response keeps it for the request that goes on from it.
+    pub(crate) fn turn_of(&self) -> Value {
+        json!({
+            "session": self.context.session_id,
+            "turn": self.context.turn_id,
+            "turn_index": self.context.turn_index,
+            "next": self.next_index,
+        })
+    }
+}
+
+/// The session and turn a stored response was answered in, as [`Carry::turn_of`] wrote them with the count of the
+/// answer's events added.
+pub(crate) fn prior_of(kept: &Value) -> Option<(String, core::Prior)> {
+    Some((
+        kept["session"].as_str()?.to_string(),
+        core::Prior {
+            turn_id: kept["turn"].as_str()?.to_string(),
+            turn_index: usize::try_from(kept["turn_index"].as_u64()?).ok()?,
+            next_index: usize::try_from(kept["next"].as_u64()?).ok()?,
+        },
+    ))
 }
 
 /// Who sends a request and what it is, as the decision knows it.
@@ -525,6 +553,11 @@ pub(crate) struct Sender<'a> {
     pub tags: &'a [String],
     /// Observe mode or the rule's shadow period: what would be refused is let through.
     pub observing: bool,
+    /// One of the model APIs (chat completions, messages, Responses, generateContent): its body is a conversation
+    /// an enforcing plugin must be able to read. Any other route sends events only for the text Gantry finds in it.
+    pub chat: bool,
+    /// The route answers in words Gantry may find: a model API, completions, a passthrough.
+    pub answers: bool,
 }
 
 /// What the plugins made of a request.
@@ -599,7 +632,8 @@ pub(crate) async fn request(
 ) -> Requested {
     let enforced = guards.iter().any(enforcing);
     let Ok(mut body) = serde_json::from_slice::<Value>(bytes) else {
-        if !enforced {
+        // A form or a file (audio, an image to edit) is not a conversation.
+        if !enforced || !sender.chat {
             return Requested::default();
         }
         return refused(
@@ -618,26 +652,40 @@ pub(crate) async fn request(
         }
     };
     let conversation = core::conversation(&body);
-    let (session, _) = core::session_id(
-        &sender.person.name,
-        &sender.person.key,
-        markers,
-        &body,
-        conversation.first_message(),
-    );
-    let placed = conversation.placed(&session, markers.turn.as_deref());
+    // A Responses request that goes on from a stored response holds only what is new: its session and its turn
+    // are the ones that response was answered in, as its owner's record keeps them. A response Gantry does not
+    // know as the caller's falls back to the headers and the body.
+    let prior = match body.get("previous_response_id").and_then(Value::as_str) {
+        Some(id) if sender.chat => crate::batch::turn_of(state, sender.person, id).await,
+        _ => None,
+    };
+    let (session, placed) = match prior {
+        Some((session, prior)) => {
+            let placed = conversation.placed_after(&session, markers.turn.as_deref(), &prior);
+            (session, placed)
+        }
+        None => {
+            let (session, _) = core::session_id(
+                &sender.person.name,
+                &sender.person.key,
+                markers,
+                &body,
+                conversation.first_message(),
+            );
+            let placed = conversation.placed(&session, markers.turn.as_deref());
+            (session, placed)
+        }
+    };
+    // A route that is not a conversation, with no text Gantry reads: nothing to show, and no session to record.
+    if !sender.chat && placed.new.is_empty() && placed.history.is_empty() {
+        return Requested::default();
+    }
     let mut out = Requested {
         session: Some((session.clone(), placed.turn_id.clone())),
         ..Requested::default()
     };
-    if enforced && let Some(by) = ended_by(state, &session).await {
-        out.refusal = Some(Refusal::new(
-            StatusCode::FORBIDDEN,
-            core::SESSION_ENDED,
-            format!(
-                "Refused: guardrail \"{by}\" ended this session, so its requests are refused for a while. Start a new conversation, or ask a Gantry admin about the guardrail."
-            ),
-        ));
+    if enforced && let Some(by) = ended_by(state, &session) {
+        out.refusal = Some(session_ended(&by));
         out.entries
             .push(json!({"guardrail": by, "action": "session_ended"}));
         return out;
@@ -716,6 +764,8 @@ pub(crate) async fn request(
         guards: Arc::new(guards),
         next_index: placed.next_index,
         context,
+        chat: sender.chat,
+        answers: sender.answers,
     });
     out
 }
@@ -768,18 +818,22 @@ pub(crate) async fn answer(
     carry: Carry,
     response: Response,
 ) -> Result<Response, Refusal> {
-    // An error is the provider's or Gantry's own words, not the model's.
-    if !response.status().is_success() {
+    // An error is the provider's or Gantry's own words, not the model's. Vectors, images and audio are not words.
+    if !response.status().is_success() || !carry.answers {
         return Ok(response);
     }
     if crate::is_type(&response, "text/event-stream") {
         return Ok(streamed(state, carry, response));
     }
+    // A cloud's binary stream, a file: not an answer Gantry reads, and not held in memory to find that out.
+    if !carry.chat && !crate::is_type(&response, "application/json") {
+        return Ok(response);
+    }
     let (mut parts, body) = response.into_parts();
     let bytes = crate::whole(body).await?;
     let enforced = carry.guards.iter().any(enforcing);
     let Ok(mut answer) = serde_json::from_slice::<Value>(&bytes) else {
-        if !enforced {
+        if !enforced || !carry.chat {
             return Ok(Response::from_parts(parts, Body::from(bytes)));
         }
         return Err(Refusal::new(
@@ -819,7 +873,12 @@ pub(crate) async fn answer(
         audit.log.append_record_then(&record, move |result| {
             let _ = tell.send(result);
         });
-        if !matches!(written.await, Ok(Ok(()))) {
+        // With observing plugins only, the answer does not wait for its record: observe mode delays nothing.
+        let judged_here = carry
+            .guards
+            .iter()
+            .any(|g| settings(g).is_some_and(|e| e.mode == Mode::Enforce));
+        if judged_here && !matches!(written.await, Ok(Ok(()))) {
             return Err(Refusal::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "audit_unavailable",
@@ -863,11 +922,437 @@ fn said(slot: &str) -> bool {
     slot.starts_with(['c', 'm', 'r']) || (slot.starts_with('g') && !slot.starts_with("gt"))
 }
 
-/// A streamed answer and its plugins. With `stream:` its text is shown to them in windows as it comes; with
-/// `hold`, a window's bytes wait for its verdict, so what a plugin blocks never reaches the caller. Without hold
-/// the bytes go on at once and a block ends the stream where it lands. When the stream ends, the whole answer is
-/// shown as events (the message, its reasoning, its tool calls), held like a window when hold is set. A block ends
-/// the stream with an error event in the caller's API; a mask does too, since what was sent cannot be rewritten.
+/// One event of a stream: its bytes as they came, and the JSON of its `data:` line.
+struct Piece {
+    raw: Vec<u8>,
+    json: Option<Value>,
+    /// The JSON was rewritten: the bytes that go on are written from it.
+    changed: bool,
+}
+
+impl Piece {
+    fn of(raw: &[u8]) -> Self {
+        let json = std::str::from_utf8(raw).ok().and_then(|text| {
+            text.lines()
+                .find_map(|line| serde_json::from_str(line.strip_prefix("data:")?.trim()).ok())
+        });
+        Self {
+            raw: raw.to_vec(),
+            json,
+            changed: false,
+        }
+    }
+
+    /// The event as it goes to the caller: every line as it came, but the data line when its JSON was rewritten.
+    fn bytes(&self) -> Vec<u8> {
+        let (Some(json), true, Ok(text)) =
+            (&self.json, self.changed, std::str::from_utf8(&self.raw))
+        else {
+            return self.raw.clone();
+        };
+        let mut out = String::with_capacity(text.len());
+        for line in text.split_inclusive('\n') {
+            if line.starts_with("data:") {
+                let ending = &line[line.trim_end_matches(['\r', '\n']).len()..];
+                out.push_str(&format!("data: {json}{ending}"));
+            } else {
+                out.push_str(line);
+            }
+        }
+        out.into_bytes()
+    }
+
+    /// The model's words in this event, by the text each is a part of.
+    fn said(&self) -> Vec<(String, &str)> {
+        let Some(json) = &self.json else {
+            return Vec::new();
+        };
+        crate::event_texts(json)
+            .into_iter()
+            .filter(|(slot, _)| said(slot))
+            .filter_map(|(slot, pointer)| Some((slot, json.pointer(&pointer)?.as_str()?)))
+            .collect()
+    }
+}
+
+/// The whole events in `bytes`, each ending with its blank line; what follows the last blank line is one more.
+fn pieces(bytes: &[u8]) -> Vec<Piece> {
+    let (mut out, mut from, mut at) = (Vec::new(), 0, 0);
+    while at < bytes.len() {
+        let rest = &bytes[at..];
+        let step = if rest.starts_with(b"\n\n") {
+            2
+        } else if rest.starts_with(b"\r\n\r\n") {
+            4
+        } else {
+            at += 1;
+            continue;
+        };
+        at += step;
+        out.push(Piece::of(&bytes[from..at]));
+        from = at;
+    }
+    if from < bytes.len() {
+        out.push(Piece::of(&bytes[from..]));
+    }
+    out
+}
+
+/// Whether a stream's event starts or carries a tool call, in any of the four APIs.
+fn calls_tool(event: &Value) -> bool {
+    let list = |v: &Value| v.as_array().cloned().unwrap_or_default();
+    let kind = event["type"].as_str().unwrap_or_default();
+    list(&event["choices"])
+        .iter()
+        .any(|c| !list(&c["delta"]["tool_calls"]).is_empty())
+        || (kind == "content_block_start"
+            && event["content_block"]["type"]
+                .as_str()
+                .is_some_and(|t| t.ends_with("tool_use")))
+        || kind.starts_with("response.function_call_arguments")
+        || kind.starts_with("response.custom_tool_call_input")
+        || (kind.starts_with("response.output_item")
+            && event["item"]["type"]
+                .as_str()
+                .is_some_and(|t| t.ends_with("_call")))
+        || list(&event["candidates"]).iter().any(|c| {
+            list(&c["content"]["parts"])
+                .iter()
+                .any(|p| p.get("functionCall").is_some())
+        })
+}
+
+/// How a stream's events map to the whole answer `core::stream_answer` makes of them: which tool call of the
+/// answer a chat chunk's `index` is, which block a messages event's `index` is, which part a Gemini part became.
+#[derive(Default)]
+struct Mapping {
+    chat_calls: std::collections::BTreeSet<u64>,
+    blocks: std::collections::BTreeSet<u64>,
+    /// Gemini: the parts so far, as (is text, is a thought): text of one kind in a row is one part of the answer.
+    parts: Vec<(bool, bool)>,
+}
+
+impl Mapping {
+    fn of<'a>(events: impl Iterator<Item = &'a Value>) -> Self {
+        let mut mapping = Self::default();
+        for event in events {
+            for (j, call) in event["choices"][0]["delta"]["tool_calls"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                mapping
+                    .chat_calls
+                    .insert(call["index"].as_u64().unwrap_or(j as u64));
+            }
+            if matches!(
+                event["type"].as_str(),
+                Some("content_block_start" | "content_block_delta")
+            ) {
+                mapping.blocks.insert(event["index"].as_u64().unwrap_or(0));
+            }
+        }
+        mapping
+    }
+
+    /// Where one event of the stream holds a part of the answer: (pointer into the event, pointer into the whole
+    /// answer, whether the event holds a piece of a text the deltas build up or the value whole). Called on every
+    /// event in order, so the Gemini parts are counted as the answer counts them.
+    fn places(&mut self, event: &Value) -> Vec<(String, String, bool)> {
+        let mut found = Vec::new();
+        let rank = |set: &std::collections::BTreeSet<u64>, n: u64| set.range(..n).count();
+        let kind = event["type"].as_str().unwrap_or_default();
+        let choice = &event["choices"][0];
+        if choice["delta"]["content"].is_string() {
+            found.push((
+                "/choices/0/delta/content".into(),
+                "/choices/0/message/content".into(),
+                true,
+            ));
+        }
+        if choice["text"].is_string() {
+            found.push(("/choices/0/text".into(), "/choices/0/text".into(), true));
+        }
+        for (j, call) in choice["delta"]["tool_calls"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if call["function"]["arguments"].is_string() {
+                let k = rank(&self.chat_calls, call["index"].as_u64().unwrap_or(j as u64));
+                found.push((
+                    format!("/choices/0/delta/tool_calls/{j}/function/arguments"),
+                    format!("/choices/0/message/tool_calls/{k}/function/arguments"),
+                    true,
+                ));
+            }
+        }
+        if kind == "content_block_delta" {
+            let block = rank(&self.blocks, event["index"].as_u64().unwrap_or(0));
+            if event["delta"]["text"].is_string() {
+                found.push(("/delta/text".into(), format!("/content/{block}/text"), true));
+            }
+            if event["delta"]["partial_json"].is_string() {
+                found.push((
+                    "/delta/partial_json".into(),
+                    format!("/content/{block}/input"),
+                    true,
+                ));
+            }
+        }
+        // The Responses API: the deltas, and the whole copies its closing events carry.
+        let (item, part) = (&event["output_index"], &event["content_index"]);
+        match kind {
+            "response.output_text.delta" => found.push((
+                "/delta".into(),
+                format!("/output/{item}/content/{part}/text"),
+                true,
+            )),
+            "response.output_text.done" => found.push((
+                "/text".into(),
+                format!("/output/{item}/content/{part}/text"),
+                false,
+            )),
+            "response.content_part.done" => found.push((
+                "/part".into(),
+                format!("/output/{item}/content/{part}"),
+                false,
+            )),
+            "response.function_call_arguments.delta" => {
+                found.push(("/delta".into(), format!("/output/{item}/arguments"), true));
+            }
+            "response.function_call_arguments.done" => found.push((
+                "/arguments".into(),
+                format!("/output/{item}/arguments"),
+                false,
+            )),
+            "response.output_item.done" => {
+                found.push(("/item".into(), format!("/output/{item}"), false));
+            }
+            "response.completed" | "response.incomplete" => {
+                found.push(("/response".into(), String::new(), false));
+            }
+            _ => {}
+        }
+        for (j, part) in event["candidates"][0]["content"]["parts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let text = part["text"].is_string();
+            let thought = part["thought"] == true;
+            if !(text && self.parts.last() == Some(&(true, thought))) {
+                self.parts.push((text, thought));
+            }
+            let at = self.parts.len() - 1;
+            if text {
+                found.push((
+                    format!("/candidates/0/content/parts/{j}/text"),
+                    format!("/candidates/0/content/parts/{at}/text"),
+                    true,
+                ));
+            } else if part.get("functionCall").is_some() {
+                found.push((
+                    format!("/candidates/0/content/parts/{j}/functionCall/args"),
+                    format!("/candidates/0/content/parts/{at}/functionCall/args"),
+                    false,
+                ));
+            }
+        }
+        found
+    }
+}
+
+/// A streamed answer on its way: what the caller has, and what still waits for a verdict.
+#[derive(Default)]
+struct Flow {
+    /// The events not yet with the caller, in order.
+    queue: Vec<Piece>,
+    /// The JSON of each event the caller has.
+    released: Vec<Value>,
+    /// Each text as the caller has it so far, by its slot.
+    out: HashMap<String, String>,
+    /// How many characters of the model's words the caller has.
+    sent_chars: usize,
+    /// Where the window being filled starts in `queue`.
+    window_from: usize,
+    /// A tool call has started: with hold, nothing more is released until the whole answer is judged.
+    calls: bool,
+    /// A window was rewritten: whole copies of the text in later events are rewritten to match.
+    rewrote: bool,
+}
+
+impl Flow {
+    /// Writes a masked window: its text whole in the window's first delta, and the other deltas empty.
+    fn rewrite_window(&mut self, text: &str) {
+        let mut first = true;
+        for piece in &mut self.queue[self.window_from..] {
+            let Some(json) = &mut piece.json else {
+                continue;
+            };
+            for (slot, pointer) in crate::event_texts(json) {
+                if said(&slot)
+                    && let Some(slot) = json.pointer_mut(&pointer)
+                {
+                    *slot = if first { text } else { "" }.into();
+                    first = false;
+                    piece.changed = true;
+                }
+            }
+        }
+        self.rewrote = true;
+    }
+
+    /// After a window was rewritten: the whole copies of a text that the Responses API's closing events carry are
+    /// written as the caller got the text, so the original never follows its mask.
+    fn fix(&mut self) {
+        if !self.rewrote {
+            return;
+        }
+        let mut out = self.out.clone();
+        for piece in &mut self.queue {
+            let said: Vec<(String, String)> = piece
+                .said()
+                .into_iter()
+                .map(|(slot, text)| (slot, text.to_string()))
+                .collect();
+            for (slot, text) in said {
+                out.entry(slot).or_default().push_str(&text);
+            }
+            let Some(json) = &mut piece.json else {
+                continue;
+            };
+            let kind = json["type"].as_str().unwrap_or_default().to_string();
+            let slot = |item: &Value, part: &Value| format!("r{item}.{part}");
+            let mut wrote = false;
+            let mut put = |target: Option<&mut Value>, slot: String| {
+                if let (Some(target), Some(text)) = (target, out.get(&slot))
+                    && target.is_string()
+                    && target.as_str() != Some(text)
+                {
+                    *target = text.as_str().into();
+                    wrote = true;
+                }
+            };
+            let (item, part) = (json["output_index"].clone(), json["content_index"].clone());
+            match kind.as_str() {
+                "response.output_text.done" => put(json.get_mut("text"), slot(&item, &part)),
+                "response.content_part.done" => {
+                    put(json.pointer_mut("/part/text"), slot(&item, &part));
+                }
+                "response.output_item.done" => {
+                    // By pointer: indexing a missing field for writing would add it.
+                    for (c, content) in json
+                        .pointer_mut("/item/content")
+                        .and_then(Value::as_array_mut)
+                        .into_iter()
+                        .flatten()
+                        .enumerate()
+                    {
+                        put(content.get_mut("text"), slot(&item, &c.into()));
+                    }
+                }
+                "response.completed" | "response.incomplete" => {
+                    for (o, output) in json
+                        .pointer_mut("/response/output")
+                        .and_then(Value::as_array_mut)
+                        .into_iter()
+                        .flatten()
+                        .enumerate()
+                    {
+                        for (c, content) in output
+                            .get_mut("content")
+                            .and_then(Value::as_array_mut)
+                            .into_iter()
+                            .flatten()
+                            .enumerate()
+                        {
+                            put(content.get_mut("text"), slot(&o.into(), &c.into()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            piece.changed |= wrote;
+        }
+    }
+
+    /// Every event of the stream so far, as the caller has it or will: for the whole answer to be read from.
+    fn all(&mut self) -> Vec<Value> {
+        self.fix();
+        self.released
+            .iter()
+            .chain(self.queue.iter().filter_map(|p| p.json.as_ref()))
+            .cloned()
+            .collect()
+    }
+
+    /// Writes a masked answer into the events that wait: `before` is the whole answer as the events make it,
+    /// `after` the same with the masks applied. Each text or tool call's arguments that differ go whole into the
+    /// first waiting delta that builds them, the later deltas empty, and each whole copy is replaced.
+    fn rewrite_answer(&mut self, before: &Value, after: &Value) {
+        let mut mapping = Mapping::of(
+            self.released
+                .iter()
+                .chain(self.queue.iter().filter_map(|p| p.json.as_ref())),
+        );
+        for event in &self.released {
+            mapping.places(event);
+        }
+        let mut started = std::collections::HashSet::new();
+        for piece in &mut self.queue {
+            let Some(json) = &mut piece.json else {
+                continue;
+            };
+            for (here, there, delta) in mapping.places(json) {
+                let (Some(old), Some(new)) = (before.pointer(&there), after.pointer(&there)) else {
+                    continue;
+                };
+                if old == new {
+                    continue;
+                }
+                let Some(slot) = json.pointer_mut(&here) else {
+                    continue;
+                };
+                *slot = match (delta, started.insert(there)) {
+                    (false, _) => new.clone(),
+                    (true, false) => "".into(),
+                    (true, true) => match new {
+                        Value::String(text) => text.as_str().into(),
+                        other => other.to_string().into(),
+                    },
+                };
+                piece.changed = true;
+            }
+        }
+    }
+
+    /// Sends what waits to the caller. `false` when the caller left.
+    async fn release(&mut self, to: &tokio::sync::mpsc::Sender<Bytes>) -> bool {
+        self.fix();
+        let mut bytes = Vec::new();
+        for piece in self.queue.drain(..) {
+            bytes.extend_from_slice(&piece.bytes());
+            for (slot, text) in piece.said() {
+                self.sent_chars += text.chars().count();
+                self.out.entry(slot).or_default().push_str(text);
+            }
+            self.released.extend(piece.json);
+        }
+        self.window_from = 0;
+        bytes.is_empty() || to.send(Bytes::from(bytes)).await.is_ok()
+    }
+}
+
+/// A streamed answer and its plugins, on every API that streams as server-sent events. With `stream:` its text is
+/// shown to them in windows as it comes. With `hold`, a window's bytes wait for its verdict: what a plugin blocks
+/// never reaches the caller, what it masks reaches the caller masked, and a tool call waits for the verdict on
+/// the whole answer. Without hold the bytes go on at once: a block ends the stream where it lands, and so does a
+/// mask, since what was sent cannot be rewritten. When the stream ends, the whole answer is shown as events (the
+/// message, its reasoning, its tool calls). A block ends the stream with an error event in the caller's API.
 fn streamed(state: &AppState, carry: Carry, response: Response) -> Response {
     let (mut parts, mut body) = response.into_parts();
     parts.headers.remove(header::CONTENT_LENGTH);
@@ -891,23 +1376,28 @@ fn streamed(state: &AppState, carry: Carry, response: Response) -> Response {
             .any(|g| enforcing(g) && settings(g).is_some_and(|e| e.stream.is_some_and(|s| s.hold)));
         let windowed = Arc::new(windowed);
         let mut seen: Vec<u8> = Vec::new();
-        // How far the stream is released to the caller, and how far its events are read.
-        let (mut released, mut read) = (0usize, 0usize);
-        let mut events: Vec<Value> = Vec::new();
+        // How far the stream's events are read.
+        let mut read = 0usize;
+        let mut flow = Flow::default();
+        // The model's words as the provider sent them, for the windows.
         let mut text = String::new();
         // Where the window before ended in `text`, and the next window's number.
         let (mut shown, mut window) = (0usize, 0usize);
         let (mut audit, mut entries) = (Vec::new(), Vec::new());
+        let mut masked = false;
         // Verdicts of windows that were not held, as they come.
         let (verdict_tx, mut verdicts) = tokio::sync::mpsc::unbounded_channel::<Judged>();
         let mut pending = 0usize;
+        let unwritable = || Blocked {
+            guardrail: String::new(),
+            message: String::new(),
+        };
+        // What was already sent cannot be rewritten: a mask of it stops the stream as a block does.
         let stop = |judged: &Judged| {
-            judged.blocked.clone().or_else(|| {
-                (!judged.masks.is_empty()).then(|| Blocked {
-                    guardrail: String::new(),
-                    message: "An events plugin would rewrite the model's answer, and a streamed answer cannot be rewritten once sent.".into(),
-                })
-            })
+            judged
+                .blocked
+                .clone()
+                .or_else(|| (!judged.masks.is_empty()).then(unwritable))
         };
         let blocked = loop {
             let done = tokio::select! {
@@ -937,40 +1427,34 @@ fn streamed(state: &AppState, carry: Carry, response: Response) -> Response {
             } else {
                 crate::whole_events(&seen)
             };
-            for (_, event) in crate::stream_events(&seen[read..end]).unwrap_or_default() {
-                for (slot, pointer) in crate::event_texts(&event) {
-                    if said(&slot) {
-                        text.push_str(
-                            event
-                                .pointer(&pointer)
-                                .and_then(Value::as_str)
-                                .unwrap_or(""),
-                        );
-                    }
+            for piece in pieces(&seen[read..end]) {
+                for (_, said) in piece.said() {
+                    text.push_str(said);
                 }
-                events.push(event);
+                flow.calls |= piece.json.as_ref().is_some_and(calls_tool);
+                flow.queue.push(piece);
             }
             read = end;
-            if !hold && end > released {
-                if tx
-                    .send(Bytes::copy_from_slice(&seen[released..end]))
-                    .await
-                    .is_err()
-                {
-                    // The caller left: the provider's stream is dropped with the body.
-                    return;
-                }
-                released = end;
+            if !hold && !flow.release(&tx).await {
+                // The caller left: the provider's stream is dropped with the body.
+                return;
             }
             let fresh = text[shown..].chars().count();
-            if !done && every.is_some_and(|every| fresh >= every) {
+            // Held, what is left at the end is the last window, so it can be masked like the ones before it. An
+            // answer shorter than one window is judged whole, below.
+            let due = match every {
+                Some(every) if !done => fresh >= every,
+                Some(_) => hold && window > 0 && fresh > 0,
+                None => false,
+            };
+            if due {
                 let event = Event {
                     partial: true,
                     window: Some(window),
+                    held: hold,
                     ..Event::text(Kind::AssistantMessage, &text[shown..])
                 }
                 .placed(&context.turn_id, carry.next_index);
-                shown = text.len();
                 window += 1;
                 if hold {
                     let judged = judge(
@@ -978,25 +1462,27 @@ fn streamed(state: &AppState, carry: Carry, response: Response) -> Response {
                         &windowed,
                         context,
                         "stream",
-                        &[event],
+                        std::slice::from_ref(&event),
                         None,
                         "the model's answer",
                     )
                     .await;
-                    let stopped = stop(&judged);
                     audit.extend(judged.audit);
                     entries.extend(judged.entries);
-                    if stopped.is_some() {
-                        break stopped;
+                    if judged.blocked.is_some() {
+                        break judged.blocked;
                     }
-                    if tx
-                        .send(Bytes::copy_from_slice(&seen[released..end]))
-                        .await
-                        .is_err()
+                    // Each plugin saw the window as the one before it masked it: the last mask is the text.
+                    if let Some(mask) = judged.masks.iter().rev().find_map(|m| m.content.as_deref())
                     {
+                        flow.rewrite_window(mask);
+                        masked = true;
+                    }
+                    flow.window_from = flow.queue.len();
+                    // A tool call waits for the end, where the whole answer is judged.
+                    if !flow.calls && !flow.release(&tx).await {
                         return;
                     }
-                    released = end;
                 } else {
                     let (state, windowed, context, tell) = (
                         state.clone(),
@@ -1019,6 +1505,7 @@ fn streamed(state: &AppState, carry: Carry, response: Response) -> Response {
                         let _ = tell.send(judged);
                     });
                 }
+                shown = text.len();
             }
             if done {
                 // The windows still out are heard before the end is judged.
@@ -1035,11 +1522,22 @@ fn streamed(state: &AppState, carry: Carry, response: Response) -> Response {
                 if stopped.is_some() {
                     break stopped;
                 }
-                let whole = core::answer_events(
-                    &core::stream_answer(&events),
-                    &context.turn_id,
-                    carry.next_index,
-                );
+                // The whole answer, as the caller has it or will: a masked window is in it as its mask.
+                let answer = core::stream_answer(&flow.all());
+                let mut whole = core::answer_events(&answer, &context.turn_id, carry.next_index);
+                // What still waits whole can be masked: a tool call, and a message none of which was sent.
+                let messages = whole
+                    .iter()
+                    .filter(|e| e.kind == Kind::AssistantMessage)
+                    .count();
+                for event in &mut whole {
+                    event.held = hold
+                        && match event.kind {
+                            Kind::ToolCall => true,
+                            Kind::AssistantMessage => flow.sent_chars == 0 && messages == 1,
+                            _ => false,
+                        };
+                }
                 let judged = judge(
                     &state,
                     &carry.guards,
@@ -1050,22 +1548,43 @@ fn streamed(state: &AppState, carry: Carry, response: Response) -> Response {
                     "the model's answer",
                 )
                 .await;
-                let stopped = stop(&judged);
                 audit.extend(judged.audit);
                 entries.extend(judged.entries);
-                if stopped.is_none() && end > released {
-                    let _ = tx.send(Bytes::copy_from_slice(&seen[released..end])).await;
+                if judged.blocked.is_some() {
+                    break judged.blocked;
                 }
-                break stopped;
+                if !judged.masks.is_empty() {
+                    let waits = judged
+                        .masks
+                        .iter()
+                        .all(|m| whole.iter().any(|e| e.event_index == m.event && e.held));
+                    let mut after = answer.clone();
+                    if !waits || core::apply_masks(&mut after, &whole, &judged.masks).is_err() {
+                        break Some(unwritable());
+                    }
+                    flow.rewrite_answer(&answer, &after);
+                    masked = true;
+                }
+                let _ = flow.release(&tx).await;
+                break None;
             }
         };
         if let Some(log) = &state.audit {
-            let word = if blocked.is_some() { "block" } else { "pass" };
+            let word = match (&blocked, masked) {
+                (Some(_), _) => "block",
+                (None, true) => "mask",
+                (None, false) => "pass",
+            };
             let mut record = answer_record(context, word, &audit, &entries);
             if blocked.is_some() {
                 record.insert(
                     "stopped_after_chars".into(),
-                    text[..shown.min(text.len())].chars().count().into(),
+                    if hold {
+                        flow.sent_chars
+                    } else {
+                        text[..shown.min(text.len())].chars().count()
+                    }
+                    .into(),
                 );
             }
             log.log.append_record_then(&record, |_| {});
@@ -1076,7 +1595,11 @@ fn streamed(state: &AppState, carry: Carry, response: Response) -> Response {
             } else {
                 format!("guardrail \"{}\"", blocked.guardrail)
             };
-            let message = if hold {
+            let message = if blocked.guardrail.is_empty() {
+                format!(
+                    "Refused: {name} would rewrite a part of the model's answer that was already sent, and what was sent cannot be rewritten, so the answer ends here. Ask in another way, or ask a Gantry admin about the guardrail: with stream.hold it masks each window before it is sent."
+                )
+            } else if hold {
                 format!(
                     "Refused: {name} stopped the model's answer partway. What came before was checked and sent; the rest was withheld. Ask in another way, or ask a Gantry admin about the guardrail."
                 )
@@ -1091,6 +1614,137 @@ fn streamed(state: &AppState, carry: Carry, response: Response) -> Response {
         }
     });
     Response::from_parts(parts, Body::new(crate::Released(rx)))
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Batches and jobs
+// ---------------------------------------------------------------------------------------------------------
+
+/// Whose batch a line is of, and which line: what its events' ids follow from, at the upload and again when its
+/// result is read, with nothing kept between the two.
+pub(crate) struct Line<'a> {
+    pub person: &'a str,
+    pub team: &'a str,
+    pub org: &'a str,
+    /// The decision the batch's lines were checked under: the batch is the session.
+    pub checked: &'a str,
+    /// The line's `custom_id`: the line is the turn.
+    pub custom_id: &'a str,
+    /// The decision of this call.
+    pub decision: &'a str,
+    pub route: &'a str,
+    pub model: &'a str,
+}
+
+impl Line<'_> {
+    fn context(&self) -> Context {
+        let markers = Markers {
+            gantry_session: Some(format!("batch {}", self.checked)),
+            ..Markers::default()
+        };
+        let (session, _) = core::session_id(self.person, "", &markers, &Value::Null, "");
+        Context {
+            turn_id: core::turn_id(&session, 0, "", Some(self.custom_id)),
+            session_id: session,
+            turn_index: 0,
+            decision_id: self.decision.to_string(),
+            person: self.person.to_string(),
+            team: self.team.to_string(),
+            org: self.org.to_string(),
+            model: self.model.to_string(),
+            route: self.route.to_string(),
+            ..Context::default()
+        }
+    }
+}
+
+/// What the plugins made of one line of a batch, or of one line of its results.
+#[derive(Default)]
+pub(crate) struct Lined {
+    /// Why the line is refused: a block, a session a plugin ended, a mask that could not be written.
+    pub refused: Option<(&'static str, String)>,
+    pub audit: Vec<AuditEntry>,
+    pub entries: Vec<Value>,
+    /// The plugins masked `body`.
+    pub changed: bool,
+}
+
+/// Shows one line of a batch (or a job's request: a video's prompt) to the plugins before it is uploaded, as the
+/// request of its turn. An enforcing plugin may refuse it or mask it: `body` is then the masked line.
+pub(crate) async fn batch_line(
+    state: &AppState,
+    guards: &[Guardrail],
+    line: &Line<'_>,
+    body: &mut Value,
+) -> Lined {
+    let context = line.context();
+    let mut out = Lined::default();
+    if guards.iter().any(enforcing)
+        && let Some(by) = ended_by(state, &context.session_id)
+    {
+        out.entries
+            .push(json!({"guardrail": by, "action": "session_ended"}));
+        out.refused = Some((core::SESSION_ENDED, session_ended(&by).message));
+        return out;
+    }
+    let placed = core::conversation(body).placed(&context.session_id, Some(line.custom_id));
+    let judged = judge(
+        state,
+        guards,
+        &context,
+        "batch",
+        &placed.new,
+        Some(&placed.history),
+        "this line",
+    )
+    .await;
+    lined(judged, body, &placed.new)
+}
+
+/// Shows the answer in one line of a batch's results to the plugins before the caller reads it, in the line's
+/// turn. Its events count from 0 again: the line's request is not at hand to count on from.
+pub(crate) async fn batch_result(
+    state: &AppState,
+    guards: &[Guardrail],
+    line: &Line<'_>,
+    answer: &mut Value,
+) -> Lined {
+    let context = line.context();
+    let events = core::answer_events(answer, &context.turn_id, 0);
+    let judged = judge(
+        state,
+        guards,
+        &context,
+        "batch_result",
+        &events,
+        None,
+        "the model's answer",
+    )
+    .await;
+    lined(judged, answer, &events)
+}
+
+fn lined(judged: Judged, body: &mut Value, events: &[Event]) -> Lined {
+    let mut out = Lined {
+        audit: judged.audit,
+        entries: judged.entries,
+        ..Lined::default()
+    };
+    if let Some(blocked) = judged.blocked {
+        out.refused = Some((guard::BLOCKED_CODE, format!("Refused: {}", blocked.message)));
+    } else if !judged.masks.is_empty() {
+        match core::apply_masks(body, events, &judged.masks) {
+            Ok(changed) => out.changed = changed,
+            // Never pass on the unmasked line because the masked one could not be written.
+            Err(_) => {
+                out.refused = Some((
+                    guard::BLOCKED_CODE,
+                    "Refused: an events plugin masked it, and its mask could not be written, so it was not passed on. Tell your Gantry admin.".into(),
+                ));
+            }
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -1141,7 +1795,7 @@ pub(crate) fn context_of(
 }
 
 /// Whether a session a plugin ended is still refused, for the routes that are not model requests.
-pub(crate) async fn refused_session(
+pub(crate) fn refused_session(
     state: &AppState,
     guards: &[Guardrail],
     context: &Context,
@@ -1149,12 +1803,16 @@ pub(crate) async fn refused_session(
     if !guards.iter().any(enforcing) {
         return None;
     }
-    let by = ended_by(state, &context.session_id).await?;
-    Some(Refusal::new(
+    let by = ended_by(state, &context.session_id)?;
+    Some(session_ended(&by))
+}
+
+fn session_ended(by: &str) -> Refusal {
+    Refusal::new(
         StatusCode::FORBIDDEN,
         core::SESSION_ENDED,
         format!(
             "Refused: guardrail \"{by}\" ended this session, so its requests are refused for a while. Start a new conversation, or ask a Gantry admin about the guardrail."
         ),
-    ))
+    )
 }

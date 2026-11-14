@@ -4222,10 +4222,12 @@ async fn decide(
     let generates = gemini_native(&path)
         .is_some_and(|(_, _, m)| matches!(m, "generateContent" | "streamGenerateContent"));
     // Events plugins last: they see the request as it will be sent, after the transforms, the tool check and the
-    // guardrails. A rule with none, in a binary with none, skips all of it.
+    // guardrails. A rule with none, in a binary with none, skips all of it. On the model APIs the body is a
+    // conversation; on every other route (embeddings, completions, images, speech, a passthrough) it is the text
+    // Gantry finds in a JSON body, and a body with none sends nothing.
+    let conversational = matches!(path.as_str(), CHAT | MESSAGES | RESPONSES) || generates;
     let mut plugins = events::Requested::default();
     if events::active(state, guards)
-        && (matches!(path.as_str(), CHAT | MESSAGES | RESPONSES) || generates)
         && let (Some(person), Some(rule)) = (seen.person, seen.rule)
         && let Ok(Next::Forward(parts, bytes, _)) = &mut outcome
     {
@@ -4243,6 +4245,12 @@ async fn decide(
             customer: seen.customer.as_deref(),
             tags: &seen.tags,
             observing: policy.observing(rule.shadow_until.as_deref()).is_some(),
+            chat: conversational,
+            answers: conversational
+                || path == COMPLETIONS
+                || [PASSTHROUGH, BEDROCK_PASSTHROUGH, VERTEX_PASSTHROUGH]
+                    .iter()
+                    .any(|prefix| path.starts_with(prefix)),
         };
         plugins = events::request(
             state,
@@ -4302,6 +4310,10 @@ async fn decide(
                 meter.session(session);
             }
             if let Some(carry) = plugins.carry.take() {
+                // A response is recorded as its creator's with its turn, for the request that goes on from it.
+                if let Some(creator) = parts.extensions.get_mut::<batch::Creator>() {
+                    creator.answered_in(carry.turn_of());
+                }
                 parts.extensions.insert(carry);
             }
         }

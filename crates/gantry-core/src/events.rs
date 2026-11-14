@@ -451,6 +451,10 @@ pub struct Event {
     /// The window's number, from 0.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window: Option<usize>,
+    /// Set on a window, or on a streamed answer's tool call, that waits for this verdict before it reaches the
+    /// caller (`stream.hold`): it can still be masked.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
     /// Where it was read from, as JSON pointers into the body, for a mask to be written back.
     #[serde(skip)]
     pub at: Vec<String>,
@@ -472,6 +476,7 @@ impl Event {
             arguments: None,
             partial: false,
             window: None,
+            held: false,
             at: Vec::new(),
         }
     }
@@ -900,7 +905,8 @@ fn tool_definitions(body: &Value) -> Option<Event> {
 }
 
 /// A request body of any API Gantry serves, as events: chat completions, the Responses API, Anthropic messages,
-/// Gemini's generateContent and Bedrock Converse.
+/// Gemini's generateContent and Bedrock Converse, and the text of an embeddings, completions, speech or image
+/// request (`input` or `prompt`, a string or a list of strings) as user messages.
 pub fn conversation(body: &Value) -> Conversation {
     let mut system = Vec::new();
     for field in ["system", "instructions"] {
@@ -915,7 +921,9 @@ pub fn conversation(body: &Value) -> Conversation {
     }
     let mut items = Vec::new();
     let mut names = BTreeMap::new();
-    for field in ["messages", "input", "contents"] {
+    // `prompt` is a completions or an image request's text. The Responses API's `prompt` is an object naming a
+    // stored prompt, which holds no text.
+    for field in ["messages", "input", "contents", "prompt"] {
         match body.get(field) {
             Some(Value::String(text)) if !text.is_empty() => items.push(Item {
                 event: Event {
@@ -929,14 +937,19 @@ pub fn conversation(body: &Value) -> Conversation {
                 for (i, message) in messages.iter().enumerate() {
                     let at = format!("/{field}/{i}");
                     match message {
-                        Value::String(text) if !text.is_empty() => items.push(Item {
-                            event: Event {
-                                at: vec![at],
-                                ..Event::text(Kind::UserMessage, text.clone())
-                            },
-                            assistant: false,
-                            starts_turn: true,
-                        }),
+                        // A list of texts (embeddings inputs, completions prompts) is one turn: every text of
+                        // it is new, and none is history.
+                        Value::String(text) if !text.is_empty() => {
+                            let starts_turn = !items.iter().any(|item: &Item| item.starts_turn);
+                            items.push(Item {
+                                event: Event {
+                                    at: vec![at],
+                                    ..Event::text(Kind::UserMessage, text.clone())
+                                },
+                                assistant: false,
+                                starts_turn,
+                            });
+                        }
                         Value::Object(_) => {
                             message_items(message, &at, &mut names, &mut system, &mut items);
                         }
@@ -946,6 +959,10 @@ pub fn conversation(body: &Value) -> Conversation {
             }
             _ => {}
         }
+    }
+    // Gemini's embedContent: one content, not a list of them.
+    if let Some(content) = body.get("content").filter(|c| c.get("parts").is_some()) {
+        message_items(content, "/content", &mut names, &mut system, &mut items);
     }
     Conversation {
         system: joined(Kind::SystemPrompt, system),
@@ -984,31 +1001,73 @@ impl Conversation {
     /// lead every turn, so their indexes are the same in each call of a turn. The new events are those after the
     /// model's last answer in the last turn; in a turn the model has not answered in yet, all of them.
     pub fn placed(&self, session: &str, named_turn: Option<&str>) -> Placed {
+        self.place(session, named_turn, None)
+    }
+
+    /// As [`Conversation::placed`], for a request that holds only what comes after an answer the provider keeps
+    /// (a Responses `previous_response_id`): what precedes its first user message goes on in `prior`'s turn, at the
+    /// index after that answer, and a user message starts the turn after `prior`'s.
+    pub fn placed_after(&self, session: &str, named_turn: Option<&str>, prior: &Prior) -> Placed {
+        self.place(session, named_turn, Some(prior))
+    }
+
+    fn place(&self, session: &str, named_turn: Option<&str>, prior: Option<&Prior>) -> Placed {
         let starts: Vec<usize> = self
             .items
             .iter()
             .enumerate()
             .filter_map(|(i, item)| item.starts_turn.then_some(i))
             .collect();
-        // What comes before the first user message belongs to the first turn.
+        // With a prior turn, what comes before the first user message goes on in it. With none it belongs to the
+        // first turn.
+        let continued = prior.filter(|_| !self.items.is_empty() && starts.first() != Some(&0));
+        let base = prior.map_or(0, |p| p.turn_index);
         let mut bounds: Vec<usize> = starts.clone();
-        match bounds.first_mut() {
-            Some(first) => *first = 0,
-            None => bounds.push(0),
+        if continued.is_some() {
+            bounds.insert(0, 0);
+        } else {
+            match bounds.first_mut() {
+                Some(first) => *first = 0,
+                None => bounds.push(0),
+            }
         }
         let lead: Vec<&Event> = self.system.iter().chain(&self.tools).collect();
-        let mut turns: Vec<(String, Vec<Event>, usize)> = Vec::new();
+        // Each turn: its id, its events, how many of them the model has answered, and its first event's index.
+        let mut turns: Vec<(String, Vec<Event>, usize, usize)> = Vec::new();
         for (n, from) in bounds.iter().enumerate() {
             let to = bounds.get(n + 1).copied().unwrap_or(self.items.len());
-            let number = if starts.is_empty() { 0 } else { n + 1 };
-            let user_text = starts
-                .get(n)
-                .and_then(|i| self.items[*i].event.content.as_deref())
-                .unwrap_or("");
+            let slice = &self.items[*from..to];
             // A named turn names the last one: the ones before it were named in their own calls.
             let named = named_turn.filter(|_| n + 1 == bounds.len());
+            if let Some(prior) = continued.filter(|_| n == 0) {
+                let turn = match named {
+                    Some(_) => turn_id(session, 0, "", named),
+                    None => prior.turn_id.clone(),
+                };
+                let events: Vec<Event> = slice
+                    .iter()
+                    .enumerate()
+                    .map(|(i, item)| item.event.clone().placed(&turn, prior.next_index + i))
+                    .collect();
+                let answered = slice
+                    .iter()
+                    .rposition(|item| item.assistant)
+                    .map_or(0, |at| at + 1);
+                turns.push((turn, events, answered, prior.next_index));
+                continue;
+            }
+            // Which of the user messages starts this turn.
+            let start = n - usize::from(continued.is_some());
+            let number = if starts.is_empty() {
+                0
+            } else {
+                base + start + 1
+            };
+            let user_text = starts
+                .get(start)
+                .and_then(|i| self.items[*i].event.content.as_deref())
+                .unwrap_or("");
             let turn = turn_id(session, number, user_text, named);
-            let slice = &self.items[*from..to];
             let events: Vec<Event> = lead
                 .iter()
                 .map(|e| (*e).clone())
@@ -1020,19 +1079,23 @@ impl Conversation {
                 .iter()
                 .rposition(|item| item.assistant)
                 .map_or(0, |at| lead.len() + at + 1);
-            turns.push((turn, events, answered));
+            turns.push((turn, events, answered, 0));
         }
-        let (turn_id, mut last, answered) = turns.pop().unwrap_or_default();
+        let (turn_id, mut last, answered, first) = turns.pop().unwrap_or_default();
         let new = last.split_off(answered);
-        let next_index = answered + new.len();
+        let next_index = first + answered + new.len();
         let mut history: Vec<Event> = turns
             .into_iter()
-            .flat_map(|(_, events, _)| events)
+            .flat_map(|(_, events, _, _)| events)
             .collect();
         history.append(&mut last);
         Placed {
             turn_id,
-            turn_index: if starts.is_empty() { 0 } else { starts.len() },
+            turn_index: if starts.is_empty() {
+                base
+            } else {
+                base + starts.len()
+            },
             new,
             history,
             next_index,
@@ -1040,11 +1103,52 @@ impl Conversation {
     }
 }
 
+/// The turn a stored answer was given in, for the request that goes on from it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Prior {
+    pub turn_id: String,
+    pub turn_index: usize,
+    /// The index after the answer's last event.
+    pub next_index: usize,
+}
+
+/// The events as the plugins after one see them: each masked event with its new content or arguments, and the id
+/// that follows from them.
+pub fn masked_events(events: &[Event], masked: &[Masked]) -> Vec<Event> {
+    events
+        .iter()
+        .map(|event| {
+            let Some(mask) = masked.iter().rev().find(|m| m.event == event.event_index) else {
+                return event.clone();
+            };
+            let mut event = event.clone();
+            if let Some(content) = &mask.content {
+                event.content = Some(content.clone());
+            }
+            if let Some(arguments) = &mask.arguments {
+                event.arguments = Some(arguments.clone());
+            }
+            let (turn, index) = (event.turn_id.clone(), event.event_index);
+            event.placed(&turn, index)
+        })
+        .collect()
+}
+
+/// Where a completions answer keeps its text.
+const COMPLETION: &str = "/choices/0/text";
+
 /// The model's message in an answer of any API, and its pointer: chat's `choices[0].message`, a messages answer
 /// itself, each item of a Responses `output`, Gemini's `candidates[0].content`, Converse's `output.message`.
 fn answer_messages(answer: &Value) -> Vec<(&Value, String)> {
     if let Some(message) = answer.pointer("/choices/0/message") {
         return vec![(message, "/choices/0/message".into())];
+    }
+    // A completions answer: read as a message whose content is the text.
+    if answer
+        .pointer("/choices/0/text")
+        .is_some_and(Value::is_string)
+    {
+        return vec![(answer, COMPLETION.into())];
     }
     if let Some(content) = answer.pointer("/candidates/0/content") {
         return vec![(content, "/candidates/0/content".into())];
@@ -1071,6 +1175,24 @@ pub fn answer_events(answer: &Value, turn: &str, first_index: usize) -> Vec<Even
     let mut items = Vec::new();
     let (mut names, mut system) = (BTreeMap::new(), Vec::new());
     for (message, at) in answer_messages(answer) {
+        if at == COMPLETION {
+            let text = message
+                .pointer(COMPLETION)
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            items.extend(
+                joined(
+                    Kind::AssistantMessage,
+                    vec![(text.to_string(), COMPLETION.into())],
+                )
+                .map(|event| Item {
+                    event,
+                    assistant: true,
+                    starts_turn: false,
+                }),
+            );
+            continue;
+        }
         // An answer's message is the model's whatever role it is written with, or with none.
         let mut message = message.clone();
         if message.get("role").is_none()
@@ -1117,10 +1239,14 @@ pub fn stream_answer(events: &[Value]) -> Value {
     let mut reasoning = String::new();
     // Gemini: the parts, text joined while it stays text of the same kind.
     let mut parts: Vec<Value> = Vec::new();
-    let (mut chat, mut messages, mut gemini) = (false, false, false);
+    let (mut chat, mut messages, mut gemini, mut completion) = (false, false, false, false);
     for event in events {
         if let Some(choice) = event.pointer("/choices/0") {
             chat = true;
+            if let Some(piece) = choice["text"].as_str() {
+                completion = true;
+                text.push_str(piece);
+            }
             let delta = &choice["delta"];
             if let Some(piece) = delta["content"].as_str() {
                 text.push_str(piece);
@@ -1215,6 +1341,9 @@ pub fn stream_answer(events: &[Value]) -> Value {
     }
     if gemini {
         return json!({"candidates": [{"content": {"role": "model", "parts": parts}}]});
+    }
+    if completion {
+        return json!({"choices": [{"text": text}]});
     }
     if chat {
         let mut message = Map::new();
@@ -1478,8 +1607,8 @@ pub fn check_verdict(verdict: Verdict, sent: &[Event]) -> Result<Verdict, String
             (false, _, _) if event.kind == Kind::ToolDefinitions => {
                 Err("tool definitions cannot be masked; block the request, or allow it")
             }
-            (false, _, _) if event.partial => Err(
-                "a window of a streamed answer cannot be masked, because part of the text may already be with the caller; block it, or allow it",
+            (false, _, _) if event.partial && !event.held => Err(
+                "a window of a streamed answer that is not held cannot be masked, because its text may already be with the caller; set stream.hold on the guardrail, block it, or allow it",
             ),
             (false, Some(_), None) => Ok(()),
             (false, _, _) => Err(
@@ -1498,8 +1627,8 @@ pub fn check_verdict(verdict: Verdict, sent: &[Event]) -> Result<Verdict, String
 }
 
 /// Writes one masked value where its event was read from. A string goes where a string was. Where the provider
-/// holds JSON (a tool's input, Gemini's function response), the masked text must be JSON of the same type, or the
-/// write is refused: the unmasked value is never what goes on.
+/// holds JSON (a tool's input), the masked text must be JSON of the same type, or the write is refused: the
+/// unmasked value is never what goes on. Gemini's function response takes any text, wrapped as its output.
 fn write_slot(body: &mut Value, at: &str, masked: &Value) -> Result<(), String> {
     let Some(slot) = body.pointer_mut(at) else {
         return Err(format!("the body has nothing at {at}"));
@@ -1509,15 +1638,20 @@ fn write_slot(body: &mut Value, at: &str, masked: &Value) -> Result<(), String> 
         // Arguments held as a string of JSON take the masked JSON as its text.
         (Value::String(_), other) => *slot = Value::String(other.to_string()),
         (held, Value::String(text)) => {
-            let parsed: Value = serde_json::from_str(text).map_err(|_| {
-                format!("the value at {at} is JSON, and the masked text is not JSON")
-            })?;
-            if std::mem::discriminant(held) != std::mem::discriminant(&parsed) {
-                return Err(format!(
-                    "the value at {at} is JSON of another type than the masked text"
-                ));
-            }
-            *slot = parsed;
+            let parsed = serde_json::from_str::<Value>(text)
+                .ok()
+                .filter(|parsed| std::mem::discriminant(held) == std::mem::discriminant(parsed));
+            *slot = match parsed {
+                Some(parsed) => parsed,
+                // Gemini's functionResponse.response is a JSON object, and its documented key for a function's
+                // output is "output": masked text that is not such an object goes there as text.
+                None if at.ends_with("/functionResponse/response") => json!({ "output": text }),
+                None => {
+                    return Err(format!(
+                        "the value at {at} is JSON, and the masked text is not JSON of the same type"
+                    ));
+                }
+            };
         }
         (_, other) => *slot = other.clone(),
     }
@@ -2026,6 +2160,161 @@ mod tests {
             "{\"a\":0}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn gemini_takes_a_masked_tool_result_that_is_not_json_as_the_function_s_output() -> TestResult {
+        let mut body = json!({"contents": [
+            {"role": "user", "parts": [{"text": "Weather in Paris?"}]},
+            {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+            {"role": "user", "parts": [{"functionResponse": {"name": "get_weather", "response": {"temp": "18C"}}}]}]});
+        let placed = conversation(&body).placed("s", None);
+        let result = placed
+            .new
+            .iter()
+            .find(|e| e.kind == Kind::ToolResult)
+            .ok_or("no tool result")?
+            .event_index;
+        let mask = |content: &str| {
+            vec![Masked {
+                event: result,
+                content: Some(content.into()),
+                arguments: None,
+            }]
+        };
+        let at = "/contents/2/parts/0/functionResponse/response";
+        assert!(apply_masks(&mut body, &placed.new, &mask("[masked]"))?);
+        assert_eq!(body.pointer(at), Some(&json!({"output": "[masked]"})));
+        // JSON of another type is text to it too; an object goes in as it is.
+        assert!(apply_masks(&mut body, &placed.new, &mask("[1, 2]"))?);
+        assert_eq!(body.pointer(at), Some(&json!({"output": "[1, 2]"})));
+        assert!(apply_masks(
+            &mut body,
+            &placed.new,
+            &mask("{\"temp\":\"?\"}")
+        )?);
+        assert_eq!(body.pointer(at), Some(&json!({"temp": "?"})));
+        // A tool call's input is still refused text that is not JSON: there is no shape to wrap it in.
+        let mut answer = json!({"role": "assistant", "content": [{"type": "tool_use", "id": "c", "name": "f", "input": {"a": 1}}]});
+        let events = answer_events(&answer, "t", 0);
+        let bad = vec![Masked {
+            event: 0,
+            content: Some("no".into()),
+            arguments: None,
+        }];
+        assert!(apply_masks(&mut answer, &events, &bad).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_request_after_a_stored_answer_goes_on_in_its_turn_or_starts_the_next() {
+        let prior = Prior {
+            turn_id: "turn_before".into(),
+            turn_index: 3,
+            next_index: 7,
+        };
+        // A tool's result alone: the same turn, counted on from the answer.
+        let result = conversation(
+            &json!({"input": [{"type": "function_call_output", "call_id": "c", "output": "18C"}]}),
+        );
+        let placed = result.placed_after("s", None, &prior);
+        assert_eq!(
+            (placed.turn_id.as_str(), placed.turn_index),
+            ("turn_before", 3)
+        );
+        assert_eq!(shape(&placed.new)[0][0], 7);
+        assert_eq!(placed.next_index, 8);
+        // A new question: the turn after, led by the system prompt as every turn is.
+        let question = conversation(&json!({"instructions": "Be brief.", "input": "And Rome?"}));
+        let placed = question.placed_after("s", None, &prior);
+        assert_eq!(placed.turn_index, 4);
+        assert_eq!(placed.turn_id, turn_id("s", 4, "And Rome?", None));
+        assert_eq!(placed.new.len(), 2);
+        assert_eq!(placed.next_index, 2);
+        // Both: the result ends the turn before, and only the question is new.
+        let both = conversation(&json!({"input": [
+            {"type": "function_call_output", "call_id": "c", "output": "18C"},
+            {"role": "user", "content": "And Rome?"}]}));
+        let placed = both.placed_after("s", None, &prior);
+        assert_eq!(placed.turn_index, 4);
+        assert_eq!(shape(&placed.history)[0][0], 7);
+        assert_eq!(placed.history[0].turn_id, "turn_before");
+        assert_eq!(placed.new.len(), 1);
+    }
+
+    #[test]
+    fn a_list_of_texts_is_one_turn_and_a_completion_is_an_answer() {
+        for field in ["input", "prompt"] {
+            let placed = conversation(&json!({ field: ["one", "two", "three"] })).placed("s", None);
+            assert_eq!(placed.new.len(), 3, "{field}");
+            assert!(placed.history.is_empty(), "{field}");
+            assert_eq!(placed.turn_index, 1, "{field}");
+        }
+        let embed = json!({"content": {"parts": [{"text": "to embed"}]}});
+        assert_eq!(conversation(&embed).placed("s", None).new.len(), 1);
+        // A stored prompt is a reference, and token ids are not text.
+        for body in [
+            json!({"prompt": {"id": "pmpt_1"}}),
+            json!({"input": [[1, 2, 3]]}),
+        ] {
+            assert!(conversation(&body).placed("s", None).new.is_empty());
+        }
+        let mut answer = json!({"choices": [{"text": "Once"}]});
+        let events = answer_events(&answer, "t", 1);
+        assert_eq!(
+            shape(&events),
+            [json!([
+                1,
+                "assistant_message",
+                "Once",
+                null,
+                null,
+                null,
+                true
+            ])]
+        );
+        let masks = vec![Masked {
+            event: 1,
+            content: Some("[x]".into()),
+            arguments: None,
+        }];
+        assert_eq!(apply_masks(&mut answer, &events, &masks), Ok(true));
+        assert_eq!(answer["choices"][0]["text"], "[x]");
+        let chunks = [
+            json!({"choices": [{"text": "On"}]}),
+            json!({"choices": [{"text": "ce"}]}),
+        ];
+        assert_eq!(
+            stream_answer(&chunks),
+            json!({"choices": [{"text": "Once"}]})
+        );
+    }
+
+    #[test]
+    fn a_window_is_masked_only_while_it_is_held_and_the_next_plugin_sees_the_mask() {
+        let window = |held: bool| {
+            vec![
+                Event {
+                    partial: true,
+                    window: Some(0),
+                    held,
+                    ..Event::text(Kind::AssistantMessage, "the code word")
+                }
+                .placed("t", 2),
+            ]
+        };
+        let mask = br#"{"action":"mask","masked":[{"event":2,"content":"the [x]"}]}"#;
+        let refused = parse_verdict(mask, &window(false));
+        assert!(refused.is_err_and(|e| e.contains("stream.hold")));
+        let held = window(true);
+        let verdict = parse_verdict(mask, &held);
+        assert!(verdict.is_ok());
+        assert_eq!(json!(held[0])["held"], true);
+        let masked = verdict.map(|v| v.masked).unwrap_or_default();
+        let next = masked_events(&held, &masked);
+        assert_eq!(next[0].content.as_deref(), Some("the [x]"));
+        assert_eq!(next[0].event_index, 2);
+        assert_ne!(next[0].event_id, held[0].event_id);
     }
 
     #[test]

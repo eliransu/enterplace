@@ -91,6 +91,16 @@ async fn gateway(name: &str, budget: &str) -> Result<Gateway, Error> {
 }
 
 async fn gateway_with(name: &str, top: &str, budget: &str) -> Result<Gateway, Error> {
+    gateway_own(name, top, budget, None).await
+}
+
+/// As [`gateway_with`], in a binary with an events plugin of its own.
+async fn gateway_own(
+    name: &str,
+    top: &str,
+    budget: &str,
+    own: Option<std::sync::Arc<dyn gantry_server::EventsPlugin>>,
+) -> Result<Gateway, Error> {
     let port = provider().await?;
     let dir = std::env::temp_dir().join(format!("gantry-realtime-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -131,8 +141,18 @@ prices:
             sha256_hex(ADMIN.as_bytes())
         ),
     )?;
-    let gw = gantry_server::governed(&policy, None, &|_| Some("provider-secret".into()))
-        .map_err(|e| -> Error { e.into() })?;
+    let gw = gantry_server::governed_with(
+        &policy,
+        None,
+        &|_| Some("provider-secret".into()),
+        &move |_| {
+            Ok(gantry_server::Extension {
+                events: own.clone(),
+                ..gantry_server::Extension::default()
+            })
+        },
+    )
+    .map_err(|e| -> Error { e.into() })?;
     let router = gw.router.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let gantry = listener.local_addr()?.port();
@@ -524,6 +544,67 @@ async fn an_events_plugin_sees_realtime_text_as_events_of_one_session() -> Resul
     assert_eq!(seen[1]["events"][0]["event_index"], 1);
     assert_ne!(seen[2]["turn_id"], seen[0]["turn_id"]);
     assert_eq!(seen[2]["turn_index"], 2);
+    Ok(())
+}
+
+/// A plugin built into the binary: it keeps what it is shown and blocks a text that says "forbidden".
+struct Own(std::sync::Arc<std::sync::Mutex<Vec<gantry_core::events::Envelope>>>);
+
+impl gantry_server::EventsPlugin for Own {
+    fn judge(
+        &self,
+        envelope: gantry_core::events::Envelope,
+    ) -> gantry_core::store::Pending<gantry_core::events::Verdict> {
+        let block = envelope.events.iter().any(|e| {
+            e.content
+                .as_deref()
+                .is_some_and(|c| c.contains("forbidden"))
+        });
+        if let Ok(mut seen) = self.0.lock() {
+            seen.push(envelope);
+        }
+        Box::pin(async move {
+            let mut verdict = gantry_core::events::Verdict::allow();
+            if block {
+                verdict.action = gantry_core::events::Action::Block;
+            }
+            Ok(verdict)
+        })
+    }
+}
+
+/// The binary's own plugin sees a realtime session's text on a rule with no guardrail at all, and what it blocks
+/// is dropped.
+#[tokio::test]
+async fn a_binary_s_own_plugin_sees_realtime_text_on_a_rule_with_no_guardrail() -> Result<(), Error>
+{
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let gw = gateway_own("own", "", "", Some(std::sync::Arc::new(Own(seen.clone())))).await?;
+    let mut socket = connect(gw.port, "/v1/realtime?model=rt-model", DANA).await?;
+    socket.send(item("hello")).await?;
+    let said = next_text(&mut socket).await?.ok_or("no transcript")?;
+    assert!(said.contains("hello"), "{said}");
+    socket.send(item("a forbidden thing")).await?;
+    let error = next_text(&mut socket).await?.ok_or("no error event")?;
+    assert!(
+        error.contains("guardrail_blocked") && !error.contains("forbidden"),
+        "{error}"
+    );
+    let seen = seen.lock().map(|s| s.clone()).unwrap_or_default();
+    let kinds: Vec<&str> = seen.iter().map(|e| e.events[0].kind.word()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "realtime_user_message",
+            "realtime_assistant_message",
+            "realtime_user_message"
+        ]
+    );
+    assert!(
+        seen.iter()
+            .all(|e| e.guardrail == "extension" && e.phase == "realtime")
+    );
+    assert_eq!(seen[0].context.session_id, seen[2].context.session_id);
     Ok(())
 }
 

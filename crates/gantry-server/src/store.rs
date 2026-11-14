@@ -218,6 +218,15 @@ CREATE TABLE gantry_deployment_load (
 );
 "];
 
+/// The version of the sessions events plugins ended, in a namespace of its own (`gantry_events`). The sessions
+/// themselves are rows of `gantry_sessions` whose `who` starts with `events:`, under a key no console session has.
+/// Never edit an entry that has shipped: add one.
+const EVENTS_MIGRATIONS: &[&str] =
+    &["INSERT INTO gantry_versions VALUES ('events', 0) ON CONFLICT (name) DO NOTHING;"];
+
+/// What marks a row of `gantry_sessions` as a session an events plugin ended, before the guardrail's name.
+const ENDED: &str = "events:";
+
 /// A gateway's load on a deployment counts this long after it last wrote it: one that stopped holds nothing.
 const LOAD_FOR_SECS: f64 = 10.0;
 
@@ -300,6 +309,9 @@ struct Inner {
     /// Every policy version, newest first, and the version of the list last read.
     policies: RwLock<Arc<Vec<PolicyVersion>>>,
     policies_seen: Mutex<Option<i64>>,
+    /// The sessions events plugins ended, and the version of them last read.
+    ended: RwLock<Arc<HashMap<String, (Instant, String)>>>,
+    ended_seen: Mutex<Option<i64>>,
     /// Set while the database cannot be reached, so the outage is reported once and its end once.
     down: AtomicBool,
     /// This gateway's name on the latency rows, new at each start.
@@ -372,6 +384,8 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         master: std::sync::OnceLock::new(),
         policies: RwLock::default(),
         policies_seen: Mutex::new(None),
+        ended: RwLock::default(),
+        ended_seen: Mutex::new(None),
         down: AtomicBool::new(false),
         gateway: id::random_hex(8),
         pins: RwLock::default(),
@@ -397,6 +411,7 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         migrate(&mut client).await?;
         migrate_namespace(&mut client, "gantry_policy", POLICY_MIGRATIONS).await?;
         migrate_namespace(&mut client, "gantry_routing", ROUTING_MIGRATIONS).await?;
+        migrate_namespace(&mut client, "gantry_events", EVENTS_MIGRATIONS).await?;
         write(&first.client, Some(Arc::new(client)));
         first.refresh().await.map_err(|err| {
             format!("the store's keys and kill switches could not be read: {err}. Check the database and start again.")
@@ -956,6 +971,42 @@ impl Inner {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(policy);
         }
+        let ended = version("events");
+        let seen = *self
+            .ended_seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if seen != Some(ended) {
+            // ponytail: every ended session is read again when one more ends. Fine for thousands; read only the
+            // rows newer than the last read when plugins end sessions by the second.
+            let rows = client
+                .query(
+                    "SELECT sha256, who, extract(epoch FROM expires - clock_timestamp())::float8 FROM gantry_sessions \
+                     WHERE who LIKE 'events:%' AND expires > clock_timestamp()",
+                    &[],
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+            let now = Instant::now();
+            let mut all = HashMap::with_capacity(rows.len());
+            for row in rows {
+                let field = |err: tokio_postgres::Error| err.to_string();
+                let who: String = row.try_get(1).map_err(field)?;
+                let left: f64 = row.try_get(2).map_err(field)?;
+                all.insert(
+                    row.try_get(0).map_err(field)?,
+                    (
+                        now + Duration::try_from_secs_f64(left).unwrap_or_default(),
+                        who.strip_prefix(ENDED).unwrap_or(&who).to_string(),
+                    ),
+                );
+            }
+            write(&self.ended, Arc::new(all));
+            *self
+                .ended_seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ended);
+        }
         self.read_routing(&client).await
     }
 
@@ -1165,6 +1216,12 @@ impl Inner {
         }
         if self.polls.fetch_add(1, Ordering::Relaxed) % CLEAN_EVERY == 0 {
             let idle = crate::alias::SESSION_IDLE.as_secs_f64();
+            // Sessions that ran out: a console's, and the ones events plugins ended.
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.execute("DELETE FROM gantry_sessions WHERE expires < now()", &[]),
+            )
+            .await;
             let _ = tokio::time::timeout(
                 WAIT,
                 client.execute(
@@ -2444,6 +2501,30 @@ impl Store for PgStore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(deployment.to_string(), load);
+    }
+
+    fn ended_sessions(&self) -> Arc<HashMap<String, (Instant, String)>> {
+        read(&self.inner.ended)
+    }
+
+    fn end_events_session(&self, key: String, by: String, ttl: Duration) {
+        let seconds = ttl.as_secs_f64();
+        self.retried("the end of a session", move |inner| {
+            let (key, who) = (key.clone(), format!("{ENDED}{by}"));
+            async move {
+                inner
+                    .client()?
+                    .execute(
+                        "WITH up AS (INSERT INTO gantry_sessions AS s VALUES ($1, $2, now() + $3 * interval '1 second') \
+                           ON CONFLICT (sha256) DO UPDATE SET expires = greatest(s.expires, excluded.expires)) \
+                         UPDATE gantry_versions SET version = version + 1 WHERE name = 'events'",
+                        &[&key, &who, &seconds],
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_err(|err| err.to_string())
+            }
+        });
     }
 
     fn open_session(&self, id_sha256: String, who: String, ttl: Duration) -> Pending<()> {

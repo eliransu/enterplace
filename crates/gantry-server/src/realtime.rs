@@ -516,12 +516,14 @@ async fn session(
     let mut found: Vec<guard::AuditEntry> = Vec::new();
     // For events plugins: the turn the session is in (one per text of the caller's), and the next event's place in it.
     let mut turn = (0usize, 0usize);
+    // Text is read when the rule has a guardrail, or the binary a plugin of its own.
+    let screened = !guards.is_empty() || crate::events::active(&state, &guards);
     let ended_by = loop {
         tokio::select! {
             message = down_rx.next() => match message {
                 Some(Ok(Down::Text(text))) => {
                     let mut text = text.as_str().to_string();
-                    if !guards.is_empty()
+                    if screened
                         && let Some((mut event, true, pointers)) = event_texts(api, &text, true)
                     {
                         let verdict = screen(&state, &guards, &open, &decision, api, true, &event, &pointers, &mut turn).await;
@@ -562,7 +564,7 @@ async fn session(
             },
             message = up_rx.next() => match message {
                 Some(Ok(Up::Text(text))) => {
-                    if !guards.is_empty()
+                    if screened
                         && let Some((event, request, pointers)) = event_texts(api, text.as_str(), false)
                     {
                         let verdict = screen(&state, &guards, &open, &decision, api, request, &event, &pointers, &mut turn).await;
@@ -812,7 +814,7 @@ async fn screen(
                 Some(placed)
             })
             .collect();
-        if let Some(refusal) = crate::events::refused_session(state, &plugins, &context).await {
+        if let Some(refusal) = crate::events::refused_session(state, &plugins, &context) {
             verdict.blocked = Some(guard::Blocked {
                 guardrail: "events".into(),
                 message: refusal.message,
