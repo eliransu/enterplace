@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::{
     guard::{self, Guardrail, GuardrailFile},
     id::sha256_hex,
-    policy::{Budget, CallerKey, Limits, Models, Period, Policy, Principal, Rule, Who},
+    policy::{Budget, CallerKey, Capture, Limits, Models, Period, Policy, Principal, Rule, Who},
     usage::{PriceOverrides, price_for},
 };
 
@@ -112,6 +112,10 @@ const KNOWN: &[&str] = &[
     "postgres_url_env",
     "credential",
     "caller_provider_key",
+    "capture",
+    "to",
+    "days",
+    "viewers",
 ];
 /// Keys whose value is a map whose keys the user chooses: model names, or header names under `headers_env`.
 /// Those names are not Gantry keys, so the unknown-key scan never reads them.
@@ -284,7 +288,20 @@ struct RuleFile {
     tools: Vec<String>,
     #[serde(default)]
     caller_provider_key: Option<String>,
+    #[serde(default)]
+    capture: Option<CaptureFile>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureFile {
+    to: String,
+    days: i64,
+    viewers: Vec<String>,
+}
+
+/// The longest a kept body may be kept: 90 days.
+const MAX_CAPTURE_DAYS: i64 = 90;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1631,6 +1648,43 @@ fn limits(rule: &RuleFile, at: &dyn Fn(&str) -> String, errors: &mut Vec<String>
             CallerKey::Refused
         }
     };
+    if let Some(capture) = &rule.capture {
+        let mut ok = true;
+        if capture.to != "console" {
+            ok = false;
+            errors.push(format!(
+                "{}: capture keeps bodies to: console, which is the one place Gantry keeps them; \"{}\" is not one. Write capture: {{ to: console, days: 7, viewers: [noa.bar] }}.",
+                at("capture"),
+                capture.to
+            ));
+        }
+        if !(1..=MAX_CAPTURE_DAYS).contains(&capture.days) {
+            ok = false;
+            errors.push(format!(
+                "{}: days is how long a redacted body is kept, 1 to 90, for example capture: {{ to: console, days: 7, viewers: [noa.bar] }}.",
+                at("capture")
+            ));
+        }
+        let viewers: Vec<String> = capture
+            .viewers
+            .iter()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect();
+        if viewers.is_empty() {
+            ok = false;
+            errors.push(format!(
+                "{}: viewers is empty, so no one could read what is kept. Name who may: a person (noa.bar), a team (team:security) or a console role (role:admin).",
+                at("capture")
+            ));
+        }
+        if ok {
+            limits.capture = Some(Capture {
+                days: u32::try_from(capture.days).unwrap_or(7),
+                viewers,
+            });
+        }
+    }
     if let Some(every) = rule.check_stream_every {
         match u32::try_from(every) {
             Ok(every @ 50..=100_000) => limits.check_stream_every = Some(every),
@@ -3080,6 +3134,36 @@ rules:
     }
 
     #[test]
+    fn capture_loads_and_a_wrong_one_names_the_fix() -> TestResult {
+        let good = LIMITED.replace(
+            "    cache: { ttl_seconds: 300 }\n",
+            "    cache: { ttl_seconds: 300 }\n    capture: { to: console, days: 7, viewers: [noa.bar, \"team:security\"] }\n",
+        );
+        let loaded = check("capture", &good, None)?.map_err(|e| e.join("\n"))?;
+        assert_eq!(
+            loaded.policy.rule_list()[0].limits.capture,
+            Some(Capture {
+                days: 7,
+                viewers: vec!["noa.bar".into(), "team:security".into()]
+            })
+        );
+        for (from, expected) in [
+            ("to: console", "to: console, which is the one place"),
+            ("days: 7", "1 to 90"),
+            ("viewers: [noa.bar, \"team:security\"]", "no one could read"),
+        ] {
+            let to = match from {
+                "to: console" => "to: otlp",
+                "days: 7" => "days: 365",
+                _ => "viewers: []",
+            };
+            let found = errors(check("capture-bad", &good.replace(from, to), None)?)?;
+            assert!(found.contains(expected), "{to}: {found}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn budget_rate_cache_and_prices_load_into_the_rules() -> TestResult {
         let loaded = check("limits", LIMITED, None)?.map_err(|e| e.join("\n"))?;
         let rules = loaded.policy.rule_list();
@@ -3096,6 +3180,7 @@ rules:
                 buffer_stream: false,
                 check_stream_every: None,
                 caller_provider_key: CallerKey::Refused,
+                capture: None,
             }
         );
         assert_eq!(

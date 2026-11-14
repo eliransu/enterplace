@@ -853,6 +853,11 @@ fn hash_of(body: &str) -> String {
     sha256_hex(format!("{body}}}").as_bytes())
 }
 
+/// Whether a record's line hashes to the hash it carries: the record is as it was written.
+pub fn line_holds(line: &str) -> bool {
+    split(line).is_some_and(|(body, hash)| hash_of(body) == hash)
+}
+
 impl AuditLog {
     /// Opens the log for appending and picks the chain up where the last record left it.
     pub fn open(path: &Path) -> Result<Self, String> {

@@ -8,6 +8,7 @@ pub mod eventstream;
 pub mod gemini;
 pub mod guard;
 pub mod id;
+pub mod insights;
 pub mod keyfile;
 pub mod kill;
 pub mod litellm;

@@ -104,6 +104,16 @@ pub struct Limits {
     pub check_stream_every: Option<u32>,
     /// Whether a caller may send their own provider key in `x-gantry-provider-key`.
     pub caller_provider_key: CallerKey,
+    /// Keep the redacted request and answer of each request this rule allows (`capture:`).
+    pub capture: Option<Capture>,
+}
+
+/// What a rule's `capture:` keeps, for how long, and for whom.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Capture {
+    pub days: u32,
+    /// A name, `team:<team>` or `role:<console role>`.
+    pub viewers: Vec<String>,
 }
 
 /// What a rule does with a provider key the caller sends in `x-gantry-provider-key`.

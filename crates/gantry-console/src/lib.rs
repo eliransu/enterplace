@@ -6,6 +6,7 @@
 
 pub mod cli;
 pub mod html;
+mod insights;
 mod pages;
 mod sso;
 
@@ -410,6 +411,9 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .route("/credentials/{action}", post(credential_change))
         .route("/policy", get(policy_page))
         .route("/spend", get(spend_page))
+        .route("/requests", get(insights::requests_page))
+        .route("/requests/body", post(insights::body_view))
+        .route("/analytics", get(insights::analytics_page))
         .route("/assets/{file}", get(asset))
         .route("/assets/fonts/{file}", get(font))
         .merge(extension.routes)

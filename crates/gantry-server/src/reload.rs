@@ -276,6 +276,12 @@ pub struct Host<'a> {
     pub audit_path: &'a Path,
 }
 
+/// The request index of every gateway on the store, and where bodies are kept, when there are.
+type Served = (
+    Option<Arc<dyn gantry_core::insights::Index>>,
+    Option<Arc<dyn gantry_core::insights::Bodies>>,
+);
+
 /// `governed`, with what an embedding binary adds: `extend` runs before the router is built.
 pub fn governed_with(
     policy_path: &Path,
@@ -423,6 +429,44 @@ pub fn governed_with(
                 loaded.audit_path.display()
             )
         })?;
+    // Bodies are kept only sealed: capture needs the master key, and is refused at start without one.
+    // Read only when something needs it: the store (which read it already) or a rule that captures.
+    let capturing = loaded
+        .policy
+        .rule_list()
+        .iter()
+        .any(|r| r.limits.capture.is_some());
+    let master = if capturing || postgres.is_some() {
+        crate::MasterKey::from_env(provider_key)?
+    } else {
+        None
+    };
+    let problems = crate::insights::capture_problems(loaded.policy.rule_list(), master.is_some());
+    if !problems.is_empty() {
+        return Err(problems.join("\n"));
+    }
+    let seal = master
+        .map(|m| -> Arc<dyn gantry_core::insights::Seal> { Arc::new(crate::insights::Sealer(m)) });
+    let (index, bodies): Served = match &postgres {
+        Some(pg) => {
+            let index =
+                crate::insights::PgIndex::open(pg.clone(), &loaded.audit_path, seal.clone(), true)?;
+            let bodies = seal
+                .is_some()
+                .then(|| -> Arc<dyn gantry_core::insights::Bodies> { index.clone() });
+            (Some(index), bodies)
+        }
+        None => (
+            None,
+            seal.map(|seal| -> Arc<dyn gantry_core::insights::Bodies> {
+                Arc::new(gantry_core::insights::FileBodies::beside(
+                    &loaded.audit_path,
+                    seal,
+                ))
+            }),
+        ),
+    };
+    gantry_core::insights::attach(&loaded.audit_path, index, bodies.clone());
     // First run: no one can sign in to the console yet, so a one-time link makes the first admin.
     let setup =
         (!loaded.policy.entries().any(|(_, p)| p.admin)).then(|| gantry_core::id::random_hex(24));
@@ -456,6 +500,7 @@ pub fn governed_with(
         setup: setup.clone(),
         mcp,
         store: shared.clone(),
+        bodies,
         extension,
         ..Config::default()
     };
@@ -629,6 +674,14 @@ impl Reloader {
         });
         if !unset.is_empty() {
             return Err(unset);
+        }
+        // Bodies can be kept only where a sealed body store was opened at start.
+        let sealed = gantry_core::insights::attached(&old.audit_path)
+            .bodies
+            .is_some();
+        let problems = crate::insights::capture_problems(new.policy.rule_list(), sealed);
+        if !problems.is_empty() {
+            return Err(problems);
         }
         let reasons = config::needs_restart(old, &new);
         if reasons.is_empty() {

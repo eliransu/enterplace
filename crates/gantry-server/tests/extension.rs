@@ -158,7 +158,11 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
         .iter()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
         .collect::<Result<_, tokio_postgres::Error>>()?;
-    assert_eq!(rows, vec![("demo".to_string(), 1)]);
+    // `insights` is the gateway's own request index, in a namespace of its own beside the extension's.
+    assert_eq!(
+        rows,
+        vec![("demo".to_string(), 1), ("insights".to_string(), 1)]
+    );
     // The gateway's own schema version is untouched by the namespace: its three migrations (keys, shared limits and
     // sessions, credentials).
     let core: i32 = client

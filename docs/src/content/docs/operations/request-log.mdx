@@ -1,0 +1,93 @@
+---
+title: Request log and analytics
+description: Search every request by person, team, key, model, provider, outcome, cost and latency, prove each row against the audit chain, and chart usage.
+sidebar:
+  order: 11
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The console's Requests page lists every request Gantry decided, with its usage, cost and latency, and lets you filter it. Analytics charts the same rows over time and ranks them by any dimension. Both read the audit log, so each row carries proof that its record is the one the chain holds.
+
+## Where the rows come from
+
+Each request is one row, folded from its audit records: the decision, the `usage` record when the answer ends, an `upstream_error` record when no provider answered, and the `answer_guardrails` record. No row holds prompt or answer text, because no record does.
+
+| Gateway | Source |
+|---|---|
+| Without `store:` | This gateway's audit log, its sealed segments included, read when the page opens |
+| With `store:` | The `gantry_requests` table in the store's Postgres. Every replica copies the rows of its own chain into it every 2 seconds, after a cursor it keeps in `gantry_insights_replicas`, so the page shows every replica |
+
+The index keeps each decision record as written, with its replica, record number and hash. It is created on first start in its own migration namespace, `insights`.
+
+## Requests
+
+Open `/console/requests`. Filter by any of these. Every filter narrows the list, and a link to a filtered list can be shared.
+
+| Filter | Query field | Matches |
+|---|---|---|
+| Person, team, key, model, provider | `person`, `team`, `key`, `model`, `provider` | The value exactly. Provider and model are the ones that answered, after a fallback |
+| Tag | `tag` | One of the strings in the request record's `tags` field |
+| Coding agent | `agent` | The product part of the `User-Agent` header, such as `claude-cli` or `codex_cli_rs` |
+| Outcome | `outcome` | `allowed`, `refused` (by the policy or a guardrail) or `error` (a provider error status, or no answer at all) |
+| Refusal code | `code` | A [refusal code](/reference/refusal-codes/), such as `budget_exceeded` or `upstream_timeout` |
+| Guardrail finding | `finding` | A kind a guardrail found on the request or the answer, such as `email_address` |
+| Decision ID | `id` | One request |
+| Time | `from`, `to` | A UTC date (`2026-11-14`) or time (`2026-11-14T09:30:00Z`). A date in `to` takes the whole day |
+| Cost | `min_cost`, `max_cost` | US dollars |
+| Latency | `min_ms`, `max_ms` | Milliseconds from the decision to the end of the answer |
+
+Each row's **Proof** column recomputes the SHA-256 of its decision record and compares it with the hash the chain holds. It also checks that the record's `prev` is the hash of the record before it. It says `Verified` when both hold, `Changed` when the record no longer hashes to its hash (it was edited after Gantry wrote it), and `Unlinked` when its `prev` does not follow the record before it. For either of the last two, run `gantry audit verify` on the gateway that wrote it. Open a row to see its facts and a link to its record on the Audit log page.
+
+## Analytics
+
+Open `/console/analytics`. Pick a window (24 hours by the hour, 7 or 30 days by the day) and a dimension to rank by: provider, model, team, person, key, tag or coding agent. Any Requests filter also works here, such as `/console/analytics?team=payments`.
+
+The page shows totals (requests, refusals, errors, tokens, cost, and latency at p50, p95 and p99 by nearest rank), charts of each over time, and a ranking by the chosen dimension, most costly first. Each ranked value links to its requests.
+
+**Budget forecasts** take each budget in the policy and what it has been charged since its period started. At that pace, each says whether it lasts the period or the date and time it runs out. A budget for each person shows the person heading out first.
+
+## Bodies
+
+A rule can keep the request and answer of each request it allows, for investigation. The redacted body is kept apart from the audit log and the request index, sealed, for the days the rule says, and readable only by the people the rule names.
+
+```yaml title="gantry.policy.yaml (one rule)"
+  - name: payments-team
+    principals: { team: payments }
+    models: [gpt-4o-mini]
+    capture: { to: console, days: 7, viewers: [noa.bar, "team:security", "role:admin"] }
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `to` | string | required | `console`: kept for the console's Requests page |
+| `days` | integer | required | How long a body is kept, 1 to 90. It is deleted after that |
+| `viewers` | list of strings | required | Who may read it: a person's name, `team:<team>`, or `role:<console role>` such as `role:admin` |
+
+How a body is kept:
+
+1. Gantry's built-in secrets and PII detectors replace every finding with `[MASKED kind]`, whatever guardrails the rule has. The request is redacted as it was sent (after any guardrail masking), and the answer as it came back, streamed or whole. Each side is cut at 64 KiB.
+2. The body is sealed with AES-256-GCM under the master key (`GANTRY_MASTER_KEY` or `GANTRY_MASTER_KEY_FILE`, as for [provider credentials](/governance/provider-credentials/)), with the decision ID bound in, so a body moved to another ID does not open.
+3. Without `store:` it is written to a file under `<audit log>.bodies/`, in one folder per day it expires on. With `store:` it goes to the `gantry_bodies` table. An expired body is never shown. On file, passed days are deleted when a body is written, at most once an hour; in Postgres, every 2 seconds.
+4. The request's `usage` record says `"body":"captured"`, so the chain shows which requests had a body kept.
+
+Reading one: open the request on the Requests page and choose **Read the kept body**. Gantry checks that you are among the viewers the rule named when the body was kept, and among its viewers now if the rule is still in the policy. Every attempt is an `admin` record with action `view_body` in the audit chain, written before the body is shown. A refusal has code `not_a_viewer`. A view that cannot be recorded is not shown.
+
+<Aside type="caution">
+`gantry serve` refuses to start, and a reload is rejected, when a rule has `capture:` and no master key is set: a body is never kept unsealed. Set `GANTRY_MASTER_KEY` to 64 hex characters made with `openssl rand -hex 32`, the same on every gateway on one store, and restart. Turning capture on by reload needs the master key to have been set when Gantry started.
+</Aside>
+
+## Limits
+
+<Aside type="note">
+Analytics fold at most 200,000 requests per window. The index rows have no retention of their own: audit retention retires segments, and the rows it copied stay in Postgres.
+</Aside>
+
+## Related
+
+<CardGrid>
+  <LinkCard title="Admin console" href="/operations/console/" />
+  <LinkCard title="Audit records" href="/reference/audit-records/" />
+  <LinkCard title="Store" href="/operations/store/" />
+  <LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" />
+</CardGrid>
