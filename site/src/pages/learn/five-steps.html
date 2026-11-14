@@ -1,0 +1,181 @@
+<!--
+title: The five steps: See, Know, Limit, Protect, Prove
+description: A guided path to control a company's AI use, one change at a time. See what is in use, know who uses it, limit spend, protect secrets and personal data, and prove all of it with a verifiable record. With the exact change for each step.
+nav: learn
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/learn/">Learn</a><span>The five steps</span></nav>
+  <h1>Five steps, one change at a time.</h1>
+  <p class="lead">Each step is one change on top of the last, and each works without the next. Stay on a step for a day or a quarter. Nothing is blocked in the first two.</p>
+</section>
+
+<nav class="rail" aria-label="The five steps">
+  <ol class="wrap">
+    <li><a href="#see">See</a></li>
+    <li><a href="#know">Know</a></li>
+    <li><a href="#limit">Limit</a></li>
+    <li><a href="#protect">Protect</a></li>
+    <li><a href="#prove">Prove</a></li>
+  </ol>
+</nav>
+
+<section class="wrap step" id="see">
+  <div class="step-head"><span class="step-n" aria-hidden="true">1</span><h2>See</h2><p class="step-q">Which AI tools and models do we use, and what do they cost?</p></div>
+  <div class="step-body">
+    <div class="stack">
+      <div><h3>What you get</h3><p>A list of the AI tools and models in use and what each one costs, from the first day. Nothing is blocked.</p></div>
+      <div><h3>The one change</h3><p>On the machine that will run Gantry, set the provider keys you already have and start it. It writes a policy in observe mode with one rule that allows everyone, prints an admin key once, and prints the settings for the coding tools it finds. Then give the first people one key and have them point their tool at the gateway.</p></div>
+      <div><h3>Check it worked</h3><p>Open the console and sign in with the admin key. The banner says <strong>Observe mode: nothing is blocked</strong>. The Analytics page ranks requests, tokens and cost by coding agent, model or key.</p></div>
+      <div><h3>Who does it</h3><p>A platform engineer. For everyone else it is one settings change in each tool.</p></div>
+      <a class="more" href="docs:/start/step-1-see/">Step 1 in the docs {{> arrow}}</a>
+    </div>
+    <div class="stack">
+      <figure class="code"><figcaption>Start Gantry</figcaption><pre>export OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
+gantry start
+
+<span class="c"># a key for the first people to try it</span>
+gantry key new pilot --team pilot</pre></figure>
+      <figure class="code"><figcaption>gantry.policy.yaml, as gantry start writes it</figcaption><pre>version: 1
+mode: observe
+providers:
+  - name: openai
+    preset: openai
+    key_env: OPENAI_PROVIDER_KEY
+    models: [gpt-5, gpt-5-mini, gpt-5-codex, gpt-4o-mini]
+  - name: anthropic
+    preset: anthropic
+    key_env: ANTHROPIC_PROVIDER_KEY
+    models: [claude-sonnet-5-5, claude-haiku-5-5]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]</pre></figure>
+    </div>
+  </div>
+</section>
+
+<section class="wrap step" id="know">
+  <div class="step-head"><span class="step-n" aria-hidden="true">2</span><h2>Know</h2><p class="step-q">Who uses what, by person and team?</p></div>
+  <div class="step-body">
+    <div class="stack">
+      <div><h3>What you get</h3><p>Every request has a name and a team on it. Usage and cost show up per person and per team.</p></div>
+      <div><h3>The one change</h3><p>Give each person a key of their own, in place of the shared one from step 1. The command prints the key once, with the lines their tool reads. With more than a handful of people, let them sign in with the company account and issue their own.</p></div>
+      <div><h3>Check it worked</h3><p>Analytics ranks by person or team. The People and workloads page lists every key by name and team, with what it spent this month and today. <code>gantry audit coverage</code> names the people who hold a key and have sent nothing.</p></div>
+      <div><h3>Who does it</h3><p>The same engineer, or your identity team. People swap a shared key for their own. Nothing is blocked in this step either.</p></div>
+      <a class="more" href="docs:/start/step-2-know/">Step 2 in the docs {{> arrow}}</a>
+    </div>
+    <div class="stack">
+      <figure class="code"><figcaption>A key per person</figcaption><pre>gantry key new maya.cohen --team payments</pre></figure>
+      <figure class="code"><figcaption>Or sign-in with the company account</figcaption><pre><span class="c"># gantry.policy.yaml (added)</span>
+console:
+  sso:
+    issuer: https://login.example.com
+    client_id: gantry-console
+    client_secret_env: GANTRY_SSO_SECRET
+    redirect_url: https://gantry.example.com/console/sso/callback
+    allowed_domains: [example.com]
+    role_claim: groups
+    admin_values: [gantry-admins]
+    self_issue:
+      allowed_domains: [example.com]
+      team: developers
+      expires_days: 30
+
+<span class="c"># each developer, once</span>
+gantry login https://gantry.example.com</pre></figure>
+    </div>
+  </div>
+</section>
+
+<section class="wrap step" id="limit">
+  <div class="step-head"><span class="step-n" aria-hidden="true">3</span><h2>Limit</h2><p class="step-q">What is the most we can spend this month, and can we stop it today?</p></div>
+  <div class="step-body">
+    <div class="stack">
+      <div><h3>What you get</h3><p>A cap on what each team spends in a month, and a stop button for a person, a team, a key or a model.</p></div>
+      <div><h3>The one change</h3><p>Add a budget for every team. Pick the amount from what step 2 showed you. Observe mode is still on, so a request over the budget is forwarded and recorded as <code>would_refuse</code>. Its cost still counts, so the numbers are real on the day you enforce.</p></div>
+      <div><h3>Enforce it</h3><p>When the amounts look right, delete the <code>mode: observe</code> line. From the next request, a team that reaches its budget is refused with <code>budget_exceeded</code>, and the message says when the budget starts again.</p></div>
+      <div><h3>Who does it</h3><p>You pick the amount. The engineer adds one line. For people, nothing changes until a team reaches its budget.</p></div>
+      <a class="more" href="docs:/start/step-3-limit/">Step 3 in the docs {{> arrow}}</a>
+    </div>
+    <div class="stack">
+      <figure class="code"><figcaption>gantry.policy.yaml (added)</figcaption><pre>limits:
+  - { team: "*", budget: { usd: 500, per: month } }</pre></figure>
+      <figure class="code"><figcaption>The stop button, with no policy change</figcaption><pre>gantry kill --team support \
+  --reason "agent retrying one ticket in a loop"
+gantry unkill --team support</pre></figure>
+    </div>
+  </div>
+</section>
+
+<section class="wrap step" id="protect">
+  <div class="step-head"><span class="step-n" aria-hidden="true">4</span><h2>Protect</h2><p class="step-q">What stops a password from being sent to a model?</p></div>
+  <div class="step-body">
+    <div class="stack">
+      <div><h3>What you get</h3><p>A prompt that holds an API key, a private key or a database password is stopped before it leaves. You see what would be stopped before anything is.</p></div>
+      <div><h3>The one change</h3><p>Add a guardrail and name it in your rule. Until the date, it records what it finds and blocks nothing. From that date it refuses a request that holds a secret with <code>guardrail_blocked</code>.</p></div>
+      <div><h3>Check it worked</h3><p>In the request log, filter by guardrail finding, such as <code>aws_access_key</code> or <code>database_url</code>. During the trial each finding says <code>shadow</code>. If the findings are real secrets, let the date arrive. If it catches text it should leave alone, move the date.</p></div>
+      <div><h3>Who does it</h3><p>Security picks the date. The engineer adds the lines. The detector runs inside Gantry, and the text it matched is never written to a record.</p></div>
+      <a class="more" href="docs:/start/step-4-protect/">Step 4 in the docs {{> arrow}}</a>
+    </div>
+    <div class="stack">
+      <figure class="code"><figcaption>gantry.policy.yaml (changed)</figcaption><pre>guardrails:
+  - name: no-secrets
+    type: secrets
+    action: block
+    shadow_until: 2026-12-15
+  - name: mask-pii
+    type: pii
+    action: mask
+    shadow_until: 2026-12-15
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+    guardrails: [no-secrets, mask-pii]</pre></figure>
+      <figure class="code"><figcaption>Try it on examples first</figcaption><pre>gantry guardrail test no-secrets \
+  --corpus examples.jsonl --policy gantry.policy.yaml</pre></figure>
+    </div>
+  </div>
+</section>
+
+<section class="wrap step" id="prove">
+  <div class="step-head"><span class="step-n" aria-hidden="true">5</span><h2>Prove</h2><p class="step-q">Can we show an auditor every request, and that the record is complete?</p></div>
+  <div class="step-body">
+    <div class="stack">
+      <div><h3>What you get</h3><p>One record for every request, allowed or refused, kept where a restart cannot lose it, with a check that shows no record was changed.</p></div>
+      <div><h3>The one change</h3><p>Gantry has written an audit record for every request since step 1. Put the file on storage that outlives the container: mount a volume, move the file onto it, add one line to the policy, and restart once.</p></div>
+      <div><h3>Check it worked</h3><p>Run the verify command, or press Verify on the console's Audit log page. Copy the last hash to a place the Gantry host cannot write, such as a ticket. Later, <code>--expect-last</code> shows that nothing up to that record was changed or removed.</p></div>
+      <div><h3>With Gantry Enterprise <span class="ent">Enterprise</span></h3><p>Export of every record to a SIEM, retention that keeps the chain verifiable, and a legal hold.</p></div>
+      <a class="more" href="docs:/start/step-5-prove/">Step 5 in the docs {{> arrow}}</a>
+    </div>
+    <div class="stack">
+      <figure class="code"><figcaption>gantry.policy.yaml (added)</figcaption><pre>audit: { path: /var/lib/gantry/gantry-audit.jsonl }</pre></figure>
+      <figure class="code"><figcaption>Verify the chain</figcaption><pre><span class="c">$</span> gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+<span class="ok">9 records in an unbroken chain from record 1 to record 9.</span>
+5 requests, 1 configuration record, 0 admin records,
+3 usage records.
+Last hash: 1ae338b73793e850d4a1a345e1648c1addde...</pre></figure>
+    </div>
+  </div>
+</section>
+
+<section class="wrap sec" id="after">
+  <div class="sec-head">
+    <h2>After step five, you can answer all five.</h2>
+    <p>The questions from the start, and where each answer now comes from.</p>
+  </div>
+  <ul class="answers">
+    <li><span><strong>Which tools and models do we use, and what do they cost?</strong> The Analytics page, by tool, model and key.</span></li>
+    <li><span><strong>Who uses what?</strong> The same page by person and team, and the coverage report.</span></li>
+    <li><span><strong>What is the most we can spend, and can we stop it?</strong> The budgets in the policy, and the kill switch.</span></li>
+    <li><span><strong>What stops a password from being sent?</strong> The secrets guardrail, with its findings in the request log.</span></li>
+    <li><span><strong>Can we show every request, and that the record is complete?</strong> The audit log and the verify command.</span></li>
+  </ul>
+  <div class="actions" style="margin-top: 32px">
+    <a class="btn btn-main" href="docs:/start/step-1-see/">Start step 1 in the docs</a>
+    <a class="btn btn-line" href="/learn/rollout-plan/">The rollout plan, to forward</a>
+  </div>
+</section>
+
+{{> cta}}

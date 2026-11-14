@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local and self-hosted models: Ollama, vLLM, on-prem and air-gapped</title>
+<meta name="description" content="Serve models from Ollama, vLLM or LM Studio through Gantry, on-prem or in an air-gapped network. The same keys, rules, budgets and audit log as hosted models, with the exact policy lines.">
+<meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<link rel="canonical" href="https://gantry.eliran.me/use-cases/local-models/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Gantry">
+<meta property="og:url" content="https://gantry.eliran.me/use-cases/local-models/">
+<meta property="og:title" content="Local and self-hosted models: Ollama, vLLM, on-prem and air-gapped">
+<meta property="og:description" content="Serve models from Ollama, vLLM or LM Studio through Gantry, on-prem or in an air-gapped network. The same keys, rules, budgets and audit log as hosted models, with the exact policy lines.">
+<meta property="og:image" content="https://gantry.eliran.me/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/fonts/FamiljenGrotesk-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<script>try { var t = new URLSearchParams(location.search).get('theme') || localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<link rel="stylesheet" href="/styles.css">
+<script src="/site.js" defer></script>
+</head>
+<body class="">
+<a class="skip" href="#main">Skip to the content</a>
+
+<header class="hdr" id="hdr">
+  <div class="wrap hdr-in">
+    <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+gantry</a>
+
+    <button class="burger" type="button" aria-expanded="false" aria-controls="nav" aria-label="Menu"><span></span></button>
+
+    <nav class="nav" id="nav" aria-label="Main">
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="product" aria-expanded="false" aria-controls="menu-product">Product<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu" id="menu-product">
+          <a href="/product/"><strong>How it works</strong><span>The request path, the controls, the audit log and the console</span></a>
+          <a href="/deploy/"><strong>Deploy</strong><span>Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare</span></a>
+          <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops</span></a>
+          <a href="/compare/"><strong>Compare</strong><span>Gantry next to LiteLLM and Bifrost, with sources</span></a>
+        </div>
+      </div>
+
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="use-cases" data-here aria-expanded="false" aria-controls="menu-use-cases">Use cases<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu menu-wide" id="menu-use-cases">
+          <div class="menu-col">
+            <p class="menu-title">By what you run</p>
+            <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Claude Code, Codex, Copilot, Cursor, Gemini CLI</span></a>
+            <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Apps and agents calling models from your cloud</span></a>
+            <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Your MCP servers behind one endpoint</span></a>
+            <a href="/use-cases/local-models/" aria-current="page"><strong>Local and self-hosted models</strong><span>Ollama, vLLM, on-prem, air-gapped</span></a>
+            <a href="/use-cases/regulated-data/"><strong>Regulated data and residency</strong><span>Regions, masking and records</span></a>
+            <a href="/use-cases/cost-control/"><strong>Cost control</strong><span>Spend per person, budgets, forecasts</span></a>
+          </div>
+          <div class="menu-col">
+            <p class="menu-title">By role</p>
+            <a href="/for/security/"><strong>Security</strong><span>What left the company, with proof</span></a>
+            <a href="/for/platform/"><strong>Platform</strong><span>Model access without provider keys on laptops</span></a>
+            <a href="/for/finance/"><strong>Finance</strong><span>Who spent it, and will the budget last</span></a>
+            <a href="/for/engineering-leaders/"><strong>Engineering leaders</strong><span>Coding agents for every developer, tracked</span></a>
+            <a class="menu-all" href="/use-cases/">All use cases</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="learn" aria-expanded="false" aria-controls="menu-learn">Learn<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu" id="menu-learn">
+          <a href="/learn/what-is-an-ai-gateway/"><strong>What is an AI gateway</strong><span>The idea in plain words, with one picture</span></a>
+          <a href="/learn/why-companies-need-one/"><strong>Why companies need one</strong><span>Five questions most companies cannot answer</span></a>
+          <a href="/learn/five-steps/"><strong>The five steps</strong><span>See, Know, Limit, Protect, Prove</span></a>
+          <a href="/learn/rollout-plan/"><strong>Rollout plan</strong><span>One page to forward to your team</span></a>
+          <a href="/learn/glossary/"><strong>Glossary</strong><span>The words, explained</span></a>
+        </div>
+      </div>
+
+      <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
+      <a class="nav-link" href="https://gantry-docs.eliran.me/">Docs</a>
+
+      <div class="nav-actions">
+        <a class="btn btn-line btn-sm" href="https://github.com/ggantry/gantry">GitHub</a>
+        <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
+        <button class="theme" type="button" aria-label="Switch between light and dark">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
+        </button>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>Local and self-hosted models</span></nav>
+  <h1>Your own models, behind the same names, rules and record.</h1>
+  <p class="lead">You serve models with Ollama or vLLM, on your own hardware or in a network with no way out. The data stays in, and you still need to know who used which model, and to keep some teams on local models only.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 40px">
+<figure class="gate" data-gate aria-label="Four callers send requests through Gantry. Requests to local models pass. A request from the legal team for a hosted model is refused because the rule lists local models only.">
+<div class="gate-lanes" aria-hidden="true">
+<div class="lane"><span class="lane-from">lior.avni<i>legal</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">vLLM, on-prem</span></div>
+<div class="lane"><span class="lane-from">maya.cohen<i>payments</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Ollama, on-prem</span></div>
+<div class="lane"><span class="lane-from">tal.shor<i>legal</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">model_not_allowed</span></span><span class="lane-to">hosted</span></div>
+<div class="lane"><span class="lane-from">omer.katz<i>research</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
+</div>
+<ol class="records" aria-label="Example audit records, newest first">
+<li><span>#41</span><span class="r-who">lior.avni<i>legal</i></span><span class="v v-allow">allow</span><span class="r-meta">local-llm, rule legal-local</span><span class="r-hash">692c59 &larr; 0ac77f</span></li>
+<li><span>#40</span><span class="r-who">tal.shor<i>legal</i></span><span class="v v-refused">refused</span><span class="r-meta">claude-sonnet-5-5, model_not_allowed</span><span class="r-hash">31b81e &larr; 692c59</span></li>
+<li><span>#39</span><span class="r-who">omer.katz<i>research</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-haiku-5-5, rule research</span><span class="r-hash">20e6d8 &larr; 31b81e</span></li>
+<li><span>#38</span><span class="r-who">maya.cohen<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-oss:20b, rule everyone</span><span class="r-hash">000000 &larr; 20e6d8</span></li>
+</ol>
+<figcaption class="gate-foot"><span>Example requests. Team legal may use local models only.</span><button class="gate-pause" type="button" aria-pressed="false">Pause</button></figcaption>
+<script type="application/json">{"n": 41, "last": "0ac77f", "seq": [[0, "lior.avni", "legal", "allow", "local-llm, rule legal-local"], [1, "maya.cohen", "payments", "allow", "gpt-oss:20b, rule everyone"], [3, "omer.katz", "research", "allow", "claude-sonnet-5-5, rule research"], [0, "lior.avni", "legal", "allow", "local-llm, rule legal-local"], [1, "maya.cohen", "payments", "allow", "gpt-oss:20b, rule everyone"], [3, "omer.katz", "research", "allow", "claude-haiku-5-5, rule research"], [2, "tal.shor", "legal", "refused", "claude-sonnet-5-5, model_not_allowed", "model_not_allowed"], [0, "lior.avni", "legal", "allow", "local-llm, rule legal-local"]]}</script>
+</figure>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>What goes wrong without control</h2></div>
+  <dl class="facts">
+    <div><dt>An open port on the network</dt><dd>Ollama ignores API keys. Anyone who can reach the server can use it, and its logs do not say who did.</dd></div>
+    <div><dt>Two worlds, two sets of rules</dt><dd>Hosted models go through one path and local ones through another. A team told to stay local can switch to a hosted model by changing a URL.</dd></div>
+    <div><dt>No usage numbers</dt><dd>You bought the GPUs. You cannot say which teams fill them, or whether the next purchase is needed.</dd></div>
+    <div><dt>Tools that phone home</dt><dd>In an air-gapped network, software that checks a license or sends telemetry over the internet stops working or gets blocked by review.</dd></div>
+  </dl>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>The steps</h2>
+    <p>Local model servers speak OpenAI's API, so each one is a provider like any other, with one extra line.</p>
+  </div>
+  <ol class="guide">
+    <li>
+      <div class="guide-text">
+        <h3>Add the local server as a provider</h3>
+        <p>A provider on a private address needs <code>allow_private: true</code>. Without it, <code>gantry check</code> refuses the file and says why. Ollama takes no key, so Gantry sends none, and never the caller's Gantry key.</p>
+        <a class="more" href="https://gantry-docs.eliran.me/providers/local-models/">Local models in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>providers:
+  - name: ollama
+    kind: openai
+    url: http://127.0.0.1:11434/v1
+    allow_private: true
+    models: [gpt-oss:20b]
+  - name: vllm
+    kind: openai
+    url: http://127.0.0.1:8000
+    allow_private: true
+    key_env: VLLM_API_KEY
+    models: [local-llm]</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Keep a team on local models</h3>
+        <p>A rule lists the models its people may use. Team legal gets the local model and nothing else. A request for a hosted model is refused with <code>model_not_allowed</code> before anything is sent.</p>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>rules:
+  - name: legal-local
+    principals: { team: legal }
+    models: [local-llm]
+  - name: everyone
+    principals: { any: true }
+    models: [gpt-oss:20b, claude-haiku-5-5]</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Give local models a price</h3>
+        <p>A budget needs a price to count. Set zero so a rule with a budget can still reach the local model, or set your own cost per token to charge teams for GPU time.</p>
+        <a class="more" href="https://gantry-docs.eliran.me/routing/pricing/">Pricing in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>prices:
+  gpt-oss:20b: { input: 0, output: 0 }
+  local-llm: { input: 0, output: 0 }</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Run coding agents on the local model</h3>
+        <p>Claude Code speaks Anthropic's messages API. With <code>accept_messages: true</code> on the provider, Gantry translates its requests to chat completions, so Claude Code can run on a model you serve.</p>
+        <a class="more" href="https://gantry-docs.eliran.me/routing/translation/">Translation in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>providers:
+  - name: vllm
+    kind: openai
+    url: http://127.0.0.1:8000
+    allow_private: true
+    accept_messages: true
+    models: [local-llm]</pre></figure>
+    </li>
+  </ol>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>In an air-gapped network</h2>
+    <p>Gantry was built to run with no connection out. These are the parts that matter there.</p>
+  </div>
+  <dl class="facts">
+    <div><dt>One image to bring in</dt><dd>A single static binary in an image built from scratch. The image also carries the Helm chart and the Terraform modules for its version, so you copy them out of the image you already approved.</dd></div>
+    <div><dt>The license is checked offline</dt><dd>The Enterprise license is verified against a public key built into the binary. The check never uses the network. A lapsed license turns Enterprise features off and never stops model traffic.</dd></div>
+    <div><dt>Nothing calls home</dt><dd>Self-hosted Gantry sends nothing to the Gantry project. Prometheus metrics are off by default, and traces and audit records go only to the systems you name.</dd></div>
+    <div><dt>Guardrails that run inside</dt><dd>The built-in secrets and personal data detectors run inside Gantry and send no text anywhere. Vendor guardrails call the vendor's API, so leave those out, or use the ones you host yourself.</dd></div>
+    <div><dt>A release you can verify</dt><dd>Images are signed and ship with an SBOM and provenance. <a href="https://gantry-docs.eliran.me/operations/verify-release/">Verify a release</a></dd></div>
+  </dl>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Limits to know before you start</h2></div>
+  <ul class="ticks out">
+    <li><strong>The local servers were configured from their docs and tested against local mocks.</strong> Each base URL was checked against the vendor's documentation, and the path Gantry calls was confirmed against a mock. <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a></li>
+    <li><strong>Inside a container, <code>127.0.0.1</code> is the container.</strong> Use the host's address for a model server on the same machine.</li>
+    <li><strong>Gantry does not serve models.</strong> It sits in front of the servers that do.</li>
+  </ul>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Read next</h2></div>
+  <nav class="rows tight" aria-label="Read next">
+    <a href="/deploy/"><strong>Deploy</strong><span>What you deploy, and what stays in your network.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/use-cases/regulated-data/"><strong>Regulated data and residency</strong><span>Keep requests in the regions a rule allows.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+  </nav>
+</section>
+
+<section class="cta">
+  <div class="cta-box">
+    <h2>Start with step one. Block nothing, and find out what is in use.</h2>
+    <div class="actions">
+      <a class="btn btn-ink" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
+      <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
+    </div>
+  </div>
+</section>
+
+
+</main>
+
+<footer class="ftr">
+  <div class="wrap ftr-top">
+    <div class="ftr-about">
+      <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+gantry</a>
+      <p>A self-hosted AI gateway, governance first. One Docker image plus Postgres, in your cloud.</p>
+    </div>
+    <nav class="ftr-cols" aria-label="Site map">
+      <div>
+        <h2>Product</h2>
+        <a href="/product/">How it works</a>
+        <a href="/deploy/">Deploy</a>
+        <a href="/security/">Security</a>
+        <a href="/compare/">Compare</a>
+        <a href="/enterprise/">Enterprise</a>
+      </div>
+      <div>
+        <h2>Use cases</h2>
+        <a href="/use-cases/coding-agents/">Coding agents</a>
+        <a href="/use-cases/cloud-agents/">Cloud and production agents</a>
+        <a href="/use-cases/mcp-tools/">MCP tools</a>
+        <a href="/use-cases/local-models/" aria-current="page">Local and self-hosted models</a>
+        <a href="/use-cases/regulated-data/">Regulated data and residency</a>
+        <a href="/use-cases/cost-control/">Cost control</a>
+      </div>
+      <div>
+        <h2>By role</h2>
+        <a href="/for/security/">Security</a>
+        <a href="/for/platform/">Platform</a>
+        <a href="/for/finance/">Finance</a>
+        <a href="/for/engineering-leaders/">Engineering leaders</a>
+      </div>
+      <div>
+        <h2>Learn</h2>
+        <a href="/learn/what-is-an-ai-gateway/">What is an AI gateway</a>
+        <a href="/learn/why-companies-need-one/">Why companies need one</a>
+        <a href="/learn/five-steps/">The five steps</a>
+        <a href="/learn/rollout-plan/">Rollout plan</a>
+        <a href="/learn/glossary/">Glossary</a>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <a href="https://gantry-docs.eliran.me/">Docs</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/changelog/">Changelog</a>
+        <a href="https://github.com/ggantry/gantry">GitHub</a>
+      </div>
+    </nav>
+  </div>
+  <p class="wrap ftr-legal">Open source core under Apache 2.0. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
+</footer>
+</body>
+</html>

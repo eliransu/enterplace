@@ -1,0 +1,147 @@
+<!--
+title: MCP tools behind one endpoint: allow lists, approvals and tool pins
+description: Put your MCP servers behind Gantry. Each person sees only the tools their rule allows, named tools wait for an admin's approval, a changed tool is held until approved, and every tool call is recorded.
+nav: use-cases
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>MCP tools</span></nav>
+  <h1>Know which agent may call which tool, and who approved the dangerous ones.</h1>
+  <p class="lead">Agents reach GitHub, the data warehouse and the deploy system through MCP servers. Each server has its own token, and the list of who may call what lives in nobody's system. Gantry serves all of them at one endpoint and checks every call.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 40px">
+{{gate
+label: Four tool calls go through Gantry's MCP endpoint. Three are allowed. A call to a tool the rule does not list is refused.
+foot: Example tool calls. A tool the rule does not list is never shown to the caller.
+lane: maya.cohen | github.create_issue | github
+lane: svc-triage-agent | docs.search | docs
+lane: dana.levi | warehouse.query | warehouse
+lane: noa.bar | github.merge_pull_request | github
+req: 0 | maya.cohen | payments | allow | github.create_issue, rule payments-team
+req: 1 | svc-triage-agent | support | allow | docs.search, rule support-agents
+req: 3 | noa.bar | platform | allow | github.merge_pull_request, approved_by ops.admin
+req: 0 | maya.cohen | payments | allow | github.list_issues, rule payments-team
+req: 1 | svc-triage-agent | support | allow | docs.search, rule support-agents
+req: 2 | dana.levi | interns | refused | warehouse.query, tool not in the rule | not in the rule
+req: 3 | noa.bar | platform | allow | github.merge_pull_request, approved_by ops.admin
+req: 0 | maya.cohen | payments | allow | github.create_issue, rule payments-team
+}}
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>What goes wrong without control</h2></div>
+  <dl class="facts">
+    <div><dt>A shared token per server</dt><dd>Every agent calls the GitHub server with the same credential. The server's log shows one caller, and it is not a person.</dd></div>
+    <div><dt>Every tool for everyone</dt><dd>An agent that needs to read issues can also delete a repository, because the server offers both and nothing sits in between.</dd></div>
+    <div><dt>Tools that change under you</dt><dd>A tool's description and schema are instructions to the model. A server that changes them can change what an agent does, and nobody is told.</dd></div>
+    <div><dt>No record of tool calls</dt><dd>When a deploy runs at night, you can see that it ran. You cannot see which agent asked, on whose behalf, with what arguments.</dd></div>
+  </dl>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>The steps</h2>
+    <p>All of it is in the same policy file as your model rules. A tool is hidden unless a rule lists it.</p>
+  </div>
+  <ol class="guide">
+    <li>
+      <div class="guide-text">
+        <h3>List your MCP servers</h3>
+        <p>Gantry serves their tools, prompts and resources at one endpoint, <code>/mcp</code>. Callers see each tool as <code>server.tool</code>. The server's own credential is read from an environment variable and never reaches a caller.</p>
+        <a class="more" href="docs:/governance/mcp-gateway/">MCP gateway in the docs {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>mcp:
+  - name: github
+    url: https://api.githubcopilot.com/mcp
+    headers_env: { Authorization: GITHUB_MCP_AUTHORIZATION }
+  - name: docs
+    url: http://127.0.0.1:9000/mcp
+    allow_private: true</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Give each rule its tools</h3>
+        <p>A rule's <code>tools</code> list is what its people can see and call. A rule with no list gets no tools.</p>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>rules:
+  - name: payments-team
+    principals: { team: payments }
+    models: [claude-sonnet-5-5]
+    tools: [github.create_issue, github.list_issues, docs.*]
+  - name: everyone-else
+    principals: { any: true }
+    models: [claude-sonnet-5-5]</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Make dangerous tools wait for a person</h3>
+        <p>A call to a tool under <code>approve_tools</code> is held until an admin approves or denies it on the console's MCP approvals page, which shows who asked, the rule and the arguments. The decision record says who approved.</p>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>rules:
+  - name: platform
+    principals: { team: platform }
+    models: [claude-sonnet-5-5]
+    tools: [github.*]
+    approve_tools: [github.delete_repo, github.merge_pull_request]
+    approval_timeout_seconds: 120</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Hold tools that changed</h3>
+        <p>Gantry pins each tool the first time it lists a server: a hash of its title, description, schemas and annotations. With <code>tool_changes: block</code>, a tool whose hash changed is left out and its calls are refused until an admin approves the new version.</p>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>mcp:
+  - name: github
+    url: https://api.githubcopilot.com/mcp
+    tool_changes: block</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Connect the clients</h3>
+        <p>A client points at <code>https://your-gantry/mcp</code> and sends a Gantry key, or signs in with OAuth from the client. A server can also run each call with the caller's own credential, so the call happens as that person at the server too.</p>
+      </div>
+      <figure class="code"><figcaption>Stop one tool for everyone</figcaption><pre>gantry kill --model github.delete_repo \
+  --reason "deleting repositories is paused"</pre></figure>
+    </li>
+  </ol>
+</section>
+
+<section class="wrap sec">
+  <div class="split">
+    <div class="stack">
+      <h2>What you see afterwards</h2>
+      <ul class="ticks">
+        <li>One list of every tool on every server, on the console's MCP tools page, with a stop and start button for each.</li>
+        <li>Every <code>tools/call</code>, <code>prompts/get</code> and <code>resources/read</code> in the audit log, under the person's name, before it reaches the server.</li>
+        <li>A <code>mcp_tool_changed</code> record, with the old and the new hash, whenever a tool changes.</li>
+        <li>Tool calls pass the rule's guardrails, so a secret in a tool argument is caught like a secret in a prompt.</li>
+      </ul>
+    </div>
+    <dl class="facts">
+      <div><dt><code>approval_denied</code></dt><dd>An admin denied the call.</dd></div>
+      <div><dt><code>approval_timeout</code></dt><dd>Nobody answered within the time the rule sets.</dd></div>
+      <div><dt><code>tool_changed</code></dt><dd>The tool's description or schema changed and has not been approved.</dd></div>
+      <div><dt><code>credential_needed</code></dt><dd>The server runs calls as each person, and this person has not connected an account yet. The refusal carries the link.</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Limits to know before you start</h2></div>
+  <ul class="ticks out">
+    <li><strong>Gantry speaks Streamable HTTP to upstream servers.</strong> A server that only runs as a local process on a laptop is outside it.</li>
+    <li><strong>An approval is a person looking at the arguments.</strong> It is as good as the attention the admin gives it. Keep the list of approved tools short.</li>
+    <li><strong>A pin covers the tool's description and schema.</strong> It does not inspect what the server does when the tool runs.</li>
+  </ul>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Read next</h2></div>
+  <nav class="rows tight" aria-label="Read next">
+    <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>The model calls those agents make, under the same rules.</span>{{> arrow}}</a>
+    <a href="/for/security/"><strong>For security teams</strong><span>Guardrails on tool calls, and a record of every decision.</span>{{> arrow}}</a>
+    <a href="/product/"><strong>How it works</strong><span>The request path, the controls, the audit log and the console.</span>{{> arrow}}</a>
+  </nav>
+</section>
+
+{{> cta}}

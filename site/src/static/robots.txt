@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://gantry.eliran.me/sitemap.xml

@@ -1,0 +1,67 @@
+<!--
+title: Gantry for security teams: guardrails and a record you can verify
+description: For security teams. Guardrails on AI requests, answers and MCP tool calls, keys that never reach a laptop, kill switches, and a hash-chained audit log that holds no prompt text. What Gantry covers and where it stops.
+nav: use-cases
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>For security</span></nav>
+  <h1>"What left the company, and can you prove it?"</h1>
+  <p class="lead">That question lands on security. Today the honest answer is that prompts go from laptops straight to providers, on shared keys, with no record on your side. Gantry puts one checked, recorded path in between.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 48px">
+  <div class="split wide-right">
+    <div class="stack">
+      <h2>What you get</h2>
+      <dl class="facts">
+        <div><dt>A record of every decision</dt><dd>Allowed or refused, written before the request is forwarded, chained by hash. It holds no prompt text, answer text, keys or matched secrets.</dd></div>
+        <div><dt>Guardrails you can try first</dt><dd>Secrets and personal data blocked or masked, on requests, answers and MCP tool calls. Each runs in shadow until a date you set.</dd></div>
+        <div><dt>Keys that stay put</dt><dd>Provider keys never leave the gateway. Gantry keys are shown once and stored as a SHA-256 hash, and one can be revoked without touching anyone else.</dd></div>
+        <div><dt>A stop button</dt><dd>A kill switch on a person, a team, a key, a model or everyone, with a reason, recorded.</dd></div>
+      </dl>
+    </div>
+    <div>
+      <div class="shot"><picture><source srcset="/img/console-audit-dark.webp" media="(prefers-color-scheme: dark)"><img src="/img/console-audit-light.webp" width="1440" height="1150" loading="lazy" alt="The Audit log page of the Gantry console, with counts of requests checked, refused and blocked today, and a table of decisions."></picture></div>
+      <p class="shot-cap">The console's Audit log page, on test data. Refused and blocked decisions are the only colored rows.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>What you can answer afterwards</h2>
+    <p>Each answer comes from the audit log or a command, so it can be checked by someone other than you.</p>
+  </div>
+  <table class="tbl">
+    <thead><tr><th>Question</th><th>Where the answer comes from</th></tr></thead>
+    <tbody>
+      <tr><td>Which AI tools are in use, and by whom?</td><td><code>gantry audit coverage</code>: requests per person and tool, and key holders who sent nothing.</td></tr>
+      <tr><td>Has a secret gone into a prompt?</td><td>The request log, filtered by guardrail finding such as <code>aws_access_key</code> or <code>database_url</code>.</td></tr>
+      <tr><td>Is the record complete and unchanged?</td><td><code>gantry audit verify</code>, with the last hash you kept elsewhere.</td></tr>
+      <tr><td>Who changed the policy, and who approved it?</td><td>Policy versions in the console, with a second admin's approval and a dry run against recent requests.</td></tr>
+      <tr><td>Can the SIEM have all of it?</td><td>Export to Splunk, Datadog, Elastic, Microsoft Sentinel or object storage. <span class="ent">Enterprise</span> In the open source edition, ship the file with Vector, Fluent Bit or the OpenTelemetry Collector.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Where it stops</h2></div>
+  <ul class="ticks out">
+    <li>Gantry is pre-1.0 and has not yet had an independent security audit.</li>
+    <li>It sees only what is sent through it. Block direct provider access at the network if you need to be sure.</li>
+    <li>Built-in guardrails match plain text. Encoded, split or translated text is not found.</li>
+    <li>Whoever can write the policy, the keys file or the audit file controls them. Protect those like provider keys.</li>
+  </ul>
+  <p style="margin-top: 24px"><a class="more" href="/security/">The full security page {{> arrow}}</a></p>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Read next</h2></div>
+  <nav class="rows tight" aria-label="Read next">
+    <a href="/use-cases/regulated-data/"><strong>Regulated data and residency</strong><span>Regions, masking, retention and legal hold.</span>{{> arrow}}</a>
+    <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Allow lists, approvals and tool pins for agent tool calls.</span>{{> arrow}}</a>
+    <a href="/product/#audit"><strong>The audit log</strong><span>What a record holds and how the chain is verified.</span>{{> arrow}}</a>
+  </nav>
+</section>
+
+{{> cta}}

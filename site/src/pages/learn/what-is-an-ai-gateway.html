@@ -1,0 +1,83 @@
+<!--
+title: What is an AI gateway? A plain explanation
+description: An AI gateway is one program that sits between your company's AI tools and the model providers. This page explains what it does, what it does not do, and how to tell whether you need one.
+nav: learn
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/learn/">Learn</a><span>What is an AI gateway</span></nav>
+  <h1>What is an AI gateway?</h1>
+  <p class="lead">An AI gateway is one program that sits between your company's AI tools and the model providers. Every request passes through it, so it is the one place where you can see what is happening and apply your rules.</p>
+</section>
+
+<div class="wrap article">
+  <nav class="toc" aria-label="On this page">
+    <a href="#picture">The picture</a>
+    <a href="#does">What it does</a>
+    <a href="#words">An example</a>
+    <a href="#not">What it is not</a>
+    <a href="#need">Do you need one</a>
+    <a href="#kinds">Kinds of gateway</a>
+    <a href="#gantry">Where Gantry fits</a>
+  </nav>
+  <article class="prose">
+    <h2 id="picture">The picture</h2>
+    <p>Today each AI tool in your company talks to a provider on its own. A developer's coding agent calls Anthropic. A support bot calls OpenAI. A script someone wrote last spring calls a model on AWS. Each one holds a key, and nobody has one place to look.</p>
+    <p>A gateway changes one thing: the tools send their requests to the gateway, and the gateway sends them on.</p>
+    <figure class="wiring">
+      <div><h3>Without a gateway</h3>{{> wiring-without}}<p>Every tool holds a provider key. The company sees a monthly invoice per provider.</p></div>
+      <div><h3>With a gateway</h3>{{> wiring-with}}<p>Tools hold a key to the gateway. The gateway holds the provider keys and sees every request.</p></div>
+    </figure>
+
+    <h2 id="does">What it can do, because it sits there</h2>
+    <p>A gateway is useful only because of where it sits. Five jobs follow from that position.</p>
+    <ul class="ticks">
+      <li><strong>See.</strong> It can count every request: which tool, which model, how many tokens, what it cost.</li>
+      <li><strong>Name.</strong> It gives each person and each service their own key, so a request has a name on it. The provider's key never reaches a laptop.</li>
+      <li><strong>Limit.</strong> It can refuse a request: the wrong model for this team, a budget that is spent, too many requests in a minute.</li>
+      <li><strong>Check.</strong> It can look at the prompt before it leaves and stop one that holds a password or mask a card number.</li>
+      <li><strong>Record.</strong> It can write down each decision, so that later you can show what happened.</li>
+    </ul>
+    <p>Most gateways also do the plumbing: one API in front of several providers, retries when a provider fails, a fallback to a second provider, a cache for repeated questions.</p>
+
+    <h2 id="words">An example</h2>
+    <p>Dana is an intern. She runs a coding agent on a long task, and by the afternoon she has used her daily budget of 20 dollars.</p>
+    <p>Without a gateway, the agent keeps going. The cost appears on next month's invoice, inside a total.</p>
+    <p>With a gateway, her next request is refused. Her terminal shows a message that says the daily budget is spent and when it starts again. The gateway writes a record: who, which model, refused, why. Her team lead can raise the number if the work needs it.</p>
+
+    <h2 id="not">What an AI gateway is not</h2>
+    <ul class="ticks out">
+      <li><strong>It is not a model.</strong> It answers nothing itself. It passes requests to the providers you already use.</li>
+      <li><strong>It does not see everything.</strong> It sees the requests that are sent through it. A tool that still calls a provider directly is invisible to it.</li>
+      <li><strong>It is not a replacement for security review.</strong> A check for secrets in prompts catches a pasted password. It does not decide whether a tool should have been allowed to read that file.</li>
+      <li><strong>It is not the same as an API gateway.</strong> An API gateway manages traffic to your own services. An AI gateway understands model requests: tokens, prices, prompts, tool calls.</li>
+    </ul>
+
+    <h2 id="need">Do you need one?</h2>
+    <p>You probably do not need one if three people use one AI tool and the bill is small. You probably do if any of these is true:</p>
+    <ul class="ticks">
+      <li>More than one team uses AI tools, and no one keeps the list.</li>
+      <li>A provider key is shared by more people than you can name.</li>
+      <li>Finance has asked who spent the AI budget and got an estimate.</li>
+      <li>Security or a customer has asked what data goes into prompts.</li>
+      <li>Agents call tools that change systems: merge code, run a deploy, write to the warehouse.</li>
+    </ul>
+    <p>The next page goes through these as five questions: <a href="/learn/why-companies-need-one/">why companies need one</a>.</p>
+
+    <h2 id="kinds">Kinds of gateway</h2>
+    <table class="tbl">
+      <thead><tr><th>Choice</th><th>One side</th><th>The other side</th></tr></thead>
+      <tbody>
+        <tr><td>Where it runs</td><td><strong>Hosted</strong> by a vendor. Nothing to operate. Your prompts pass through the vendor.</td><td><strong>Self-hosted</strong> in your own cloud. You run it. Prompts go only to the providers you chose.</td></tr>
+        <tr><td>What it is built around</td><td><strong>Routing first.</strong> Many providers, load balancing, speed.</td><td><strong>Governance first.</strong> Identity, policy, limits and the record.</td></tr>
+        <tr><td>How it is licensed</td><td><strong>Open source</strong>, so you can read what handles your requests.</td><td><strong>Closed source.</strong> You rely on the vendor's description.</td></tr>
+      </tbody>
+    </table>
+    <p>These are not exclusive. Most products sit somewhere on each line, and the docs of each will tell you where.</p>
+
+    <h2 id="gantry">Where Gantry fits</h2>
+    <p>Gantry is a self-hosted, governance-first gateway with an open source core. It runs as one Docker image plus Postgres in your own cloud. It is pre-1.0. If you are comparing gateways, the <a href="/compare/">compare page</a> says where the older projects lead.</p>
+    <p>If you want to see how a company adopts one, step by step and without blocking anyone on day one, read <a href="/learn/five-steps/">the five steps</a>.</p>
+  </article>
+</div>
+
+{{> cta}}

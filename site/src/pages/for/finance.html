@@ -1,0 +1,64 @@
+<!--
+title: Gantry for finance: who spent it, and will the budget last
+description: For finance teams. AI spend per team, person and model, budgets that requests cannot pass, and a forecast for each budget. What the numbers are based on and how they relate to the provider invoice.
+nav: use-cases
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>For finance</span></nav>
+  <h1>"Who spent this, and will the budget last the month?"</h1>
+  <p class="lead">The provider invoice gives one total per account. It does not say which team, tool or person spent it. Gantry counts every request as it passes, under the name of whoever sent it.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 48px">
+  <div class="split wide-right">
+    <div class="stack">
+      <h2>What you get</h2>
+      <dl class="facts">
+        <div><dt>Spend with names</dt><dd>Per organization, team, person, key and model, from the first day tools point at the gateway.</dd></div>
+        <div><dt>Budgets that hold</dt><dd>A team that reaches its budget is refused until the period starts again or someone raises the number. Periods run from a minute to a year.</dd></div>
+        <div><dt>A forecast per budget</dt><dd>Each budget says whether it lasts the period at the current pace, or the date it runs out.</dd></div>
+        <div><dt>A trial before any cap</dt><dd>A budget can record what it would refuse for a month before it refuses anything.</dd></div>
+      </dl>
+    </div>
+    <div>
+      <div class="shot"><img src="/img/console-spend-light.webp" width="1440" height="1090" loading="lazy" alt="The Spend page of the Gantry console: spend per day, who spent most, each budget with its limit, and spend by model."></div>
+      <p class="shot-cap">The console's Spend page, on test data. The dashed line is the daily pace that keeps every monthly budget inside its limit.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>What you decide</h2>
+    <p>The engineer adds the lines. The numbers are yours.</p>
+  </div>
+  <table class="tbl">
+    <thead><tr><th>Decision</th><th>When</th><th>What it changes for people</th></tr></thead>
+    <tbody>
+      <tr><td>The monthly amount per team</td><td>After a few weeks of watching, from what each team used</td><td>Nothing until a team reaches it</td></tr>
+      <tr><td>The day enforcement starts</td><td>When the trial numbers look right</td><td>From that day a team over budget is refused, with a message that says when the budget starts again</td></tr>
+      <tr><td>Who may raise a budget</td><td>Before the first refusal</td><td>A refused team knows who to ask</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>How the numbers relate to the invoice</h2></div>
+  <ul class="ticks out">
+    <li>Gantry computes cost from the tokens each answer reports and a price per model. Prices for most models are built in, and your own rates can be set in the policy.</li>
+    <li>Expect the totals to be close to the provider invoice and not identical, for example where you have a negotiated discount.</li>
+    <li>Only requests that go through Gantry are counted. Subscription seats, such as Claude Team, are billed by the vendor per seat and show up in Gantry as estimated usage.</li>
+    <li>Alerts before a budget runs out, to Slack, Teams, PagerDuty or email, are part of Gantry Enterprise. <span class="ent">Enterprise</span></li>
+  </ul>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Read next</h2></div>
+  <nav class="rows tight" aria-label="Read next">
+    <a href="/use-cases/cost-control/"><strong>Cost control</strong><span>The steps and the exact lines, to hand to the engineer.</span>{{> arrow}}</a>
+    <a href="/learn/rollout-plan/"><strong>Rollout plan</strong><span>The whole rollout on one page, with who does what.</span>{{> arrow}}</a>
+    <a href="/enterprise/"><strong>Open source and Enterprise</strong><span>What a license adds.</span>{{> arrow}}</a>
+  </nav>
+</section>
+
+{{> cta}}
