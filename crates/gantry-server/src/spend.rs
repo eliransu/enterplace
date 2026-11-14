@@ -2825,6 +2825,18 @@ pub(crate) fn charge(spend: &Spend, line: Line<'_>) -> (f64, Map<String, Value>)
         "cache_write_tokens".into(),
         tokens(|u| u.cache_write + u.cache_write_1h),
     );
+    // Audio is priced apart (realtime): its counts are written only when there were any.
+    if line
+        .usage
+        .is_some_and(|u| u.input_audio + u.output_audio + u.cache_read_audio > 0)
+    {
+        record.insert("input_audio_tokens".into(), tokens(|u| u.input_audio));
+        record.insert("output_audio_tokens".into(), tokens(|u| u.output_audio));
+        record.insert(
+            "cache_read_audio_tokens".into(),
+            tokens(|u| u.cache_read_audio),
+        );
+    }
     record.insert(
         "price".into(),
         if line.price.is_some() {
@@ -3068,7 +3080,7 @@ mod tests {
             max_output: None,
             max_context: None,
             per_image: None,
-            source: Default::default(),
+            ..Price::default()
         };
         // 3,000,000 bytes is 1,000,000 tokens at 4 dollars, and 1000 output tokens at 10 dollars per million.
         let most = most_cost(&price, 3_000_000, 0, 1000);
@@ -3087,7 +3099,7 @@ mod tests {
             max_output: Some(16384),
             max_context: None,
             per_image: None,
-            source: Default::default(),
+            ..Price::default()
         };
         let out = |body: &str, route: &str| {
             hints(body.as_bytes()).map(|h| output_tokens(&h, Some(&price), route))

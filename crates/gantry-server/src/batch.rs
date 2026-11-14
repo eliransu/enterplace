@@ -2185,6 +2185,13 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
         extra.insert("custom_id".into(), custom_id.as_str().into());
         extra.insert("line".into(), (n + 1).into());
         let counted = counted(version, &owned, &model);
+        let (price, share) =
+            prices
+                .and_then(|p| price_for(&model, p))
+                .map_or((None, BATCH_SHARE), |p| {
+                    let (price, share) = p.for_batch(BATCH_SHARE);
+                    (Some(price), share)
+                });
         let (cost, record) = spend::charge(
             &state.spend,
             spend::Line {
@@ -2199,9 +2206,9 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
                 model: &model,
                 provider: &owned.provider,
                 version: (&version.policy_sha256, &version.keys_sha256),
-                price: prices.and_then(|p| price_for(&model, p)),
+                price,
                 usage: *usage,
-                share: BATCH_SHARE,
+                share,
                 unreported: per_line,
                 succeeded: *ok,
                 extra,
