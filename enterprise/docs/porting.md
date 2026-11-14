@@ -90,6 +90,10 @@ GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55433/postgres cargo
 - Alerting (`alerts.rs`, `alerts/channels.rs`, feature `alerts`): rules on the records `enterprise_audit` holds,
   evaluated on the exporter's tick.
 
+- Secret managers in `serve` (`managers.rs`, feature `secrets`): not a port but the same pattern for the open
+  source hook `gantry_core::secrets::Source`, installed by `main.rs` before the server starts when the license
+  unlocks the feature.
+
 ## Still to port
 
 Policy editing with dry run and approval, reports, workload identity, Claude Code watch mode, devices, TOTP. The

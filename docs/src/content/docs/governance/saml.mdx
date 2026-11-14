@@ -1,0 +1,114 @@
+---
+title: SAML sign-in
+description: Sign in to the console through a SAML 2.0 identity provider, with roles and teams from the groups in the signed assertion.
+sidebar:
+  order: 4
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Gantry is a SAML 2.0 service provider for the admin console, beside [OpenID Connect sign-in](/governance/single-sign-on/). People sign in at your identity provider and get the console role and the team their groups say. Gantry takes only signed assertions, and checks each one against the certificate you paste into the policy.
+
+## Example
+
+{/* not checked: the certificate is a placeholder */}
+```yaml title="gantry.policy.yaml (fragment)"
+console:
+  saml:
+    idp_entity_id: http://www.okta.com/exk1a2b3c4d5e6f7g8h9
+    idp_sso_url: https://example.okta.com/app/example_gantry_1/exk1a2b3c4d5e6f7g8h9/sso/saml
+    idp_certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIDqDCCApCgAwIBAgIGAY...
+      -----END CERTIFICATE-----
+    sp_entity_id: https://gantry.example.com/console/saml/metadata
+    acs_url: https://gantry.example.com/console/saml/acs
+    role_attribute: groups
+    admin_values: [gantry-admins]
+    read_only_values: [gantry-viewers]
+    allowed_domains: [example.com]
+```
+
+## Set up
+
+<Steps>
+
+1. At your identity provider, create a SAML 2.0 application with:
+   - **ACS URL** (single sign-on URL, reply URL): `https://<your gantry>/console/saml/acs`, HTTP-POST binding.
+   - **Audience** (SP entity ID, identifier): `https://<your gantry>/console/saml/metadata`.
+   - **NameID format**: email address, or an `email` attribute (set `email_attribute`).
+   - An attribute that holds the person's groups, named as `role_attribute` says.
+   - Assertion signing on, with RSA-SHA256. Assertion encryption off.
+
+   An identity provider that imports metadata can read it from `https://<your gantry>/console/saml/metadata`.
+
+2. Copy the identity provider's entity ID (its issuer), its SSO URL (HTTP-Redirect binding) and its signing certificate into `console.saml`.
+
+3. Open `/console`. The sign-in page shows **Sign in with single sign-on**, which starts the SAML sign-in when SAML is the only single sign-on set up. With both, the button starts OpenID Connect and `/console/saml/start` starts SAML.
+
+</Steps>
+
+Per-provider steps: [Okta](/governance/identity-providers/okta/), [Microsoft Entra ID](/governance/identity-providers/entra-id/), [Google Workspace](/governance/identity-providers/google-workspace/), [OneLogin](/governance/identity-providers/onelogin/), [Keycloak](/governance/identity-providers/keycloak/), [JumpCloud](/governance/identity-providers/jumpcloud/).
+
+The policy is read on every console page, so a change to `console.saml` needs no restart.
+
+## Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `idp_entity_id` | string | required | The identity provider's entity ID. The `Issuer` of each assertion must equal it. |
+| `idp_sso_url` | string | required | The identity provider's single sign-on URL for the HTTP-Redirect binding. https (plain http only to this machine). |
+| `idp_certificate` | string | required | The identity provider's signing certificate, PEM. List two PEM blocks while the provider rotates its certificate: an assertion signed by either is taken. |
+| `sp_entity_id` | string | required | Gantry's entity ID. Every assertion must name it as its audience. |
+| `acs_url` | string | required | The console's `/console/saml/acs` at its public address. Assertions must be addressed to it. |
+| `email_attribute` | string | none | The attribute holding the email. Without it the subject's NameID is used, and must be an email. |
+| `role_attribute` | string | required | The attribute whose values give the role and the team. Matched by `Name` or `FriendlyName`. |
+| `admin_values` | list | `[]` | Values that give the admin role. |
+| `read_only_values` | list | `[]` | Values that give the read-only role. |
+| `allowed_domains` | list | `[]` | Email domains let in. |
+| `allowed_emails` | list | `[]` | Whole addresses let in. |
+
+Roles work as with OpenID Connect: an admin value, then the first [policy role](/governance/policy/#console-roles) whose `sso_values` match, then a read-only value. The person's team is the [team](/governance/teams/) that lists their email, else the first whose `sso_values` match a group.
+
+## What Gantry checks
+
+Every check fails closed, with a message that names the cause and the fix.
+
+- **Started here.** The sign-in starts at the console: Gantry sends an `AuthnRequest` with a random ID and keeps that ID only in a sealed cookie in the browser. The response must answer that request (`InResponseTo`), in that browser, within 10 minutes. A sign-in started from the identity provider's app list is refused.
+- **Signature.** The assertion, or the response that holds it, carries an enveloped XML signature with exclusive canonicalization, SHA-256 or SHA-512 digests and RSA-SHA256, RSA-SHA512 or ECDSA-SHA256, that verifies with `idp_certificate`. SHA-1 is refused.
+- **What is read is what is signed.** The response holds exactly one assertion, the signature's reference names it by an ID no other element carries, and every value is read from that element. A second assertion, or a signed one moved elsewhere, is refused.
+- **Issuer, audience, recipient.** `Issuer` is `idp_entity_id`, an `AudienceRestriction` names `sp_entity_id`, the response's `Destination` and a bearer `SubjectConfirmationData`'s `Recipient` are `acs_url`.
+- **Time.** `NotBefore` and `NotOnOrAfter` on the conditions and the confirmation, with 60 seconds of clock skew allowed.
+- **Once.** Each request is answered once and each assertion ID is used once.
+- **XML.** A document type declaration is refused before anything is read. Encrypted assertions are refused.
+
+## Audit records
+
+A sign-in or refusal is an `admin` record with `action: console_sign_in` and `target.via: saml`. A sign-in holds the role and the person's team, a refusal the code:
+
+| Code | Cause |
+|---|---|
+| `saml_response` | The response is not base64, not UTF-8, not XML Gantry takes (a DTD), not a SAML 2.0 response, or holds other than one assertion. |
+| `saml_status` | The identity provider did not sign the person in (status not Success). |
+| `saml_unsigned` | Neither the assertion nor the response is signed. |
+| `saml_signature` | The signature does not verify with `idp_certificate`, the content changed after signing, or the algorithm, canonicalization or reference is not one Gantry takes. |
+| `saml_issuer` | The issuer is not `idp_entity_id`. |
+| `saml_audience` | No audience, or not `sp_entity_id`. |
+| `saml_recipient` | `Destination` or the bearer confirmation's `Recipient` is not `acs_url`. |
+| `saml_expired` | The assertion is expired or not valid yet. |
+| `saml_replay` | The response answers no request this browser started, or was used already. |
+| `saml_encrypted` | The assertion is encrypted. |
+| `sso_email` | No email, or one outside the allowed lists. |
+| `sso_role` | No group value gives a role. |
+| `sso_config` | `console.saml` is not set, or the policy has problems. |
+
+<Aside type="note">
+`gantry login` signs in through OpenID Connect only. A setup with SAML alone gives developers keys through an admin, the console or the admin API.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Single sign-on (OpenID Connect)" href="/governance/single-sign-on/" description="Console sign-in and gantry login through OpenID Connect." />
+	<LinkCard title="Teams" href="/governance/teams/" description="Teams with owners and members, and the groups that place people." />
+</CardGrid>

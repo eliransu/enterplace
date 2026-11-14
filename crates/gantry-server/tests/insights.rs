@@ -411,6 +411,27 @@ async fn the_index_holds_every_replica_and_answers_as_the_local_chain_does() -> 
         assert_eq!(from_index, expected, "{pairs:?}");
         assert!(from_index.iter().all(|r| r.checks_out() && r.linked));
     }
+    // The reach of a role kept to teams: any of them, as the local fold reads it; a dimension Gantry does not define
+    // matches nothing.
+    for (dimension, teams, some) in [
+        ("team", vec!["search".to_string(), "nope".to_string()], true),
+        (
+            "team",
+            vec!["payments".to_string(), "search".to_string()],
+            true,
+        ),
+        ("team", vec!["nope".to_string()], false),
+        ("not_a_dimension", vec!["search".to_string()], false),
+    ] {
+        let query = Query {
+            within: vec![(dimension.to_string(), teams.clone())],
+            limit: 100,
+            ..Query::default()
+        };
+        let from_index = index.rows(&query).await?;
+        assert_eq!(from_index, query.select(&local), "{dimension} {teams:?}");
+        assert_eq!(!from_index.is_empty(), some, "{dimension} {teams:?}");
+    }
 
     // Bodies: sealed in the table, opened for a reader, gone when expired.
     let now = gantry_core::insights::now_secs();

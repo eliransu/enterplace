@@ -1,0 +1,118 @@
+---
+title: OneLogin
+description: Connect the Gantry admin console to OneLogin with OpenID Connect or SAML 2.0, and give people roles from their OneLogin roles or groups.
+sidebar:
+  order: 4
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+OneLogin can sign people in to the admin console with OpenID Connect (`console.sso`) or SAML 2.0 (`console.saml`). OneLogin sends the person's roles (or a directory group attribute) as groups, and Gantry maps them to a console role and, at `gantry login`, to a team.
+
+The examples use `https://gantry.example.com` for your Gantry address, `example` for your OneLogin subdomain, and the OneLogin roles `gantry-admins` and `gantry-viewers`.
+
+## OpenID Connect
+
+<Steps>
+
+1. In the OneLogin admin portal, go to **Applications** > **Applications**, click **Add App**, search for `OpenID Connect` and select **OpenId Connect (OIDC)**. Give it a display name and save.
+
+2. On the **Configuration** tab, add `https://gantry.example.com/console/sso/callback` as the redirect URI and save. OneLogin can take a few minutes to apply a changed redirect URI. `gantry login` comes back on the same URI.
+
+3. On the **Parameters** tab, open **Groups**. Set the default value to **User Roles** and the transform to semicolon-delimited input with multi-value output, then save.
+
+4. On the **SSO** tab, set **Application Type** to **Web** and the token endpoint authentication method to **Basic** or **POST** (not **None (PKCE)**: Gantry sends a client secret and a PKCE challenge). Copy the **Client ID** and **Client Secret**.
+
+5. On the **Access** tab, select the roles that may use the app, and give people the `gantry-admins` or `gantry-viewers` role.
+
+</Steps>
+
+<Aside type="caution">
+OneLogin documents the `groups` claim for requests that ask for the `groups` scope. Gantry asks for `openid email profile`. Sign in once and check the ID token: if it carries no `groups` claim, every sign-in is refused with `sso_role`, and roles from OneLogin need SAML 2.0 below.
+</Aside>
+
+```yaml title="gantry.policy.yaml"
+console:
+  sso:
+    issuer: https://example.onelogin.com/oidc/2
+    client_id: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
+    client_secret_env: GANTRY_SSO_SECRET
+    redirect_url: https://gantry.example.com/console/sso/callback
+    allowed_domains: [example.com]
+    role_claim: groups
+    admin_values: [gantry-admins]
+    read_only_values: [gantry-viewers]
+```
+
+The issuer is `https://<subdomain>.onelogin.com/oidc/2`. Set the secret where Gantry runs: `GANTRY_SSO_SECRET=...`.
+
+## SAML 2.0
+
+<Steps>
+
+1. Go to **Applications** > **Applications**, click **Add App**, search for `SAML Custom Connector` and select **SAML Custom Connector (Advanced)**. Give it a display name and save.
+
+2. On the **Configuration** tab:
+   - **Audience (EntityID)**: `https://gantry.example.com/console/saml/metadata`
+   - **Recipient**: `https://gantry.example.com/console/saml/acs`
+   - **ACS (Consumer) URL Validator**: `^https://gantry\.example\.com/console/saml/acs$`
+   - **ACS (Consumer) URL**: `https://gantry.example.com/console/saml/acs`
+   - **Login URL**: `https://gantry.example.com/console/saml/start`, so the OneLogin portal tile starts an SP-initiated sign-in
+   - Set the SAML initiator to the service provider, the name ID format to email, and the signature element to the assertion (or both), and leave encryption off
+
+3. On the **Parameters** tab, keep the name ID mapped to **Email**. Add a parameter named `email` with the value **Email**, and a parameter named `groups` with the value **User Roles** (or a directory group attribute such as `MemberOf`). Mark both **Include in SAML Assertion**, and send `groups` as multiple values.
+
+4. On the **SSO** tab, set the SAML signature algorithm to SHA-256. Gantry refuses SHA-1.
+
+5. Download the IdP metadata from **More Actions** > **SAML Metadata**. Take `idp_entity_id` from its `entityID`, `idp_sso_url` from the single sign-on location with the HTTP-Redirect binding, and the certificate from the signing key. The **Issuer URL** on the **SSO** tab is where the same metadata lives.
+
+6. On the **Access** tab, select the roles that may use the app.
+
+</Steps>
+
+{/* not checked: the certificate is a placeholder */}
+```yaml title="gantry.policy.yaml"
+console:
+  saml:
+    idp_entity_id: https://app.onelogin.com/saml/metadata/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
+    idp_sso_url: https://example.onelogin.com/trust/saml2/http-redirect/sso/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
+    idp_certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIELDCCAxSgAwIBAgIU...
+      -----END CERTIFICATE-----
+    sp_entity_id: https://gantry.example.com/console/saml/metadata
+    acs_url: https://gantry.example.com/console/saml/acs
+    email_attribute: email
+    role_attribute: groups
+    admin_values: [gantry-admins]
+    read_only_values: [gantry-viewers]
+    allowed_domains: [example.com]
+```
+
+Copy the entity ID and SSO URL from your own metadata; the values above only show the shape.
+
+## Teams and custom roles
+
+The same values feed a custom role's `sso_values` under `roles:` and a team's `sso_values` under `teams:`. At `gantry login`, a person listed in a team's `members` gets that team, otherwise the first team whose `sso_values` match one of their groups, otherwise `self_issue.team`.
+
+## Check it
+
+<Steps>
+
+1. Open `https://gantry.example.com/console` in a private window and click the sign-in button.
+
+2. Sign in as someone with the `gantry-admins` role. The console opens with the admin role.
+
+3. Sign in as someone with only the `gantry-viewers` role. The console opens read only.
+
+</Steps>
+
+A refusal with `sso_role` means the groups value held no configured value. Check that the `groups` parameter is sent as multiple values (one value holding `gantry-admins;gantry-viewers` matches nothing) and that the role names match the policy.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Every console.sso field, check and refusal code." />
+	<LinkCard title="SAML 2.0" href="/governance/saml/" description="Every console.saml field and what Gantry checks." />
+	<LinkCard title="Console roles" href="/governance/policy/#console-roles" description="Custom roles with sso_values." />
+</CardGrid>

@@ -1,0 +1,145 @@
+---
+title: Microsoft Entra ID
+description: Connect the Gantry admin console to Microsoft Entra ID with OpenID Connect or SAML 2.0, and give people roles from their Entra groups.
+sidebar:
+  order: 2
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Microsoft Entra ID can sign people in to the admin console with OpenID Connect (`console.sso`, an app registration) or SAML 2.0 (`console.saml`, an enterprise application). In both, Entra sends the person's groups, and Gantry maps them to a console role and, at `gantry login`, to a team.
+
+The examples use `https://gantry.example.com` for your Gantry address.
+
+## Group values
+
+Entra identifies a group in a token by its **object ID** by default, for example `5f3c1a2b-8d4e-4f6a-9b7c-0e1d2c3b4a59`. You have two choices:
+
+- Put the object IDs in `admin_values` and `read_only_values`. They work for every group and never change when a group is renamed.
+- Emit group display names instead. Entra does this for cloud-only groups only when the group claim is limited to **Groups assigned to the application**, and the groups are assigned to the app under **Users and groups**.
+
+<Aside type="caution">
+Entra puts at most 200 groups in an ID token and 150 in a SAML assertion, nested groups included. A person in more groups gets no group claim at all, only a pointer to Microsoft Graph, which Gantry does not call, so the sign-in is refused with `sso_role`. Limit the claim to **Groups assigned to the application** and assign only the console groups.
+</Aside>
+
+## OpenID Connect
+
+<Steps>
+
+1. In the Microsoft Entra admin center, go to **Entra ID** > **App registrations** and select **New registration**. Under **Supported account types**, choose the single tenant option, then **Register**.
+
+2. On the **Overview** page, copy the **Application (client) ID** and the **Directory (tenant) ID**.
+
+3. Under **Manage**, select **Authentication**, select **Add Redirect URI**, choose the **Web** platform and enter `https://gantry.example.com/console/sso/callback`. `gantry login` comes back on the same URI.
+
+4. Select **Certificates & secrets** > **Client secrets** > **New client secret**, pick an expiry and select **Add**. Copy the **Value** now: Entra never shows it again.
+
+5. Select **Token configuration** > **Add optional claim**, choose the **ID** token type and add `email`.
+
+6. On the same page, select **Add groups claim**. Choose **Groups assigned to the application** (or **Security groups** in a small tenant) and save. The ID token claim is named `groups`.
+
+7. For group names instead of object IDs, open **Manifest**, set `"groupMembershipClaims": "ApplicationGroup"`, and add `cloud_displayname` to the `groups` entry under `optionalClaims.idToken`:
+
+   ```json
+   "groupMembershipClaims": "ApplicationGroup",
+   "optionalClaims": {
+       "idToken": [
+           { "name": "groups", "additionalProperties": ["cloud_displayname"] }
+       ]
+   }
+   ```
+
+8. Go to **Entra ID** > **Enterprise apps**, open the app of the same name, and under **Users and groups** add the console groups.
+
+</Steps>
+
+```yaml title="gantry.policy.yaml"
+console:
+  sso:
+    issuer: https://login.microsoftonline.com/7d1f0e2c-3b4a-4c5d-8e9f-a0b1c2d3e4f5/v2.0
+    client_id: 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
+    client_secret_env: GANTRY_SSO_SECRET
+    redirect_url: https://gantry.example.com/console/sso/callback
+    allowed_domains: [example.com]
+    role_claim: groups
+    admin_values: [5f3c1a2b-8d4e-4f6a-9b7c-0e1d2c3b4a59]     # or the display name, gantry-admins
+    read_only_values: [9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d]
+```
+
+The issuer is `https://login.microsoftonline.com/<tenant-id>/v2.0`, with your **Directory (tenant) ID**. Set the secret where Gantry runs: `GANTRY_SSO_SECRET=...`. Entra limits a client secret to 24 months, so note its expiry.
+
+Entra fills `email` from the user's mail attribute. A user with no mailbox address gets no `email` claim and is refused with `sso_email`.
+
+## SAML 2.0
+
+<Steps>
+
+1. Go to **Entra ID** > **Enterprise apps** > **All applications**, select **New application**, and create your own (non-gallery) application named for example `Gantry console`.
+
+2. In the app, select **Single sign-on**, then **SAML**.
+
+3. In **Basic SAML Configuration**, select **Edit**:
+   - **Identifier (Entity ID)**: `https://gantry.example.com/console/saml/metadata`
+   - **Reply URL (Assertion Consumer Service URL)**: `https://gantry.example.com/console/saml/acs`
+   - **Sign on URL**: `https://gantry.example.com/console/saml/start`, so a launch from My Apps starts at Gantry instead of sending an IdP-initiated response, which Gantry refuses
+
+4. In **Attributes & Claims**, select **Edit**. Select **Add new claim**, name it `email` with no namespace, and choose the source attribute `user.mail`.
+
+5. Select **Add a group claim**. Choose **Groups assigned to the application**. For names, set **Source attribute** to **Cloud-only group display names**; otherwise leave it as group ID. Under **Advanced options**, select **Customize the name of the group claim** and enter `groups` with an empty namespace.
+
+6. In **SAML Signing Certificate**, select **Edit**. Set **Signing Option** to **Sign SAML assertion** (or **Sign SAML response and assertion**) and **Signing Algorithm** to **SHA-256**. Leave token encryption off.
+
+7. In **SAML Certificates**, download the certificate in Base64 format. Its contents are the PEM block for `idp_certificate`.
+
+8. In the **Set up** section, copy the **Login URL** (`idp_sso_url`) and the **Microsoft Entra Identifier** (`idp_entity_id`).
+
+9. Under **Users and groups**, add the console groups.
+
+</Steps>
+
+{/* not checked: the certificate is a placeholder */}
+```yaml title="gantry.policy.yaml"
+console:
+  saml:
+    idp_entity_id: https://sts.windows.net/7d1f0e2c-3b4a-4c5d-8e9f-a0b1c2d3e4f5/
+    idp_sso_url: https://login.microsoftonline.com/7d1f0e2c-3b4a-4c5d-8e9f-a0b1c2d3e4f5/saml2
+    idp_certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIC8DCCAdigAwIBAgIQ...
+      -----END CERTIFICATE-----
+    sp_entity_id: https://gantry.example.com/console/saml/metadata
+    acs_url: https://gantry.example.com/console/saml/acs
+    email_attribute: email
+    role_attribute: groups
+    admin_values: [gantry-admins]
+    read_only_values: [gantry-viewers]
+    allowed_domains: [example.com]
+```
+
+Copy the **Microsoft Entra Identifier** exactly, trailing slash included. With group IDs instead of display names, put the object IDs in `admin_values` and `read_only_values`.
+
+## Teams and custom roles
+
+The same group values feed a custom role's `sso_values` under `roles:` and a team's `sso_values` under `teams:`. At `gantry login`, a person listed in a team's `members` gets that team, otherwise the first team whose `sso_values` match one of their groups, otherwise `self_issue.team`.
+
+## Check it
+
+<Steps>
+
+1. Open `https://gantry.example.com/console` in a private window and click the sign-in button.
+
+2. Sign in as a member of the admin group. The console opens with the admin role.
+
+3. Sign in as a member of the read-only group only. The console opens read only.
+
+</Steps>
+
+A refusal with `sso_role` means the token's groups held no configured value. The usual causes are object IDs in the token and names in the policy (or the reverse), a group not assigned to the app, or a person over the group limit.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Every console.sso field, check and refusal code." />
+	<LinkCard title="SAML 2.0" href="/governance/saml/" description="Every console.saml field and what Gantry checks." />
+	<LinkCard title="Console roles" href="/governance/policy/#console-roles" description="Custom roles with sso_values." />
+</CardGrid>

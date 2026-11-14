@@ -28,7 +28,7 @@ Gantry is much younger than both and does less. It covers fewer providers and AP
 | Unknown config keys | Refused with line and suggestion | Accepted silently | Accepted silently |
 | Unknown request parameters | Forwarded unchanged; unknown query refused | Some standard fields dropped | Dropped |
 | Providers | OpenAI chat completions, Responses, embeddings, images, audio, moderations and rerank; Anthropic messages; Azure OpenAI; Bedrock for Claude; Claude on Vertex AI; Gemini and Vertex AI. Chat translated to messages (per provider) and to Gemini; messages translated to chat and Gemini (per provider, for Claude Code) | 140+, translated | Many, translated |
-| SSO, roles | Open source: console sign-in by OpenID Connect (PKCE, RS256 and ES256), admin and read-only roles from a claim, every sign-in recorded; SAML and SCIM planned | SSO free to 5 users, then enterprise | Enterprise |
+| SSO, roles | Open source: console sign-in by OpenID Connect (PKCE, RS256 and ES256), or SAML 2.0 (signed assertions only), roles and teams from groups, roles kept to teams, every sign-in recorded; SCIM in the enterprise build | SSO free to 5 users, then enterprise | Enterprise |
 | Developer sign-in for coding tools | `gantry login`: SSO in the browser, personal key named by the email, expiry from policy, recorded; `gantry logout` revokes it | UI login, keys copied by hand | Enterprise |
 | Kill switch | Person, team, key, model or everyone; reason required and shown to the caller; within 1 second on every node sharing the files; recorded | No (block a key or team by API) | No |
 | Metrics | Prometheus `/metrics` on its own address, off by default; audit log as JSONL for any log shipper | Prometheus, many callbacks | Prometheus, OpenTelemetry |
