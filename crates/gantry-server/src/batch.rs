@@ -920,30 +920,28 @@ async fn prepare<'a>(
             ),
         ));
     }
-    let rule = policy.rule_for(person).ok_or_else(|| {
-        Refusal::new(
-            StatusCode::FORBIDDEN,
-            "no_rule",
-            format!(
-                "Refused: no rule in the policy names \"{}\" or team \"{}\", so nothing is allowed. Ask a Gantry admin to add a rule.",
-                person.name, person.team
-            ),
-        )
+    let rule = crate::rule_or_observed(policy, person, crate::no_rule(person), |r, by| {
+        crate::observed(seen, r, by);
     })?;
     seen.rule = Some(rule);
+    let by = policy.observing(rule.shadow_until.as_deref());
     // The end customer and tags the objects are charged to, as on the model routes.
-    crate::customer_and_tags(&mut parts.headers, person, rule, seen)?;
+    crate::customer_and_tags(&mut parts.headers, person, rule, seen, by)?;
     if let Some(regions) = &rule.limits.regions {
         // Files, batches and jobs are kept at one provider account, which has no region Gantry can show.
-        return Err(Refusal::new(
-            StatusCode::FORBIDDEN,
-            "region_not_allowed",
-            format!(
-                "Refused: rule \"{}\" keeps requests in {}, and files, batches and fine-tuning jobs are kept at the provider's account, with no region Gantry can show. Send these requests under a rule without regions:.",
-                rule.name,
-                regions.join(", ")
+        crate::enforce(
+            seen,
+            Refusal::new(
+                StatusCode::FORBIDDEN,
+                "region_not_allowed",
+                format!(
+                    "Refused: rule \"{}\" keeps requests in {}, and files, batches and fine-tuning jobs are kept at the provider's account, with no region Gantry can show. Send these requests under a rule without regions:.",
+                    rule.name,
+                    regions.join(", ")
+                ),
             ),
-        ));
+            by,
+        )?;
     }
     let op = op(&parts.method, parts.uri.path()).ok_or_else(unknown_batch_route)?;
     let query = checked_query(&parts.uri, &key)?;
@@ -1003,6 +1001,7 @@ async fn prepare<'a>(
             if !upload.found.is_empty() {
                 extra.insert("guardrails".into(), Value::Array(upload.found));
             }
+            seen.would_refuse.extend(upload.would_refuse);
             if let Ok(value) = HeaderValue::from_str(&content_type) {
                 headers.insert(header::CONTENT_TYPE, value);
             }
@@ -1142,11 +1141,18 @@ async fn prepare<'a>(
             }
             // The policy may have changed since the upload: every model is decided again now.
             for model in &file.models {
-                decide_model(policy, person, rule, model, "the batch")?;
+                decide_model(
+                    policy,
+                    person,
+                    rule,
+                    model,
+                    "the batch",
+                    &mut seen.would_refuse,
+                )?;
                 crate::killed(state, person, &key_sha256, Some(model))?;
             }
             seen.model = file.models.first().cloned();
-            let reserved = reserve(state, policy, person, rule, &file, file_id).await?;
+            let reserved = reserve(state, policy, person, rule, &file, file_id, seen).await?;
             let mut created = Owned::new(Item::Batch, &file.provider, person, seen, decision);
             created.purpose = file.model_of.get("").cloned().unwrap_or_default();
             created.models = file.models.clone();
@@ -1207,6 +1213,8 @@ async fn prepare<'a>(
                 "request",
             )
             .await?;
+            seen.would_refuse
+                .extend(checked.would_refuse.iter().cloned());
             let first = checked.models.first().cloned().unwrap_or_default();
             let provider = pick(version, Kind::Anthropic, &parts.headers, Some(&first))?;
             if let Some(other) = checked
@@ -1252,8 +1260,16 @@ async fn prepare<'a>(
                 .file_retention_days
                 .map(|days| now_secs() + u64::from(days) * 86_400);
             seen.model = Some(first);
-            let reserved =
-                reserve(state, policy, person, rule, &created, "this message batch").await?;
+            let reserved = reserve(
+                state,
+                policy,
+                person,
+                rule,
+                &created,
+                "this message batch",
+                seen,
+            )
+            .await?;
             created.reserved = reserved.clone();
             extra.insert("object".into(), "message_batch".into());
             extra.insert("lines".into(), created.lines.into());
@@ -1283,7 +1299,14 @@ async fn prepare<'a>(
                 )
             })?;
             seen.model = Some(model.to_string());
-            decide_model(policy, person, rule, model, "the fine-tuning job")?;
+            decide_model(
+                policy,
+                person,
+                rule,
+                model,
+                "the fine-tuning job",
+                &mut seen.would_refuse,
+            )?;
             crate::killed(state, person, &key_sha256, Some(model))?;
             let training = body["training_file"].as_str().ok_or_else(|| {
                 bad(
@@ -1345,19 +1368,29 @@ pub(crate) fn decide_model(
     rule: &Rule,
     model: &str,
     what: &str,
+    would_refuse: &mut Vec<Value>,
 ) -> Result<(), Refusal> {
-    match policy.decide(person, model) {
-        Decision::Allow(_) => Ok(()),
-        _ => Err(Refusal::new(
-            StatusCode::FORBIDDEN,
-            "model_not_allowed",
-            format!(
-                "Refused: {what} asks for model \"{model}\", which rule \"{}\" does not allow for \"{}\". {} Change the model, or ask a Gantry admin to change the policy.",
-                rule.name,
-                person.name,
-                crate::allowed_models(rule)
-            ),
-        )),
+    let shadow = match policy.decide(person, model) {
+        Decision::Allow(_) => return Ok(()),
+        Decision::ModelNotAllowed(rule) => policy.observing(rule.shadow_until.as_deref()),
+        _ => policy.observing(None),
+    };
+    let refusal = Refusal::new(
+        StatusCode::FORBIDDEN,
+        "model_not_allowed",
+        format!(
+            "Refused: {what} asks for model \"{model}\", which rule \"{}\" does not allow for \"{}\". {} Change the model, or ask a Gantry admin to change the policy.",
+            rule.name,
+            person.name,
+            crate::allowed_models(rule)
+        ),
+    );
+    match shadow {
+        Some(by) => {
+            would_refuse.push(crate::would_refuse_entry(refusal, by));
+            Ok(())
+        }
+        None => Err(refusal),
     }
 }
 
@@ -1369,30 +1402,36 @@ async fn reserve(
     rule: &Rule,
     batch: &Owned,
     what: &str,
+    seen: &mut Seen<'_>,
 ) -> Result<Vec<Value>, Refusal> {
     let budgets = budgets_of(policy, person, rule, batch);
     if budgets.is_empty() {
         return Ok(Vec::new());
     }
+    let budgets: Vec<&Applied> = budgets.iter().collect();
+    let shadow = spend::all_shadowed(&budgets);
     let Some(estimate) = batch.estimate else {
-        return Err(bad(
+        // Observed budgets: the batch goes on with nothing reserved, and what would have refused it is recorded.
+        return crate::enforce(seen, bad(
             "no_estimate",
             format!(
                 "Refused: a budget applies to {what}, and the most its lines could cost was not known when they were checked (a model without a price, or a line without max_tokens and no max_output for its model). Ask a Gantry admin to set the model's price with max_output under prices:, or give every line max_tokens, then upload the lines again."
             ),
-        ));
+        ), shadow).map(|()| Vec::new());
     };
-    let budgets: Vec<&Applied> = budgets.iter().collect();
+    let mut observed = Vec::new();
     let (held, _) = spend::reserve_budgets(
         &state.spend,
         &budgets,
         rule,
         estimate * BATCH_SHARE,
         "This batch",
-        // A batch is enforced: its lines have no decision record of their own to carry would_refuse.
-        None,
+        Some(&mut observed),
     )
     .await?;
+    for (refusal, by) in observed {
+        crate::observed(seen, refusal, by);
+    }
     Ok(held.iter().map(spend::Reservation::to_json).collect())
 }
 
@@ -1465,6 +1504,8 @@ struct Checked {
     estimate: Option<f64>,
     /// What the guardrails found, by line.
     found: Vec<Value>,
+    /// What observe mode or a shadow period let through, for the decision record.
+    would_refuse: Vec<Value>,
 }
 
 /// Decides every line: its model by the rule, its text by the guardrails, and what it could cost. `word` names a
@@ -1490,11 +1531,11 @@ async fn check_lines(
         refusal.message = format!("Refused: {word} {n} of the batch: {rest}");
         refusal
     };
-    let guards: Vec<_> = rule
-        .guardrails
-        .iter()
+    let observe = policy.mode() == gantry_core::policy::Mode::Observe;
+    let guards: Vec<_> = crate::observed_guards(policy, &rule.guardrails)
+        .unwrap_or_else(|| rule.guardrails.clone())
+        .into_iter()
         .filter(|g| g.on.request)
-        .cloned()
         .collect();
     // A budget of the rule, the key or any scope of the limits: list may count these lines, so each needs its most.
     let budgeted = !rule.limits.budgets.is_empty()
@@ -1506,6 +1547,7 @@ async fn check_lines(
         masked: Vec::with_capacity(items.len()),
         estimate: Some(0.0),
         found: Vec::new(),
+        would_refuse: Vec::new(),
     };
     for (n, custom_id, route, body) in items {
         let Some(model) = body["model"].as_str().map(String::from) else {
@@ -1517,7 +1559,15 @@ async fn check_lines(
                 ),
             ));
         };
-        decide_model(policy, person, rule, &model, "it").map_err(|r| at(n, r))?;
+        decide_model(
+            policy,
+            person,
+            rule,
+            &model,
+            "it",
+            &mut checked.would_refuse,
+        )
+        .map_err(|r| at(n, r))?;
         crate::killed(state, person, key_sha256, Some(&model)).map_err(|r| at(n, r))?;
         if checked
             .model_of
@@ -1548,6 +1598,11 @@ async fn check_lines(
                 .into_parts();
             let (result, entries) =
                 crate::guarded(state, &guards, seen, decision, parts, bytes.clone()).await;
+            if observe {
+                checked
+                    .would_refuse
+                    .extend(crate::would_block(rule, &entries));
+            }
             if !entries.is_empty() {
                 checked
                     .found
@@ -1587,7 +1642,8 @@ async fn check_lines(
         };
         match most {
             Ok(most) => checked.estimate = checked.estimate.map(|sum| sum + most),
-            Err(refusal) if budgeted => return Err(refusal),
+            // In observe mode the batch's no_estimate is recorded when it is created, and nothing refused.
+            Err(refusal) if budgeted && !observe => return Err(refusal),
             // Without a budget the estimate is only what a line without usage is charged.
             Err(_) => checked.estimate = None,
         }
@@ -1606,6 +1662,7 @@ struct Upload {
     body: Bytes,
     owned: Owned,
     found: Vec<Value>,
+    would_refuse: Vec<Value>,
 }
 
 /// Checks an upload: a batch input line by line, and the retention the policy sets for every file.
@@ -1653,6 +1710,7 @@ async fn upload(
     let mut owned_file = Owned::new(Item::File, "", person, seen, decision);
     owned_file.purpose = purpose.clone();
     let mut found = Vec::new();
+    let mut would_refuse = Vec::new();
     let mut new_file = None;
     let mut model = None;
     if purpose == "batch" {
@@ -1739,6 +1797,7 @@ async fn upload(
         // The endpoint the lines were checked for, kept under the empty custom_id.
         owned_file.model_of.insert(String::new(), endpoint);
         found = checked.found;
+        would_refuse = checked.would_refuse;
         model = checked.models.first().cloned();
     }
     let provider = pick(version, Kind::OpenAi, headers, model.as_deref())?;
@@ -1796,6 +1855,7 @@ async fn upload(
         body,
         owned: owned_file,
         found,
+        would_refuse,
     })
 }
 
@@ -1873,6 +1933,7 @@ pub(crate) async fn record_decision(
     };
     let mut record = audit::record(&entry);
     record.extend(extra);
+    crate::mark_would_refuse(&mut record, seen.would_refuse.clone(), refused.is_none());
     if write(state, record).await {
         return Ok(());
     }

@@ -120,6 +120,10 @@ struct Open {
     /// the headers are gone, and its record names both as every other decision record does.
     client_ip: Option<String>,
     user_agent: Map<String, Value>,
+    /// Set when every budget the session counts against is observed: a spent one does not end it.
+    budget_shadow: Option<&'static str>,
+    /// What observe mode let through at connect, for Gemini's record, written once the setup names the model.
+    would_refuse: Vec<Value>,
 }
 
 async fn open(
@@ -203,30 +207,28 @@ async fn admit<'a>(
             ),
         ));
     }
-    let rule = policy.rule_for(person).ok_or_else(|| {
-        Refusal::new(
-            StatusCode::FORBIDDEN,
-            "no_rule",
-            format!(
-                "Refused: no rule in the policy names \"{}\" or team \"{}\", so nothing is allowed. Ask a Gantry admin to add a rule.",
-                person.name, person.team
-            ),
-        )
+    let rule = crate::rule_or_observed(policy, person, crate::no_rule(person), |r, by| {
+        crate::observed(seen, r, by);
     })?;
     seen.rule = Some(rule);
+    let by = policy.observing(rule.shadow_until.as_deref());
     // The end customer and tags, as on the model routes. The headers stay as they came: none goes upstream.
-    crate::customer_and_tags(&mut headers.clone(), person, rule, seen)?;
+    crate::customer_and_tags(&mut headers.clone(), person, rule, seen, by)?;
     if let Some(regions) = &rule.limits.regions {
         // A realtime session goes to the provider's own endpoint, which has no region Gantry can show.
-        return Err(Refusal::new(
-            StatusCode::FORBIDDEN,
-            "region_not_allowed",
-            format!(
-                "Refused: rule \"{}\" keeps requests in {}, and a realtime session goes to the provider's own endpoint, with no region Gantry can show. Connect under a rule without regions:.",
-                rule.name,
-                regions.join(", ")
+        crate::enforce(
+            seen,
+            Refusal::new(
+                StatusCode::FORBIDDEN,
+                "region_not_allowed",
+                format!(
+                    "Refused: rule \"{}\" keeps requests in {}, and a realtime session goes to the provider's own endpoint, with no region Gantry can show. Connect under a rule without regions:.",
+                    rule.name,
+                    regions.join(", ")
+                ),
             ),
-        ));
+            by,
+        )?;
     }
     let mut model = None;
     let mut provider = None;
@@ -265,7 +267,14 @@ async fn admit<'a>(
                     )
                 })?;
             seen.model = Some(named.to_string());
-            batch::decide_model(policy, person, rule, named, "the session")?;
+            batch::decide_model(
+                policy,
+                person,
+                rule,
+                named,
+                "the session",
+                &mut seen.would_refuse,
+            )?;
             crate::killed(state, person, &key_sha256, Some(named))?;
             provider = Some(serving(version, Kind::OpenAi, named)?);
             seen.provider = provider;
@@ -291,15 +300,25 @@ async fn admit<'a>(
             tags: &seen.tags,
         },
     );
+    let budget_shadow = spend::all_shadowed(
+        &budgets
+            .iter()
+            .filter(|a| matches!(a.limit, gantry_core::policy::Limit::Budget(_)))
+            .collect::<Vec<_>>(),
+    );
     if !spend::room(&state.spend, &budgets).await {
-        return Err(Refusal::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            "budget_exceeded",
-            format!(
-                "Refused: a budget \"{}\" counts against (of rule \"{}\", its key or the limits: list) is spent for this period, and a realtime session starts only with budget left. It starts again at the next period; ask a Gantry admin to raise it if you need more before then.",
-                person.name, rule.name
+        crate::enforce(
+            seen,
+            Refusal::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "budget_exceeded",
+                format!(
+                    "Refused: a budget \"{}\" counts against (of rule \"{}\", its key or the limits: list) is spent for this period, and a realtime session starts only with budget left. It starts again at the next period; ask a Gantry admin to raise it if you need more before then.",
+                    person.name, rule.name
+                ),
             ),
-        ));
+            budget_shadow,
+        )?;
     }
     if ws.is_err() {
         return Err(Refusal::new(
@@ -322,6 +341,8 @@ async fn admit<'a>(
         beta: headers.get("openai-beta").cloned(),
         client_ip: client_ip.map(|ip| ip.to_string()),
         user_agent: batch::user_agent_of(headers),
+        budget_shadow,
+        would_refuse: seen.would_refuse.clone(),
     })
 }
 
@@ -525,7 +546,9 @@ async fn session(
                         });
                         charged += cost;
                         batch::write(&state, record).await;
-                        if !spend::room(&state.spend, &budgets).await {
+                        // ponytail: an observed budget spent mid-session is not recorded again; the connect record
+                        // and the spend records show it.
+                        if open.budget_shadow.is_none() && !spend::room(&state.spend, &budgets).await {
                             tell(&mut down_tx, api, &decision, "budget_exceeded", &format!("this session's responses spent a budget \"{}\" counts against (of rule \"{}\", its key or the limits: list), so it ends here. The budget starts again at the next period.", open.person.name, open.rule.name)).await;
                             break "budget";
                         }
@@ -599,8 +622,10 @@ async fn gemini_setup(
         model: named
             .as_ref()
             .map(|m| m.trim_start_matches("models/").to_string()),
+        would_refuse: open.would_refuse.clone(),
         ..Seen::default()
     };
+    let mut observed = Vec::new();
     let decided = (|| {
         let model = seen.model.clone().ok_or_else(|| {
             Refusal::new(
@@ -610,7 +635,14 @@ async fn gemini_setup(
             )
         })?;
         let policy = version.policy.as_ref().ok_or_else(crate::unknown_route)?;
-        batch::decide_model(policy, &open.person, &open.rule, &model, "the session")?;
+        batch::decide_model(
+            policy,
+            &open.person,
+            &open.rule,
+            &model,
+            "the session",
+            &mut observed,
+        )?;
         crate::killed(state, &open.person, &open.key_sha256, Some(&model))?;
         let index = serving(version, Kind::Gemini, &model)?;
         Ok::<_, Refusal>((model, index))
@@ -618,6 +650,7 @@ async fn gemini_setup(
     if let Ok((_, index)) = &decided {
         seen.provider = Some(*index);
     }
+    seen.would_refuse.extend(observed);
     batch::record_decision(
         state,
         version,

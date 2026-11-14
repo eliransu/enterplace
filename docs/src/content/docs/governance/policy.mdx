@@ -199,7 +199,8 @@ What observe mode lets through, and records:
 - a model the rule does not allow, a caller no rule names, and a key's own `models:` list
 - budgets, `rate` (`rpm`, `tpm`) and `parallel`, from rules, keys and the `limits:` list
 - guardrails: they record what they find, as in their [shadow period](/governance/guardrails/#shadow-mode), and neither block nor mask
-- `regions`
+- `regions`, a rule's or key's `from:` address ranges (`ip_not_allowed`), and a tag or customer the rule does not list
+- a budgeted request whose cost cannot be estimated: `no_price`, `max_tokens_needed` and `stored_context` are recorded with that code, nothing is reserved, and the answer's cost still counts
 
 What it still refuses, because forwarding would open the gateway:
 
@@ -207,11 +208,11 @@ What it still refuses, because forwarding would open the gateway:
 - a model no provider serves (`unknown_model`)
 - a [kill switch](/governance/kill-switches/): a stop button always works
 
-Spend still counts. A request a budget would refuse is charged to that budget's counter, so the numbers are real when you switch to enforce. `gantry check` warns while observe mode is on, and the console's audit log shows "Observe mode: nothing is blocked". Remove the line, or write `mode: enforce`, and the next request after the [reload](#reloading) is enforced.
+Spend and limits still count. A request a budget would refuse is charged to that budget's counter, and a request over `rpm`, `tpm` or `parallel` holds its tokens and its place as an enforced one does, so the numbers are real when you switch to enforce. `gantry check` warns while observe mode is on, and the console's audit log shows "Observe mode: nothing is blocked". Remove the line, or write `mode: enforce`, and the next request after the [reload](#reloading) is enforced.
 
 To try one feature while the rest is enforced, give it a `shadow_until` date instead: a rule, each budget, and each `limits:` entry take one, as guardrails do. Until that date it records what it would refuse; after it, it enforces. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#trying-a-limit-first).
 
-Observe mode covers the model routes (chat, messages, responses, embeddings and the rest). Batches, realtime sessions, passthrough calls and MCP tools are enforced as before.
+Observe mode covers every governed route: the model routes (chat, messages, responses, embeddings and the rest), files, batches, fine-tuning jobs, realtime sessions, passthrough calls and MCP tools, prompts and resources. In observe mode `tools/list` lists every tool of the MCP servers. A passthrough path with a `..`, `.` or `%` segment is refused in both modes, and an MCP tool that waits for approval still waits.
 
 ## Organizations
 

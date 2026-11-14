@@ -14,7 +14,6 @@ use axum::{
     Router,
     body::{Body, Bytes},
     http::{Request, StatusCode, header},
-    routing::post,
 };
 use gantry_core::id::sha256_hex;
 use gantry_server::{Governed, Reload, Trigger};
@@ -29,25 +28,27 @@ const PAT: &str = "gantry_pat_0123456789abcdef0123456789ab";
 const CARL: &str = "gantry_carl_0123456789abcdef0123456789a";
 const NOBODY: &str = "gantry_nobody_0123456789abcdef01234567";
 const ADMIN: &str = "gantry_admin_0123456789abcdef012345678";
+const EXPIRED: &str = "gantry_exa_0123456789abcdef0123456789ab";
 
-/// A provider that counts the requests it gets. Every answer reports 1000 prompt tokens and 1 output token.
+/// A provider that counts the requests it gets, on any path. Every answer reports 1000 prompt tokens and 1 output
+/// token. A request whose body says "slow" is answered after 1.5 seconds.
 async fn provider() -> Result<(Arc<AtomicUsize>, u16), Error> {
     let hits = Arc::new(AtomicUsize::new(0));
     let counted = hits.clone();
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
-    let app = Router::new().route(
-        "/v1/chat/completions",
-        post(move |_: Bytes| async move {
-            counted.fetch_add(1, Ordering::SeqCst);
-            axum::response::Response::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    r#"{"id":"c","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":1}}"#,
-                ))
-                .unwrap_or_default()
-        }),
-    );
+    let app = Router::new().fallback(move |body: Bytes| async move {
+        counted.fetch_add(1, Ordering::SeqCst);
+        if body.windows(4).any(|w| w == b"slow") {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        }
+        axum::response::Response::builder()
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"id":"c","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":1}}"#,
+            ))
+            .unwrap_or_default()
+    });
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -109,10 +110,11 @@ async fn setup(name: &str, top: &str, rules: &str) -> Result<Setup, Error> {
     std::fs::write(
         dir.join("gantry.keys.yaml"),
         format!(
-            "keys:\n{}{}{}{}    admin: true\n",
+            "keys:\n{}{}{}{}    expires: 2020-01-01\n{}    admin: true\n",
             entry("pat", "payments", PAT),
             entry("carl", "cap", CARL),
             entry("nobody", "elsewhere", NOBODY),
+            entry("exa", "payments", EXPIRED),
             entry("ops", "ops", ADMIN)
         ),
     )?;
@@ -251,6 +253,11 @@ async fn observe_still_refuses_missing_key() -> TestResult {
     assert_eq!(
         (status, code.as_str()),
         (StatusCode::UNAUTHORIZED, "unknown_key")
+    );
+    let (status, code, _) = send(app, chat(EXPIRED, "m", "hi")?).await?;
+    assert_eq!(
+        (status, code.as_str()),
+        (StatusCode::UNAUTHORIZED, "key_expired")
     );
     assert_eq!(s.hits.load(Ordering::SeqCst), 0);
     Ok(())
@@ -454,5 +461,212 @@ fn malformed_shadow_until_is_refused_by_check_with_path() -> TestResult {
             "the fix names a date: {errors}"
         );
     }
+    Ok(())
+}
+
+fn get(key: &str, path: &str) -> Result<Request<Body>, axum::http::Error> {
+    Request::get(path)
+        .header(header::AUTHORIZATION, format!("Bearer {key}"))
+        .body(Body::empty())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn observe_covers_tags_customers_addresses_passthrough_and_batches() -> TestResult {
+    let rules = "  - name: payments
+    principals: { team: payments }
+    models: [m]
+    tags: [ok]
+    customers: [acme]
+    from: [10.0.0.0/8]
+    regions: [eu]
+";
+    let s = setup("routes", "mode: observe\n", rules).await?;
+    let app = &s.gw.router;
+
+    // A tag and a customer the rule does not list, from an address it does not list.
+    let mut request = chat(PAT, "m", "hi")?;
+    request
+        .headers_mut()
+        .insert("x-gantry-tags", "ok,secret-project".parse()?);
+    request
+        .headers_mut()
+        .insert("x-gantry-customer", "globex".parse()?);
+    let (status, refused, id) = send(app, request).await?;
+    assert_eq!(status, StatusCode::OK, "{refused}");
+    let rec = record(&s.audit, &id)?;
+    let codes = would_refuse(&rec);
+    for code in ["ip_not_allowed", "tag_not_allowed", "customer_not_allowed"] {
+        assert!(codes.contains(&code.to_string()), "{code}: {rec}");
+    }
+    assert_eq!(rec["outcome"], "would_refuse", "{rec}");
+
+    // A provider path the rule does not list, by a caller no rule names and by one whose rule keeps regions.
+    for (key, codes) in [
+        (NOBODY, &["no_rule", "passthrough_not_allowed"][..]),
+        (PAT, &["region_not_allowed", "passthrough_not_allowed"][..]),
+    ] {
+        let request = Request::post("/passthrough/openai/v1/embeddings")
+            .header(header::AUTHORIZATION, format!("Bearer {key}"))
+            .body(Body::from("{}"))?;
+        let (status, refused, id) = send(app, request).await?;
+        assert_eq!(status, StatusCode::OK, "{refused}");
+        let rec = record(&s.audit, &id)?;
+        for code in codes {
+            assert!(
+                would_refuse(&rec).contains(&code.to_string()),
+                "{code}: {rec}"
+            );
+        }
+    }
+
+    // Files, batches and fine-tuning jobs: a caller no rule names, and a rule that keeps regions.
+    for (key, path, code) in [
+        (NOBODY, "/v1/batches", "no_rule"),
+        (PAT, "/v1/files", "region_not_allowed"),
+        (NOBODY, "/v1/fine_tuning/jobs", "no_rule"),
+    ] {
+        let (_, refused, id) = send(app, get(key, path)?).await?;
+        let rec = record(&s.audit, &id)?;
+        assert_eq!(rec["verdict"], "allow", "{path}: {refused} {rec}");
+        assert!(
+            would_refuse(&rec).contains(&code.to_string()),
+            "{path}: {rec}"
+        );
+    }
+    assert_eq!(s.hits.load(Ordering::SeqCst), 6);
+
+    // Enforced, the same requests are refused.
+    std::fs::write(&s.policy, policy(s.port, "", rules))?;
+    assert!(matches!(
+        s.gw.reloader.check(Trigger::FileChange),
+        Reload::Loaded
+    ));
+    let (status, code, _) = send(app, get(NOBODY, "/v1/batches")?).await?;
+    assert_eq!((status, code.as_str()), (StatusCode::FORBIDDEN, "no_rule"));
+    let (status, code, _) = send(app, chat(PAT, "m", "hi")?).await?;
+    assert_eq!(
+        (status, code.as_str()),
+        (StatusCode::FORBIDDEN, "ip_not_allowed")
+    );
+    assert_eq!(s.hits.load(Ordering::SeqCst), 6);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn observe_forwards_a_budgeted_request_whose_cost_is_unknown() -> TestResult {
+    let s = setup("unknown-cost", "mode: observe\n", RULES).await?;
+    let app = &s.gw.router;
+
+    // No max_tokens, and the model's price has no max_output.
+    let request = Request::post("/v1/chat/completions")
+        .header(header::AUTHORIZATION, format!("Bearer {PAT}"))
+        .body(Body::from(
+            r#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#,
+        ))?;
+    let (status, refused, id) = send(app, request).await?;
+    assert_eq!(status, StatusCode::OK, "{refused}");
+    let rec = record(&s.audit, &id)?;
+    assert_eq!(would_refuse(&rec), ["max_tokens_needed"], "{rec}");
+    assert_eq!(rec["outcome"], "would_refuse", "{rec}");
+
+    // Stored context the provider adds and Gantry cannot see.
+    let request = Request::post("/v1/responses")
+        .header(header::AUTHORIZATION, format!("Bearer {PAT}"))
+        .body(Body::from(
+            r#"{"model":"m","input":"hi","max_output_tokens":1,"previous_response_id":"resp_1"}"#,
+        ))?;
+    let (status, refused, id) = send(app, request).await?;
+    assert_eq!(status, StatusCode::OK, "{refused}");
+    let rec = record(&s.audit, &id)?;
+    assert_eq!(would_refuse(&rec), ["stored_context"], "{rec}");
+
+    // Enforced, the first is refused.
+    std::fs::write(&s.policy, policy(s.port, "", RULES))?;
+    assert!(matches!(
+        s.gw.reloader.check(Trigger::FileChange),
+        Reload::Loaded
+    ));
+    let request = Request::post("/v1/chat/completions")
+        .header(header::AUTHORIZATION, format!("Bearer {PAT}"))
+        .body(Body::from(
+            r#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#,
+        ))?;
+    let (status, code, _) = send(app, request).await?;
+    assert_eq!(
+        (status, code.as_str()),
+        (StatusCode::BAD_REQUEST, "max_tokens_needed")
+    );
+    assert_eq!(s.hits.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn observed_requests_count_against_tpm() -> TestResult {
+    let rules = |tpm: u32| {
+        format!(
+            "  - name: payments\n    principals: {{ team: payments }}\n    models: [m]\n    rate: {{ tpm: {tpm} }}\n"
+        )
+    };
+    let s = setup("tpm", "mode: observe\n", &rules(1020)).await?;
+    let app = &s.gw.router;
+    // Each answer reports 1001 tokens and each request holds about 35: the second is over 1020 and observed.
+    // The usage is counted once the answer has ended, just after the caller has it.
+    let settle = || tokio::time::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(send(app, chat(PAT, "m", "hi")?).await?.0, StatusCode::OK);
+    settle().await;
+    let (status, _, id) = send(app, chat(PAT, "m", "hi")?).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(would_refuse(&record(&s.audit, &id)?), ["rate_limited"]);
+    settle().await;
+
+    // Enforced at 1100: the observed request's 1001 tokens count, so a third does not fit this minute.
+    std::fs::write(&s.policy, policy(s.port, "", &rules(1100)))?;
+    assert!(matches!(
+        s.gw.reloader.check(Trigger::FileChange),
+        Reload::Loaded
+    ));
+    let (status, code, _) = send(app, chat(PAT, "m", "hi")?).await?;
+    assert_eq!(
+        (status, code.as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, "rate_limited")
+    );
+    assert_eq!(s.hits.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn observed_requests_hold_a_parallel_place() -> TestResult {
+    let rules = |n: u32| {
+        format!(
+            "  - name: payments\n    principals: {{ team: payments }}\n    models: [m]\n    parallel: {n}\n"
+        )
+    };
+    let s = setup("parallel", "mode: observe\n", &rules(1)).await?;
+    let app = s.gw.router.clone();
+    let slow = |app: Router| async move {
+        let request = chat(PAT, "m", "slow").map_err(|e| e.to_string())?;
+        send(&app, request).await.map_err(|e| e.to_string())
+    };
+    let first = tokio::spawn(slow(app.clone()));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let second = tokio::spawn(slow(app.clone()));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // Enforced at 2 while both are in flight: the observed one holds its place, so a third is refused.
+    std::fs::write(&s.policy, policy(s.port, "", &rules(2)))?;
+    assert!(matches!(
+        s.gw.reloader.check(Trigger::FileChange),
+        Reload::Loaded
+    ));
+    let (status, code, _) = send(&app, chat(PAT, "m", "hi")?).await?;
+    assert_eq!(
+        (status, code.as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, "parallel_limited")
+    );
+    let (status, _, _) = first.await??;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, id) = second.await??;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(would_refuse(&record(&s.audit, &id)?), ["parallel_limited"]);
     Ok(())
 }

@@ -561,6 +561,25 @@ impl Spend {
         }
     }
 
+    /// Counts `need` for `scope` in the store past its limit, for a request observe mode or a shadow period lets
+    /// through: an observed request is counted as an enforced one is, so the numbers are real when enforcement starts.
+    async fn take_past(
+        &self,
+        store: &Arc<dyn Store>,
+        scope: &str,
+        need: u64,
+    ) -> Result<i64, Short> {
+        // No limit to keep under, and exactly `need` granted: nothing is leased ahead for this gateway.
+        match store
+            .lease(scope.to_string(), need, need, i64::MAX as u64)
+            .await
+        {
+            Ok(Lease::Granted { grant, .. }) => Ok(grant),
+            Ok(Lease::Over { wait }) => Err(Short::Over(wait)),
+            Err(err) => Err(Short::Down(err)),
+        }
+    }
+
     /// Gives `n` back to a grant: to this gateway's lease while it lasts, else to the store.
     fn give_back(&self, store: &Arc<dyn Store>, scope: &str, grant: i64, n: i64) {
         if let (Ok(add), Some(slot)) = (u64::try_from(n), locked(&self.leases).get(scope)) {
@@ -1434,23 +1453,43 @@ pub(crate) async fn admit(
                 applied,
                 serde_json::json!({ "kind": "rpm", "of": applied.of, "value": rpm }),
             )));
-            match applied.shadow {
-                Some(by) => observed.push((refusal, by)),
-                None => return Err(refusal),
+            let Some(by) = applied.shadow else {
+                return Err(refusal);
+            };
+            observed.push((refusal, by));
+            // Observed: counted all the same, so the minute's count is the one enforcement will see.
+            match &spend.store {
+                None => {
+                    let _ = spend.rate(&applied.scope, u32::MAX, Instant::now());
+                }
+                Some(store) => {
+                    if let Err(Short::Down(err)) = spend
+                        .take_past(store, &format!("rpm:{}", applied.scope), 1)
+                        .await
+                    {
+                        return Err(rate_store_unavailable(&err));
+                    }
+                }
             }
+        }
+    }
+    let tpm_applied: Vec<&Applied> = ask
+        .applied
+        .iter()
+        .filter(|a| matches!(a.limit, Limit::Tpm(_)))
+        .collect();
+    let mut tpm = tpm;
+    if tpm && !ask.free && output_tokens(&hints, admitted.price.as_ref(), ask.route).is_none() {
+        if let Some(by) = all_shadowed(&tpm_applied) {
+            // Observed: the tokens it could use are unknown, so none are held; the answer's count is not either.
+            observed.push((max_tokens_for_tpm(&named), by));
+            tpm = false;
         }
     }
     if tpm && !ask.free {
         // The most tokens this request could use: every three bytes of its body one, and the output it may write.
-        let output = output_tokens(&hints, admitted.price.as_ref(), ask.route).ok_or_else(|| {
-            Refusal::new(
-                StatusCode::BAD_REQUEST,
-                "max_tokens_needed",
-                format!(
-                    "Refused: a tokens-per-minute limit applies to this request, and it does not say how many output tokens it may use, and {named} has no max_output in its price, so the tokens it could use are unknown. Send max_tokens (max_output_tokens on /v1/responses) with the request, or ask a Gantry admin to set max_output for the model under prices: in the policy."
-                ),
-            )
-        })?;
+        let output = output_tokens(&hints, admitted.price.as_ref(), ask.route)
+            .ok_or_else(|| max_tokens_for_tpm(&named))?;
         let most = (ask.body.len().div_ceil(3) as u64).saturating_add(output);
         for applied in ask.applied {
             let Limit::Tpm(limit) = applied.limit else {
@@ -1500,13 +1539,28 @@ pub(crate) async fn admit(
                         applied,
                         serde_json::json!({ "kind": "tpm", "of": applied.of, "value": limit, "request_could_use": most }),
                     )));
-                    // Observed: nothing is held, so the request takes none of the minute's tokens from others.
-                    match applied.shadow {
-                        Some(by) => {
-                            observed.push((refusal, by));
-                            continue;
+                    let Some(by) = applied.shadow else {
+                        return Err(refusal);
+                    };
+                    observed.push((refusal, by));
+                    // Observed: held all the same, so the minute's count is the one enforcement will see.
+                    match &spend.store {
+                        None => {
+                            if spend
+                                .hold_tokens(&scope, u32::MAX, most, Instant::now())
+                                .is_err()
+                            {
+                                continue;
+                            }
+                            None
                         }
-                        None => return Err(refusal),
+                        Some(store) => {
+                            match spend.take_past(store, &format!("tpm:{scope}"), most).await {
+                                Ok(grant) => Some(grant),
+                                Err(Short::Over(_)) => continue,
+                                Err(Short::Down(err)) => return Err(rate_store_unavailable(&err)),
+                            }
+                        }
                     }
                 }
             };
@@ -1538,9 +1592,15 @@ pub(crate) async fn admit(
                 );
                 refusal.retry_after = Some(1);
                 refusal.record = Some(Box::new(limit_record(applied, Value::Null)));
-                match applied.shadow {
-                    Some(by) => observed.push((refusal, by)),
-                    None => return Err(refusal),
+                let Some(by) = applied.shadow else {
+                    return Err(refusal);
+                };
+                observed.push((refusal, by));
+                // Observed: in flight all the same, so the count is the one enforcement will see.
+                match spend.hold_parallel(&applied.scope, u32::MAX).await {
+                    Ok(hold) => admitted.parallel.push(hold),
+                    Err(Short::Down(err)) => return Err(rate_store_unavailable(&err)),
+                    Err(Short::Over(_)) => {}
                 }
             }
         }
@@ -1551,82 +1611,121 @@ pub(crate) async fn admit(
             .iter()
             .filter(|a| matches!(a.limit, Limit::Budget(_)))
             .collect();
+        // Observed budgets (every one that applies): a request whose cost cannot be known is forwarded, and what
+        // would have refused it is recorded.
+        let shadow = all_shadowed(&budgets);
+        let unknown = |refusal: Refusal, observed: &mut Vec<(Refusal, &'static str)>| match shadow {
+            Some(by) => {
+                observed.push((refusal, by));
+                Ok(())
+            }
+            None => Err(refusal),
+        };
         let Some(price) = &admitted.price else {
             // The loader refuses a rule budget over an unpriced model, so only a key budget, a scope's budget or a
             // policy built in code gets here.
-            return Err(Refusal::new(
-                StatusCode::FORBIDDEN,
-                "no_price",
-                format!(
-                    "Refused: a budget applies to this request ({}) and {named} has no price, so its spend could not be counted. Ask a Gantry admin to add its price under prices: in the policy.",
-                    budgets
-                        .iter()
-                        .map(|a| a.source.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            ));
-        };
-        let Some(output) = output_tokens(&hints, Some(price), ask.route) else {
-            let whose = match budgets.as_slice() {
-                [one] if one.of == "rule" => {
-                    format!("the budget of rule \"{}\" applies", ask.rule.name)
-                }
-                [one] if one.of == "key" => {
-                    format!("the key of \"{}\" has a budget", ask.person.name)
-                }
-                [one] => format!("the budget of {} applies", one.whose),
-                many => format!(
-                    "the budgets of {} apply",
-                    many.iter()
-                        .map(|a| a.whose.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" and ")
-                ),
-            };
-            // Each API names its output limit differently; the caller can only send its own route's.
-            let images = ask.route.starts_with("/v1/images");
-            if images || ask.route.starts_with("/v1/audio/speech") {
-                let per_image = if images { "per_image or " } else { "" };
-                return Err(Refusal::new(
-                    StatusCode::BAD_REQUEST,
-                    "max_tokens_needed",
+            unknown(
+                Refusal::new(
+                    StatusCode::FORBIDDEN,
+                    "no_price",
                     format!(
-                        "Refused: {whose} to this request, and {named} is priced by the token with no max_output, so the most its generated output could cost is unknown. Ask a Gantry admin to set {per_image}max_output for the model under prices: in the policy."
+                        "Refused: a budget applies to this request ({}) and {named} has no price, so its spend could not be counted. Ask a Gantry admin to add its price under prices: in the policy.",
+                        budgets
+                            .iter()
+                            .map(|a| a.source.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
-                ));
-            }
-            let field = if ask.route.starts_with("/v1/responses") {
-                "max_output_tokens"
-            } else if ask.route.starts_with("/v1/messages") {
-                "max_tokens"
-            } else {
-                "max_tokens (or max_completion_tokens)"
-            };
-            return Err(Refusal::new(
-                StatusCode::BAD_REQUEST,
-                "max_tokens_needed",
-                format!(
-                    "Refused: {whose} to this request, and it does not say how many output tokens it may use, and {named} has no max_output in its price, so the most it could cost is unknown. Send {field} with the request, or ask a Gantry admin to set max_output for the model under prices: in the policy."
                 ),
+                &mut observed,
+            )?;
+            return Ok(Admit::Go(
+                Meter(Arc::new(Mutex::new(Some(admitted)))),
+                cache_word,
+                observed,
             ));
         };
-        let context = stored_tokens(&hints, price, ask.route).map_err(|fields| {
-            Refusal::new(
-                StatusCode::BAD_REQUEST,
-                "stored_context",
-                format!(
-                    "Refused: a budget applies to this request and it names stored context ({fields}), which the provider adds to the prompt and Gantry cannot see, so the most it could cost is unknown. Send the whole conversation in input instead (as Codex does, with store: false), or ask a Gantry admin to set max_context for model \"{}\" under prices: in the policy, so such a request reserves the model's whole context.",
-                    ask.model
-                ),
-            )
-        })?;
-        let most = match price
-            .per_image
-            .filter(|_| ask.route.starts_with("/v1/images"))
-        {
-            Some(each) => each * hints.n.unwrap_or(1) as f64,
-            None => most_cost(price, ask.body.len(), context, output),
+        let estimate = match output_tokens(&hints, Some(price), ask.route) {
+            None => Err(None),
+            Some(output) => stored_tokens(&hints, price, ask.route)
+                .map(|context| (output, context))
+                .map_err(Some),
+        };
+        let most = match estimate {
+            Ok((output, context)) => match price
+                .per_image
+                .filter(|_| ask.route.starts_with("/v1/images"))
+            {
+                Some(each) => each * hints.n.unwrap_or(1) as f64,
+                None => most_cost(price, ask.body.len(), context, output),
+            },
+            Err(None) => {
+                let whose = match budgets.as_slice() {
+                    [one] if one.of == "rule" => {
+                        format!("the budget of rule \"{}\" applies", ask.rule.name)
+                    }
+                    [one] if one.of == "key" => {
+                        format!("the key of \"{}\" has a budget", ask.person.name)
+                    }
+                    [one] => format!("the budget of {} applies", one.whose),
+                    many => format!(
+                        "the budgets of {} apply",
+                        many.iter()
+                            .map(|a| a.whose.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" and ")
+                    ),
+                };
+                // Each API names its output limit differently; the caller can only send its own route's.
+                let images = ask.route.starts_with("/v1/images");
+                if images || ask.route.starts_with("/v1/audio/speech") {
+                    let per_image = if images { "per_image or " } else { "" };
+                    unknown(
+                        Refusal::new(
+                            StatusCode::BAD_REQUEST,
+                            "max_tokens_needed",
+                            format!(
+                                "Refused: {whose} to this request, and {named} is priced by the token with no max_output, so the most its generated output could cost is unknown. Ask a Gantry admin to set {per_image}max_output for the model under prices: in the policy."
+                            ),
+                        ),
+                        &mut observed,
+                    )?;
+                } else {
+                    let field = if ask.route.starts_with("/v1/responses") {
+                        "max_output_tokens"
+                    } else if ask.route.starts_with("/v1/messages") {
+                        "max_tokens"
+                    } else {
+                        "max_tokens (or max_completion_tokens)"
+                    };
+                    unknown(
+                        Refusal::new(
+                            StatusCode::BAD_REQUEST,
+                            "max_tokens_needed",
+                            format!(
+                                "Refused: {whose} to this request, and it does not say how many output tokens it may use, and {named} has no max_output in its price, so the most it could cost is unknown. Send {field} with the request, or ask a Gantry admin to set max_output for the model under prices: in the policy."
+                            ),
+                        ),
+                        &mut observed,
+                    )?;
+                }
+                // Observed: nothing is reserved, and the answer's cost still counts against the budgets.
+                0.0
+            }
+            Err(Some(fields)) => {
+                unknown(
+                    Refusal::new(
+                        StatusCode::BAD_REQUEST,
+                        "stored_context",
+                        format!(
+                            "Refused: a budget applies to this request and it names stored context ({fields}), which the provider adds to the prompt and Gantry cannot see, so the most it could cost is unknown. Send the whole conversation in input instead (as Codex does, with store: false), or ask a Gantry admin to set max_context for model \"{}\" under prices: in the policy, so such a request reserves the model's whole context.",
+                            ask.model
+                        ),
+                    ),
+                    &mut observed,
+                )?;
+                0.0
+            }
         };
         let (reservations, counted) = reserve_budgets(
             spend,
@@ -1645,6 +1744,22 @@ pub(crate) async fn admit(
         cache_word,
         observed,
     ))
+}
+
+/// The shadow every limit in `applied` is under, when each is: `None` when one of them is enforced, or none applies.
+pub(crate) fn all_shadowed(applied: &[&Applied]) -> Option<&'static str> {
+    let first = applied.first()?.shadow?;
+    applied.iter().all(|a| a.shadow.is_some()).then_some(first)
+}
+
+fn max_tokens_for_tpm(named: &str) -> Refusal {
+    Refusal::new(
+        StatusCode::BAD_REQUEST,
+        "max_tokens_needed",
+        format!(
+            "Refused: a tokens-per-minute limit applies to this request, and it does not say how many output tokens it may use, and {named} has no max_output in its price, so the tokens it could use are unknown. Send max_tokens (max_output_tokens on /v1/responses) with the request, or ask a Gantry admin to set max_output for the model under prices: in the policy."
+        ),
+    )
 }
 
 /// Whether a request's answer may be cached. Never a stream, a request sent with `Cache-Control: no-store`, a

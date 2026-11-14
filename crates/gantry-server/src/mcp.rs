@@ -304,6 +304,8 @@ struct Asked {
     extra: Map<String, Value>,
     /// Where the caller signs in to an upstream server, when its credential is missing.
     connect: Option<String>,
+    /// What observe mode or the rule's shadow period let through.
+    would_refuse: Vec<Value>,
 }
 
 async fn post(mcp: &Shared, bundle: Option<String>, request: Request, decision: &str) -> Response {
@@ -600,17 +602,28 @@ async fn answer(
     // A switch on a person, team or key stops their tools as it stops their models. A switch on a model named like a
     // tool (`gantry kill --model github.delete_repo`) stops that one tool for everyone.
     killed(&mcp.app, &person, &key_sha256, named.as_deref())?;
-    let rule = policy.rule_for(&person).ok_or_else(|| {
-        Refusal::new(
-            StatusCode::FORBIDDEN,
-            "no_rule",
-            format!(
-                "Refused: no rule in the policy names \"{}\" or team \"{}\", so no MCP tool is allowed. Ask a Gantry admin to add a rule with the tools you need.",
-                person.name, person.team
-            ),
-        )
+    let no_rule = Refusal::new(
+        StatusCode::FORBIDDEN,
+        "no_rule",
+        format!(
+            "Refused: no rule in the policy names \"{}\" or team \"{}\", so no MCP tool is allowed. Ask a Gantry admin to add a rule with the tools you need.",
+            person.name, person.team
+        ),
+    );
+    let rule = crate::rule_or_observed(policy, &person, no_rule, |r, by| {
+        asked.would_refuse.push(crate::would_refuse_entry(r, by));
     })?;
     asked.rule = Some(rule.clone());
+    // Observe mode or the rule's shadow period: every tool, prompt and resource is listed and may be used, and one
+    // the rule does not allow is recorded as would_refuse.
+    let shadow = policy.observing(rule.shadow_until.as_deref());
+    let listed = shadow.map(|_| {
+        let mut open = rule.clone();
+        open.tools = vec!["*".into()];
+        open.mcp.prompts = vec!["*".into()];
+        open.mcp.resources = vec!["*".into()];
+        open
+    });
     let (Some(item), Some(name)) = (item, named) else {
         let item = match method {
             "tools/list" => Item::Tool,
@@ -619,7 +632,13 @@ async fn answer(
             _ => Item::Template,
         };
         let items = mcp
-            .gather(item, rule, bundle.as_ref(), &person, &asked.origin)
+            .gather(
+                item,
+                listed.as_ref().unwrap_or(rule),
+                bundle.as_ref(),
+                &person,
+                &asked.origin,
+            )
             .await;
         return Ok(result(&call_id, json!({ item.key(): items })));
     };
@@ -651,14 +670,20 @@ async fn answer(
             Item::Prompt => ("prompt_not_allowed", "prompts"),
             _ => ("resource_not_allowed", "resources"),
         };
-        return Err(Refusal::new(
+        let refusal = Refusal::new(
             StatusCode::FORBIDDEN,
             code,
             format!(
                 "Refused: rule \"{}\" does not allow {noun} \"{name}\" for \"{}\" of team \"{}\". {allowed} Ask a Gantry admin to add it to the rule's {field} if you need it.",
                 rule.name, person.name, person.team
             ),
-        ));
+        );
+        let Some(by) = shadow else {
+            return Err(refusal);
+        };
+        asked
+            .would_refuse
+            .push(crate::would_refuse_entry(refusal, by));
     }
     let index = asked
         .server
@@ -707,7 +732,9 @@ async fn answer(
         return Ok(json_response(StatusCode::OK, &response));
     }
     mcp.check_pin(index, &conn, &own).await?;
-    let guards: Vec<Guardrail> = rule.guardrails.clone();
+    let observe = policy.mode() == gantry_core::policy::Mode::Observe;
+    let guards: Vec<Guardrail> =
+        crate::observed_guards(policy, &rule.guardrails).unwrap_or_else(|| rule.guardrails.clone());
     if let Some(params) = forwarded.as_object_mut() {
         params.insert("name".into(), own.clone().into());
         if guards.iter().any(|g| g.on.request) {
@@ -715,6 +742,9 @@ async fn answer(
             let (arguments, found) = mcp
                 .screen_arguments(&guards, arguments, decision, &person)
                 .await;
+            if observe {
+                asked.would_refuse.extend(crate::would_block(rule, &found));
+            }
             if !found.is_empty() {
                 asked.extra.insert("guardrails".into(), json!(found));
             }
@@ -1418,6 +1448,7 @@ async fn record(
     for (field, value) in &asked.extra {
         record.insert(field.clone(), value.clone());
     }
+    crate::mark_would_refuse(&mut record, asked.would_refuse.clone(), refusal.is_none());
     if append(mcp, &record).await {
         return Ok(());
     }

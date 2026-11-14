@@ -1269,6 +1269,8 @@ pub(crate) fn customer_and_tags(
     person: &Principal,
     rule: &Rule,
     seen: &mut Seen<'_>,
+    // Observe mode or the rule's shadow period: a customer or tag the rule refuses is recorded and taken.
+    by: Option<&'static str>,
 ) -> Result<(), Refusal> {
     let once = |name: &str, headers: &HeaderMap| -> Result<Option<String>, Refusal> {
         let mut values = headers.get_all(name).iter();
@@ -1306,28 +1308,37 @@ pub(crate) fn customer_and_tags(
             ));
         }
         match &person.customer {
-            Some(own) if *own != customer => {
-                return Err(Refusal::new(
+            // Observed, the key's own customer stays the one charged: the key says whose it is.
+            Some(own) if *own != customer => enforce(
+                seen,
+                Refusal::new(
                     StatusCode::FORBIDDEN,
                     "customer_not_allowed",
                     format!(
                         "Refused: the key {} is for customer \"{own}\", and this request names customer \"{customer}\" in x-gantry-customer. Leave the header out, or use that customer's key.",
                         person.key
                     ),
-                ));
-            }
+                ),
+                by,
+            )?,
             Some(_) => {}
-            None if !rule.accepts_customer(&customer) => {
-                return Err(Refusal::new(
-                    StatusCode::FORBIDDEN,
-                    "customer_not_allowed",
-                    format!(
-                        "Refused: rule \"{}\" does not let a caller name customer \"{customer}\" in x-gantry-customer. Leave the header out, or ask a Gantry admin to add it (or \"*\") to the rule's customers.",
-                        rule.name
-                    ),
-                ));
+            None => {
+                if !rule.accepts_customer(&customer) {
+                    enforce(
+                        seen,
+                        Refusal::new(
+                            StatusCode::FORBIDDEN,
+                            "customer_not_allowed",
+                            format!(
+                                "Refused: rule \"{}\" does not let a caller name customer \"{customer}\" in x-gantry-customer. Leave the header out, or ask a Gantry admin to add it (or \"*\") to the rule's customers.",
+                                rule.name
+                            ),
+                        ),
+                        by,
+                    )?;
+                }
+                seen.customer = Some(customer);
             }
-            None => seen.customer = Some(customer),
         }
     }
     let mut all = person.tags.clone();
@@ -1348,14 +1359,18 @@ pub(crate) fn customer_and_tags(
             ));
         }
         if !rule.accepts_tag(tag) {
-            return Err(Refusal::new(
-                StatusCode::FORBIDDEN,
-                "tag_not_allowed",
-                format!(
-                    "Refused: rule \"{}\" does not let a caller send tag \"{tag}\" in x-gantry-tags. Remove it, or ask a Gantry admin to add it to the rule's tags.",
-                    rule.name
+            enforce(
+                seen,
+                Refusal::new(
+                    StatusCode::FORBIDDEN,
+                    "tag_not_allowed",
+                    format!(
+                        "Refused: rule \"{}\" does not let a caller send tag \"{tag}\" in x-gantry-tags. Remove it, or ask a Gantry admin to add it to the rule's tags.",
+                        rule.name
+                    ),
                 ),
-            ));
+                by,
+            )?;
         }
         all.push(tag.to_string());
     }
@@ -1539,7 +1554,12 @@ async fn check<'a>(
     }
     if parts.method == Method::GET && parts.uri.path() == MODELS {
         check_query(&parts.uri)?;
-        seen.rule = policy.rule_for(person);
+        // In observe mode a caller no rule names lists what observe mode would forward: every model.
+        seen.rule = policy.rule_for(person).or_else(|| {
+            policy
+                .observing(None)
+                .map(|_| &*gantry_core::policy::OBSERVED)
+        });
         caller_paid(seen.rule, None, provider_key.as_deref())?;
         return Ok(Next::Answer(model_list(
             version,
@@ -1618,7 +1638,8 @@ async fn check<'a>(
     if let Decision::Allow(rule) = decision {
         seen.rule = Some(rule);
         seen.model = Some(peek.model.clone());
-        customer_and_tags(&mut parts.headers, person, rule, seen)?;
+        let by = policy.observing(rule.shadow_until.as_deref());
+        customer_and_tags(&mut parts.headers, person, rule, seen, by)?;
     }
     // A copy of its own, so seen can still take what is observed below.
     seen.model = Some(peek.model.clone());
@@ -1738,14 +1759,7 @@ async fn check<'a>(
 /// The refusal of a request the rules do not allow. An allowed one has none: it gets a generic `no_rule`.
 fn rule_refusal(decision: Decision<'_>, person: &Principal, model: &str, path: &str) -> Refusal {
     match decision {
-        Decision::Allow(_) | Decision::NoRule => Refusal::new(
-            StatusCode::FORBIDDEN,
-            "no_rule",
-            format!(
-                "Refused: no rule in the policy names \"{}\" or team \"{}\", so nothing is allowed. Ask a Gantry admin to add a rule.",
-                person.name, person.team
-            ),
-        ),
+        Decision::Allow(_) | Decision::NoRule => no_rule(person),
         Decision::KeyModelNotAllowed(_) => {
             let hint = claude_code_hint(path);
             let mut refusal = Refusal::new(
@@ -1780,11 +1794,10 @@ fn rule_refusal(decision: Decision<'_>, person: &Principal, model: &str, path: &
     }
 }
 
-/// In observe mode, each guardrail set to block that found something, as the refusal it would have made.
-fn would_block(seen: &mut Seen<'_>, entries: &[guard::AuditEntry]) {
-    let Some(rule) = seen.rule else {
-        return;
-    };
+/// In observe mode, each guardrail of `rule` set to block that found something, as the `would_refuse` entry of the
+/// refusal it would have made.
+pub(crate) fn would_block(rule: &Rule, entries: &[guard::AuditEntry]) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
     for guard in rule
         .guardrails
         .iter()
@@ -1808,13 +1821,34 @@ fn would_block(seen: &mut Seen<'_>, entries: &[guard::AuditEntry]) {
             ),
         );
         refusal.record = Some(Box::new(serde_json::json!({ "guardrail": guard.name })));
-        observed(seen, refusal, "observe");
+        out.push(would_refuse_entry(refusal, "observe"));
     }
+    out
+}
+
+/// In observe mode, `guards` as in their shadow period: each records what it finds, and neither blocks nor masks.
+/// `None` in enforce mode, where they run as written.
+pub(crate) fn observed_guards(policy: &Policy, guards: &[Guardrail]) -> Option<Vec<Guardrail>> {
+    (policy.mode() == gantry_core::policy::Mode::Observe && !guards.is_empty()).then(|| {
+        guards
+            .iter()
+            .cloned()
+            .map(|mut g| {
+                g.shadow_until = Some("9999-12-31".into());
+                g
+            })
+            .collect()
+    })
 }
 
 /// Records a decision against a request that observe mode or a shadow period does not enforce: the request goes on,
 /// and its record lists what would have refused it, with the refusal's code, message and detail.
-fn observed(seen: &mut Seen<'_>, refusal: Refusal, by: &'static str) {
+pub(crate) fn observed(seen: &mut Seen<'_>, refusal: Refusal, by: &'static str) {
+    seen.would_refuse.push(would_refuse_entry(refusal, by));
+}
+
+/// One `would_refuse` entry: the refusal's code, why it was not enforced, its message and detail.
+pub(crate) fn would_refuse_entry(refusal: Refusal, by: &'static str) -> serde_json::Value {
     let mut entry = serde_json::Map::new();
     entry.insert("code".into(), refusal.code.into());
     entry.insert("by".into(), by.into());
@@ -1822,7 +1856,70 @@ fn observed(seen: &mut Seen<'_>, refusal: Refusal, by: &'static str) {
     if let Some(serde_json::Value::Object(extra)) = refusal.record.map(|r| *r) {
         entry.extend(extra);
     }
-    seen.would_refuse.push(serde_json::Value::Object(entry));
+    serde_json::Value::Object(entry)
+}
+
+/// Refuses with `refusal`, unless `by` (observe mode or a shadow period) says to record it and go on.
+pub(crate) fn enforce(
+    seen: &mut Seen<'_>,
+    refusal: Refusal,
+    by: Option<&'static str>,
+) -> Result<(), Refusal> {
+    match by {
+        Some(by) => {
+            observed(seen, refusal, by);
+            Ok(())
+        }
+        None => Err(refusal),
+    }
+}
+
+/// The caller's rule. With none, observe mode forwards under a rule that allows everything, and `refused` goes on
+/// the record as `would_refuse` through `observe`.
+pub(crate) fn rule_or_observed<'a>(
+    policy: &'a Policy,
+    person: &Principal,
+    refused: Refusal,
+    observe: impl FnOnce(Refusal, &'static str),
+) -> Result<&'a Rule, Refusal> {
+    if let Some(rule) = policy.rule_for(person) {
+        return Ok(rule);
+    }
+    match policy.observing(None) {
+        Some(by) => {
+            observe(refused, by);
+            Ok(&gantry_core::policy::OBSERVED)
+        }
+        None => Err(refused),
+    }
+}
+
+/// The refusal of a caller no rule names.
+pub(crate) fn no_rule(person: &Principal) -> Refusal {
+    Refusal::new(
+        StatusCode::FORBIDDEN,
+        "no_rule",
+        format!(
+            "Refused: no rule in the policy names \"{}\" or team \"{}\", so nothing is allowed. Ask a Gantry admin to add a rule.",
+            person.name, person.team
+        ),
+    )
+}
+
+/// Puts what observe mode or a shadow period let through on a decision record: `outcome: would_refuse` on a
+/// request that went on, and the list of refusals it would have had.
+pub(crate) fn mark_would_refuse(
+    record: &mut serde_json::Map<String, serde_json::Value>,
+    would_refuse: Vec<serde_json::Value>,
+    allowed: bool,
+) {
+    if would_refuse.is_empty() {
+        return;
+    }
+    if allowed {
+        record.insert("outcome".into(), "would_refuse".into());
+    }
+    record.insert("would_refuse".into(), would_refuse.into());
 }
 
 /// Who sent the request, from their Gantry key: refused when the key is unknown, expired or stopped by a kill switch.
@@ -1914,7 +2011,7 @@ pub(crate) async fn identify<'a>(
             ),
         );
         refusal.record = Some(Box::new(serde_json::json!({ "ip_not_allowed": "key" })));
-        return Err(refusal);
+        enforce(seen, refusal, policy.observing(None))?;
     }
     if let Some(rule) = policy.rule_for(person)
         && blocked(&rule.limits.from)
@@ -1929,7 +2026,11 @@ pub(crate) async fn identify<'a>(
             ),
         );
         refusal.record = Some(Box::new(serde_json::json!({ "ip_not_allowed": "rule" })));
-        return Err(refusal);
+        enforce(
+            seen,
+            refusal,
+            policy.observing(rule.shadow_until.as_deref()),
+        )?;
     }
     if !person.options.reaches(path) {
         return Err(Refusal::new(
@@ -2023,43 +2124,43 @@ async fn passthrough<'a>(
         ));
     };
     seen.provider = Some(index);
-    let Some(rule) = policy.rule_for(person) else {
-        return Err(Refusal::new(
-            StatusCode::FORBIDDEN,
-            "no_rule",
-            format!(
-                "Refused: no rule in the policy names \"{}\" or team \"{}\", so nothing is allowed. Ask a Gantry admin to add a rule.",
-                person.name, person.team
-            ),
-        ));
-    };
+    let rule = rule_or_observed(policy, person, no_rule(person), |r, by| {
+        observed(seen, r, by);
+    })?;
     seen.rule = Some(rule);
-    customer_and_tags(&mut parts.headers, person, rule, seen)?;
+    let by = policy.observing(rule.shadow_until.as_deref());
+    customer_and_tags(&mut parts.headers, person, rule, seen, by)?;
     if let Some(regions) = &rule.limits.regions {
         // A provider's own API has no region label: residency cannot be shown, so it is refused.
-        return Err(Refusal::new(
-            StatusCode::FORBIDDEN,
-            "region_not_allowed",
-            format!(
-                "Refused: rule \"{}\" keeps requests in {}, and a passthrough call goes to the provider as is, with no region Gantry can show. Use a model route with an alias whose deployments are in those regions.",
-                rule.name,
-                regions.join(", ")
+        enforce(
+            seen,
+            Refusal::new(
+                StatusCode::FORBIDDEN,
+                "region_not_allowed",
+                format!(
+                    "Refused: rule \"{}\" keeps requests in {}, and a passthrough call goes to the provider as is, with no region Gantry can show. Use a model route with an alias whose deployments are in those regions.",
+                    rule.name,
+                    regions.join(", ")
+                ),
             ),
-        ));
+            by,
+        )?;
     }
     // A dot segment could climb out of the listed prefix at the provider, whatever the prefix match says here.
     let climbs = native
         .split('/')
         .any(|seg| seg == "." || seg == ".." || seg.contains('%'));
     if climbs || !rule.reaches(&name, &native) {
-        return Err(Refusal::new(
+        let refusal = Refusal::new(
             StatusCode::FORBIDDEN,
             "passthrough_not_allowed",
             format!(
                 "Refused: rule \"{}\" does not let you reach {native} at provider \"{name}\" as sent. Ask a Gantry admin to add the path under the rule's passthrough:.",
                 rule.name
             ),
-        ));
+        );
+        // A path that climbs is refused in every mode: it is not a path any rule could list.
+        enforce(seen, refusal, by.filter(|_| !climbs))?;
     }
     caller_paid(
         Some(rule),
@@ -2080,16 +2181,20 @@ async fn passthrough<'a>(
     if let Some(model) = &model {
         seen.model = Some(model.clone());
         if !matches!(policy.decide(person, model), Decision::Allow(_)) {
-            return Err(Refusal::new(
-                StatusCode::FORBIDDEN,
-                "model_not_allowed",
-                format!(
-                    "Refused: rule \"{}\" does not allow model \"{model}\" for \"{}\". {} Ask a Gantry admin if you need it.",
-                    rule.name,
-                    person.name,
-                    allowed_models(rule)
+            enforce(
+                seen,
+                Refusal::new(
+                    StatusCode::FORBIDDEN,
+                    "model_not_allowed",
+                    format!(
+                        "Refused: rule \"{}\" does not allow model \"{model}\" for \"{}\". {} Ask a Gantry admin if you need it.",
+                        rule.name,
+                        person.name,
+                        allowed_models(rule)
+                    ),
                 ),
-            ));
+                by,
+            )?;
         }
     }
     killed(state, person, key_sha256, model.as_deref())?;
@@ -2764,18 +2869,10 @@ async fn decide(
     let mut guards = seen.rule.map_or(&[][..], |rule| rule.guardrails.as_slice());
     // In observe mode every guardrail runs as in its shadow period: it records what it finds, and neither blocks nor
     // masks. A block it would have made goes on the record as would_refuse.
-    let shadowed: Vec<Guardrail>;
-    let observe = policy.mode() == gantry_core::policy::Mode::Observe;
-    if observe && !guards.is_empty() {
-        shadowed = guards
-            .iter()
-            .cloned()
-            .map(|mut g| {
-                g.shadow_until = Some("9999-12-31".into());
-                g
-            })
-            .collect();
-        guards = &shadowed;
+    let shadowed = observed_guards(policy, guards);
+    let observe = shadowed.is_some();
+    if let Some(shadowed) = &shadowed {
+        guards = shadowed;
     }
     // An audio upload holds no text a guardrail reads. It is forwarded, and its record says the guardrails did not
     // run on it, rather than that they ran and found nothing.
@@ -2793,8 +2890,9 @@ async fn decide(
     outcome = match outcome {
         Ok(Next::Forward(parts, bytes, held)) if on_request && !not_text => {
             let (checked, entries) = guarded(state, guards, &seen, decision, parts, bytes).await;
-            if observe {
-                would_block(&mut seen, &entries);
+            if let (true, Some(rule)) = (observe, seen.rule) {
+                let blocked = would_block(rule, &entries);
+                seen.would_refuse.extend(blocked);
             }
             found = Some(entries);
             checked.map(|(parts, bytes)| Next::Forward(parts, bytes, held))
@@ -2953,15 +3051,11 @@ async fn decide(
             record.insert("jwt_issuer".into(), jwt.issuer.as_str().into());
             record.insert("jwt_subject".into(), jwt.subject.as_str().into());
         }
-        if !seen.would_refuse.is_empty() {
-            if outcome.is_ok() {
-                record.insert("outcome".into(), "would_refuse".into());
-            }
-            record.insert(
-                "would_refuse".into(),
-                std::mem::take(&mut seen.would_refuse).into(),
-            );
-        }
+        mark_would_refuse(
+            &mut record,
+            std::mem::take(&mut seen.would_refuse),
+            outcome.is_ok(),
+        );
         if let Some(deployment) = &seen.deployment {
             // The model on the record is the alias the caller sent and the rule decided on; this is where it went first.
             record.insert(

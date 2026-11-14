@@ -1649,3 +1649,53 @@ async fn each_person_signs_in_at_an_upstream_oauth_server_and_calls_run_with_the
     assert!(!kept.contains("tok-maya"), "{kept}");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn observe_mode_forwards_tools_the_rule_does_not_allow_and_records_them() -> TestResult {
+    let calls = Calls::default();
+    let dir = setup("observe", &calls).await?;
+    let path = dir.join("gantry.policy.yaml");
+    let text = std::fs::read_to_string(&path)?;
+    std::fs::write(
+        &path,
+        text.replacen("version: 1\n", "version: 1\nmode: observe\n", 1),
+    )?;
+    let app = gateway(&dir)?;
+
+    // A tool the rule does not allow, and a caller no rule names: both run, and are on record.
+    let (_, ran_it) = rpc(&app, MAYA, call(1, "github.delete_repo")).await?;
+    assert_eq!(
+        ran_it["result"]["content"][0]["text"], "github ran delete_repo",
+        "{ran_it}"
+    );
+    let (_, list) = rpc(
+        &app,
+        OMER,
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    )
+    .await?;
+    assert!(
+        list["result"]["tools"]
+            .as_array()
+            .is_some_and(|t| t.len() == 5),
+        "{list}"
+    );
+    let (_, searched) = rpc(&app, OMER, call(3, "docs.search")).await?;
+    assert_eq!(
+        searched["result"]["content"][0]["text"], "docs ran search",
+        "{searched}"
+    );
+    assert_eq!(ran(&calls), ["github:delete_repo", "docs:search"]);
+
+    let log = records(&dir)?;
+    for (tool, code) in [("delete_repo", "tool_not_allowed"), ("search", "no_rule")] {
+        let record = log
+            .iter()
+            .find(|r| r["tool"] == tool && r["mcp_method"] == "tools/call")
+            .ok_or(format!("no record of {tool}"))?;
+        assert_eq!(record["verdict"], "allow", "{record}");
+        assert_eq!(record["outcome"], "would_refuse", "{record}");
+        assert_eq!(record["would_refuse"][0]["code"], code, "{record}");
+    }
+    Ok(())
+}
