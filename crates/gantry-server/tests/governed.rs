@@ -239,7 +239,7 @@ async fn every_refusal_has_its_code_its_decision_id_and_a_record_and_nothing_is_
         .header(header::AUTHORIZATION, format!("Bearer {MAYA}"))
         .header(header::AUTHORIZATION, format!("Bearer {OMER}"))
         .body(Body::from("{}"))?;
-    let other_route = Request::get("/v1/files")
+    let other_route = Request::get("/v1/assistants")
         .header(header::AUTHORIZATION, format!("Bearer {MAYA}"))
         .body(Body::empty())?;
     let stranger_elsewhere = Request::get("/admin").body(Body::empty())?;

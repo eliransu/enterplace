@@ -32,10 +32,12 @@ use gantry_core::{
 
 mod admin;
 mod alias;
+mod batch;
 pub mod cloud;
 mod credentials;
 mod mcp;
 mod metrics;
+mod realtime;
 mod reload;
 mod spend;
 pub mod store;
@@ -91,6 +93,8 @@ const TRANSCRIPTIONS: &str = "/v1/audio/transcriptions";
 const SPEECH: &str = "/v1/audio/speech";
 const MODERATIONS: &str = "/v1/moderations";
 const RERANK: &str = "/v1/rerank";
+/// OpenAI's legacy text completions: forwarded as sent, priced from its usage.
+const COMPLETIONS: &str = "/v1/completions";
 /// `/passthrough/<provider>/<native path>`: a provider's own API, reached as sent on the paths a rule names.
 const PASSTHROUGH: &str = "/passthrough/";
 
@@ -98,7 +102,14 @@ const PASSTHROUGH: &str = "/passthrough/";
 fn openai_only(path: &str) -> bool {
     matches!(
         path,
-        RESPONSES | EMBEDDINGS | IMAGES | TRANSCRIPTIONS | SPEECH | MODERATIONS | RERANK
+        RESPONSES
+            | EMBEDDINGS
+            | IMAGES
+            | TRANSCRIPTIONS
+            | SPEECH
+            | MODERATIONS
+            | RERANK
+            | COMPLETIONS
     )
 }
 
@@ -331,6 +342,8 @@ struct AppState {
     tracer: Option<Arc<traces::Tracer>>,
     // Fields an embedding binary adds to /healthz.
     health: Option<Health>,
+    // Who owns each file, batch and fine-tuning job created through this gateway (batch.rs).
+    owned: Arc<batch::Registry>,
 }
 
 impl AppState {
@@ -498,8 +511,10 @@ fn build(
     let mut spend = spend::Spend::default();
     spend.store = config.store.clone();
     let spend = Arc::new(spend);
+    let owned = Arc::new(batch::Registry::default());
     if let Some(path) = &config.spent_from {
         spend.replay(path).map_err(ConfigError)?;
+        owned.replay(path, &spend).map_err(ConfigError)?;
     }
     let client = Client::builder(TokioExecutor::new()).build(connector);
     // Spans are finished from the audit records, so traces need the audit log.
@@ -544,7 +559,10 @@ fn build(
         }),
         pool: Arc::new(alias::Pool::new(config.store.clone())),
         health: config.extension.health.clone(),
+        owned,
     };
+    let keep = Arc::new(state.clone());
+    batch::spawn_poller(Arc::downgrade(&keep));
     let metrics = Router::new()
         .route("/metrics", get(metrics::serve))
         .with_state(state.clone());
@@ -568,7 +586,11 @@ fn build(
             .route("/admin/credentials/{name}", any(admin::handle));
     }
     let mcp = mcp::router(&state, config.mcp)?;
-    let router = router.fallback(handle).with_state(state);
+    let router = router
+        .merge(batch::routes(keep))
+        .merge(realtime::routes())
+        .fallback(handle)
+        .with_state(state);
     let router = match mcp {
         Some(mcp) => router.merge(mcp),
         None => router,
@@ -1090,40 +1112,7 @@ async fn check<'a>(
     // Read before the key's header is removed below: Anthropic's clients send their key in x-api-key.
     let anthropic_client =
         parts.headers.contains_key("x-api-key") || parts.headers.contains_key("anthropic-version");
-    // A stranger is refused before their body is read, so an unknown caller cannot make the gateway buffer anything.
-    let Some(person) = policy.identify(key) else {
-        // Enough of the hash to tell two unknown keys apart in the audit log, and far too little to find the key.
-        seen.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
-        let hint = if key.starts_with("sk-") {
-            " This looks like a provider key. Send your Gantry key instead: the provider key stays with Gantry."
-        } else {
-            ""
-        };
-        return Err(Refusal::new(
-            StatusCode::UNAUTHORIZED,
-            "unknown_key",
-            format!(
-                "Refused: Gantry does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. A key from gantry login is replaced by the next login and removed by gantry logout: run gantry login again. Otherwise ask a Gantry admin.{hint}"
-            ),
-        ));
-    };
-    seen.person = Some(person);
-    // Allowed requests name their key too: during a rotation a person has two, and the record says which was used.
-    seen.key = Some(person.key.clone());
-    if person.expires.is_some() && person.expired(&gantry_core::audit::timestamp()) {
-        return Err(Refusal::new(
-            StatusCode::UNAUTHORIZED,
-            "key_expired",
-            format!(
-                "Refused: the key {} of \"{}\" expired at {} (UTC). Ask a Gantry admin for a new key, or, if it came from gantry login, run gantry login <gantry url> again.",
-                person.key,
-                person.name,
-                person.expires.as_deref().unwrap_or_default()
-            ),
-        ));
-    }
-    let key_sha256 = id::sha256_hex(key.as_bytes());
-    killed(state, person, &key_sha256, None)?;
+    let (person, key_sha256) = identify(state, policy, key, seen)?;
     // The key must not travel on in any other header either, under whatever name the caller chose for it.
     let (key, mut parts) = (key.to_string(), parts);
     // Taken out at once: nothing after this (guardrail webhooks, traces, the provider) can see it in the headers.
@@ -1345,6 +1334,50 @@ async fn check<'a>(
     }
 }
 
+/// Who sent the request, from their Gantry key: refused when the key is unknown, expired or stopped by a kill switch.
+/// A stranger is refused before their body is read. Returns the person and the SHA-256 of the key.
+fn identify<'a>(
+    state: &AppState,
+    policy: &'a Policy,
+    key: &str,
+    seen: &mut Seen<'a>,
+) -> Result<(&'a Principal, String), Refusal> {
+    let Some(person) = policy.identify(key) else {
+        // Enough of the hash to tell two unknown keys apart in the audit log, and far too little to find the key.
+        seen.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
+        let hint = if key.starts_with("sk-") {
+            " This looks like a provider key. Send your Gantry key instead: the provider key stays with Gantry."
+        } else {
+            ""
+        };
+        return Err(Refusal::new(
+            StatusCode::UNAUTHORIZED,
+            "unknown_key",
+            format!(
+                "Refused: Gantry does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. A key from gantry login is replaced by the next login and removed by gantry logout: run gantry login again. Otherwise ask a Gantry admin.{hint}"
+            ),
+        ));
+    };
+    seen.person = Some(person);
+    // Allowed requests name their key too: during a rotation a person has two, and the record says which was used.
+    seen.key = Some(person.key.clone());
+    if person.expires.is_some() && person.expired(&gantry_core::audit::timestamp()) {
+        return Err(Refusal::new(
+            StatusCode::UNAUTHORIZED,
+            "key_expired",
+            format!(
+                "Refused: the key {} of \"{}\" expired at {} (UTC). Ask a Gantry admin for a new key, or, if it came from gantry login, run gantry login <gantry url> again.",
+                person.key,
+                person.name,
+                person.expires.as_deref().unwrap_or_default()
+            ),
+        ));
+    }
+    let key_sha256 = id::sha256_hex(key.as_bytes());
+    killed(state, person, &key_sha256, None)?;
+    Ok((person, key_sha256))
+}
+
 /// Refuses a request a kill switch stops, naming the switch, its reason and who set it. A switch list that cannot
 /// be read refuses every request: Gantry cannot tell that the caller is not stopped.
 fn killed(
@@ -1498,7 +1531,7 @@ fn unknown_route() -> Refusal {
     Refusal::new(
         StatusCode::NOT_FOUND,
         "unknown_route",
-        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models and GET /healthz. Check the method and the path.",
+        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/completions, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models and GET /healthz. Check the method and the path.",
     )
 }
 
@@ -2901,6 +2934,19 @@ fn text_fields(path: &str, body: &serde_json::Value) -> Result<Vec<String>, Stri
             Value::Null => {}
             _ => return Err("prompt".into()),
         },
+        // A completion's prompt is a string or a list of strings; one given as token IDs cannot be read as text.
+        COMPLETIONS => {
+            for field in ["prompt", "suffix"] {
+                match &body[field] {
+                    Value::String(_) => pointers.push(format!("/{field}")),
+                    Value::Null => {}
+                    Value::Array(items) if items.iter().all(Value::is_string) => {
+                        pointers.extend((0..items.len()).map(|i| format!("/{field}/{i}")));
+                    }
+                    _ => return Err(format!("{field} (send it as text, not token IDs)")),
+                }
+            }
+        }
         RERANK => {
             strings(&body["query"], "/query".into(), &mut pointers);
             strings(&body["documents"], "/documents".into(), &mut pointers);

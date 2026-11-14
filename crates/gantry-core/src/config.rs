@@ -61,6 +61,7 @@ const KNOWN: &[&str] = &[
     "ttl_seconds",
     "buffer_stream",
     "check_stream_every",
+    "file_retention_days",
     "passthrough",
     "provider",
     "paths",
@@ -284,6 +285,8 @@ struct RuleFile {
     tools: Vec<String>,
     #[serde(default)]
     caller_provider_key: Option<String>,
+    #[serde(default)]
+    file_retention_days: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -1631,6 +1634,16 @@ fn limits(rule: &RuleFile, at: &dyn Fn(&str) -> String, errors: &mut Vec<String>
             CallerKey::Refused
         }
     };
+    if let Some(days) = rule.file_retention_days {
+        match u32::try_from(days) {
+            // OpenAI keeps an uploaded file at most 30 days when told to expire it.
+            Ok(days @ 1..=30) => limits.file_retention_days = Some(days),
+            _ => errors.push(format!(
+                "{}: file_retention_days is how many days a file uploaded through Gantry is kept before it is deleted at the provider, 1 to 30, for example file_retention_days: 7. To keep the provider's default, remove the line.",
+                at("file_retention_days")
+            )),
+        }
+    }
     if let Some(every) = rule.check_stream_every {
         match u32::try_from(every) {
             Ok(every @ 50..=100_000) => limits.check_stream_every = Some(every),
@@ -3096,6 +3109,7 @@ rules:
                 buffer_stream: false,
                 check_stream_every: None,
                 caller_provider_key: CallerKey::Refused,
+                file_retention_days: None,
             }
         );
         assert_eq!(
@@ -3442,6 +3456,37 @@ guardrails:
             .collect();
         assert_eq!(names, ["vendor", "no-secrets"]);
         assert!(rules[1].guardrails.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn file_retention_days_loads_and_a_bad_one_names_the_range() -> TestResult {
+        let with = |extra: &str| {
+            GOOD.replace(
+                "    models: [gpt-4o-mini]\n",
+                &format!("    models: [gpt-4o-mini]\n{extra}"),
+            )
+        };
+        let loaded = check("retention", &with("    file_retention_days: 7\n"), None)?
+            .map_err(|e| e.join("\n"))?;
+        assert_eq!(
+            loaded.policy.rule_list()[0].limits.file_retention_days,
+            Some(7)
+        );
+        for days in ["0", "31", "-2"] {
+            let refused = check(
+                "retention-bad",
+                &with(&format!("    file_retention_days: {days}\n")),
+                None,
+            )?
+            .err()
+            .ok_or("a bad file_retention_days loaded")?
+            .join("\n");
+            assert!(
+                refused.contains("file_retention_days") && refused.contains("1 to 30"),
+                "{days}: {refused}"
+            );
+        }
         Ok(())
     }
 

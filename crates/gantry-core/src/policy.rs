@@ -104,6 +104,9 @@ pub struct Limits {
     pub check_stream_every: Option<u32>,
     /// Whether a caller may send their own provider key in `x-gantry-provider-key`.
     pub caller_provider_key: CallerKey,
+    /// Days a file uploaded through Gantry (a batch input, a fine-tuning set) is kept before it is deleted at the
+    /// provider. None keeps the provider's default.
+    pub file_retention_days: Option<u32>,
 }
 
 /// What a rule does with a provider key the caller sends in `x-gantry-provider-key`.

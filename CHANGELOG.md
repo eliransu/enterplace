@@ -7,6 +7,18 @@ same version. How a release is made: RELEASING.md in the gantry-enterprise repos
 
 ## [Unreleased]
 
+### Added
+
+- Files, batches and fine-tuning jobs served natively (`/v1/files`, `/v1/batches`, `/v1/messages/batches`,
+  `/v1/fine_tuning/jobs`): each owned by the person who created it, every batch line decided by the policy and the
+  guardrails before the provider sees the file (a refused line is named by number), the batch's estimate reserved at
+  batch prices against budgets, and results metered with one usage record per line.
+- `file_retention_days` on a rule: uploads expire at the provider and Gantry deletes what is left when the time is up.
+- Realtime sessions over WebSocket: OpenAI Realtime and Gemini Live, decided at connect (Gemini on its setup),
+  metered per response from the provider's usage events, ended by a kill switch or a spent budget, and recorded
+  without content.
+- `POST /v1/completions` (legacy text completions) for openai providers, guarded on its prompt and priced from usage.
+
 ## [0.1.0] - Unreleased
 
 The first tagged release: a governed AI gateway in one static binary. Every request carries a person's or workload's

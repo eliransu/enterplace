@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A provider of `kind: openai` serves OpenAI's API: chat completions, Responses, embeddings, images, audio, moderations and rerank. The same kind reaches any vendor with an OpenAI-compatible endpoint; only the `url`, `key_env` and model names change.
+A provider of `kind: openai` serves OpenAI's API: chat completions, Responses, embeddings, images, audio, moderations, rerank and legacy completions, plus files, batches, fine-tuning jobs and Realtime sessions. The same kind reaches any vendor with an OpenAI-compatible endpoint; only the `url`, `key_env` and model names change.
 
 ## OpenAI
 
@@ -186,12 +186,13 @@ These routes go to the `openai` provider that serves the request's `model`, or a
 | `POST /v1/audio/transcriptions` | `multipart/form-data`, parsed strictly, forwarded byte for byte | Every text field but `model`, such as `prompt`. Not the audio. | `usage` when reported, else the reservation |
 | `POST /v1/audio/speech` | JSON; the audio answer streams through | `input` and `instructions` (strings; any other shape is refused under a rule with guardrails) | None reported: charged its reservation under a budget |
 | `POST /v1/moderations` | JSON | `input`: a string, a list of strings, or `text` items | None reported |
+| `POST /v1/completions` | JSON, legacy text completions | `prompt` and `suffix` (a string or a list of strings; token IDs are refused under a rule with guardrails) | `usage` |
 | `POST /v1/rerank` | JSON, Cohere style, for a provider that serves it (vLLM, Cohere's compatible endpoint) | Every string in `query` and each document, structured fields included | None reported |
 
 - A request with no `model` is refused with `unreadable_request`. This includes a moderation request, which OpenAI would otherwise send to its default model. A form with no `model` field, or with two, is refused the same way.
 - A transcription form is parsed strictly, so the field Gantry decides on is the one every parser reads. A form with an extended `name*=` parameter, spaces around `=`, a backslash or single quotes in a parameter, a folded header line, or bytes after the closing boundary is refused with `unreadable_request`.
 - A guardrail mask on a transcription's text fields is written back into the form. A form with no text field is forwarded, and its record says `"guardrails": "not_run: the body is audio"`.
-- Image edits and variations, audio translations, batches and files are refused with `unknown_route`.
+- Image edits and variations and audio translations are refused with `unknown_route`. Files, batches, fine-tuning jobs and Realtime sessions are served natively, each owned by its creator: see [Files, batches and realtime](/providers/batches-and-realtime/).
 
 <Aside type="caution">
 Guardrails never read the audio of a transcription. Do not give transcription models to a rule whose guardrails must see what is spoken.
