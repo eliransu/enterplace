@@ -290,7 +290,7 @@ A key gets a role with `role:` in its entry (`gantry key new --role finance`); `
 
 ## Passthrough
 
-Gantry serves the common routes itself: chat completions, messages, responses, embeddings, images, audio, moderations and rerank. For any other endpoint of a provider's own API (batches, files, the legacy completions route, Gemini's native methods), send the request to `/passthrough/<provider>/<path>`. Gantry swaps your Gantry key for the provider key and sends the request to that path unchanged.
+Gantry serves the common routes itself: chat completions, messages, responses, embeddings, images, audio, moderations, rerank, legacy completions, files, batches, fine-tuning jobs and realtime sessions. For any other endpoint of a provider's own API (Bedrock or Vertex batch jobs, Gemini's native methods), send the request to `/passthrough/<provider>/<path>`. Gantry swaps your Gantry key for the provider key and sends the request to that path unchanged.
 
 A rule reaches nothing this way unless it lists the provider and the path prefixes:
 

@@ -347,7 +347,7 @@ impl Pool {
 
 /// The boundary of a `multipart/form-data` content type. A second boundary parameter is refused: parsers differ on
 /// which one they use.
-fn boundary(content_type: &str) -> Option<&str> {
+pub(crate) fn boundary(content_type: &str) -> Option<&str> {
     let (kind, params) = content_type.split_once(';')?;
     if !kind.trim().eq_ignore_ascii_case("multipart/form-data") {
         return None;

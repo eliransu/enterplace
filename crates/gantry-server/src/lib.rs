@@ -32,6 +32,7 @@ use gantry_core::{
 
 mod admin;
 mod alias;
+mod batch;
 pub mod cloud;
 mod credentials;
 pub mod insights;
@@ -39,6 +40,7 @@ mod jwt;
 mod mcp;
 mod metrics;
 mod policy_api;
+mod realtime;
 mod reload;
 mod spend;
 pub mod store;
@@ -94,6 +96,8 @@ const TRANSCRIPTIONS: &str = "/v1/audio/transcriptions";
 const SPEECH: &str = "/v1/audio/speech";
 const MODERATIONS: &str = "/v1/moderations";
 const RERANK: &str = "/v1/rerank";
+/// OpenAI's legacy text completions: forwarded as sent, priced from its usage.
+const COMPLETIONS: &str = "/v1/completions";
 /// `/passthrough/<provider>/<native path>`: a provider's own API, reached as sent on the paths a rule names.
 const PASSTHROUGH: &str = "/passthrough/";
 
@@ -101,7 +105,14 @@ const PASSTHROUGH: &str = "/passthrough/";
 fn openai_only(path: &str) -> bool {
     matches!(
         path,
-        RESPONSES | EMBEDDINGS | IMAGES | TRANSCRIPTIONS | SPEECH | MODERATIONS | RERANK
+        RESPONSES
+            | EMBEDDINGS
+            | IMAGES
+            | TRANSCRIPTIONS
+            | SPEECH
+            | MODERATIONS
+            | RERANK
+            | COMPLETIONS
     )
 }
 
@@ -297,7 +308,23 @@ impl std::error::Error for ConfigError {}
 
 /// The address of the client on the other end of a connection.
 #[derive(Clone, Copy)]
-struct ClientAddr(SocketAddr);
+pub(crate) struct ClientAddr(SocketAddr);
+
+/// The client's own address: the connection's, or, from a trusted proxy, the one it names in X-Forwarded-For.
+pub(crate) fn client_ip(
+    policy: &Policy,
+    addr: Option<&ClientAddr>,
+    headers: &HeaderMap,
+) -> Option<std::net::IpAddr> {
+    addr.map(|addr| {
+        let forwarded: Vec<&str> = headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        policy.client_ip(addr.0.ip(), &forwarded)
+    })
+}
 
 /// Set by the accept loop once a stop signal came: `/readyz` then answers 503 while requests in flight finish.
 #[derive(Clone)]
@@ -345,6 +372,8 @@ struct AppState {
     health: Option<Health>,
     // The signing keys of the identity providers whose JWTs the policy trusts. Kept across reloads.
     jwks: Arc<jwt::Keys>,
+    // Who owns each file, batch and fine-tuning job created through this gateway (batch.rs).
+    owned: Arc<batch::Registry>,
 }
 
 impl AppState {
@@ -534,6 +563,11 @@ fn build(
             }
         });
     }
+    // With a store, who owns each file, batch and job is kept there, so every replica answers for it.
+    let owned = Arc::new(match &config.mcp_setup.postgres {
+        Some(pg) => batch::Registry::with_store(pg.clone()).map_err(ConfigError)?,
+        None => batch::Registry::default(),
+    });
     if let Some(path) = &config.spent_from {
         let snapshot = match live.read() {
             Ok(version) => version.clone(),
@@ -542,6 +576,7 @@ fn build(
         spend
             .replay(path, snapshot.policy.as_ref())
             .map_err(ConfigError)?;
+        owned.replay(path, &spend).map_err(ConfigError)?;
     }
     let client = Client::builder(TokioExecutor::new()).build(connector);
     // Spans are finished from the audit records, so traces need the audit log.
@@ -587,7 +622,10 @@ fn build(
         pool: Arc::new(alias::Pool::new(config.store.clone())),
         health: config.extension.health.clone(),
         jwks: Arc::default(),
+        owned,
     };
+    let keep = Arc::new(state.clone());
+    batch::spawn_poller(Arc::downgrade(&keep));
     let metrics = Router::new()
         .route("/metrics", get(metrics::serve))
         .with_state(state.clone());
@@ -617,7 +655,11 @@ fn build(
             .route("/admin/policy/{*rest}", any(policy_api::handle));
     }
     let mcp = mcp::router(&state, config.mcp, config.mcp_setup)?;
-    let router = router.fallback(handle).with_state(state);
+    let router = router
+        .merge(batch::routes(keep))
+        .merge(realtime::routes())
+        .fallback(handle)
+        .with_state(state);
     let mut console_extension = config.extension.console;
     let router = match mcp {
         Some(mcp) => {
@@ -1141,7 +1183,7 @@ const TAGS: &str = "x-gantry-tags";
 /// The end customer and tags of a request: the key's, and those the caller sends in `x-gantry-customer` and
 /// `x-gantry-tags` when the rule lets them. A name the rule does not list is refused by name, so a caller cannot
 /// charge another customer or forge a tag. Both headers are taken out: they are Gantry's, not the provider's.
-fn customer_and_tags(
+pub(crate) fn customer_and_tags(
     headers: &mut HeaderMap,
     person: &Principal,
     rule: &Rule,
@@ -1369,114 +1411,16 @@ async fn check<'a>(
     // Read before the key's header is removed below: Anthropic's clients send their key in x-api-key.
     let anthropic_client =
         parts.headers.contains_key("x-api-key") || parts.headers.contains_key("anthropic-version");
-    // A stranger is refused before their body is read, so an unknown caller cannot make the gateway buffer anything.
-    // A JWT from an issuer the policy trusts stands in for a key; it is checked before anything else is read too.
-    let identified: Option<&'a Principal> = match policy.identify(key) {
-        Some(person) => Some(person),
-        None if !policy.jwt().is_empty() && jwt::looks_like(key) => {
-            seen.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
-            let person = jwt::verify(&state.client, &state.jwks, policy.jwt(), key)
-                .await
-                .map_err(|refused| {
-                    let status = if refused.unavailable {
-                        StatusCode::SERVICE_UNAVAILABLE
-                    } else {
-                        StatusCode::UNAUTHORIZED
-                    };
-                    let mut refusal = Refusal::new(status, refused.code, refused.message);
-                    refusal.retry = refused.unavailable;
-                    refusal
-                })?;
-            Some(minted.get_or_init(|| person))
-        }
-        None => None,
-    };
-    let Some(person) = identified else {
-        // Enough of the hash to tell two unknown keys apart in the audit log, and far too little to find the key.
-        seen.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
-        let hint = if key.starts_with("sk-") {
-            " This looks like a provider key. Send your Gantry key instead: the provider key stays with Gantry."
-        } else {
-            ""
-        };
-        return Err(Refusal::new(
-            StatusCode::UNAUTHORIZED,
-            "unknown_key",
-            format!(
-                "Refused: Gantry does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. A key from gantry login is replaced by the next login and removed by gantry logout: run gantry login again. Otherwise ask a Gantry admin.{hint}"
-            ),
-        ));
-    };
-    seen.person = Some(person);
-    // Allowed requests name their key too: during a rotation a person has two, and the record says which was used.
-    seen.key = Some(person.key.clone());
-    if person.expires.is_some() && person.expired(&gantry_core::audit::timestamp()) {
-        return Err(Refusal::new(
-            StatusCode::UNAUTHORIZED,
-            "key_expired",
-            format!(
-                "Refused: the key {} of \"{}\" expired at {} (UTC). Ask a Gantry admin for a new key, or, if it came from gantry login, run gantry login <gantry url> again.",
-                person.key,
-                person.name,
-                person.expires.as_deref().unwrap_or_default()
-            ),
-        ));
-    }
-    // A JWT caller is named by its issuer and subject, as a key by its hash, so a key_prefix switch can stop it.
-    let key_sha256 = match &person.jwt {
-        Some(jwt) => id::sha256_hex(format!("{}\n{}", jwt.issuer, jwt.subject).as_bytes()),
-        None => id::sha256_hex(key.as_bytes()),
-    };
-    killed(state, person, &key_sha256, None)?;
-    let blocked = |from: &[gantry_core::policy::Cidr]| {
-        !from.is_empty() && !client_ip.is_some_and(|ip| from.iter().any(|c| c.contains(ip)))
-    };
-    let where_from =
-        client_ip.map_or_else(|| "an unknown address".to_string(), |ip| ip.to_string());
-    if blocked(&person.options.from) {
-        let mut refusal = Refusal::new(
-            StatusCode::FORBIDDEN,
-            "ip_not_allowed",
-            format!(
-                "Refused: the key {} of \"{}\" may be used only from its listed address ranges, and this request came from {where_from}. Send it from an allowed network, or ask a Gantry admin to change the key's from list.",
-                person.key, person.name
-            ),
-        );
-        refusal.record = Some(Box::new(serde_json::json!({ "ip_not_allowed": "key" })));
-        return Err(refusal);
-    }
-    if let Some(rule) = policy.rule_for(person)
-        && blocked(&rule.limits.from)
-    {
-        seen.rule = Some(rule);
-        let mut refusal = Refusal::new(
-            StatusCode::FORBIDDEN,
-            "ip_not_allowed",
-            format!(
-                "Refused: rule \"{}\" allows requests only from its listed address ranges, and this request came from {where_from}. Send it from an allowed network, or ask a Gantry admin to change the rule's from list.",
-                rule.name
-            ),
-        );
-        refusal.record = Some(Box::new(serde_json::json!({ "ip_not_allowed": "rule" })));
-        return Err(refusal);
-    }
-    if !person.options.reaches(parts.uri.path()) {
-        return Err(Refusal::new(
-            StatusCode::FORBIDDEN,
-            "route_not_allowed",
-            format!(
-                "Refused: the key {} of \"{}\" may call only {}, and this request is for {}. Ask a Gantry admin to change the key's routes if it needs this one.",
-                person.key,
-                person.name,
-                person.options.routes.join(", "),
-                parts.uri.path()
-            ),
-        ));
-    }
-    if let Some(next) = &person.options.replaced_by {
-        // Every use of a key in its rotation's grace period is recorded as such, so the stragglers can be found.
-        seen.rotated = Some(serde_json::json!({ "replaced_by": next, "expires": person.expires }));
-    }
+    let (person, key_sha256) = identify(
+        state,
+        policy,
+        key,
+        parts.uri.path(),
+        client_ip,
+        minted,
+        seen,
+    )
+    .await?;
     // The key must not travel on in any other header either, under whatever name the caller chose for it.
     let (key, mut parts) = (key.to_string(), parts);
     // Taken out at once: nothing after this (guardrail webhooks, traces, the provider) can see it in the headers.
@@ -1716,6 +1660,132 @@ async fn check<'a>(
     }
 }
 
+/// Who sent the request, from their Gantry key: refused when the key is unknown, expired or stopped by a kill switch.
+/// A stranger is refused before their body is read. Returns the person and the SHA-256 of the key.
+/// Who sends a request, by their Gantry key or a JWT from an issuer the policy trusts, refused when unknown,
+/// expired, stopped by a kill switch, from an address range their key or rule does not allow, or for a route their
+/// key may not call. Every route that takes a Gantry key comes here: the model routes, files, batches,
+/// fine-tuning and realtime. Returns the person and the SHA-256 kill switches know the caller by.
+pub(crate) async fn identify<'a>(
+    state: &AppState,
+    policy: &'a Policy,
+    key: &str,
+    path: &str,
+    client_ip: Option<std::net::IpAddr>,
+    minted: &'a std::sync::OnceLock<Principal>,
+    seen: &mut Seen<'a>,
+) -> Result<(&'a Principal, String), Refusal> {
+    // A stranger is refused before their body is read, so an unknown caller cannot make the gateway buffer anything.
+    // A JWT from an issuer the policy trusts stands in for a key; it is checked before anything else is read too.
+    let identified: Option<&'a Principal> = match policy.identify(key) {
+        Some(person) => Some(person),
+        None if !policy.jwt().is_empty() && jwt::looks_like(key) => {
+            seen.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
+            let person = jwt::verify(&state.client, &state.jwks, policy.jwt(), key)
+                .await
+                .map_err(|refused| {
+                    let status = if refused.unavailable {
+                        StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        StatusCode::UNAUTHORIZED
+                    };
+                    let mut refusal = Refusal::new(status, refused.code, refused.message);
+                    refusal.retry = refused.unavailable;
+                    refusal
+                })?;
+            Some(minted.get_or_init(|| person))
+        }
+        None => None,
+    };
+    let Some(person) = identified else {
+        // Enough of the hash to tell two unknown keys apart in the audit log, and far too little to find the key.
+        seen.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
+        let hint = if key.starts_with("sk-") {
+            " This looks like a provider key. Send your Gantry key instead: the provider key stays with Gantry."
+        } else {
+            ""
+        };
+        return Err(Refusal::new(
+            StatusCode::UNAUTHORIZED,
+            "unknown_key",
+            format!(
+                "Refused: Gantry does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. A key from gantry login is replaced by the next login and removed by gantry logout: run gantry login again. Otherwise ask a Gantry admin.{hint}"
+            ),
+        ));
+    };
+    seen.person = Some(person);
+    // Allowed requests name their key too: during a rotation a person has two, and the record says which was used.
+    seen.key = Some(person.key.clone());
+    if person.expires.is_some() && person.expired(&gantry_core::audit::timestamp()) {
+        return Err(Refusal::new(
+            StatusCode::UNAUTHORIZED,
+            "key_expired",
+            format!(
+                "Refused: the key {} of \"{}\" expired at {} (UTC). Ask a Gantry admin for a new key, or, if it came from gantry login, run gantry login <gantry url> again.",
+                person.key,
+                person.name,
+                person.expires.as_deref().unwrap_or_default()
+            ),
+        ));
+    }
+    // A JWT caller is named by its issuer and subject, as a key by its hash, so a key_prefix switch can stop it.
+    let key_sha256 = match &person.jwt {
+        Some(jwt) => id::sha256_hex(format!("{}\n{}", jwt.issuer, jwt.subject).as_bytes()),
+        None => id::sha256_hex(key.as_bytes()),
+    };
+    killed(state, person, &key_sha256, None)?;
+    let blocked = |from: &[gantry_core::policy::Cidr]| {
+        !from.is_empty() && !client_ip.is_some_and(|ip| from.iter().any(|c| c.contains(ip)))
+    };
+    let where_from =
+        client_ip.map_or_else(|| "an unknown address".to_string(), |ip| ip.to_string());
+    if blocked(&person.options.from) {
+        let mut refusal = Refusal::new(
+            StatusCode::FORBIDDEN,
+            "ip_not_allowed",
+            format!(
+                "Refused: the key {} of \"{}\" may be used only from its listed address ranges, and this request came from {where_from}. Send it from an allowed network, or ask a Gantry admin to change the key's from list.",
+                person.key, person.name
+            ),
+        );
+        refusal.record = Some(Box::new(serde_json::json!({ "ip_not_allowed": "key" })));
+        return Err(refusal);
+    }
+    if let Some(rule) = policy.rule_for(person)
+        && blocked(&rule.limits.from)
+    {
+        seen.rule = Some(rule);
+        let mut refusal = Refusal::new(
+            StatusCode::FORBIDDEN,
+            "ip_not_allowed",
+            format!(
+                "Refused: rule \"{}\" allows requests only from its listed address ranges, and this request came from {where_from}. Send it from an allowed network, or ask a Gantry admin to change the rule's from list.",
+                rule.name
+            ),
+        );
+        refusal.record = Some(Box::new(serde_json::json!({ "ip_not_allowed": "rule" })));
+        return Err(refusal);
+    }
+    if !person.options.reaches(path) {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "route_not_allowed",
+            format!(
+                "Refused: the key {} of \"{}\" may call only {}, and this request is for {}. Ask a Gantry admin to change the key's routes if it needs this one.",
+                person.key,
+                person.name,
+                person.options.routes.join(", "),
+                path
+            ),
+        ));
+    }
+    if let Some(next) = &person.options.replaced_by {
+        // Every use of a key in its rotation's grace period is recorded as such, so the stragglers can be found.
+        seen.rotated = Some(serde_json::json!({ "replaced_by": next, "expires": person.expires }));
+    }
+    Ok((person, key_sha256))
+}
+
 /// Refuses a request a kill switch stops, naming the switch, its reason and who set it. A switch list that cannot
 /// be read refuses every request: Gantry cannot tell that the caller is not stopped.
 fn killed(
@@ -1882,7 +1952,7 @@ fn unknown_route() -> Refusal {
     Refusal::new(
         StatusCode::NOT_FOUND,
         "unknown_route",
-        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models, GET /healthz and GET /readyz. Check the method and the path.",
+        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/completions, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models, GET /healthz and GET /readyz. Check the method and the path.",
     )
 }
 
@@ -2502,16 +2572,11 @@ async fn decide(
     request: Request,
     decision: &str,
 ) -> Result<Next, Refusal> {
-    // The client's own address: from a trusted proxy, the one it names in X-Forwarded-For.
-    let client_ip = request.extensions().get::<ClientAddr>().map(|addr| {
-        let forwarded: Vec<&str> = request
-            .headers()
-            .get_all("x-forwarded-for")
-            .iter()
-            .filter_map(|v| v.to_str().ok())
-            .collect();
-        policy.client_ip(addr.0.ip(), &forwarded)
-    });
+    let client_ip = client_ip(
+        policy,
+        request.extensions().get::<ClientAddr>(),
+        request.headers(),
+    );
     let client = client_ip.map(|ip| ip.to_string());
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
@@ -3616,6 +3681,19 @@ fn text_fields(path: &str, body: &serde_json::Value) -> Result<Vec<String>, Stri
             Value::Null => {}
             _ => return Err("prompt".into()),
         },
+        // A completion's prompt is a string or a list of strings; one given as token IDs cannot be read as text.
+        COMPLETIONS => {
+            for field in ["prompt", "suffix"] {
+                match &body[field] {
+                    Value::String(_) => pointers.push(format!("/{field}")),
+                    Value::Null => {}
+                    Value::Array(items) if items.iter().all(Value::is_string) => {
+                        pointers.extend((0..items.len()).map(|i| format!("/{field}/{i}")));
+                    }
+                    _ => return Err(format!("{field} (send it as text, not token IDs)")),
+                }
+            }
+        }
         RERANK => {
             strings(&body["query"], "/query".into(), &mut pointers);
             strings(&body["documents"], "/documents".into(), &mut pointers);

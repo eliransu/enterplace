@@ -615,6 +615,9 @@ pub struct Limits {
     pub regions: Option<Vec<String>>,
     /// Keep the redacted request and answer of each request this rule allows (`capture:`).
     pub capture: Option<Capture>,
+    /// Days a file uploaded through Gantry (a batch input, a fine-tuning set) is kept before it is deleted at the
+    /// provider. None keeps the provider's default.
+    pub file_retention_days: Option<u32>,
 }
 
 /// Whose requests share a rule's cached answers.

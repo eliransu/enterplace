@@ -71,6 +71,7 @@ Gemini finish reasons that mean the answer failed, such as `MALFORMED_FUNCTION_C
 
 - Guardrails, cache and budgets work on the request in its chat form, before translation. A masked message is masked in what Gemini receives.
 - A `gemini` provider can fall back to another `gemini` or a `vertex` provider, and to no other kind.
+- Live API sessions (WebSocket) are decided on their `setup` message and metered per turn. See [Files, batches and realtime](/providers/batches-and-realtime/).
 - With `accept_messages: true`, Claude Code can use Gemini models: messages are translated to chat, then to generateContent. See [Translation](/routing/translation/).
 
 <Aside type="note">

@@ -1,0 +1,94 @@
+---
+title: Files, batches and realtime
+description: OpenAI files, batches and fine-tuning jobs, Anthropic message batches, and OpenAI Realtime and Gemini Live sessions, each owned by its creator, checked line by line, reserved against budgets and metered per line or per response.
+sidebar:
+  order: 9
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Gantry serves the asynchronous and realtime APIs natively, not as passthrough. Every file, batch and job belongs to the person who created it, every batch line is decided before the provider sees the file, a batch reserves its cost against the budget when it is created, and its results are charged line by line when it ends.
+
+## Routes
+
+| Route | Provider kind | What Gantry does |
+|---|---|---|
+| `POST /v1/files` | openai | Checks every line of a `purpose: batch` file, sets the policy's retention, records the file as yours |
+| `GET /v1/files`, `GET /v1/files/<id>`, `GET /v1/files/<id>/content`, `DELETE /v1/files/<id>` | openai | Yours only; a list shows only your files |
+| `POST /v1/batches` | openai | Only from a batch file you uploaded; decides its model again and reserves its estimate at batch prices |
+| `GET /v1/batches`, `GET /v1/batches/<id>`, `POST /v1/batches/<id>/cancel` | openai | Yours only; an ended batch is metered when read |
+| `POST /v1/messages/batches` | anthropic | Checks every request, reserves the estimate at batch prices |
+| `GET /v1/messages/batches`, `GET` and `DELETE /v1/messages/batches/<id>`, `GET .../results`, `POST .../cancel` | anthropic | Yours only; an ended batch is metered when read |
+| `POST /v1/fine_tuning/jobs` | openai | The base model must be allowed by your rule and the training and validation files must be yours |
+| `GET /v1/fine_tuning/jobs`, `GET /v1/fine_tuning/jobs/<id>`, `/events`, `/checkpoints`, `POST .../cancel`, `/pause`, `/resume` | openai | Yours only |
+| `GET /v1/realtime?model=<model>` (WebSocket) | openai | Decided at connect, relayed, metered per response |
+| `GET /ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent` (WebSocket) | gemini | Decided on the `setup` message, relayed, metered per turn |
+| `POST /v1/completions` | openai | Legacy text completions: decided, guarded on `prompt` and `suffix`, charged from `usage` |
+
+A list or events read takes `after`, `limit`, `order`, `purpose`, `before_id`, `after_id` and `metadata` in its query, with plain values. Anything else is refused with `bad_query`.
+
+When more than one provider of the kind could take a new file or a list, name one in `x-gantry-provider: <name>`. A batch file goes to the provider that serves its model.
+
+## Ownership
+
+- A file, batch, message batch or fine-tuning job is owned by the person whose Gantry key created it. Anyone else gets `404 not_found` for its ID, the same answer as for an ID that does not exist, so nobody can learn which IDs others hold.
+- A key with `admin: true` in the keys file reads, cancels and deletes any of them, and its lists are not filtered.
+- The output and error files a batch writes belong to the batch's owner.
+- Objects created at the provider outside Gantry are unknown to it and refused.
+- Who owns what is written to the audit log (`owned`, `owned_settled` and `owned_deleted` records) and read back at start, so a restart keeps it, and an open batch's reservation is held again.
+
+<Aside type="note">
+With a [store](/operations/store/), ownership is also kept in Postgres (namespace `batches`), so every replica behind a load balancer answers for every file, batch and job, and a batch that several replicas see end is metered once. Without a store it is kept per gateway, from its own audit log, and a replica refuses an ID another replica created.
+
+These routes take the same access checks as the model routes: a key's `routes` and `from`, a rule's `from`, JWT callers, and `x-gantry-customer` and `x-gantry-tags`. A rule with `regions:` refuses them with `region_not_allowed`, since a provider account shows no region. Batches and realtime sessions count against every budget the request would, the `limits:` list included.
+</Aside>
+
+## Batch lines
+
+Every line of a `purpose: batch` file (each request of a message batch) is checked before the provider sees anything:
+
+1. The line names `custom_id`, `method: POST`, a `url` of `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/completions` or `/v1/moderations`, and a `body` object with a `model`. Every line names the same `url`, each `custom_id` once, and (OpenAI's rule) one model for the whole file.
+2. The model is decided by your rule, and kill switches are checked for it.
+3. The rule's request guardrails run on the body, as they would on a live request to that endpoint. A blocked line refuses the whole upload; a masked line is written back into the file the provider receives.
+4. Under a budget, what the line could cost is estimated as a live request is reserved: the body and its `max_tokens`, or the model's `max_output`.
+
+A refused line names itself: `Refused (guardrail_blocked): line 2 of the batch: ...` for a file, `request 2 of the batch` for a message batch. The refusal is recorded and the provider never sees the file.
+
+## Budgets and metering
+
+- OpenAI and Anthropic bill batches at half the model's price. A batch reserves half of its lines' estimate against every budget its lines count against (the rule's, the key's and the `limits:` list's) when it is created. If that does not fit, it is refused with `budget_exceeded` and never reaches the provider.
+- When the batch ends (`completed`, `failed`, `expired` or `cancelled` for OpenAI, `processing_status: ended` for Anthropic), Gantry reads its results and writes one `usage` record per line, at half the model's price, with `batch`, `custom_id`, `line` and `price_share: 0.5`. A failed line costs nothing. A line that succeeded without usage is charged its share of the reservation. The reservation is then given back and an `owned_settled` record sums the batch.
+- A batch is metered the first time it is read after it ended, or by the gateway's check of open batches once a minute, whichever comes first, and only once.
+- A fine-tuning job that ends is recorded with its `trained_tokens` and `fine_tuned_model`. OpenAI's job object carries no price, so it is not charged.
+
+## Retention
+
+```yaml title="gantry.policy.yaml"
+rules:
+  - name: data
+    principals: { team: data }
+    models: [gpt-4o-mini]
+    file_retention_days: 7
+```
+
+`file_retention_days` (1 to 30) is how long a file uploaded under the rule is kept. Gantry adds `expires_after[anchor]=created_at` and `expires_after[seconds]` to the upload so OpenAI expires the file itself, refuses an upload that asks to keep it longer (`retention_too_long`), refuses reads after it (`expired`), and deletes at the provider whatever is still there, including batch output files and ended Anthropic message batches. Each deletion is an `owned_deleted` record with `why: retention`.
+
+## Realtime sessions
+
+- **OpenAI Realtime**: connect to `/v1/realtime?model=<model>` with your Gantry key in `Authorization`. The key, rule, model, kill switches and budget are decided before the upgrade; a refusal is an HTTP status with the usual error body. Only `model` may be in the query.
+- **Gemini Live**: connect to Google's `BidiGenerateContent` path with your Gantry key as `Authorization: Bearer <key>` or in `x-api-key`, never in the URL. The key, rule, kill switches and budget are checked at connect; the model is decided from the first message (`{"setup": {"model": "models/<model>"}}`) before anything is sent on. A refused setup closes the socket with code 1008.
+- Audio and text events pass both ways as they come.
+- Each OpenAI `response.done` event is charged from its `response.usage`, and each Gemini message with `usageMetadata` from `promptTokenCount`, `cachedContentTokenCount`, `responseTokenCount` and `thoughtsTokenCount`. Our reading of the Live API reference is that each `usageMetadata` reports one turn; the reference does not say whether the counts are per turn or for the session. Each is one `usage` record with `session` set to the session's decision ID. Audio and text tokens are charged at the model's one price under `prices:`, so give a realtime model its audio price to never under-count.
+- A kill switch on the person, team, key or model ends the session within a second. A response that spends the budget ends it after that response. OpenAI clients get an `error` event with the code first; every client gets a close frame with code 1008 and the code in its reason.
+- When the session ends, a `realtime_session` record names the person, model, provider, seconds, responses, `charged_usd` and `ended_by` (`client`, `provider`, `killed` or `budget`). No event content is recorded.
+
+<Aside type="note">
+`x-gantry-provider-key` is refused on these routes: files, batches and sessions live in the organization's provider account. Bedrock and Vertex batch jobs are not served yet; reach them through `/passthrough/` on paths a rule names.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="OpenAI and compatible vendors" href="/providers/openai/" description="The other OpenAI routes." />
+	<LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" description="How requests reserve and settle." />
+</CardGrid>

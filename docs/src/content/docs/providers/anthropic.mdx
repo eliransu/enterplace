@@ -39,6 +39,7 @@ Name the key variable something other than `ANTHROPIC_API_KEY`. Claude Code read
 | Query | `beta=true` or `beta=false`, once. Anything else is refused by name with `unknown_query`. |
 | Chat completions | Refused with `wrong_route`, unless the provider sets `accept_chat: true`. |
 | Cost | `count_tokens` requests are free and reserve nothing under a budget. |
+| Message batches | `/v1/messages/batches` is served natively: each request checked, the batch reserved at batch prices and metered per result. See [Files, batches and realtime](/providers/batches-and-realtime/). |
 
 ## Chat clients
 

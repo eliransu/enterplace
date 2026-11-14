@@ -38,7 +38,7 @@ Gantry is much younger than both and does less. It covers fewer providers and AP
 
 ## What LiteLLM does better
 
-- **Providers.** Over 140 providers, with translation between their APIs. Gantry has no Cohere, no Bedrock models other than Claude, and no batch or files routes.
+- **Providers.** Over 140 providers, with translation between their APIs. Gantry has no Cohere and no Bedrock models other than Claude. Its batch and files routes cover OpenAI and Anthropic, not Bedrock or Vertex.
 - **Spend control breadth.** Budgets per key, team and organization. Gantry has budgets per team, person or key, and none per organization or tag.
 - **Time to a first request.** 8 seconds from `docker run` with a five-line config and no database, measured in the review. Gantry's image answers its first governed request within a second of `docker run`, but needs a policy file and a key first.
 - **Routing breadth.** More routing strategies (latency and cost based). Both share cooldowns across instances, LiteLLM through Redis, Gantry through its Postgres store.

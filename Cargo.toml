@@ -12,7 +12,8 @@ license = "Apache-2.0"
 gantry-core = { path = "crates/gantry-core", version = "0.1.0" }
 gantry-server = { path = "crates/gantry-server", version = "0.1.0" }
 gantry-console = { path = "crates/gantry-console", version = "0.1.0" }
-axum = { version = "0.8", default-features = false, features = ["http1", "http2", "tokio"] }
+# `ws`: realtime sessions (OpenAI Realtime, Gemini Live) are WebSocket connections callers open to Gantry.
+axum = { version = "0.8", default-features = false, features = ["http1", "http2", "tokio", "ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio", "server-auto", "server-graceful", "service"] }
 http-body-util = "0.1"
@@ -40,6 +41,11 @@ webpki-roots = "1"
 # Budget periods aligned to a time zone (`tz:` on a budget), daylight saving included. The zone database is bundled:
 # the release image is FROM scratch and has no /usr/share/zoneinfo.
 jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
+# Realtime sessions (OpenAI Realtime, Gemini Live) are WebSocket: the client side to the provider. The same version
+# axum's `ws` feature already brings in for the side callers connect to.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+# Splitting a WebSocket into its two directions to relay both at once. Already in the build through tokio-tungstenite.
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "webpki-tokio", "tls12"] }
 
 [workspace.lints.rust]

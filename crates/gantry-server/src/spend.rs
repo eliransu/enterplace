@@ -436,26 +436,20 @@ impl Spend {
                         .find(|(_, p)| p.key == who.key)
                         .map_or(who.clone(), |(_, p)| p.clone());
                     let rule = policy.rule_for(&identified)?;
-                    let ctx = gantry_core::policy::Context {
-                        sent: if text("alias").is_empty() {
-                            text("model")
-                        } else {
-                            text("alias")
-                        },
-                        model: text("model"),
-                        customer: record["customer"].as_str(),
-                        tags: &tags,
+                    let sent = if text("alias").is_empty() {
+                        text("model")
+                    } else {
+                        text("alias")
                     };
-                    Some(
-                        policy
-                            .applied(&identified, rule, ctx)
-                            .into_iter()
-                            .filter_map(|a| match a.limit {
-                                Limit::Budget(b) => Some((a.scope, b.per)),
-                                _ => None,
-                            })
-                            .collect(),
-                    )
+                    Some(counted_for(
+                        policy,
+                        &identified,
+                        rule,
+                        sent,
+                        text("model"),
+                        record["customer"].as_str(),
+                        &tags,
+                    ))
                 })
                 .unwrap_or_default();
             self.add(
@@ -1607,34 +1601,10 @@ pub(crate) async fn admit(
             Some(each) => each * hints.n.unwrap_or(1) as f64,
             None => most_cost(price, ask.body.len(), context, output),
         };
-        let now = audit::timestamp();
-        for applied in budgets {
-            let Limit::Budget(budget) = applied.limit else {
-                continue;
-            };
-            let (code, under) = match applied.of {
-                "rule" => (
-                    "budget_exceeded",
-                    format!(" under rule \"{}\"", ask.rule.name),
-                ),
-                "key" => ("key_budget_exceeded", String::new()),
-                _ => ("budget_exceeded", format!(" set by {}", applied.source)),
-            };
-            let reservation = spend
-                .reserve_shared(&applied.scope, budget, most, &now)
-                .await
-                .map_err(|over| match over {
-                    Ok(over) => {
-                        let mut refusal =
-                            over_budget(&over, code, &applied.whose, budget, &under, most);
-                        refusal.record = Some(Box::new(limit_record(applied, Value::Null)));
-                        refusal
-                    }
-                    Err(err) => store_unavailable(&err),
-                })?;
-            admitted.reservations.push(reservation);
-            admitted.counted.push((applied.scope.clone(), budget.per));
-        }
+        let (reservations, counted) =
+            reserve_budgets(spend, &budgets, ask.rule, most, "This request").await?;
+        admitted.reservations = reservations;
+        admitted.counted = counted;
     }
     Ok(Admit::Go(
         Meter(Arc::new(Mutex::new(Some(admitted)))),
@@ -1799,6 +1769,90 @@ pub(crate) fn prompt_cache(body: &Bytes) -> Option<(Bytes, Vec<&'static str>)> {
     Some((Bytes::from(serde_json::to_vec(&request).ok()?), marks))
 }
 
+/// Reserves `most` against every budget in `budgets` (from `Policy::applied`), and returns the reservations with
+/// the counters the cost is then charged to. `what` names it in a refusal ("This request", "This batch"). A
+/// reservation already taken is given back when a later one is refused.
+pub(crate) async fn reserve_budgets(
+    spend: &Arc<Spend>,
+    budgets: &[&Applied],
+    rule: &Rule,
+    most: f64,
+    what: &str,
+) -> Result<(Vec<Reservation>, Vec<(String, Period)>), Refusal> {
+    let mut reservations = Vec::new();
+    let mut counted = Vec::new();
+    let now = audit::timestamp();
+    for applied in budgets {
+        let Limit::Budget(budget) = applied.limit else {
+            continue;
+        };
+        let (code, under) = match applied.of {
+            "rule" => ("budget_exceeded", format!(" under rule \"{}\"", rule.name)),
+            "key" => ("key_budget_exceeded", String::new()),
+            _ => ("budget_exceeded", format!(" set by {}", applied.source)),
+        };
+        match spend
+            .reserve_shared(&applied.scope, budget, most, &now)
+            .await
+        {
+            Ok(reservation) => {
+                reservations.push(reservation);
+                counted.push((applied.scope.clone(), budget.per));
+            }
+            Err(over) => {
+                release_all(spend, reservations);
+                return Err(match over {
+                    Ok(over) => {
+                        let mut refusal =
+                            over_budget(&over, code, &applied.whose, budget, &under, most, what);
+                        refusal.record = Some(Box::new(limit_record(applied, Value::Null)));
+                        refusal
+                    }
+                    Err(err) => store_unavailable(&err),
+                });
+            }
+        }
+    }
+    Ok((reservations, counted))
+}
+
+/// Gives back reservations that will not be settled by an answer: a batch that ended, or one the provider refused.
+pub(crate) fn release_all(spend: &Spend, reservations: Vec<Reservation>) {
+    for reservation in &reservations {
+        spend.release(reservation);
+    }
+}
+
+/// The budget counters a request of `who` under `rule` counts against, for `sent` (the model or alias asked for)
+/// answered by `model`, with its customer and tags: what its cost is charged to, as `Policy::applied` names them.
+pub(crate) fn counted_for(
+    policy: &Policy,
+    who: &Principal,
+    rule: &Rule,
+    sent: &str,
+    model: &str,
+    customer: Option<&str>,
+    tags: &[String],
+) -> Vec<(String, Period)> {
+    policy
+        .applied(
+            who,
+            rule,
+            gantry_core::policy::Context {
+                sent,
+                model,
+                customer,
+                tags,
+            },
+        )
+        .into_iter()
+        .filter_map(|a| match a.limit {
+            Limit::Budget(b) => Some((a.scope, b.per)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The cache key: the same body means the same answer only on the same route of the same provider and model, with
 /// the same headers that change what the provider does, and only within the scope it was made for.
 fn cache_key(ask: &Ask<'_>, scope: &str) -> [u8; 32] {
@@ -1827,6 +1881,7 @@ fn over_budget(
     budget: Budget,
     under: &str,
     most: f64,
+    what: &str,
 ) -> Refusal {
     let held = if over.reserved > 0.0 {
         format!(
@@ -1846,7 +1901,7 @@ fn over_budget(
         StatusCode::TOO_MANY_REQUESTS,
         code,
         format!(
-            "Refused: {whose} has spent {} of its {} budget for this {}{under}{held}. This request could cost up to {}, which would pass it.{smaller} The budget starts again at {}. Ask a Gantry admin to raise it if you need more before then.",
+            "Refused: {whose} has spent {} of its {} budget for this {}{under}{held}. {what} could cost up to {}, which would pass it.{smaller} The budget starts again at {}. Ask a Gantry admin to raise it if you need more before then.",
             dollars(over.spent),
             dollars(budget.usd),
             budget.per.describe(),
@@ -2413,6 +2468,214 @@ impl Drop for Metered {
     fn drop(&mut self) {
         self.finish();
     }
+}
+
+/// What a batch line could cost at its model's full price, as a budget reserves a live request: Err says why that
+/// is unknown.
+pub(crate) fn most_for(body: &[u8], route: &str, price: &Price) -> Result<f64, String> {
+    let hints = hints(body)?;
+    let output = output_tokens(&hints, Some(price), route).ok_or_else(|| {
+        "it does not say how many output tokens it may use (max_tokens, or max_output_tokens on /v1/responses), and its model has no max_output in its price".to_string()
+    })?;
+    let stored = stored_tokens(&hints, price, route).map_err(|fields| {
+        format!("it names stored context ({fields}), which the provider adds to the prompt and Gantry cannot see")
+    })?;
+    Ok(
+        match price.per_image.filter(|_| route.starts_with("/v1/images")) {
+            Some(each) => each * hints.n.unwrap_or(1) as f64,
+            None => most_cost(price, body.len(), stored, output),
+        },
+    )
+}
+
+impl Reservation {
+    /// The reservation as a batch's record keeps it, so a restart holds it again until the batch is settled.
+    pub(crate) fn to_json(&self) -> Value {
+        serde_json::json!({ "scope": self.scope, "per": self.per.word(), "period": self.period, "usd": self.usd })
+    }
+
+    pub(crate) fn from_json(value: &Value) -> Option<Self> {
+        let per = match value["per"].as_str()? {
+            "day" => Period::Day,
+            "month" => Period::Month,
+            _ => return None,
+        };
+        Some(Self {
+            scope: value["scope"].as_str()?.to_string(),
+            per,
+            period: value["period"].as_str()?.to_string(),
+            usd: value["usd"]
+                .as_f64()
+                .filter(|usd| usd.is_finite() && *usd >= 0.0)?,
+        })
+    }
+}
+
+impl Spend {
+    /// Holds again, after a restart, what a batch still in flight reserved. With a store the store kept it.
+    pub(crate) fn hold(&self, reservation: &Reservation) {
+        if self.store.is_some() {
+            return;
+        }
+        let mut ledger = locked(&self.ledger);
+        if let Some(bucket) = Self::bucket(
+            &mut ledger,
+            &reservation.scope,
+            reservation.per,
+            &reservation.period,
+        ) {
+            bucket.reserved += reservation.usd;
+        }
+    }
+}
+
+/// One metered unit that is not a live answer: a line of a finished batch, or one response of a realtime session.
+pub(crate) struct Line<'a> {
+    /// The decision that admitted it, as the usage record's id.
+    pub decision: &'a str,
+    pub person: &'a str,
+    pub team: &'a str,
+    pub key: &'a str,
+    /// The organization, end customer and tags, for the usage record and the counters they name.
+    pub org: &'a str,
+    pub customer: Option<&'a str>,
+    pub tags: &'a [String],
+    /// Every budget counter the line counts against beyond its person, team and key (`counted_for`).
+    pub counted: &'a [(String, Period)],
+    pub model: &'a str,
+    pub provider: &'a str,
+    pub version: (&'a str, &'a str),
+    pub price: Option<Price>,
+    pub usage: Option<Usage>,
+    /// The part of the model's price charged: batch lines cost half (OpenAI and Anthropic batch pricing).
+    pub share: f64,
+    /// Charged when the provider says it answered and reports no usage: the line's part of what was reserved.
+    pub unreported: f64,
+    pub succeeded: bool,
+    /// Fields the usage record carries besides the usual ones: the batch, the line, the session.
+    pub extra: Map<String, Value>,
+}
+
+/// Counts what a line cost against its person, team and key, as an answer's settlement does, and returns the usage
+/// record to write. It reserves nothing: whatever reserved for it is given back by its owner.
+pub(crate) fn charge(spend: &Spend, line: Line<'_>) -> (f64, Map<String, Value>) {
+    let now = audit::timestamp();
+    let cost = line
+        .usage
+        .zip(line.price.as_ref())
+        .map(|(u, p)| p.cost_usd(&u) * line.share);
+    let charged = match cost {
+        Some(cost) => cost,
+        None if line.succeeded => line.unreported,
+        None => 0.0,
+    };
+    // Inside the organization, as an answer's settlement counts them.
+    let who = Principal {
+        name: line.person.to_string(),
+        team: line.team.to_string(),
+        org: line.org.to_string(),
+        ..Principal::default()
+    };
+    let (person_scope, team_scope) = (who.person_scope(), who.team_scope());
+    if charged > 0.0 && charged.is_finite() {
+        if let Some(store) = &spend.store {
+            store.settle(
+                buckets(&person_scope, &team_scope, line.key, line.counted, &now)
+                    .into_iter()
+                    .map(|bucket| Change {
+                        bucket,
+                        spent: charged,
+                        reserved: 0.0,
+                    })
+                    .collect(),
+            );
+        }
+        spend.add(
+            &person_scope,
+            &team_scope,
+            line.key,
+            line.counted,
+            charged,
+            &now,
+        );
+    }
+    spend.metrics.charged(line.team, line.model, charged);
+    let mut record = Map::new();
+    record.insert("event".into(), "usage".into());
+    record.insert("id".into(), line.decision.into());
+    record.insert("time".into(), now.into());
+    record.insert("person".into(), line.person.into());
+    record.insert("team".into(), line.team.into());
+    record.insert("key".into(), line.key.into());
+    // Only when set, as on an answer's record, so a restart counts the line against the same budgets.
+    if !line.org.is_empty() {
+        record.insert("org".into(), line.org.into());
+    }
+    if let Some(customer) = line.customer {
+        record.insert("customer".into(), customer.into());
+    }
+    if !line.tags.is_empty() {
+        record.insert("tags".into(), line.tags.to_vec().into());
+    }
+    record.insert("model".into(), line.model.into());
+    record.insert("provider".into(), line.provider.into());
+    record.insert("ended".into(), "complete".into());
+    let reported = match (line.usage, line.succeeded) {
+        (Some(_), _) => "reported",
+        (None, true) => "not_reported",
+        (None, false) => "failed",
+    };
+    record.insert("usage".into(), reported.into());
+    let tokens = |n: fn(&Usage) -> u64| line.usage.map_or(Value::Null, |u| Value::from(n(&u)));
+    record.insert("input_tokens".into(), tokens(|u| u.input));
+    record.insert("output_tokens".into(), tokens(|u| u.output));
+    record.insert("cache_read_tokens".into(), tokens(|u| u.cache_read));
+    record.insert(
+        "cache_write_tokens".into(),
+        tokens(|u| u.cache_write + u.cache_write_1h),
+    );
+    record.insert(
+        "price".into(),
+        if line.price.is_some() {
+            "known"
+        } else {
+            "none"
+        }
+        .into(),
+    );
+    record.insert(
+        "price_source".into(),
+        line.price
+            .as_ref()
+            .map_or(Value::Null, |p| p.source.as_str().into()),
+    );
+    record.insert("price_share".into(), line.share.into());
+    record.insert("cost_usd".into(), cost.map_or(Value::Null, Value::from));
+    record.insert("charged_usd".into(), charged.into());
+    record.insert("policy_sha256".into(), line.version.0.into());
+    record.insert("keys_sha256".into(), line.version.1.into());
+    record.extend(line.extra);
+    (charged, record)
+}
+
+/// Whether every budget in `budgets` (from `Policy::applied`) still has room: false once one is spent, or when the
+/// store that keeps them cannot be asked. A realtime session ends at the first false.
+pub(crate) async fn room(spend: &Spend, budgets: &[Applied]) -> bool {
+    let now = audit::timestamp();
+    for applied in budgets {
+        let Limit::Budget(budget) = applied.limit else {
+            continue;
+        };
+        // Nothing is reserved: a reservation of zero only asks whether spent and reserved already fill the budget.
+        if spend
+            .reserve_shared(&applied.scope, budget, 0.0, &now)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]

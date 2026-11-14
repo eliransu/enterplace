@@ -161,7 +161,8 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
     let policy = dir.join("gantry.policy.yaml");
     std::fs::write(
         &policy,
-        "version: 1\nstore: { postgres_url_env: GANTRY_STORE_URL }\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\nrules:\n  - name: all\n    principals: { any: true }\n    models: [m]\n",
+        // An MCP server too, so every namespace of the gateway's own is created.
+        "version: 1\nstore: { postgres_url_env: GANTRY_STORE_URL }\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\nmcp:\n  - name: docs\n    url: http://127.0.0.1:9/mcp\n    allow_private: true\nrules:\n  - name: all\n    principals: { any: true }\n    models: [m]\n",
     )?;
     let env = |variable: &str| match variable {
         "GANTRY_STORE_URL" => Some(url.clone()),
@@ -198,13 +199,16 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
         .iter()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
         .collect::<Result<_, tokio_postgres::Error>>()?;
-    // The gateway's own namespaces, beside the extension's: policy versions and the request index.
+    // The gateway's own namespaces, beside the extension's: ownership of files and batches, policy versions, the
+    // request index and the MCP gateway's state.
     assert_eq!(
         rows,
         vec![
+            ("batches".to_string(), 1),
             ("demo".to_string(), 1),
             ("gantry_policy".to_string(), 1),
-            ("insights".to_string(), 1)
+            ("insights".to_string(), 1),
+            ("mcp".to_string(), 1),
         ]
     );
     // The gateway's own schema version is untouched by the namespace: its five migrations (keys, shared limits and
