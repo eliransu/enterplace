@@ -117,7 +117,7 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `name` | string | required | Letters, digits, `.`, `-`, `_` and `@`, up to 100 characters. Unique. Audit records name the provider by it. |
 | `kind` | string | required | `openai`, `anthropic`, `azure`, `bedrock`, `gemini`, `vertex` or `vertex_anthropic`. |
 | `url` | string | required | Base URL, `http://` or `https://`, no query, fragment or login. May carry the vendor's path, such as `https://api.groq.com/openai/v1`. Not used by `bedrock`. |
-| `key_env` | string | required | Name of the environment variable holding the provider key. Optional for an `openai` provider with `allow_private: true`. Not used by `bedrock`, which signs with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. |
+| `key_env` | string | required | Name of the environment variable holding the provider key. Optional for an `openai` provider with `allow_private: true`. Not used by `bedrock`, which signs with the AWS credentials it finds. Optional for `vertex` and `vertex_anthropic`, which otherwise sign in to Google Cloud themselves. |
 | `key_file` | string | none | Instead of `key_env`: the path of a file holding the provider key. Read at start and again within 2 seconds of a change, without a restart. A relative path is read from where Gantry runs. Not used by `bedrock`. |
 | `credential` | string | none | Instead of `key_env` or `key_file`: the name of a [provider credential](/governance/provider-credentials/) kept in the store, sealed under `GANTRY_MASTER_KEY`. A rotation reaches every gateway within 2 seconds, without a restart. Needs `store:`. Not used by `bedrock`. |
 | `models` | list | required | Exact model names this provider serves. Not empty, no `"*"`. A model may be listed by one provider only. |
@@ -129,6 +129,7 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `deployments` | map | `azure` only | Model name to Azure deployment name. |
 | `api_version` | string | `azure` only | The Azure OpenAI `api-version`. |
 | `region` | string | `bedrock` only | The AWS region. |
+| `role_arn` | string | `bedrock` only | An IAM role to assume with the AWS credentials Gantry finds. |
 | `model_ids` | map | `bedrock` only | Model name to Bedrock model ID. |
 
 Per-kind routes, headers and examples are in [Providers](/providers/overview/).

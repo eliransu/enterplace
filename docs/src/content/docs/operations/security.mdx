@@ -61,6 +61,10 @@ A rule with `caller_provider_key: allowed` lets callers send their own provider 
 - The provider bills the caller's account, under the caller's terms with that provider. Spend is recorded as caller-paid and, with `allowed`, not counted against budgets.
 - Without the opt-in (the default) the header is refused with `caller_provider_key_not_allowed`, so it is never silently dropped or forwarded.
 
+## Cloud credentials
+
+No static cloud key is needed on AWS or Google Cloud. A `bedrock` provider signs with the role Gantry runs as (IRSA or Pod Identity on EKS, the ECS task role, the EC2 instance profile), and a `vertex` or `vertex_anthropic` provider without `key_env` signs in as the service account Gantry runs as (GKE Workload Identity, Cloud Run, Compute Engine). These credentials last an hour or a few, are renewed in the background before they expire, and are never written to disk, printed or recorded; the start line names where they came from, never their value. Static keys still work: AWS access keys in the environment, a service account key file, or an access token in `key_env`. See [Amazon Bedrock](/providers/bedrock/#credentials) and [Vertex AI](/providers/vertex/#credentials).
+
 ## What the provider sees
 
 Gantry removes from every forwarded request:

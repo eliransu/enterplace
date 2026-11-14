@@ -22,7 +22,8 @@ tokio-postgres.workspace = true
 webpki-roots.workspace = true
 # Answers are passed on frame by frame (Bedrock streams decoded, usage read as it passes): that needs a body type of Gantry's own.
 http-body.workspace = true
-# AES-256-GCM for provider credentials in the store. Already in the build through rustls and the console.
+# AES-256-GCM for provider credentials in the store, and the RS256 JWT that trades a Google service account key for
+# a Vertex AI token. Already in the build through rustls and the console; named here to call it directly.
 ring = "0.17"
 
 [dev-dependencies]

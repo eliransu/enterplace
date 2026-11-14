@@ -66,11 +66,15 @@ Read for every `bedrock` provider and every guardrail of the `bedrock` vendor. G
 
 | Variable | Required | Holds |
 |---|---|---|
-| `AWS_ACCESS_KEY_ID` | yes | The access key ID |
-| `AWS_SECRET_ACCESS_KEY` | yes | The secret access key |
-| `AWS_SESSION_TOKEN` | for temporary credentials | The session token |
+| `AWS_ACCESS_KEY_ID` | for static keys | The access key ID |
+| `AWS_SECRET_ACCESS_KEY` | for static keys | The secret access key |
+| `AWS_SESSION_TOKEN` | for temporary keys | The session token |
 
-The region comes from the provider's `region` in the policy, not from the environment.
+The region comes from the provider's `region` in the policy, not from the environment. A `bedrock` provider (not yet a guardrail) also finds credentials without static keys, through the variables EKS, ECS and EC2 set up: `AWS_WEB_IDENTITY_TOKEN_FILE` with `AWS_ROLE_ARN` and `AWS_ROLE_SESSION_NAME`, `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` or `AWS_CONTAINER_CREDENTIALS_FULL_URI` with `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` or `AWS_CONTAINER_AUTHORIZATION_TOKEN`, and the instance metadata service (`AWS_EC2_METADATA_SERVICE_ENDPOINT`, `AWS_EC2_METADATA_DISABLED`). STS is reached at `AWS_ENDPOINT_URL_STS` when set, in `AWS_REGION` when set. See [Amazon Bedrock](/providers/bedrock/#credentials).
+
+## Google Cloud
+
+Read for a `vertex` or `vertex_anthropic` provider without `key_env`: `GOOGLE_APPLICATION_CREDENTIALS` (a service account key or gcloud user file), `CLOUDSDK_CONFIG` (where gcloud keeps its sign-in) and `GCE_METADATA_HOST` (another metadata server address). See [Vertex AI](/providers/vertex/#credentials).
 
 ## gantry serve --unchecked
 

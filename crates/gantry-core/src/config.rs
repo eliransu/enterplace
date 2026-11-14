@@ -41,6 +41,7 @@ const KNOWN: &[&str] = &[
     "model_ids",
     "api_version",
     "region",
+    "role_arn",
     "fallback",
     "retries",
     "accept_chat",
@@ -226,7 +227,7 @@ struct ProviderFile {
     // Optional for bedrock, whose URL follows from its region. Every other kind needs one.
     #[serde(default)]
     url: Option<String>,
-    // Bedrock reads the AWS variables instead. Every other kind needs one.
+    // Bedrock finds AWS credentials itself, and vertex Google ones when it is left out. Every other kind needs one.
     #[serde(default)]
     key_env: Option<String>,
     // Instead of key_env, for a key that changes while Gantry runs: the file is read again once a second.
@@ -247,6 +248,8 @@ struct ProviderFile {
     api_version: Option<String>,
     #[serde(default)]
     region: Option<String>,
+    #[serde(default)]
+    role_arn: Option<String>,
     #[serde(default)]
     fallback: Option<String>,
     #[serde(default)]
@@ -823,7 +826,8 @@ pub struct Provider {
     /// Base URL, without a trailing slash.
     pub url: String,
     /// Name of the environment variable that holds the provider key. The key itself is never in a file.
-    /// Empty for bedrock, which reads AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN.
+    /// Empty for bedrock, which finds AWS credentials through the AWS default chain, and for a vertex provider
+    /// that signs in with Google's Application Default Credentials.
     pub key_env: String,
     /// A file that holds the provider key, in place of `key_env`. Gantry reads it at start and again whenever it
     /// changes, so the key can be rotated without a restart. A relative path is read from where Gantry runs.
@@ -838,6 +842,8 @@ pub struct Provider {
     pub api_version: Option<String>,
     /// Bedrock's AWS region.
     pub region: Option<String>,
+    /// An IAM role Bedrock requests are signed as, assumed with the credentials Gantry finds.
+    pub role_arn: Option<String>,
     /// The provider a request goes to when this one fails before answering.
     pub fallback: Option<String>,
     /// How many times a failure before the answer starts is tried again on this provider.
@@ -1865,6 +1871,17 @@ fn provider_options(
     if entry.region.is_some() && kind != Some(Kind::Bedrock) {
         only("region", "bedrock", errors);
     }
+    if entry.role_arn.is_some() && kind != Some(Kind::Bedrock) {
+        only("role_arn", "bedrock", errors);
+    }
+    if let Some(role) = &entry.role_arn
+        && !(role.starts_with("arn:aws") && role.contains(":role/"))
+    {
+        errors.push(format!(
+            "{}: role_arn is the ARN of an IAM role, for example arn:aws:iam::123456789012:role/gantry-bedrock.",
+            at("role_arn")
+        ));
+    }
     if entry.accept_chat.is_some() && kind.is_some_and(|k| k.api() != Kind::Anthropic) {
         errors.push(format!(
             "{}: accept_chat translates chat completions requests to the messages API, so it is for a provider of kind anthropic, bedrock or vertex_anthropic. Remove the line.",
@@ -2170,7 +2187,7 @@ fn providers(
         if let Some(path) = &entry.key_file {
             if bedrock {
                 errors.push(format!(
-                    "{}: a bedrock provider takes no key_file. Gantry signs its requests with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, for temporary credentials, AWS_SESSION_TOKEN from its environment. Remove the line.",
+                    "{}: a bedrock provider takes no key_file. Gantry signs its requests with the AWS credentials it finds: the role of its pod, task or instance, or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in its environment. Remove the line.",
                     at("key_file")
                 ));
             } else if entry.key_env.is_some() {
@@ -2188,7 +2205,7 @@ fn providers(
         }
         match (&entry.key_env, bedrock) {
             (Some(_), true) => errors.push(format!(
-                "{}: a bedrock provider takes no key_env. Gantry signs its requests with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, for temporary credentials, AWS_SESSION_TOKEN from its environment. Remove the line.",
+                "{}: a bedrock provider takes no key_env. Gantry signs its requests with the AWS credentials it finds: the role of its pod, task or instance, or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in its environment. Remove the line.",
                 at("key_env")
             )),
             (Some(env), false) => {
@@ -2204,6 +2221,8 @@ fn providers(
             // A model server on this machine or a private network, such as Ollama or vLLM, often takes no key.
             (None, false) if entry.allow_private && kind == Some(Kind::OpenAi) => {}
             (None, false) if entry.key_file.is_some() || entry.credential.is_some() => {}
+            // Vertex AI signs in with Google's Application Default Credentials.
+            (None, false) if matches!(kind, Some(Kind::Vertex | Kind::VertexAnthropic)) => {}
             (None, false) => errors.push(format!(
                 "{}:{line}: provider \"{}\" has no key_env. Add the name of the environment variable that holds its key, for example `key_env: OPENAI_API_KEY`, or `key_file:` with the path of a file that holds it, or `credential:` with the name of a provider credential kept in the store. A model server of kind openai on this machine with `allow_private: true` may leave it out.",
                 file.display(),
@@ -2313,6 +2332,7 @@ fn providers(
                 upstream_models,
                 api_version: entry.api_version.clone(),
                 region: entry.region.clone(),
+                role_arn: entry.role_arn.clone(),
                 fallback: entry.fallback.clone(),
                 retries: entry.retries.unwrap_or(0),
                 accept_chat: entry.accept_chat.unwrap_or(false),
@@ -2671,6 +2691,11 @@ pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
                 "region",
                 provider.region.clone().unwrap_or_default(),
                 now.region.clone().unwrap_or_default(),
+            ),
+            (
+                "role_arn",
+                provider.role_arn.clone().unwrap_or_default(),
+                now.role_arn.clone().unwrap_or_default(),
             ),
             (
                 "allow_private",
@@ -3940,6 +3965,16 @@ rules:
                 "region is for a provider of kind bedrock",
             ),
             (
+                "    models: [llama-4]\n",
+                "    models: [llama-4]\n    role_arn: arn:aws:iam::123456789012:role/x\n",
+                "role_arn is for a provider of kind bedrock",
+            ),
+            (
+                "    region: us-east-1\n",
+                "    region: us-east-1\n    role_arn: gantry-bedrock\n",
+                "role_arn is the ARN of an IAM role",
+            ),
+            (
                 "    url: https://api.groq.com/openai/v1/\n",
                 "",
                 "provider \"groq\" has no url",
@@ -4017,6 +4052,30 @@ rules:
         assert_eq!((gemini.kind, vertex.kind), (Kind::Gemini, Kind::Vertex));
         assert_eq!(gemini.kind.api(), Kind::OpenAi);
         assert_eq!(ollama.key_env, "");
+        Ok(())
+    }
+
+    /// Without key_env, Vertex AI signs in with Application Default Credentials; Bedrock may name a role to assume.
+    #[test]
+    fn cloud_providers_load_without_static_keys() -> TestResult {
+        let text = GOOGLE.replace("    key_env: VERTEX_ACCESS_TOKEN\n", "");
+        let loaded = check("adc", &text, None)?.map_err(|e| e.join("\n"))?;
+        assert_eq!(loaded.providers[1].key_env, "");
+        let text = MORE.replacen(
+            "    region: us-east-1\n",
+            "    region: us-east-1\n    role_arn: arn:aws:iam::123456789012:role/gantry-bedrock\n",
+            1,
+        );
+        let loaded = check("role", &text, None)?.map_err(|e| e.join("\n"))?;
+        let bedrock = loaded
+            .providers
+            .iter()
+            .find(|p| p.kind == Kind::Bedrock)
+            .ok_or("no bedrock provider")?;
+        assert_eq!(
+            bedrock.role_arn.as_deref(),
+            Some("arn:aws:iam::123456789012:role/gantry-bedrock")
+        );
         Ok(())
     }
 

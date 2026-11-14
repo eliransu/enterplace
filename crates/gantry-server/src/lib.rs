@@ -32,6 +32,7 @@ use gantry_core::{
 
 mod admin;
 mod alias;
+pub mod cloud;
 mod credentials;
 mod mcp;
 mod metrics;
@@ -202,9 +203,11 @@ pub struct ProviderRoute {
     pub upstream_models: BTreeMap<String, String>,
     /// Azure's api-version.
     pub api_version: Option<String>,
-    /// Bedrock's AWS region, and the access key its requests are signed with.
+    /// Bedrock's AWS region, and the AWS credentials its requests are signed with, kept current.
     pub region: Option<String>,
-    pub aws: Option<sigv4::Credentials>,
+    pub aws: Option<cloud::Live<sigv4::Credentials>>,
+    /// Vertex AI's OAuth access token, kept current, when it does not come from `key`.
+    pub google: Option<cloud::Live<HeaderValue>>,
     /// The provider a request goes to when this one fails before the answer starts.
     pub fallback: Option<String>,
     /// How many times such a failure is tried again on this provider first.
@@ -351,7 +354,8 @@ struct Upstream {
     upstream_models: BTreeMap<String, String>,
     api_version: Option<String>,
     region: Option<String>,
-    aws: Option<sigv4::Credentials>,
+    aws: Option<cloud::Live<sigv4::Credentials>>,
+    google: Option<cloud::Live<HeaderValue>>,
     fallback: Option<String>,
     retries: u32,
     accept_chat: bool,
@@ -367,8 +371,8 @@ impl Upstream {
 /// The provider key as the header its kind of provider expects, marked sensitive so nothing that prints headers shows it.
 fn key_header(kind: Kind, key: &Secret) -> Result<(HeaderName, HeaderValue), ConfigError> {
     let (name, text) = match kind {
-        // Vertex AI takes an OAuth access token as a Bearer token.
-        // ponytail: the token comes from key_env at start and lasts about an hour; sign in with a service account if Vertex is used for long.
+        // Vertex AI takes an OAuth access token as a Bearer token. One from key_env lasts about an hour; without
+        // key_env, `cloud::google` signs in and renews it.
         Kind::OpenAi | Kind::Vertex | Kind::VertexAnthropic => {
             (header::AUTHORIZATION, format!("Bearer {}", key.0))
         }
@@ -377,7 +381,7 @@ fn key_header(kind: Kind, key: &Secret) -> Result<(HeaderName, HeaderValue), Con
         Kind::Azure => (HeaderName::from_static("api-key"), key.0.clone()),
         Kind::Bedrock => {
             return Err(ConfigError(
-                "a bedrock provider takes no provider key: its requests are signed with the AWS access key. Remove the key and set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.".into(),
+                "a bedrock provider takes no provider key: its requests are signed with AWS credentials. Remove the key, and run Gantry with an AWS role or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.".into(),
             ));
         }
     };
@@ -417,7 +421,16 @@ fn build(
     for route in &config.providers {
         if route.kind == Kind::Bedrock && (route.aws.is_none() || route.region.is_none()) {
             return Err(ConfigError(format!(
-                "provider \"{}\" is of kind bedrock and has no AWS region or access key. Set its region, and AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in Gantry's environment.",
+                "provider \"{}\" is of kind bedrock and has no AWS region or credentials. Set its region, and give it credentials from `gantry_server::cloud::aws`.",
+                route.name
+            )));
+        }
+        if matches!(route.kind, Kind::Vertex | Kind::VertexAnthropic)
+            && route.key.is_none()
+            && route.google.is_none()
+        {
+            return Err(ConfigError(format!(
+                "provider \"{}\" is on Vertex AI and has no access token. Give it a key, or credentials from `gantry_server::cloud::google`.",
                 route.name
             )));
         }
@@ -435,6 +448,7 @@ fn build(
             api_version: route.api_version.clone(),
             region: route.region.clone(),
             aws: route.aws.clone(),
+            google: route.google.clone(),
             fallback: route.fallback.clone(),
             retries: route.retries,
             accept_chat: route.accept_chat,
@@ -461,6 +475,7 @@ fn build(
             api_version: None,
             region: None,
             aws: None,
+            google: None,
             fallback: None,
             retries: 0,
             accept_chat: false,
@@ -3482,6 +3497,9 @@ fn outbound(
     if let Some((name, value)) = key {
         headers.insert(name, value);
     }
+    if let Some(token) = &provider.google {
+        headers.insert(header::AUTHORIZATION, token.get());
+    }
     if provider.kind == Kind::Bedrock {
         sign_for_bedrock(provider, &uri, &body, &mut headers)?;
     }
@@ -3569,9 +3587,11 @@ fn sign_for_bedrock(
             "Gantry could not sign the request for Amazon Bedrock. Tell your Gantry admin: the AWS credentials or region may hold a character that cannot be sent.",
         )
     };
-    let (Some(credentials), Some(region), Some(host)) =
-        (&provider.aws, &provider.region, uri.authority())
-    else {
+    let (Some(credentials), Some(region), Some(host)) = (
+        provider.aws.as_ref().map(cloud::Live::get),
+        &provider.region,
+        uri.authority(),
+    ) else {
         return Err(failed());
     };
     // The betas went into the body. The other Anthropic headers mean nothing to Bedrock.
@@ -3582,7 +3602,7 @@ fn sign_for_bedrock(
         HeaderValue::from_static("application/json"),
     );
     let signed = sigv4::sign(
-        credentials,
+        &credentials,
         region,
         "bedrock",
         &sigv4::Request {

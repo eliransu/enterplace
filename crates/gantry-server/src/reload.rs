@@ -18,7 +18,6 @@ use gantry_core::{
     guard,
     id::{hex, sha256_hex},
     policy::Policy,
-    sigv4,
     store::{self, Store},
 };
 use serde_json::{Map, Value, json};
@@ -293,23 +292,23 @@ pub fn governed_with(
     let mut providers = Vec::new();
     for provider in &loaded.providers {
         let set = |variable: &str| provider_key(variable).filter(|value| !value.trim().is_empty());
-        let (key, aws) = if provider.kind == Kind::Bedrock {
-            // Read from the environment, as the AWS SDKs do, and never through the aws command.
-            let (Some(id), Some(secret)) = (set("AWS_ACCESS_KEY_ID"), set("AWS_SECRET_ACCESS_KEY"))
-            else {
-                return Err(format!(
-                    "provider \"{}\" is on Amazon Bedrock, and AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY is not set. Set both (and AWS_SESSION_TOKEN for temporary credentials) and start again.",
-                    provider.name
-                ));
-            };
-            let credentials = sigv4::Credentials {
-                access_key_id: id.trim().to_string(),
-                secret_access_key: secret.trim().to_string(),
-                session_token: set("AWS_SESSION_TOKEN").map(|t| t.trim().to_string()),
-            };
-            (None, Some(credentials))
+        let (key, aws, google) = if provider.kind == Kind::Bedrock {
+            // The AWS default chain, as the SDKs read it, and never through the aws command.
+            let region = provider.region.as_deref().unwrap_or_default();
+            let aws = crate::cloud::aws(
+                &provider.name,
+                region,
+                provider.role_arn.as_deref(),
+                provider_key,
+            )?;
+            println!(
+                "gantry: provider \"{}\" signs with AWS credentials from {}.",
+                provider.name,
+                aws.source()
+            );
+            (None, Some(aws), None)
         } else if let Some(path) = &provider.key_file {
-            (Some(read_key_file(&provider.name, path)?), None)
+            (Some(read_key_file(&provider.name, path)?), None, None)
         } else if let Some(name) = &provider.credential {
             let store = shared
                 .as_ref()
@@ -331,10 +330,20 @@ pub fn governed_with(
                         &store.credentials().unwrap_or_default(),
                     )
                 })?;
-            (Some(Secret::new(value)), None)
+            (Some(Secret::new(value)), None, None)
+        } else if provider.key_env.is_empty()
+            && matches!(provider.kind, Kind::Vertex | Kind::VertexAnthropic)
+        {
+            let google = crate::cloud::google(&provider.name, provider_key)?;
+            println!(
+                "gantry: provider \"{}\" signs in to Google Cloud with {}.",
+                provider.name,
+                google.source()
+            );
+            (None, None, Some(google))
         } else if provider.key_env.is_empty() {
             // `gantry check` allows this only for a model server on this machine or a private network.
-            (None, None)
+            (None, None, None)
         } else {
             let variable = &provider.key_env;
             let key = set(variable).ok_or_else(|| {
@@ -343,7 +352,7 @@ pub fn governed_with(
                     provider.name
                 )
             })?;
-            (Some(Secret::new(key.trim())), None)
+            (Some(Secret::new(key.trim())), None, None)
         };
         providers.push(ProviderRoute {
             name: provider.name.clone(),
@@ -355,6 +364,7 @@ pub fn governed_with(
             api_version: provider.api_version.clone(),
             region: provider.region.clone(),
             aws,
+            google,
             fallback: provider.fallback.clone(),
             retries: provider.retries,
             accept_chat: provider.accept_chat,

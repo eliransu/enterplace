@@ -162,7 +162,7 @@ fn aws() -> sigv4::Credentials {
 fn bedrock(url: String, models: &[(&str, &str)]) -> ProviderRoute {
     ProviderRoute {
         region: Some("us-east-1".into()),
-        aws: Some(aws()),
+        aws: Some(aws().into()),
         upstream_models: models
             .iter()
             .map(|(m, id)| (m.to_string(), id.to_string()))
