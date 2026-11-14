@@ -7,6 +7,31 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Operator API and metrics
+
+- `GET /admin/usage`: spend, tokens and requests grouped by `org`, `team`, `person`, `key`, `customer`, `tag`,
+  `model`, `provider`, `agent`, `day` or `hour`, filtered by time range and any dimension, as JSON or CSV. Summed in
+  SQL by the store's request index, else from the gateway's audit log. Needs `see_spend`; a role kept to an
+  organization sees its own.
+- The admin API covers what the console does: providers, rules, guardrails, MCP servers and aliases a part at a time
+  (`/admin/<part>[/<name>]`), models and prices (`/admin/models`), budgets (`/admin/budgets`, the `limits:` list) and
+  teams (`/admin/teams`). Each change is a new policy version with its admin record, as `PUT /admin/policy` makes.
+- `GET /admin/openapi.json`: an OpenAPI 3.1 document of every admin route, its permission and record action. Routes
+  and document come from one table; any path not in it is refused with `unknown_route` and recorded as an `admin`
+  record.
+- `/metrics` adds `gantry_tokens_total` (input, output, cached, cache_write), `gantry_request_seconds`,
+  `gantry_first_byte_seconds`, `gantry_refusals_total`, `gantry_guardrail_findings_total`,
+  `gantry_cache_lookups_total`, `gantry_deployment_up`, `gantry_deployment_cooldowns_total`,
+  `gantry_budget_limit_usd`, `gantry_budget_remaining_usd` and `gantry_store_up`. Labels come from the policy only;
+  `GANTRY_METRICS_BUDGET_SCOPES` chooses the budget scopes shown (default `global,org,team,model`).
+- Alerts (enterprise): `unusual_requests`, `unusual_errors` and `unusual_latency` against a 14-day baseline per
+  team, key or provider; `deployment_down`, `key_expiring`, `credential_failing`, `guardrail_vendor_failing` and
+  `export_lagging`. Alert rules are in the admin API (`/admin/alerts/rules`), and an embedding binary adds admin routes
+  through `gantry_server::AdminApi`, checked and recorded by the gateway.
+- `gantry import litellm --url <proxy> --master-key-env <VAR>` reads a running LiteLLM proxy's model list, keys and
+  teams through its management API, writes team budgets as `limits:`, and issues one Gantry key per LiteLLM key into a
+  new keys file, printing each beside the key it replaces.
+
 ### Browser access
 
 - `cors:` in the policy: `allowed_origins` lists the browser origins (or `"*"`) that may call Gantry's routes. Off by
