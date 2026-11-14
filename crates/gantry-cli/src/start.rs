@@ -22,6 +22,12 @@ const PROVIDERS: &[(&str, &[&str])] = &[
 
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8080";
 
+/// What the image's default command (`start --container`) uses in place of the defaults above.
+pub const CONTAINER_DIR: &str = "/var/lib/gantry";
+pub const CONTAINER_LISTEN: &str = "0.0.0.0:8080";
+/// A policy mounted here is served as it is, as the image always did.
+const MOUNTED_POLICY: &str = "/etc/gantry/gantry.policy.yaml";
+
 pub struct Options<'a> {
     pub dir: &'a Path,
     pub providers: Option<&'a str>,
@@ -30,8 +36,12 @@ pub struct Options<'a> {
     pub serve: bool,
     pub listen: &'a str,
     pub all_tools: bool,
+    /// The image's default command: serve a mounted policy, or the one an earlier start wrote on the volume, and
+    /// write one only when there is neither.
+    pub container: bool,
 }
 
+#[derive(Default)]
 struct Chosen {
     id: &'static str,
     models: &'static [&'static str],
@@ -193,6 +203,24 @@ fn ask(found: &[Chosen]) -> Result<Option<String>, String> {
 
 pub async fn run(options: &Options<'_>) -> Result<(), String> {
     let env = |name: &str| std::env::var(name).ok();
+    if options.container {
+        let written = options.dir.join("gantry.policy.yaml");
+        if let Some(policy) = [Path::new(MOUNTED_POLICY), written.as_path()]
+            .into_iter()
+            .find(|p| p.exists())
+        {
+            // No keys found is not an error here: the policy may read other variables, and serve names any unset.
+            let chosen = choose(None, &env).unwrap_or_default();
+            println!(
+                "Serving {} (its keys file beside it). The admin key was printed at the first start.",
+                policy.display()
+            );
+            if !options.serve {
+                return Ok(());
+            }
+            return serve(&chosen, policy, options.listen, &env);
+        }
+    }
     let mut chosen = choose(options.providers, &env)?;
     if !options.yes && options.providers.is_none() && std::io::stdin().is_terminal() {
         if let Some(answer) = ask(&chosen)? {
@@ -230,7 +258,11 @@ pub async fn run(options: &Options<'_>) -> Result<(), String> {
             std::env::var_os("HOME").map(PathBuf::from),
         )
     };
-    let url = format!("http://{}", options.listen);
+    // An address that listens everywhere is opened on this machine as localhost.
+    let url = format!(
+        "http://{}",
+        options.listen.replacen("0.0.0.0:", "localhost:", 1)
+    );
     print!(
         "{}",
         report(&chosen, &policy_path, &keys_path, &issued, &url, &tools)

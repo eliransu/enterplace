@@ -44,6 +44,16 @@ scripts/release.sh image
 
 This builds a static musl binary into an image tagged `gantry:local`. The image holds the binary and nothing else and runs as user `65532`. Its binary is the enterprise build (`enterprise/`, commercial license): with no license key it is the open source gateway this guide uses.
 
+To see Gantry work before writing anything, run the image with only a provider key:
+
+```bash
+docker run -p 127.0.0.1:8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY gantry:local
+```
+
+The first start writes a policy in observe mode (every key may use every model, nothing is blocked, every request is recorded) and an admin key to the `gantry-data` volume, prints the admin key once with the settings for Claude Code, Codex, Cursor and the OpenAI SDKs, and serves on `http://localhost:8080`. `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` work the same way, alone or together. Later starts on the same volume serve that policy and keys and print no new key. The key stays in the container's log (`docker logs`) until the container is removed: copy it to your secret manager and remove the container once you have it. A published release is `ghcr.io/ggantry/gantry:<version>` in place of `gantry:local`.
+
+With a policy mounted at `/etc/gantry/gantry.policy.yaml` (step 4 below), the image serves that policy instead and writes nothing.
+
 </TabItem>
 </Tabs>
 

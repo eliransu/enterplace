@@ -1,0 +1,102 @@
+---
+title: Verify a release
+description: Check that a Gantry image and Helm chart were built and signed by the Gantry release workflows, read the SBOM and provenance, and see how images are scanned.
+sidebar:
+  order: 7
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Every published Gantry image and Helm chart is signed, and the image carries its SBOM and its build provenance as signed attestations. Check them before you run a version, and pin the image by the digest the check prints.
+
+## What each release carries
+
+| Artifact | Where | Signed by |
+|---|---|---|
+| The image, `ghcr.io/ggantry/gantry:X.Y.Z` (amd64 and arm64) | ghcr.io | `.github/workflows/image.yml` on tag `vX.Y.Z` |
+| A CycloneDX SBOM of the image, as a cosign attestation (`--type cyclonedx`), and as `sbom.cdx.json` on the GitHub Release | ghcr.io, GitHub Release | the same |
+| SLSA v1 provenance of the image (commit, Cargo.lock, Dockerfile, CI run), as a cosign attestation (`--type slsaprovenance1`) | ghcr.io | the same |
+| The Helm chart, `oci://ghcr.io/ggantry/charts/gantry`, version `X.Y.Z` | ghcr.io | `.github/workflows/release.yml` on tag `vX.Y.Z` |
+| The binary tarballs, `SHA256SUMS` and `provenance.json` | GitHub Release | the release SSH key (`scripts/release.sh verify`, see RELEASING.md) |
+
+Signing is keyless: the workflow trades its GitHub OIDC token for a short-lived Sigstore certificate that names the repository, the workflow file and the tag. There is no long-lived signing key to steal. A signature made by any other workflow, branch or repository fails the check.
+
+<Aside type="note">
+Keyless signatures are recorded in Sigstore's public transparency log (Rekor). The log entry names the repository and workflow (`github.com/ggantry/gantry/.github/workflows/image.yml@refs/tags/vX.Y.Z`) and the digest. It holds no image content and no source.
+</Aside>
+
+## Check a version
+
+You need [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) 3.0 or later, python3, and a token that can read the packages.
+
+<Steps>
+
+1. Log in to the registry.
+
+   ```bash
+   docker login ghcr.io -u <your user name>
+   ```
+
+2. Run the check, from a checkout of the repository at any version (or copy the script).
+
+   ```bash
+   scripts/verify_release.sh 0.2.0
+   ```
+
+   ```text
+   OK  image signed: ghcr.io/ggantry/gantry@sha256:4c1f...
+   OK  SBOM attested: 174 crates (cosign verify-attestation --type cyclonedx ... | jq to read it)
+   OK  SLSA provenance attested: built from commit 9be869bf...
+   OK  chart signed: ghcr.io/ggantry/charts/gantry:0.2.0
+
+   Verified Gantry 0.2.0. Pin the image by digest: ghcr.io/ggantry/gantry@sha256:4c1f...
+   ```
+
+   Any failed check stops the script with `FAILED:` and the reason. Do not run that version.
+
+3. Pin the digest it printed: `image.tag` is not enough, because a tag can be moved and a digest cannot. In the Helm values, set `image.tag` to `X.Y.Z@sha256:...`.
+
+</Steps>
+
+The same checks by hand, with the identity spelled out:
+
+```bash
+V=0.2.0
+cosign verify ghcr.io/ggantry/gantry:$V \
+  --certificate-identity https://github.com/ggantry/gantry/.github/workflows/image.yml@refs/tags/v$V \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify-attestation --type cyclonedx ghcr.io/ggantry/gantry:$V \
+  --certificate-identity https://github.com/ggantry/gantry/.github/workflows/image.yml@refs/tags/v$V \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  | jq -r .payload | base64 -d | jq .predicate > sbom.cdx.json
+cosign verify ghcr.io/ggantry/charts/gantry:$V \
+  --certificate-identity https://github.com/ggantry/gantry/.github/workflows/release.yml@refs/tags/v$V \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+In a cluster, an admission controller such as Sigstore's policy-controller or Kyverno's `verifyImages` can enforce the same identity on every pod.
+
+## The SBOM
+
+The image is built `FROM scratch`: one static binary and nothing else, so there is no package database to read. The build uses [cargo-auditable](https://github.com/rust-secure-code/cargo-auditable), which writes the binary's exact crate list (name, version, source) into the binary. syft reads it to make the SBOM, so the SBOM lists what the shipped binary contains, without the test-only crates a `Cargo.lock` holds. You can read the same list from any copy of the binary:
+
+```bash
+syft ghcr.io/ggantry/gantry:0.2.0 -o cyclonedx-json     # the image
+cargo audit bin gantry                                  # a binary from a release tarball
+```
+
+## Scanning
+
+Every image CI builds, on a pull request and before each publish, goes through `scripts/scan_image.sh`: syft makes the SBOM, and Grype scans that same SBOM, so what is scanned is exactly what is attested. The job fails on any high or critical vulnerability. An exception goes in `.grype.yaml` with the reason it does not reach Gantry, who decided, and a date to look again. A scan that fails before publishing leaves the image unsigned.
+
+Grype rather than Trivy: Grype reads the SBOM syft writes directly (`grype sbom:sbom.cdx.json`), so one file is both the attestation and the scan input, and both tools read cargo-auditable data. `cargo deny check` (every push) covers RustSec advisories in `Cargo.lock`, and a CodeQL workflow analyzes Gantry's own Rust code and its workflows on every pull request and weekly.
+
+## FIPS 140-3
+
+**There is no FIPS build of Gantry today, and no Gantry image makes a FIPS claim.** What it would take:
+
+- **TLS.** Gantry's TLS (rustls, through hyper-rustls and tokio-rustls) uses the `ring` crypto provider. ring is not a FIPS-validated module. rustls can run on aws-lc-rs in FIPS mode (`rustls/fips`), which links the AWS-LC FIPS module, but aws-lc-rs is not in Gantry's dependency tree: adding it means building the AWS-LC FIPS C library (`aws-lc-fips-sys`), which needs CMake, Go and a C toolchain at build time, a much larger build than today's.
+- **Everything else that hashes or signs.** FIPS mode covers every security function, not only TLS. Gantry also calls ring directly to verify SSO ID tokens (RS256, ES256), to sign Vertex AI service account tokens (RS256) and to check license signatures (Ed25519), and hashes keys and audit records with SHA-256. Each would have to move to the validated module. A TLS-only switch would leave these outside it, and a "FIPS" label on that build would be wrong.
+- **The platform.** The image is a static musl binary. A validated module is valid only on the operating environments its certificate lists, and a musl static build has to be checked against the AWS-LC FIPS certificate before any claim is made; a glibc base image may be needed instead of `scratch`.
+
+When a customer needs it, the work is: a `fips` cargo feature that switches rustls to `rustls::crypto::default_fips_provider()` and moves the direct ring calls to aws-lc-rs, a separate image tag (`X.Y.Z-fips`) built with the toolchain above, a start-up check that refuses to run unless `rustls::crypto::CryptoProvider::fips()` is true, and a review of the certificate's operating environments.

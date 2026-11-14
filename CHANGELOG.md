@@ -128,6 +128,43 @@ one repository. How a release is made: RELEASING.md.
   the audit log: two more columns, `devices` and `direct`.
 - MCP records (`/mcp`) carry `user_agent`, so MCP clients count in the coverage report.
 
+### Supply chain and releases
+
+- Published images are signed with cosign, keyless (the release workflow's GitHub identity, through Sigstore), and
+  carry a CycloneDX SBOM and SLSA provenance as signed attestations. The Helm chart is published as a signed OCI
+  artifact, `oci://ghcr.io/ggantry/charts/gantry`. `scripts/verify_release.sh X.Y.Z` checks the image, its SBOM and
+  provenance, and the chart, and prints the digest to pin. Docs: Operations, Verify a release.
+- The binary records its exact crate list inside itself (cargo-auditable), so `syft`, `grype` and `cargo audit bin`
+  read the dependencies of the image and of any release binary.
+- Every image CI builds is scanned (syft and Grype); a high or critical vulnerability fails the build unless
+  `.grype.yaml` allows it with a reason. CodeQL analyzes the Rust code and workflows on every pull request.
+- No FIPS build yet: the Verify a release page says why (ring, not a validated module, does TLS and signing) and what
+  one would take.
+
+### Docker first start
+
+- `docker run -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY ghcr.io/ggantry/gantry` with no policy starts a
+  working gateway in observe mode, with an admin key printed once and the tool settings, as `gantry start` does.
+  Later starts serve what the first one wrote. The image's default command is now `start --container`; a policy
+  mounted at `/etc/gantry/gantry.policy.yaml` is served as before, and explicit `serve ...` commands (Compose, Helm,
+  Terraform) are unchanged.
+- `gantry start` with `--listen 0.0.0.0:<port>` prints `http://localhost:<port>` in the tool settings, not an address
+  a browser cannot open.
+
+### Helm
+
+- `autoscaling.enabled` renders a HorizontalPodAutoscaler on CPU and an optional per-pod custom metric (for example
+  from `gantry_overhead_seconds`); it needs `store:` in the policy, as more than one replica always did. A
+  PodDisruptionBudget (`maxUnavailable: 1`) is rendered with more than one replica or with autoscaling.
+
+### Rolling upgrades
+
+- Two versions one minor version apart now run on one Postgres at the same time: the newer applies its migrations
+  while the older keeps serving, and an older replica restarting mid-rollout still starts. A version two or more minor
+  versions behind refuses the database, naming both versions. Store migration 6 adds the `gantry_writer` table, which
+  records the newest version that started on the database. Versions released before this one refuse any newer schema
+  at restart, so for the upgrade to this version keep old pods from restarting during the rollout.
+
 ### Browser access
 
 - `cors:` in the policy: `allowed_origins` lists the browser origins (or `"*"`) that may call Gantry's routes. Off by

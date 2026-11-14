@@ -3,7 +3,10 @@
 # gateway; a valid key in GANTRY_LICENSE unlocks the paid features. Every open source command runs from it too.
 # Build: scripts/release.sh image, or `docker build -t gantry:local .`
 #
-# Run:
+# Run with nothing but a provider key: the first start writes an observe-mode policy and an admin key (printed once)
+# on the volume, and later starts serve them (`gantry start --container`):
+#   docker run -p 127.0.0.1:8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY ghcr.io/ggantry/gantry
+# Or with your own policy, served as it is:
 #   docker run --rm -p 127.0.0.1:8080:8080 \
 #     -v "$PWD/gantry.policy.yaml:/etc/gantry/gantry.policy.yaml:ro" \
 #     -v gantry-data:/var/lib/gantry \
@@ -13,6 +16,9 @@
 
 FROM rust:1.88-alpine AS build
 RUN apk add --no-cache musl-dev
+# cargo-auditable writes the binary's exact crate list into the binary itself. The image is FROM scratch, with no
+# package database, so without it syft (the SBOM), Grype (the image scan) and `cargo audit bin` see no dependencies.
+RUN cargo install cargo-auditable --locked --version 0.7.5
 WORKDIR /src
 COPY . .
 # Reproducible: the release pipeline passes the commit's time, and paths in the binary do not name this machine.
@@ -21,7 +27,7 @@ ARG SOURCE_DATE_EPOCH=0
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     RUSTFLAGS="--remap-path-prefix=/src=. --remap-path-prefix=/usr/local/cargo=cargo"
 # A static binary needs no C library in the final image. TLS roots are compiled in, so it needs no certificates either.
-RUN cargo build --release --locked -p gantry-enterprise \
+RUN cargo auditable build --release --locked -p gantry-enterprise \
  && mkdir -p /out/var/lib/gantry /out/etc/gantry \
  && cp target/release/gantry-enterprise /out/gantry
 
@@ -40,4 +46,6 @@ USER 65532:65532
 EXPOSE 8080
 VOLUME ["/var/lib/gantry"]
 ENTRYPOINT ["/gantry"]
-CMD ["serve", "/etc/gantry/gantry.policy.yaml", "--listen", "0.0.0.0:8080"]
+# Serves /etc/gantry/gantry.policy.yaml when one is mounted (as `serve` always did), else the policy an earlier start
+# wrote on the volume, else writes one from the provider keys in the environment.
+CMD ["start", "--container"]

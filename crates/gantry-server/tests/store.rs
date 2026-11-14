@@ -979,6 +979,37 @@ async fn serve_refuses_to_start_without_its_store_or_on_a_newer_schema() -> Test
         .map(|e| e.to_string());
     let newer = newer.unwrap_or_default();
     assert!(newer.contains("newer Gantry"), "{newer}");
+
+    // A rolling upgrade: a schema moved ahead by the next minor version is used; two minor versions ahead is refused,
+    // naming both versions.
+    let mut parts = gantry_core::VERSION.split('.').map(str::parse::<u64>);
+    let (Some(Ok(major)), Some(Ok(minor))) = (parts.next(), parts.next()) else {
+        return Err("the workspace version is not X.Y.Z".into());
+    };
+    let next = format!("{major}.{}.0", minor + 1);
+    client
+        .execute("UPDATE gantry_writer SET version = $1", &[&next])
+        .await?;
+    drop(gateway(&dir("start-next")?, &url, port)?);
+    let writer: String = client
+        .query_one("SELECT version FROM gantry_writer", &[])
+        .await?
+        .try_get(0)?;
+    assert_eq!(writer, next, "an older Gantry lowered the recorded version");
+    let two = format!("{major}.{}.0", minor + 2);
+    client
+        .execute("UPDATE gantry_writer SET version = $1", &[&two])
+        .await?;
+    let refused = gateway(&dir("start-two")?, &url, port)
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(
+        refused.contains(&two)
+            && refused.contains(gantry_core::VERSION)
+            && refused.contains("one minor version apart"),
+        "{refused}"
+    );
     Ok(())
 }
 

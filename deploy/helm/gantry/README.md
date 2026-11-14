@@ -17,6 +17,15 @@ helm install gantry ./gantry-deploy/helm/gantry \
   --set 'imagePullSecrets[0].name=ghcr' --set image.tag=<version>
 ```
 
+From a release on, the chart is also an OCI artifact, signed with cosign beside the image
+(`scripts/verify_release.sh <version>` checks both):
+
+```bash
+helm registry login ghcr.io -u <user>
+helm install gantry oci://ghcr.io/ggantry/charts/gantry --version <version> \
+  --set 'imagePullSecrets[0].name=ghcr'
+```
+
 The first pod prints a one-time link to make the first admin (`kubectl logs gantry-0 -c gantry`). Admin commands run in
 the pod with the image's own binary, which takes every `gantry` command:
 
@@ -64,6 +73,8 @@ helm upgrade --install gantry ./gantry-deploy/helm/gantry --reuse-values \
 | Value | Default | Description |
 |---|---|---|
 | `replicaCount` | `1` | Above 1 only with `store:` in the policy |
+| `autoscaling.*` | off | HorizontalPodAutoscaler on CPU (`targetCPUUtilizationPercentage`) and an optional per-pod custom metric (`podMetric.name`, `podMetric.targetAverageValue`), `minReplicas` 2 to `maxReplicas` 10. Needs `store:` |
+| `podDisruptionBudget.enabled`, `.maxUnavailable` | `true`, `1` | Rendered only with more than one replica or autoscaling |
 | `image.repository`, `image.tag`, `image.pullPolicy` | `ghcr.io/ggantry/gantry`, appVersion, `IfNotPresent` | |
 | `imagePullSecrets` | empty | The registry is private |
 | `policy` | One OpenAI provider, one rule | The policy file, mounted at `/etc/gantry/gantry.policy.yaml`; reloads without a restart |

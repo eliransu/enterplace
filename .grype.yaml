@@ -1,0 +1,11 @@
+# The image scan's allowlist (scripts/scan_image.sh, CI in image.yml). The scan fails on any high or critical
+# vulnerability in what the image ships. An entry here lets one through: name the vulnerability, the package, why it
+# does not reach Gantry, who decided, and a date to look again. Remove the entry once a fixed version ships.
+#
+# ignore:
+#   - vulnerability: GHSA-xxxx-xxxx-xxxx
+#     package:
+#       name: some-crate
+#     # Why: the vulnerable function is never called (only used in tests). Decided by <name>, 2026-11-14.
+#     # Review by: 2027-02-14
+ignore: []

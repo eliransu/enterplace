@@ -32,6 +32,10 @@ jobs:
           grep -q "needs the policy's \`store:\` section" <<<"$out"
           if out=$(helm template t . --set postgres.enabled=true 2>&1); then echo "rendered: $out"; exit 1; fi
           grep -q "nothing uses" <<<"$out"
+          if out=$(helm template t . --set autoscaling.enabled=true 2>&1); then echo "rendered: $out"; exit 1; fi
+          grep -q "autoscaling.enabled runs more than one replica" <<<"$out"
+      - name: HPA, disruption budget and the scripted checks
+        run: python3 scripts/check_deploy.py
 
   # Installs the chart on a kind cluster with the image built here and makes a governed call through the Service.
   kind:

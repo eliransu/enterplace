@@ -212,13 +212,13 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
             ("mcp".to_string(), 1),
         ]
     );
-    // The gateway's own schema version is untouched by the namespace: its five migrations (keys, shared limits and
-    // sessions, credentials, the hierarchy's key fields, key options).
+    // The gateway's own schema version is untouched by the namespace: its six migrations (keys, shared limits and
+    // sessions, credentials, the hierarchy's key fields, key options, the newest version to migrate).
     let core: i32 = client
         .query_one("SELECT max(version) FROM gantry_schema", &[])
         .await?
         .try_get(0)?;
-    assert_eq!(core, 5);
+    assert_eq!(core, 6);
 
     // Its own connection, so a transaction is safe on it.
     let tx = client.transaction().await?;

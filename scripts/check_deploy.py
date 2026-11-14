@@ -115,7 +115,21 @@ def main() -> None:
         assert statefulset["replicas"] == 1, "one replica without a store"
         check_pod(statefulset["template"]["spec"], "the rendered StatefulSet")
         assert kinds["ConfigMap"]["data"]["gantry.policy.yaml"] == policy, "the rendered policy is not values.yaml's"
-        print("helm lint (with each ci/ values file) and helm template passed; the pod's security settings hold")
+        assert "HorizontalPodAutoscaler" not in kinds and "PodDisruptionBudget" not in kinds, "one replica: no HPA, no PDB"
+        # Autoscaling: the HPA owns the replica count, scales the StatefulSet on CPU and the custom metric, and a
+        # disruption budget keeps all but one pod through a drain.
+        with tempfile.TemporaryDirectory() as tmp:
+            rendered = pathlib.Path(tmp) / "chart.yaml"
+            rendered.write_text(subprocess.run(["helm", "template", "gantry", str(CHART), "-f", str(CHART / "ci" / "autoscaling.yaml")], check=True, capture_output=True, text=True).stdout)
+            scaled = {(d["kind"], d["metadata"]["name"]): d for d in load_all(rendered)}
+        hpa = scaled[("HorizontalPodAutoscaler", "gantry")]["spec"]
+        assert hpa["scaleTargetRef"] == {"apiVersion": "apps/v1", "kind": "StatefulSet", "name": "gantry"}, hpa
+        assert [m["type"] for m in hpa["metrics"]] == ["Resource", "Pods"], hpa["metrics"]
+        assert "replicas" not in scaled[("StatefulSet", "gantry")]["spec"], "the HPA owns the replica count"
+        assert scaled[("PodDisruptionBudget", "gantry")]["spec"]["maxUnavailable"] == 1
+        refused = subprocess.run(["helm", "template", "gantry", str(CHART), "--set", "autoscaling.enabled=true"], capture_output=True, text=True)
+        assert refused.returncode and "store:" in refused.stderr, "autoscaling without a store must be refused"
+        print("helm lint (with each ci/ values file) and helm template passed; the pod's security settings hold; HPA and PDB render as set")
     else:
         print("helm is not installed: the chart's templates were checked for balanced blocks only, not rendered")
     check_otel()
