@@ -1,0 +1,65 @@
+<!--
+title: AI gateway glossary: the words, explained
+description: Plain definitions of the terms used around AI gateways and on this site: AI gateway, guardrail, kill switch, MCP, observe mode, shadow mode, hash-chained audit log, alias, residency and more.
+nav: learn
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/learn/">Learn</a><span>Glossary</span></nav>
+  <h1>Glossary</h1>
+  <p class="lead">The words used on this site and in the docs, each in a few sentences.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 40px">
+  <dl class="gloss">
+    <dt id="ai-gateway">AI gateway</dt>
+    <dd>One program that sits between a company's AI tools and the model providers. Tools send requests to the gateway, and the gateway sends them on. <a href="/learn/what-is-an-ai-gateway/">What is an AI gateway</a></dd>
+    <dt id="alias">Alias</dt>
+    <dd>One model name that is served from several deployments, for example the same model at two providers. The gateway picks a deployment for each request and falls back to another when one fails.</dd>
+    <dt id="audit-log">Audit log</dt>
+    <dd>The record of every request and every admin action. In Gantry it is one JSON line per event, holding who asked, the model, the decision, the rule and the cost. It holds no prompt or answer text.</dd>
+    <dt id="budget">Budget</dt>
+    <dd>The most a team, a person, a key or a model may spend in a period. When it is reached, further requests are refused until the period starts again or someone raises the number.</dd>
+    <dt id="coding-agent">Coding agent</dt>
+    <dd>A tool that writes and changes code by calling a model many times in one task, such as Claude Code, Codex or Cursor. It reads files around it and sends parts of them in prompts.</dd>
+    <dt id="coverage">Coverage</dt>
+    <dd>How much of the company's AI use goes through the gateway. Gantry's coverage report counts requests per person and tool, and names people who hold a key and have sent nothing.</dd>
+    <dt id="decision-id">Decision ID</dt>
+    <dd>The identifier Gantry gives each request. It is returned in the <code>X-Gantry-Decision</code> header and repeated in every refusal message, so a person can quote it and an admin can find the record.</dd>
+    <dt id="fail-closed">Fail closed</dt>
+    <dd>When a safety step cannot run, the request is refused instead of let through. Gantry refuses every request while it cannot write the audit log.</dd>
+    <dt id="guardrail">Guardrail</dt>
+    <dd>A check on the text of a request or an answer. It can block the request, mask what it found, or only warn. Gantry has built-in detectors for secrets and personal data and can call outside services.</dd>
+    <dt id="hash-chain">Hash chain</dt>
+    <dd>Each audit record holds a fingerprint (a hash) of the record before it. Change, remove or reorder a record and every fingerprint after it stops matching, so the change shows.</dd>
+    <dt id="key">Key</dt>
+    <dd>The secret a tool sends to prove who is calling. A <strong>provider key</strong> is issued by OpenAI, Anthropic and the like, and with a gateway it stays inside the gateway. A <strong>Gantry key</strong> is issued to one person or one workload.</dd>
+    <dt id="kill-switch">Kill switch</dt>
+    <dd>A stop for a person, a team, a key, a model or everyone, set with one command and a reason. It works at once and needs no policy change.</dd>
+    <dt id="mcp">MCP</dt>
+    <dd>Model Context Protocol. The way agents call tools on other systems, such as creating an issue or querying a database. An MCP server offers the tools, and an MCP client, usually an agent, calls them.</dd>
+    <dt id="observe-mode">Observe mode</dt>
+    <dd>A setting for the whole policy in which nothing is blocked. Every request from a known key is forwarded, and what a rule would have refused is recorded as <code>would_refuse</code>.</dd>
+    <dt id="policy">Policy</dt>
+    <dd>The file that says who may use which models and tools, with which limits and guardrails. In Gantry it is one YAML file kept in version control.</dd>
+    <dt id="provider">Provider</dt>
+    <dd>The company or server that runs the model: OpenAI, Anthropic, Azure OpenAI, Amazon Bedrock, Vertex AI, Gemini, or a server of your own such as Ollama or vLLM.</dd>
+    <dt id="rate-limit">Rate limit</dt>
+    <dd>A cap on how fast requests may arrive, in requests or tokens per minute. It protects against loops and against one caller using up a shared quota.</dd>
+    <dt id="refusal">Refusal</dt>
+    <dd>What a caller gets when policy stops a request: an error with a code such as <code>budget_exceeded</code>, the cause, what to do, and a decision ID.</dd>
+    <dt id="residency">Residency</dt>
+    <dd>A rule that requests may only go to deployments in named regions. In Gantry you label each deployment with its region, and a request with nowhere allowed to go is refused.</dd>
+    <dt id="self-hosted">Self-hosted</dt>
+    <dd>You run the software in your own network or cloud account. Prompts and answers go only to the providers you chose, and the vendor of the software sees none of it.</dd>
+    <dt id="shadow-mode">Shadow mode</dt>
+    <dd>A trial for one limit or one guardrail. Until the date you set, it records what it would have done and changes nothing. From that date it is enforced.</dd>
+    <dt id="siem">SIEM</dt>
+    <dd>The system a security team uses to collect and search logs from every other system, such as Splunk or Microsoft Sentinel.</dd>
+    <dt id="token">Token</dt>
+    <dd>The unit providers count and bill: a piece of a word. A request costs the tokens sent plus the tokens answered, each at the model's price.</dd>
+    <dt id="workload">Workload</dt>
+    <dd>Anything that calls a model and is not a person: a service, a CI job, an agent. It gets a key of its own, with a name such as <code>svc-billing</code>.</dd>
+  </dl>
+</section>
+
+{{> cta}}

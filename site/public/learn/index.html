@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Learn: AI gateways explained, and a plan to adopt one</title>
+<meta name="description" content="A short teaching section for companies working out how to control their AI use: what an AI gateway is, why companies need one, the five steps to adopt one, a rollout plan to forward, and a glossary.">
+<meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<link rel="canonical" href="https://gantry.eliran.me/learn/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Gantry">
+<meta property="og:url" content="https://gantry.eliran.me/learn/">
+<meta property="og:title" content="Learn: AI gateways explained, and a plan to adopt one">
+<meta property="og:description" content="A short teaching section for companies working out how to control their AI use: what an AI gateway is, why companies need one, the five steps to adopt one, a rollout plan to forward, and a glossary.">
+<meta property="og:image" content="https://gantry.eliran.me/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/fonts/FamiljenGrotesk-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<script>try { var t = new URLSearchParams(location.search).get('theme') || localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<link rel="stylesheet" href="/styles.css">
+<script src="/site.js" defer></script>
+</head>
+<body class="">
+<a class="skip" href="#main">Skip to the content</a>
+
+<header class="hdr" id="hdr">
+  <div class="wrap hdr-in">
+    <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+gantry</a>
+
+    <button class="burger" type="button" aria-expanded="false" aria-controls="nav" aria-label="Menu"><span></span></button>
+
+    <nav class="nav" id="nav" aria-label="Main">
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="product" aria-expanded="false" aria-controls="menu-product">Product<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu" id="menu-product">
+          <a href="/product/"><strong>How it works</strong><span>The request path, the controls, the audit log and the console</span></a>
+          <a href="/deploy/"><strong>Deploy</strong><span>Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare</span></a>
+          <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops</span></a>
+          <a href="/compare/"><strong>Compare</strong><span>Gantry next to LiteLLM and Bifrost, with sources</span></a>
+        </div>
+      </div>
+
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="use-cases" aria-expanded="false" aria-controls="menu-use-cases">Use cases<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu menu-wide" id="menu-use-cases">
+          <div class="menu-col">
+            <p class="menu-title">By what you run</p>
+            <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Claude Code, Codex, Copilot, Cursor, Gemini CLI</span></a>
+            <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Apps and agents calling models from your cloud</span></a>
+            <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Your MCP servers behind one endpoint</span></a>
+            <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>Ollama, vLLM, on-prem, air-gapped</span></a>
+            <a href="/use-cases/regulated-data/"><strong>Regulated data and residency</strong><span>Regions, masking and records</span></a>
+            <a href="/use-cases/cost-control/"><strong>Cost control</strong><span>Spend per person, budgets, forecasts</span></a>
+          </div>
+          <div class="menu-col">
+            <p class="menu-title">By role</p>
+            <a href="/for/security/"><strong>Security</strong><span>What left the company, with proof</span></a>
+            <a href="/for/platform/"><strong>Platform</strong><span>Model access without provider keys on laptops</span></a>
+            <a href="/for/finance/"><strong>Finance</strong><span>Who spent it, and will the budget last</span></a>
+            <a href="/for/engineering-leaders/"><strong>Engineering leaders</strong><span>Coding agents for every developer, tracked</span></a>
+            <a class="menu-all" href="/use-cases/">All use cases</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="learn" data-here aria-expanded="false" aria-controls="menu-learn">Learn<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu" id="menu-learn">
+          <a href="/learn/what-is-an-ai-gateway/"><strong>What is an AI gateway</strong><span>The idea in plain words, with one picture</span></a>
+          <a href="/learn/why-companies-need-one/"><strong>Why companies need one</strong><span>Five questions most companies cannot answer</span></a>
+          <a href="/learn/five-steps/"><strong>The five steps</strong><span>See, Know, Limit, Protect, Prove</span></a>
+          <a href="/learn/rollout-plan/"><strong>Rollout plan</strong><span>One page to forward to your team</span></a>
+          <a href="/learn/glossary/"><strong>Glossary</strong><span>The words, explained</span></a>
+        </div>
+      </div>
+
+      <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
+      <a class="nav-link" href="https://gantry-docs.eliran.me/">Docs</a>
+
+      <div class="nav-actions">
+        <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
+        <button class="theme" type="button" aria-label="Switch between light and dark">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
+        </button>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="wrap head">
+  <h1>If you are not sure where to start, start here.</h1>
+  <p class="lead">Most companies got their AI tools before they got a plan for them. These pages explain the problem and one way through it, in plain words. Read them in order, or pick by who you are below.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 48px">
+  <nav class="rows" aria-label="Learn">
+    <a href="/learn/what-is-an-ai-gateway/"><strong>1. What is an AI gateway</strong><span>The idea with one picture, what it can do because of where it sits, and what it is not.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/learn/why-companies-need-one/"><strong>2. Why companies need one</strong><span>Five questions most companies cannot answer about their AI use today.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/learn/five-steps/"><strong>3. The five steps</strong><span>See, Know, Limit, Protect, Prove. One change at a time, with the exact lines for each.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/learn/rollout-plan/"><strong>4. Rollout plan</strong><span>The whole rollout on one page: who does what, what changes for people, and what you decide.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/learn/glossary/"><strong>Glossary</strong><span>Gateway, guardrail, kill switch, MCP, observe mode and the rest, each in two sentences.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+  </nav>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>Pick by who you are</h2>
+    <p>The same material, in the order that suits the reader.</p>
+  </div>
+  <table class="tbl">
+    <thead><tr><th>You are</th><th>Read first</th><th>Then</th></tr></thead>
+    <tbody>
+      <tr><td>A manager who was asked "do we need this?"</td><td><a href="/learn/why-companies-need-one/">Why companies need one</a></td><td><a href="/learn/rollout-plan/">Rollout plan</a></td></tr>
+      <tr><td>The engineer who will set it up</td><td><a href="/learn/five-steps/">The five steps</a></td><td><a href="https://gantry-docs.eliran.me/getting-started/quickstart/">The quickstart in the docs</a></td></tr>
+      <tr><td>In security or compliance</td><td><a href="/learn/what-is-an-ai-gateway/">What is an AI gateway</a></td><td><a href="/security/">Security</a></td></tr>
+      <tr><td>New to all of it</td><td><a href="/learn/what-is-an-ai-gateway/">What is an AI gateway</a></td><td><a href="/learn/glossary/">Glossary</a></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="cta">
+  <div class="cta-box">
+    <h2>Start with step one. Block nothing, and find out what is in use.</h2>
+    <div class="actions">
+      <a class="btn btn-ink" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
+      <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
+    </div>
+  </div>
+</section>
+
+
+</main>
+
+<footer class="ftr">
+  <div class="wrap ftr-top">
+    <div class="ftr-about">
+      <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+gantry</a>
+      <p>A self-hosted AI gateway, governance first. One Docker image plus Postgres, in your cloud.</p>
+    </div>
+    <nav class="ftr-cols" aria-label="Site map">
+      <div>
+        <h2>Product</h2>
+        <a href="/product/">How it works</a>
+        <a href="/deploy/">Deploy</a>
+        <a href="/security/">Security</a>
+        <a href="/compare/">Compare</a>
+        <a href="/enterprise/">Enterprise</a>
+      </div>
+      <div>
+        <h2>Use cases</h2>
+        <a href="/use-cases/coding-agents/">Coding agents</a>
+        <a href="/use-cases/cloud-agents/">Cloud and production agents</a>
+        <a href="/use-cases/mcp-tools/">MCP tools</a>
+        <a href="/use-cases/local-models/">Local and self-hosted models</a>
+        <a href="/use-cases/regulated-data/">Regulated data and residency</a>
+        <a href="/use-cases/cost-control/">Cost control</a>
+      </div>
+      <div>
+        <h2>By role</h2>
+        <a href="/for/security/">Security</a>
+        <a href="/for/platform/">Platform</a>
+        <a href="/for/finance/">Finance</a>
+        <a href="/for/engineering-leaders/">Engineering leaders</a>
+      </div>
+      <div>
+        <h2>Learn</h2>
+        <a href="/learn/what-is-an-ai-gateway/">What is an AI gateway</a>
+        <a href="/learn/why-companies-need-one/">Why companies need one</a>
+        <a href="/learn/five-steps/">The five steps</a>
+        <a href="/learn/rollout-plan/">Rollout plan</a>
+        <a href="/learn/glossary/">Glossary</a>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <a href="https://gantry-docs.eliran.me/">Docs</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/changelog/">Changelog</a>
+      </div>
+    </nav>
+  </div>
+  <p class="wrap ftr-legal">Open source core under Apache 2.0. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
+</footer>
+</body>
+</html>

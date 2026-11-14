@@ -1,0 +1,138 @@
+<!--
+title: Local and self-hosted models: Ollama, vLLM, on-prem and air-gapped
+description: Serve models from Ollama, vLLM or LM Studio through Gantry, on-prem or in an air-gapped network. The same keys, rules, budgets and audit log as hosted models, with the exact policy lines.
+nav: use-cases
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>Local and self-hosted models</span></nav>
+  <h1>Your own models, behind the same names, rules and record.</h1>
+  <p class="lead">You serve models with Ollama or vLLM, on your own hardware or in a network with no way out. The data stays in, and you still need to know who used which model, and to keep some teams on local models only.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 40px">
+{{gate
+label: Four callers send requests through Gantry. Requests to local models pass. A request from the legal team for a hosted model is refused because the rule lists local models only.
+foot: Example requests. Team legal may use local models only.
+lane: lior.avni | legal | vLLM, on-prem
+lane: maya.cohen | payments | Ollama, on-prem
+lane: tal.shor | legal | hosted
+lane: omer.katz | research | Anthropic
+req: 0 | lior.avni | legal | allow | local-llm, rule legal-local
+req: 1 | maya.cohen | payments | allow | gpt-oss:20b, rule everyone
+req: 3 | omer.katz | research | allow | claude-sonnet-5-5, rule research
+req: 0 | lior.avni | legal | allow | local-llm, rule legal-local
+req: 1 | maya.cohen | payments | allow | gpt-oss:20b, rule everyone
+req: 3 | omer.katz | research | allow | claude-haiku-5-5, rule research
+req: 2 | tal.shor | legal | refused | claude-sonnet-5-5, model_not_allowed | model_not_allowed
+req: 0 | lior.avni | legal | allow | local-llm, rule legal-local
+}}
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>What goes wrong without control</h2></div>
+  <dl class="facts">
+    <div><dt>An open port on the network</dt><dd>Ollama ignores API keys. Anyone who can reach the server can use it, and its logs do not say who did.</dd></div>
+    <div><dt>Two worlds, two sets of rules</dt><dd>Hosted models go through one path and local ones through another. A team told to stay local can switch to a hosted model by changing a URL.</dd></div>
+    <div><dt>No usage numbers</dt><dd>You bought the GPUs. You cannot say which teams fill them, or whether the next purchase is needed.</dd></div>
+    <div><dt>Tools that phone home</dt><dd>In an air-gapped network, software that checks a license or sends telemetry over the internet stops working or gets blocked by review.</dd></div>
+  </dl>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>The steps</h2>
+    <p>Local model servers speak OpenAI's API, so each one is a provider like any other, with one extra line.</p>
+  </div>
+  <ol class="guide">
+    <li>
+      <div class="guide-text">
+        <h3>Add the local server as a provider</h3>
+        <p>A provider on a private address needs <code>allow_private: true</code>. Without it, <code>gantry check</code> refuses the file and says why. Ollama takes no key, so Gantry sends none, and never the caller's Gantry key.</p>
+        <a class="more" href="docs:/providers/local-models/">Local models in the docs {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>providers:
+  - name: ollama
+    kind: openai
+    url: http://127.0.0.1:11434/v1
+    allow_private: true
+    models: [gpt-oss:20b]
+  - name: vllm
+    kind: openai
+    url: http://127.0.0.1:8000
+    allow_private: true
+    key_env: VLLM_API_KEY
+    models: [local-llm]</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Keep a team on local models</h3>
+        <p>A rule lists the models its people may use. Team legal gets the local model and nothing else. A request for a hosted model is refused with <code>model_not_allowed</code> before anything is sent.</p>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>rules:
+  - name: legal-local
+    principals: { team: legal }
+    models: [local-llm]
+  - name: everyone
+    principals: { any: true }
+    models: [gpt-oss:20b, claude-haiku-5-5]</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Give local models a price</h3>
+        <p>A budget needs a price to count. Set zero so a rule with a budget can still reach the local model, or set your own cost per token to charge teams for GPU time.</p>
+        <a class="more" href="docs:/routing/pricing/">Pricing in the docs {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>prices:
+  gpt-oss:20b: { input: 0, output: 0 }
+  local-llm: { input: 0, output: 0 }</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Run coding agents on the local model</h3>
+        <p>Claude Code speaks Anthropic's messages API. With <code>accept_messages: true</code> on the provider, Gantry translates its requests to chat completions, so Claude Code can run on a model you serve.</p>
+        <a class="more" href="docs:/routing/translation/">Translation in the docs {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>providers:
+  - name: vllm
+    kind: openai
+    url: http://127.0.0.1:8000
+    allow_private: true
+    accept_messages: true
+    models: [local-llm]</pre></figure>
+    </li>
+  </ol>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>In an air-gapped network</h2>
+    <p>Gantry was built to run with no connection out. These are the parts that matter there.</p>
+  </div>
+  <dl class="facts">
+    <div><dt>One image to bring in</dt><dd>A single static binary in an image built from scratch. The image also carries the Helm chart and the Terraform modules for its version, so you copy them out of the image you already approved.</dd></div>
+    <div><dt>The license is checked offline</dt><dd>The Enterprise license is verified against a public key built into the binary. The check never uses the network. A lapsed license turns Enterprise features off and never stops model traffic.</dd></div>
+    <div><dt>Nothing calls home</dt><dd>Self-hosted Gantry sends nothing to the Gantry project. Prometheus metrics are off by default, and traces and audit records go only to the systems you name.</dd></div>
+    <div><dt>Guardrails that run inside</dt><dd>The built-in secrets and personal data detectors run inside Gantry and send no text anywhere. Vendor guardrails call the vendor's API, so leave those out, or use the ones you host yourself.</dd></div>
+    <div><dt>A release you can verify</dt><dd>Images are signed and ship with an SBOM and provenance. <a href="docs:/operations/verify-release/">Verify a release</a></dd></div>
+  </dl>
+</section>
+
+<section class="wrap sec doc">
+  <h2>Limits to know before you start</h2>
+  <ul class="ticks out">
+    <li><strong>The local servers were configured from their docs and tested against local mocks.</strong> Each base URL was checked against the vendor's documentation, and the path Gantry calls was confirmed against a mock. <a href="docs:/getting-started/status/">Project status</a></li>
+    <li><strong>Inside a container, <code>127.0.0.1</code> is the container.</strong> Use the host's address for a model server on the same machine.</li>
+    <li><strong>Gantry does not serve models.</strong> It sits in front of the servers that do.</li>
+  </ul>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Read next</h2></div>
+  <nav class="rows tight" aria-label="Read next">
+    <a href="/deploy/"><strong>Deploy</strong><span>What you deploy, and what stays in your network.</span>{{> arrow}}</a>
+    <a href="/use-cases/regulated-data/"><strong>Regulated data and residency</strong><span>Keep requests in the regions a rule allows.</span>{{> arrow}}</a>
+    <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops.</span>{{> arrow}}</a>
+  </nav>
+</section>
+
+{{> cta}}

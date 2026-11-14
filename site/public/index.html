@@ -4,628 +4,306 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gantry: put a name on every AI call</title>
-<meta name="description" content="Gantry is a self-hosted AI gateway. Every call from coding tools, apps and MCP clients goes through it with a person's name, a budget, guardrails and a record in a hash-chained audit log. One Docker image and Postgres, in your cloud.">
+<meta name="description" content="Gantry is a self-hosted AI gateway. Every call from coding tools, agents, apps and MCP clients goes through it with a person&#x27;s name, a budget, guardrails and a record in a hash-chained audit log. One Docker image plus Postgres, in your cloud.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <link rel="canonical" href="https://gantry.eliran.me/">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="Gantry">
 <meta property="og:url" content="https://gantry.eliran.me/">
 <meta property="og:title" content="Gantry: put a name on every AI call">
-<meta property="og:description" content="A self-hosted AI gateway, governance first. A name, a budget and a verifiable record on every model and MCP request.">
+<meta property="og:description" content="Gantry is a self-hosted AI gateway. Every call from coding tools, agents, apps and MCP clients goes through it with a person&#x27;s name, a budget, guardrails and a record in a hash-chained audit log. One Docker image plus Postgres, in your cloud.">
 <meta property="og:image" content="https://gantry.eliran.me/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="preload" href="/fonts/FamiljenGrotesk-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<script>try { var t = new URLSearchParams(location.search).get('theme') || localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <link rel="stylesheet" href="/styles.css">
+<script src="/site.js" defer></script>
 </head>
-<body>
+<body class="">
+<a class="skip" href="#main">Skip to the content</a>
 
-<header class="header" id="header">
-  <div class="wrap">
-    <a class="brand" href="#top" aria-label="Gantry, back to top">
-      <svg width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
-      gantry
-    </a>
-    <nav class="nav" aria-label="Sections">
-      <a href="#steps">Five steps</a>
-      <a href="#use-cases">Use cases</a>
-      <a href="#rollouts">Example rollouts</a>
-      <a href="#different">Compare</a>
-      <a href="#editions">Editions</a>
-      <a href="/security.html">Security</a>
-      <a href="https://gantry-docs.eliran.me/">Docs</a>
+<header class="hdr" id="hdr">
+  <div class="wrap hdr-in">
+    <a class="brand" href="/" aria-current="page" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+gantry</a>
+
+    <button class="burger" type="button" aria-expanded="false" aria-controls="nav" aria-label="Menu"><span></span></button>
+
+    <nav class="nav" id="nav" aria-label="Main">
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="product" aria-expanded="false" aria-controls="menu-product">Product<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu" id="menu-product">
+          <a href="/product/"><strong>How it works</strong><span>The request path, the controls, the audit log and the console</span></a>
+          <a href="/deploy/"><strong>Deploy</strong><span>Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare</span></a>
+          <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops</span></a>
+          <a href="/compare/"><strong>Compare</strong><span>Gantry next to LiteLLM and Bifrost, with sources</span></a>
+        </div>
+      </div>
+
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="use-cases" aria-expanded="false" aria-controls="menu-use-cases">Use cases<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu menu-wide" id="menu-use-cases">
+          <div class="menu-col">
+            <p class="menu-title">By what you run</p>
+            <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Claude Code, Codex, Copilot, Cursor, Gemini CLI</span></a>
+            <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Apps and agents calling models from your cloud</span></a>
+            <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Your MCP servers behind one endpoint</span></a>
+            <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>Ollama, vLLM, on-prem, air-gapped</span></a>
+            <a href="/use-cases/regulated-data/"><strong>Regulated data and residency</strong><span>Regions, masking and records</span></a>
+            <a href="/use-cases/cost-control/"><strong>Cost control</strong><span>Spend per person, budgets, forecasts</span></a>
+          </div>
+          <div class="menu-col">
+            <p class="menu-title">By role</p>
+            <a href="/for/security/"><strong>Security</strong><span>What left the company, with proof</span></a>
+            <a href="/for/platform/"><strong>Platform</strong><span>Model access without provider keys on laptops</span></a>
+            <a href="/for/finance/"><strong>Finance</strong><span>Who spent it, and will the budget last</span></a>
+            <a href="/for/engineering-leaders/"><strong>Engineering leaders</strong><span>Coding agents for every developer, tracked</span></a>
+            <a class="menu-all" href="/use-cases/">All use cases</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="learn" aria-expanded="false" aria-controls="menu-learn">Learn<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu" id="menu-learn">
+          <a href="/learn/what-is-an-ai-gateway/"><strong>What is an AI gateway</strong><span>The idea in plain words, with one picture</span></a>
+          <a href="/learn/why-companies-need-one/"><strong>Why companies need one</strong><span>Five questions most companies cannot answer</span></a>
+          <a href="/learn/five-steps/"><strong>The five steps</strong><span>See, Know, Limit, Protect, Prove</span></a>
+          <a href="/learn/rollout-plan/"><strong>Rollout plan</strong><span>One page to forward to your team</span></a>
+          <a href="/learn/glossary/"><strong>Glossary</strong><span>The words, explained</span></a>
+        </div>
+      </div>
+
+      <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
+      <a class="nav-link" href="https://gantry-docs.eliran.me/">Docs</a>
+
+      <div class="nav-actions">
+        <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
+        <button class="theme" type="button" aria-label="Switch between light and dark">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
+        </button>
+      </div>
     </nav>
-    <div class="header-actions">
-      <a class="btn btn-line btn-sm hide-sm" href="https://github.com/ggantry/gantry">GitHub</a>
-      <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
-      <details class="menu">
-        <summary aria-label="Menu"><span></span></summary>
-        <nav aria-label="Sections, small screens">
-          <a href="#steps">Five steps</a>
-          <a href="#use-cases">Use cases</a>
-          <a href="#rollouts">Example rollouts</a>
-          <a href="#different">Compare</a>
-          <a href="#deploy">Security and deployment</a>
-          <a href="#editions">Editions</a>
-          <a href="https://gantry-docs.eliran.me/">Docs</a>
-          <a href="https://github.com/ggantry/gantry">GitHub</a>
-        </nav>
-      </details>
-    </div>
   </div>
 </header>
 
-<main>
-
-<section class="wrap hero" id="top">
-  <p class="eyebrow live">Self-hosted AI gateway, open source core</p>
-  <h1>Put a name on every AI call.</h1>
-  <div class="hero-cols">
-    <div class="hero-text">
-      <p class="lead">Gantry is a self-hosted AI gateway: coding tools, apps and MCP clients call models through it, each request tied to a person and a budget.</p>
-      <div class="actions">
-        <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
-        <a class="btn btn-line" href="#steps">See the five steps</a>
-      </div>
-      <p class="hero-note">One Docker image plus Postgres, in your cloud.</p>
-    </div>
-
-    <div class="terminal" aria-label="Two example records from a Gantry audit log">
-      <div class="terminal-bar"><span>gantry-audit.jsonl</span><span class="bar-note">example records</span></div>
-      <div class="try-body">
-        <ul class="records">
-          <li>
-            <span class="rec-n">#41</span>
-            <span class="rec-who">maya.cohen <i>payments</i></span>
-            <span class="verdict pass">allow</span>
-            <span class="rec-meta">gpt-4o-mini, rule payments-team</span>
-          </li>
-          <li>
-            <span class="rec-n">#42</span>
-            <span class="rec-who">dana.levi <i>interns</i></span>
-            <span class="verdict stop">refused</span>
-            <span class="rec-meta">gpt-4o, budget_exceeded: interns has a 50 USD daily budget</span>
-          </li>
-        </ul>
-        <p class="try-foot">Each record carries the hash of the one before it, so an edited log fails <a href="https://gantry-docs.eliran.me/governance/audit-log/">gantry audit verify</a>.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="works" id="works" aria-label="Works with">
-  <div class="wrap works-head">
-    <p class="eyebrow">Works with the tools your people already use</p>
-    <button type="button" class="pause" id="pause" aria-pressed="false">Pause</button>
-  </div>
-  <div class="marquee">
-    <div class="marquee-track">
-      <ul>
-        <li><span class="logo" style="--m: url(/logos/claude.svg)"></span>Claude Code</li>
-        <li>OpenAI Codex</li>
-        <li><span class="logo" style="--m: url(/logos/githubcopilot.svg)"></span>GitHub Copilot</li>
-        <li><span class="logo" style="--m: url(/logos/cursor.svg)"></span>Cursor</li>
-        <li><span class="logo" style="--m: url(/logos/zedindustries.svg)"></span>Zed</li>
-        <li><span class="logo" style="--m: url(/logos/jetbrains.svg)"></span>JetBrains AI</li>
-        <li>Qwen Code</li>
-        <li>Gemini CLI</li>
-        <li>Open WebUI</li>
-        <li>LibreChat</li>
-        <li><span class="logo" style="--m: url(/logos/modelcontextprotocol.svg)"></span>MCP clients</li>
-      </ul>
-      <ul aria-hidden="true">
-        <li><span class="logo" style="--m: url(/logos/claude.svg)"></span>Claude Code</li>
-        <li>OpenAI Codex</li>
-        <li><span class="logo" style="--m: url(/logos/githubcopilot.svg)"></span>GitHub Copilot</li>
-        <li><span class="logo" style="--m: url(/logos/cursor.svg)"></span>Cursor</li>
-        <li><span class="logo" style="--m: url(/logos/zedindustries.svg)"></span>Zed</li>
-        <li><span class="logo" style="--m: url(/logos/jetbrains.svg)"></span>JetBrains AI</li>
-        <li>Qwen Code</li>
-        <li>Gemini CLI</li>
-        <li>Open WebUI</li>
-        <li>LibreChat</li>
-        <li><span class="logo" style="--m: url(/logos/modelcontextprotocol.svg)"></span>MCP clients</li>
-      </ul>
-    </div>
-  </div>
-  <div class="marquee back">
-    <div class="marquee-track">
-      <ul>
-        <li>OpenAI</li>
-        <li><span class="logo" style="--m: url(/logos/anthropic.svg)"></span>Anthropic</li>
-        <li>Azure OpenAI</li>
-        <li>AWS Bedrock</li>
-        <li><span class="logo" style="--m: url(/logos/googlecloud.svg)"></span>Vertex AI</li>
-        <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini</li>
-        <li><span class="logo" style="--m: url(/logos/mistralai.svg)"></span>Mistral</li>
-        <li>Groq</li>
-        <li>Local models</li>
-      </ul>
-      <ul aria-hidden="true">
-        <li>OpenAI</li>
-        <li><span class="logo" style="--m: url(/logos/anthropic.svg)"></span>Anthropic</li>
-        <li>Azure OpenAI</li>
-        <li>AWS Bedrock</li>
-        <li><span class="logo" style="--m: url(/logos/googlecloud.svg)"></span>Vertex AI</li>
-        <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini</li>
-        <li><span class="logo" style="--m: url(/logos/mistralai.svg)"></span>Mistral</li>
-        <li>Groq</li>
-        <li>Local models</li>
-      </ul>
-    </div>
-  </div>
-  <p class="wrap works-note">Integrations, named so you can find yours. Each mark belongs to its owner. <a href="https://gantry-docs.eliran.me/integrations/coding-tools/">Which tools were tested, and what each one sends elsewhere</a></p>
-</section>
-
-<section class="wrap problem" id="problem">
-  <div class="problem-head">
-    <p class="eyebrow">The problem</p>
-    <h2 class="section-title">Three questions most companies cannot answer today.</h2>
-  </div>
-  <dl class="asks">
-    <div>
-      <dt>Who uses which AI tool?</dt>
-      <dd>Developers installed Claude Code, Cursor and Copilot on their own. A team wired an agent to an MCP server. The list lives in nobody's system.</dd>
-    </div>
-    <div>
-      <dt>What does it cost, and who spent it?</dt>
-      <dd>The provider sends one invoice for one shared key. It has a total and no names, so a runaway agent shows up at the end of the month.</dd>
-    </div>
-    <div>
-      <dt>What was sent out?</dt>
-      <dd>Source code, customer records and secrets go into prompts every day. When security or an auditor asks for the record, there is none to hand over.</dd>
-    </div>
-  </dl>
-  <p class="problem-close">This is where most companies are, and it is fixable without stopping anyone's work. Send every call through one place you run, watch first, and add one control at a time. The five steps below are that order.</p>
-</section>
-
-<section class="ladder" id="steps">
-  <div class="wrap">
-    <div class="ladder-head">
-      <p class="eyebrow">Five steps</p>
-      <h2 class="section-title">One change at a time, in this order.</h2>
-      <p>Each step is a few lines in one policy file or one page in the console. You can stop after any of them and keep what you have.</p>
-    </div>
-
-    <ol class="rungs">
-      <li class="rung">
-        <div class="rung-mark" aria-hidden="true">1</div>
-        <div class="rung-text">
-          <h3>See</h3>
-          <p>Point your tools at Gantry with a rule that allows everything. Nothing is blocked. After a week you know which tools are in use, by which teams, and what each one costs.</p>
-          <p class="gets"><strong>You get:</strong> a record of every request, spend per team and model, and <code>gantry audit coverage</code>, which lists who sent requests from which tool and which key holders sent nothing.</p>
-          <a class="more" href="https://gantry-docs.eliran.me/governance/coverage/">Coverage in the docs</a>
-        </div>
-        <pre class="code"><span class="dim"># gantry.policy.yaml</span>
-rules:
-  - name: everyone
-    principals: { any: true }
-    models: ["*"]
-
-<span class="dim"># on each laptop, for Claude Code</span>
-export ANTHROPIC_BASE_URL=https://gantry.internal
-export ANTHROPIC_API_KEY=gantry_...</pre>
-      </li>
-
-      <li class="rung">
-        <div class="rung-mark" aria-hidden="true">2</div>
-        <div class="rung-text">
-          <h3>Know</h3>
-          <p>Give each person and each service its own key, or let developers sign in with your identity provider. The provider's key stays inside the gateway and never reaches a laptop.</p>
-          <p class="gets"><strong>You get:</strong> a person and a team on every record. Keys are shown once and stored as a hash, and one person's key can be revoked without touching anyone else.</p>
-          <a class="more" href="https://gantry-docs.eliran.me/governance/keys/">Keys and identity in the docs</a>
-        </div>
-        <pre class="code"><span class="dim"># a key per person</span>
-gantry key new maya.cohen --team payments
-
-<span class="dim"># or single sign-on from the terminal</span>
-gantry login https://gantry.example.com
-
-<span class="dim"># or JWTs from your identity provider</span>
-jwt:
-  - issuer: https://login.example.com
-    audience: gantry
-    person_claim: email
-    team_claim: team</pre>
-      </li>
-
-      <li class="rung">
-        <div class="rung-mark" aria-hidden="true">3</div>
-        <div class="rung-text">
-          <h3>Limit</h3>
-          <p>Put a budget and a rate limit on a team, a person, a key or a model. Keep a kill switch for the day an agent loops or a key leaks.</p>
-          <p class="gets"><strong>You get:</strong> spend that cannot pass the number you wrote, a refusal that tells the person why and when the budget starts again, and a switch that stops matching traffic within a second.</p>
-          <a class="more" href="https://gantry-docs.eliran.me/governance/budgets-and-rate-limits/">Budgets and rate limits in the docs</a>
-        </div>
-        <pre class="code">rules:
-  - name: payments-team
-    principals: { team: payments }
-    models: [claude-sonnet-5-5, claude-haiku-5-5]
-    budget: { usd: 2000, per: month }
-    rate: { rpm: 600 }
-    parallel: 20
-
-<span class="dim"># when something goes wrong</span>
-gantry kill --team payments \
-  --reason "runaway agent, investigating"</pre>
-      </li>
-
-      <li class="rung">
-        <div class="rung-mark" aria-hidden="true">4</div>
-        <div class="rung-text">
-          <h3>Protect</h3>
-          <p>Turn on guardrails for prompts, answers and MCP tool calls. Run each one in shadow mode first: it records what it would have stopped and blocks nothing until the date you set.</p>
-          <p class="gets"><strong>You get:</strong> secrets and personal data blocked or masked before they leave, your own patterns and keyword lists, vendor guardrails such as Lakera Guard, Presidio and Bedrock guardrails, and MCP tools that wait for an admin's approval.</p>
-          <a class="more" href="https://gantry-docs.eliran.me/governance/guardrails/">Guardrails in the docs</a>
-        </div>
-        <pre class="code">guardrails:
-  - name: no-secrets
-    type: secrets
-    action: block
-    shadow_until: 2027-01-15
-  - name: mask-pii
-    type: pii
-    action: mask
-rules:
-  - name: payments-team
-    <span class="dim"># ...</span>
-    guardrails: [no-secrets, mask-pii]
-    tools: [github.*]
-    approve_tools: [github.merge_pull_request]</pre>
-      </li>
-
-      <li class="rung">
-        <div class="rung-mark" aria-hidden="true">5</div>
-        <div class="rung-text">
-          <h3>Prove</h3>
-          <p>Every record carries the hash of the one before it. Change, insert or reorder a line and the chain breaks at that record. Anyone can check it with one command.</p>
-          <p class="gets"><strong>You get:</strong> an audit log you can verify yourself. With Gantry Enterprise, export to Splunk, Datadog, Elastic, Sentinel or object storage, a retention period, and a legal hold. Each exported batch carries its hash range, so the SIEM can check its copy.</p>
-          <a class="more" href="https://gantry-docs.eliran.me/governance/audit-log/">Audit log in the docs</a>
-        </div>
-        <pre class="code"><span class="dim">$ </span>gantry audit verify gantry-audit.jsonl
-<span class="good">gantry-audit.jsonl: 122 records in an
-unbroken chain from record 1 to record 122.</span>
-Last hash: ef2d127d...
-
-<span class="dim"># one record, shortened</span>
-{"n":119,"person":"maya.cohen",
- "team":"payments","verdict":"allow",
- "rule":"payments-team",
- "prev":"6b86b273...","hash":"d4735e3a..."}</pre>
-      </li>
-    </ol>
-  </div>
-</section>
-
-<section class="wrap uses" id="use-cases">
-  <div class="uses-head">
-    <p class="eyebrow">Use cases</p>
-    <h2 class="section-title">Who asks for it, and what they get.</h2>
-  </div>
-
-  <div class="roles" role="table" aria-label="Use cases by role">
-    <div class="role" role="row">
-      <h3 role="cell">Security</h3>
-      <p class="role-q" role="cell">"What left the company, and can I prove it?"</p>
-      <p role="cell">Guardrails on requests, answers and tool calls. A hash-chained record of every decision, with no prompt text, keys or matched secrets in it. Alerts on guardrail blocks and on a key used from a new address.</p>
-    </div>
-    <div class="role" role="row">
-      <h3 role="cell">Platform</h3>
-      <p class="role-q" role="cell">"How do I give 300 people model access without handing out provider keys?"</p>
-      <p role="cell">One endpoint for OpenAI, Anthropic, Azure OpenAI, Bedrock, Vertex AI and Gemini. Aliases, retries and fallbacks. A policy file that <code>gantry check</code> validates in CI, where a misspelled field is an error with its line number.</p>
-    </div>
-    <div class="role" role="row">
-      <h3 role="cell">Finance</h3>
-      <p class="role-q" role="cell">"Who spent this, and will the budget last the month?"</p>
-      <p role="cell">Spend per organization, team, person, key and model. Budgets in your time zone with periods from a minute to a year, and a forecast for each one: it lasts, or the day it runs out.</p>
-    </div>
-    <div class="role" role="row">
-      <h3 role="cell">Engineering leaders</h3>
-      <p class="role-q" role="cell">"Can we roll out coding agents without losing track of them?"</p>
-      <p role="cell">Two environment variables per developer. Each session runs under the developer's own name and inside the team's budget. A refusal shows up in the terminal they already use, with the reason and a decision ID.</p>
-    </div>
-  </div>
-
-  <div class="situations">
-    <a class="situation" href="https://gantry-docs.eliran.me/integrations/claude-code/">
-      <h3>Rolling out a coding agent</h3>
-      <p>Claude Code, Codex, Copilot, Cursor and others, each developer signed in through your identity provider, each with a daily budget.</p>
-      <span>Coding tool guides</span>
-    </a>
-    <a class="situation" href="https://gantry-docs.eliran.me/governance/mcp-gateway/">
-      <h3>MCP tools</h3>
-      <p>Your MCP servers behind one endpoint. Each person sees the tools their rule allows. A tool whose description changed can be held until an admin approves it.</p>
-      <span>MCP gateway</span>
-    </a>
-    <a class="situation" href="https://gantry-docs.eliran.me/integrations/connect-a-project/">
-      <h3>Internal apps and agents</h3>
-      <p>A key per service, a budget per end customer or tag, and the same audit record as a person's request. The OpenAI and Anthropic SDKs need a base URL and a key.</p>
-      <span>Connect a project</span>
-    </a>
-    <a class="situation" href="https://gantry-docs.eliran.me/routing/strategies/">
-      <h3>Regulated data</h3>
-      <p>Requests kept in the regions a rule allows, personal data masked before it leaves, and optional redacted bodies sealed apart from the log for the people you name.</p>
-      <span>Regions and routing</span>
-    </a>
-  </div>
-</section>
-
-<section class="rollouts" id="rollouts">
-  <div class="wrap">
-    <div class="rollouts-head">
-      <p class="eyebrow">Example rollouts</p>
-      <h2 class="section-title">Three ways this goes, written out.</h2>
-      <p class="honest">These are scenarios we wrote to show the steps, with real policy lines. They are not customers. Gantry is pre-1.0 and has no customer stories to publish yet.</p>
-    </div>
-
-    <details class="rollout" open>
-      <summary>
-        <p class="tag">Example rollout</p>
-        <h3>A 200-person fintech rolling out Claude Code</h3>
-        <p>Sixty engineers already use Claude Code with one shared Anthropic key. Finance sees a single invoice. Security has been asked whether card data has gone into a prompt.</p>
-      </summary>
-      <div class="rollout-body">
-      <div class="rollout-text">
-        <ol>
-          <li><strong>See.</strong> The shared key moves into Gantry and laptops point at the gateway. Nothing is blocked for two weeks.</li>
-          <li><strong>Know.</strong> Engineers run <code>gantry login</code> and get a personal key through the identity provider. The shared key is revoked.</li>
-          <li><strong>Limit.</strong> A daily budget per person and a monthly budget per team.</li>
-          <li><strong>Protect.</strong> The secrets guardrail runs in shadow, then blocks. Personal data is masked.</li>
-        </ol>
-        <p class="result"><strong>What they have:</strong> spend by engineer and team, a refusal message developers can act on, and a log that answers the card data question with records.</p>
-      </div>
-      <pre class="code">rules:
-  - name: engineering
-    principals: { team: engineering }
-    models: [claude-sonnet-5-5, claude-haiku-5-5]
-    budget: { usd: 6000, per: month }
-    guardrails: [no-secrets, mask-pii]
-limits:
-  - { person: "*", budget: { usd: 30, per: day } }
-guardrails:
-  - { name: no-secrets, type: secrets, action: block }
-  - { name: mask-pii, type: pii, action: mask }</pre>
-          </div>
-    </details>
-
-    <details class="rollout" open>
-      <summary>
-        <p class="tag">Example rollout</p>
-        <h3>A platform team with 40 MCP servers</h3>
-        <p>Agents across the company call internal MCP servers for GitHub, the data warehouse and deploys. Each server has its own token, and nobody can list which agent may call which tool.</p>
-      </summary>
-      <div class="rollout-body">
-      <div class="rollout-text">
-        <ol>
-          <li><strong>See.</strong> The servers go behind Gantry's one MCP endpoint. Every tool call is recorded with the person who made it.</li>
-          <li><strong>Know.</strong> People sign in with their key or by OAuth from the client. Each rule lists the tools its team may see.</li>
-          <li><strong>Limit.</strong> Merges and deploys wait for an admin's approval. Any tool has a kill switch.</li>
-          <li><strong>Protect.</strong> Each tool is pinned by a hash of its description and schema. A changed tool is held until an admin approves it.</li>
-        </ol>
-        <p class="result"><strong>What they have:</strong> one list of every tool, who called it, and a way to stop one tool without taking a server down.</p>
-      </div>
-      <pre class="code">mcp:
-  - name: github
-    url: https://api.githubcopilot.com/mcp/
-    tool_changes: block
-  - name: warehouse
-    url: https://warehouse-mcp.internal/mcp
-    tool_changes: block
-rules:
-  - name: platform
-    principals: { team: platform }
-    models: [claude-sonnet-5-5]
-    tools: [github.*, warehouse.query]
-    approve_tools: [github.merge_pull_request]
-    approval_timeout_seconds: 120</pre>
-          </div>
-    </details>
-
-    <details class="rollout" open>
-      <summary>
-        <p class="tag">Example rollout</p>
-        <h3>A healthcare company that must keep PHI in region</h3>
-        <p>Clinical teams want model help with notes. Compliance requires that patient data stays with an EU endpoint under a signed agreement, and that six years of records can be produced on request.</p>
-      </summary>
-      <div class="rollout-body">
-      <div class="rollout-text">
-        <ol>
-          <li><strong>See.</strong> Gantry runs in the company's own EU cloud account, from the Terraform module.</li>
-          <li><strong>Limit.</strong> The clinical rule reaches only deployments labelled <code>eu</code>. A request with no EU deployment is refused before anything is sent.</li>
-          <li><strong>Protect.</strong> Personal data is masked, and a regex guardrail masks patient record numbers.</li>
-          <li><strong>Prove.</strong> With Gantry Enterprise: export to the SIEM, a retention period, and a legal hold when a case opens.</li>
-        </ol>
-        <p class="result"><strong>What they have:</strong> a record per request naming the region rule that decided it. Gantry enforces the label you set on each deployment. It does not check where a provider runs.</p>
-      </div>
-      <pre class="code">aliases:
-  - name: clinical
-    deployments:
-      - { provider: azure-eu, model: gpt-4o, region: eu }
-      - { provider: openai, model: gpt-4o, region: us }
-guardrails:
-  - { name: mask-pii, type: pii, action: mask }
-  - name: patient-ids
-    type: regex
-    action: mask
-    patterns: { mrn: 'MRN-[0-9]{8}' }
-rules:
-  - name: clinical
-    principals: { team: clinical }
-    models: [clinical]
-    regions: [eu]
-    guardrails: [mask-pii, patient-ids]</pre>
-          </div>
-    </details>
-  </div>
-</section>
-
-<section class="wrap different" id="different">
-  <div class="different-head">
-    <p class="eyebrow">What is different</p>
-    <h2 class="section-title">A gateway built around the record.</h2>
-    <p>Gantry covers the gateway features you expect from LiteLLM or Bifrost: one endpoint, many providers, routing, retries, caching, budgets. The difference is what it does before a request leaves.</p>
-  </div>
-
-  <ol class="points">
-    <li><h3>Governance on every scope</h3><p>Budgets, rate limits and kill switches per organization, team, person, key, end customer, tag and model. <code>gantry explain</code> shows which rule decided and every limit that applied.</p></li>
-    <li><h3>An audit log you can verify</h3><p>The record is written before the request is forwarded. If it cannot be written, the request is refused. The chain is checked with one command, in the open source edition.</p></li>
-    <li><h3>One image, in your cloud</h3><p>A single static binary in an image built from scratch, running as a non-root user, with Postgres as the only other part. No Redis. Prompts and answers stay out of the log.</p></li>
-    <li><h3>One policy file</h3><p>Providers, rules, budgets and guardrails in one YAML file you keep in git. An unknown field is an error with its line and the nearest known word.</p></li>
-    <li><h3>Open source core</h3><p>Apache 2.0, for any number of people. Enterprise features are in the same image and turn on with a license key that is checked offline.</p></li>
-  </ol>
-
-  <div class="compare" role="table" aria-label="Audit and sign-on in the open source editions">
-    <div class="compare-row compare-top" role="row">
-      <span role="columnheader">In the open source edition</span>
-      <span role="columnheader">Gantry</span>
-      <span role="columnheader">LiteLLM</span>
-      <span role="columnheader">Bifrost</span>
-    </div>
-    <div class="compare-row" role="row">
-      <span role="cell">A record of every request</span>
-      <span role="cell" data-l="Gantry">Yes, hash-chained, written before the request is forwarded</span>
-      <span role="cell" data-l="LiteLLM">Audit logs are an Enterprise feature and record admin changes</span>
-      <span role="cell" data-l="Bifrost">Audit logs are an Enterprise feature</span>
-    </div>
-    <div class="compare-row" role="row">
-      <span role="cell">Single sign-on for the admin console</span>
-      <span role="cell" data-l="Gantry">Yes, OpenID Connect</span>
-      <span role="cell" data-l="LiteLLM">Free for up to 5 users, then Enterprise</span>
-      <span role="cell" data-l="Bifrost">Enterprise</span>
-    </div>
-  </div>
-  <p class="compare-note">From each project's public documentation: <a href="https://docs.litellm.ai/docs/proxy/audit_logs">LiteLLM audit logs</a>, <a href="https://docs.litellm.ai/docs/proxy/admin_ui_sso">LiteLLM SSO</a>, <a href="https://docs.getbifrost.ai/enterprise/audit-logs.md">Bifrost audit logs</a>. Both projects are older than Gantry and each does some jobs better. <a href="https://gantry-docs.eliran.me/migrate/comparison/">The full comparison, including where they lead</a></p>
-</section>
-
-<section class="wrap deploy" id="deploy">
-  <div class="deploy-head">
-    <p class="eyebrow">Security and deployment</p>
-    <h2 class="section-title">It runs where your data already is.</h2>
-  </div>
-  <div class="deploy-cols">
-    <ul class="doc-list">
-      <li>The audit log holds no prompt text, no answer text and no keys. A rule can keep redacted bodies, sealed apart from the log, for the people it names.</li>
-      <li>Gantry keys are shown once and stored as a SHA-256 hash. Provider credentials kept in the store are sealed with AES-256-GCM under a master key you hold.</li>
-      <li>The image holds one static binary and runs as user 65532. The license is checked offline, and a lapsed license never stops model traffic.</li>
-      <li>Gantry is pre-1.0 and has not yet had an independent security audit. <a href="/security.html">What it protects, and where it stops</a></li>
-    </ul>
-    <div class="targets">
-      <a href="https://gantry-docs.eliran.me/deploy/docker/"><strong>Docker Compose</strong><span>Gateway and Postgres on one machine</span></a>
-      <a href="https://gantry-docs.eliran.me/deploy/kubernetes/"><strong>Kubernetes</strong><span>Helm chart</span></a>
-      <a href="https://gantry-docs.eliran.me/deploy/aws/"><strong>AWS</strong><span>Terraform for ECS</span></a>
-      <a href="https://gantry-docs.eliran.me/deploy/gcp/"><strong>Google Cloud</strong><span>Terraform for Cloud Run</span></a>
-      <a href="https://gantry-docs.eliran.me/deploy/azure/"><strong>Azure</strong><span>Terraform for Container Apps</span></a>
-      <a href="https://gantry-docs.eliran.me/deploy/cloudflare/"><strong>Cloudflare</strong><span>Containers, audit chain in R2</span></a>
-    </div>
-  </div>
-  <p class="deploy-note">The deploy guides use the Gantry Enterprise image. The open source gateway builds from source with one script, and runs the same way.</p>
-
-  <div class="index">
-    <h3>Everything the gateway does, by docs page</h3>
-    <ul>
-      <li><a href="https://gantry-docs.eliran.me/governance/guardrails/">Guardrails</a><span>Built-in detectors, your patterns, eight vendors, webhooks, shadow mode and backtests</span></li>
-      <li><a href="https://gantry-docs.eliran.me/governance/mcp-gateway/">MCP gateway</a><span>Tool allow lists, approvals, tool pins, per-person credentials</span></li>
-      <li><a href="https://gantry-docs.eliran.me/governance/budgets-and-rate-limits/">Budgets and limits</a><span>Dollars, requests, tokens and requests in flight, exact across replicas</span></li>
-      <li><a href="https://gantry-docs.eliran.me/governance/access-control/">Access</a><span>Keys with rotation, allowed networks, JWTs, SSO, SCIM, console roles</span></li>
-      <li><a href="https://gantry-docs.eliran.me/operations/console-editing/">Policy changes</a><span>Versions, a second admin's approval, a dry run against recent requests</span></li>
-      <li><a href="https://gantry-docs.eliran.me/operations/request-log/">Request log</a><span>Search by person, model, cost and outcome, with a forecast per budget</span></li>
-      <li><a href="https://gantry-docs.eliran.me/routing/strategies/">Routing</a><span>Lowest latency or cost, regions, retries, fallbacks, session affinity</span></li>
-      <li><a href="https://gantry-docs.eliran.me/providers/batches-and-realtime/">APIs</a><span>Chat, Responses, messages, embeddings, files, batches, Realtime</span></li>
-      <li><a href="https://gantry-docs.eliran.me/operations/alerting/">Alerts and export</a><span>Slack, Teams, PagerDuty, email, SIEM destinations, OTLP traces</span></li>
-    </ul>
-  </div>
-</section>
-
-<section class="wrap plans" id="editions">
-  <div class="plans-head">
-    <p class="eyebrow">Editions</p>
-    <h2 class="section-title">Open source gateway. A license adds what a company needs.</h2>
-  </div>
-  <div class="plan-grid">
-    <article class="plan free">
-      <h3>Open source</h3>
-      <p>Apache 2.0, for any number of people. One binary on files, or several replicas on Postgres.</p>
-      <ul>
-        <li>Keys per person and workload, policy as code, kill switches</li>
-        <li>Hash-chained audit log with a command that verifies it</li>
-        <li>Guardrails, MCP gateway, budgets, rate limits and caching</li>
-        <li>Every major provider, with routing, retries and fallbacks</li>
-        <li>Admin console with single sign-on</li>
-      </ul>
+<main id="main">
+<section class="wrap hero">
+  <div class="hero-text">
+    <h1>Put a name on every AI call.</h1>
+    <p class="lead">Gantry is a self-hosted AI gateway. Coding tools, agents, apps and MCP clients call models through it, and each request gets a person's name, a budget, guardrails and a line in an audit log you can verify.</p>
+    <div class="actions">
       <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
-    </article>
-    <article class="plan paid">
-      <h3>Gantry Enterprise</h3>
-      <p>The same gateway in one image, with features a signed license key turns on. The key is checked offline and nothing calls home. A lapsed license never stops model traffic.</p>
-      <ul>
-        <li>Console members and SCIM from Okta or Microsoft Entra ID</li>
-        <li>Alerts, SIEM export and LLM observability destinations</li>
-        <li>Audit retention with a legal hold</li>
-        <li>Compose, Helm, Terraform and Cloudflare deployment templates</li>
-      </ul>
-      <a class="btn btn-line" href="https://gantry-docs.eliran.me/operations/license/">How the license works</a>
-    </article>
+      <a class="btn btn-line" href="#use-cases">Find your use case</a>
+    </div>
+    <p class="muted">One Docker image plus Postgres, in your own cloud. Open source core under Apache 2.0.</p>
   </div>
+
+<figure class="gate" data-gate aria-label="Four callers send requests through the Gantry gate. Allowed requests pass to the provider. One request is refused because its team is over budget. Each request writes an audit record.">
+<div class="gate-lanes" aria-hidden="true">
+<div class="lane"><span class="lane-from">maya.cohen<i>Claude Code</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
+<div class="lane"><span class="lane-from">svc-invoice-bot<i>internal app</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">OpenAI</span></div>
+<div class="lane"><span class="lane-from">dana.levi<i>Codex</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">budget_exceeded</span></span><span class="lane-to">OpenAI</span></div>
+<div class="lane"><span class="lane-from">ci.release<i>CI job</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
+</div>
+<ol class="records" aria-label="Example audit records, newest first">
+<li><span>#41</span><span class="r-who">maya.cohen<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule payments-team</span><span class="r-hash">eb9301 &larr; 7084cb</span></li>
+<li><span>#40</span><span class="r-who">dana.levi<i>interns</i></span><span class="v v-refused">refused</span><span class="r-meta">gpt-5, budget_exceeded</span><span class="r-hash">963777 &larr; eb9301</span></li>
+<li><span>#39</span><span class="r-who">ci.release<i>platform</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-haiku-5-5, rule platform</span><span class="r-hash">0e47c0 &larr; 963777</span></li>
+<li><span>#38</span><span class="r-who">svc-invoice-bot<i>finance</i></span><span class="v v-masked">masked</span><span class="r-meta">gpt-5-mini, credit_card masked</span><span class="r-hash">000000 &larr; 0e47c0</span></li>
+</ol>
+<figcaption class="gate-foot"><span>Example requests. Each record carries the hash of the one before it.</span><button class="gate-pause" type="button" aria-pressed="false">Pause</button></figcaption>
+<script type="application/json">{"n": 41, "last": "7084cb", "seq": [[0, "maya.cohen", "payments", "allow", "claude-sonnet-5-5, rule payments-team"], [3, "ci.release", "platform", "blocked", "claude-haiku-5-5, aws_access_key", "aws_access_key"], [1, "svc-invoice-bot", "finance", "allow", "gpt-5-mini, rule finance-apps"], [0, "maya.cohen", "payments", "allow", "claude-haiku-5-5, rule payments-team"], [1, "svc-invoice-bot", "finance", "masked", "gpt-5-mini, credit_card masked"], [3, "ci.release", "platform", "allow", "claude-haiku-5-5, rule platform"], [2, "dana.levi", "interns", "refused", "gpt-5, budget_exceeded", "budget_exceeded"], [0, "maya.cohen", "payments", "allow", "claude-sonnet-5-5, rule payments-team"]]}</script>
+</figure>
+</section>
+
+<section class="wrap works" aria-label="Works with">
+  <h2>Coding tools and clients</h2>
+  <ul>
+    <li><span class="logo" style="--m: url(/logos/claude.svg)"></span>Claude Code</li>
+    <li>OpenAI Codex</li>
+    <li><span class="logo" style="--m: url(/logos/githubcopilot.svg)"></span>GitHub Copilot</li>
+    <li><span class="logo" style="--m: url(/logos/cursor.svg)"></span>Cursor</li>
+    <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini CLI</li>
+    <li><span class="logo" style="--m: url(/logos/zedindustries.svg)"></span>Zed</li>
+    <li><span class="logo" style="--m: url(/logos/jetbrains.svg)"></span>JetBrains AI</li>
+    <li><span class="logo" style="--m: url(/logos/modelcontextprotocol.svg)"></span>MCP clients</li>
+  </ul>
+  <h2>Model providers</h2>
+  <ul>
+    <li>OpenAI</li>
+    <li><span class="logo" style="--m: url(/logos/anthropic.svg)"></span>Anthropic</li>
+    <li>Azure OpenAI</li>
+    <li>Amazon Bedrock</li>
+    <li><span class="logo" style="--m: url(/logos/googlecloud.svg)"></span>Vertex AI</li>
+    <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini</li>
+    <li><span class="logo" style="--m: url(/logos/mistralai.svg)"></span>Mistral</li>
+    <li>Ollama and vLLM</li>
+  </ul>
+  <p class="works-note">Named so you can find yours. Each mark belongs to its owner. <a href="/use-cases/coding-agents/#tools">Which tools were run against Gantry, and which were set up from their docs only</a></p>
+</section>
+
+<section class="wrap sec" id="use-cases">
+  <div class="sec-head">
+    <h2>Start from what you are running.</h2>
+    <p>Each page is a short path: the situation, what goes wrong without control, the steps with the exact policy lines, and what you see afterwards.</p>
+  </div>
+  <nav class="rows" aria-label="Use cases">
+    <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Developers run Claude Code, Codex, Copilot or Cursor on a shared provider key, and nobody can say who spent what.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Services and agents in your cloud call models with keys copied into environment files.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Agents call MCP servers for GitHub, the warehouse and deploys, and no one can list who may call which tool.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>You serve models with Ollama or vLLM, on-prem or in an air-gapped network, and want the same rules there.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/use-cases/regulated-data/"><strong>Regulated data and residency</strong><span>Some requests must stay in a region, and personal data must not leave in a prompt.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/use-cases/cost-control/"><strong>Cost control</strong><span>The provider sends one invoice with a total and no names.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+  </nav>
+  <p class="muted" style="margin-top: 24px">Or start from your role: <a href="/for/security/">security</a>, <a href="/for/platform/">platform</a>, <a href="/for/finance/">finance</a>, <a href="/for/engineering-leaders/">engineering leaders</a>.</p>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>What every call gets on its way through.</h2>
+    <p>Gantry sits between your tools and the model providers. It identifies the caller, decides by your policy and writes the record before anything is forwarded.</p>
+  </div>
+  <div class="split wide-right">
+    <div class="stack">
+      <dl class="facts">
+        <div><dt>A name</dt><dd>A key per person and per workload, or sign-in through your identity provider. The provider's key stays inside the gateway.</dd></div>
+        <div><dt>A budget</dt><dd>Dollars, requests and tokens per team, person, key or model. A refusal says why and when the budget starts again.</dd></div>
+        <div><dt>Guardrails</dt><dd>Secrets and personal data blocked or masked before they leave. Each one can run on trial first.</dd></div>
+        <div><dt>A kill switch</dt><dd>Stop a person, a team, a key or a model with one command and a reason.</dd></div>
+        <div><dt>A record</dt><dd>One line per request, chained by hash to the one before it. It holds no prompt or answer text.</dd></div>
+      </dl>
+      <a class="more" href="/product/">How it works, stage by stage <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    </div>
+    <div>
+      <figure class="shot"><figcaption>Gantry console: Spend <span>light theme</span></figcaption><div class="shot-in"><img src="/img/console-spend-light.webp" width="1440" height="1090" loading="lazy" alt="The Spend page of the Gantry console: spend per day, who spent most, each budget with its limit, and spend by model."></div></figure>
+      <p class="shot-cap">The console's Spend page, on test data. Team payments reached its budget on 13 November and is refused until 1 December.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>Five steps, one change at a time.</h2>
+    <p>Start by watching. Nothing your people do today is blocked in step one, and each step works without the next.</p>
+  </div>
+  <ol class="five">
+    <li><span class="dots" aria-hidden="true"><i class="on"></i><i></i><i></i><i></i><i></i></span><h3>See</h3><p>Which tools and models are in use, and what they cost.</p></li>
+    <li><span class="dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><h3>Know</h3><p>Who uses what, by person and team.</p></li>
+    <li><span class="dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><h3>Limit</h3><p>A budget per team, and a stop button.</p></li>
+    <li><span class="dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><h3>Protect</h3><p>Secrets and personal data stay out of prompts.</p></li>
+    <li><span class="dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><h3>Prove</h3><p>A record of every request that anyone can verify.</p></li>
+  </ol>
+  <div class="actions" style="margin-top: 32px">
+    <a class="btn btn-line" href="/learn/five-steps/">Walk through the five steps</a>
+    <a class="more" href="/learn/what-is-an-ai-gateway/">New to this? What an AI gateway is <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>It runs where your data already is.</h2>
+    <p>Prompts and answers go from your callers, through Gantry, to the providers your policy names. Gantry never stores them, and nothing calls home.</p>
+  </div>
+  <div class="parts">
+    <div><b>ghcr.io/ggantry/gantry</b><h3>One image</h3><p>A single static binary in an image built from scratch, running as a non-root user. It serves the gateway, the console and the admin API.</p></div>
+    <div><b>DATABASE_URL</b><h3>Postgres</h3><p>Keys, kill switches, budgets and rate limits, shared by every replica. No Redis.</p></div>
+    <div><b>gantry.policy.yaml</b><h3>One policy file</h3><p>Providers, rules, budgets and guardrails, kept in git. An unknown field is an error with its line number.</p></div>
+  </div>
+  <div class="actions" style="margin-top: 32px">
+    <a class="more" href="/deploy/">Docker, Kubernetes, AWS, Google Cloud, Azure <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a class="more" href="/enterprise/">Open source and Enterprise <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a class="more" href="/security/">What it protects, and where it stops <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <p class="note"><strong>Where the project stands.</strong> Gantry is at version 0.1.0, pre-1.0, and has not yet had an independent security audit. There are no customer stories on this site because there are none to publish yet. The docs say what is built, what is planned, and which integrations were run against what: <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>.</p>
 </section>
 
 <section class="cta">
   <div class="cta-box">
     <h2>Start with step one. Block nothing, and find out what is in use.</h2>
     <div class="actions">
-      <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
-      <a class="btn btn-ink-line" href="https://gantry-docs.eliran.me/deploy/overview/">Deploy in your cloud</a>
-      <a class="btn btn-ink-line" href="https://github.com/ggantry/gantry">GitHub</a>
+      <a class="btn btn-ink" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
+      <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
     </div>
   </div>
 </section>
+
+
 </main>
 
-<footer class="footer">
-  <div class="wrap top">
-    <div class="about">
-      <span class="brand" style="font-size: 20px; color: var(--fg)"><svg width="22" height="20" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>gantry</span>
-      <p>The self-hosted AI gateway built for governance.</p>
+<footer class="ftr">
+  <div class="wrap ftr-top">
+    <div class="ftr-about">
+      <a class="brand" href="/" aria-current="page" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+gantry</a>
+      <p>A self-hosted AI gateway, governance first. One Docker image plus Postgres, in your cloud.</p>
     </div>
-    <nav class="cols" aria-label="Footer">
-      <div><strong>Product</strong><a href="#steps">Five steps</a><a href="#use-cases">Use cases</a><a href="#rollouts">Example rollouts</a><a href="#editions">Editions</a><a href="/security.html">Security</a></div>
-      <div><strong>Docs</strong><a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a><a href="https://gantry-docs.eliran.me/governance/policy/">Policy file</a><a href="https://gantry-docs.eliran.me/deploy/overview/">Deploy</a><a href="https://gantry-docs.eliran.me/operations/security/">Security model</a></div>
-      <div><strong>Project</strong><a href="https://github.com/ggantry/gantry">GitHub</a><a href="https://gantry-docs.eliran.me/getting-started/status/">Status</a><a href="https://gantry-docs.eliran.me/migrate/comparison/">Compared with LiteLLM and Bifrost</a></div>
+    <nav class="ftr-cols" aria-label="Site map">
+      <div>
+        <h2>Product</h2>
+        <a href="/product/">How it works</a>
+        <a href="/deploy/">Deploy</a>
+        <a href="/security/">Security</a>
+        <a href="/compare/">Compare</a>
+        <a href="/enterprise/">Enterprise</a>
+      </div>
+      <div>
+        <h2>Use cases</h2>
+        <a href="/use-cases/coding-agents/">Coding agents</a>
+        <a href="/use-cases/cloud-agents/">Cloud and production agents</a>
+        <a href="/use-cases/mcp-tools/">MCP tools</a>
+        <a href="/use-cases/local-models/">Local and self-hosted models</a>
+        <a href="/use-cases/regulated-data/">Regulated data and residency</a>
+        <a href="/use-cases/cost-control/">Cost control</a>
+      </div>
+      <div>
+        <h2>By role</h2>
+        <a href="/for/security/">Security</a>
+        <a href="/for/platform/">Platform</a>
+        <a href="/for/finance/">Finance</a>
+        <a href="/for/engineering-leaders/">Engineering leaders</a>
+      </div>
+      <div>
+        <h2>Learn</h2>
+        <a href="/learn/what-is-an-ai-gateway/">What is an AI gateway</a>
+        <a href="/learn/why-companies-need-one/">Why companies need one</a>
+        <a href="/learn/five-steps/">The five steps</a>
+        <a href="/learn/rollout-plan/">Rollout plan</a>
+        <a href="/learn/glossary/">Glossary</a>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <a href="https://gantry-docs.eliran.me/">Docs</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/changelog/">Changelog</a>
+      </div>
     </nav>
   </div>
-  <p class="wrap legal">Apache 2.0. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
+  <p class="wrap ftr-legal">Open source core under Apache 2.0. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
 </footer>
-
-<script>
-// Header border on scroll, the marquee's pause button, the copy button, and closing the small-screen menu after a tap.
-(() => {
-  const header = document.getElementById('header');
-  const onScroll = () => header.classList.toggle('scrolled', window.scrollY > 8);
-  onScroll();
-  window.addEventListener('scroll', onScroll, { passive: true });
-
-  const pause = document.getElementById('pause');
-  pause.addEventListener('click', () => {
-    const paused = document.getElementById('works').classList.toggle('paused');
-    pause.setAttribute('aria-pressed', String(paused));
-    pause.textContent = paused ? 'Play' : 'Pause';
-  });
-
-  document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
-    const text = document.getElementById(b.dataset.copy).textContent.replace(/^\$ /gm, '');
-    try { await navigator.clipboard.writeText(text); b.textContent = 'Copied'; }
-    catch { b.textContent = 'Press Cmd+C'; }
-    setTimeout(() => { b.textContent = 'Copy'; }, 1600);
-  }));
-
-  const menu = document.querySelector('.menu');
-  menu.addEventListener('click', (e) => { if (e.target.closest('a')) menu.open = false; });
-
-  // On a phone the example rollouts start folded, except the first.
-  if (window.matchMedia('(max-width: 760px)').matches) document.querySelectorAll('.rollout').forEach((d, i) => { d.open = i === 0; });
-})();
-</script>
 </body>
 </html>

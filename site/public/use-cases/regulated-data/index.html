@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Regulated data and residency: regions, masking and a record per request</title>
+<meta name="description" content="Keep AI requests in the regions a rule allows, mask personal data before it leaves, and hold a hash-chained record of every request. Self-hosted in your own cloud account, with the exact policy lines and the limits.">
+<meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<link rel="canonical" href="https://gantry.eliran.me/use-cases/regulated-data/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Gantry">
+<meta property="og:url" content="https://gantry.eliran.me/use-cases/regulated-data/">
+<meta property="og:title" content="Regulated data and residency: regions, masking and a record per request">
+<meta property="og:description" content="Keep AI requests in the regions a rule allows, mask personal data before it leaves, and hold a hash-chained record of every request. Self-hosted in your own cloud account, with the exact policy lines and the limits.">
+<meta property="og:image" content="https://gantry.eliran.me/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/fonts/FamiljenGrotesk-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<script>try { var t = new URLSearchParams(location.search).get('theme') || localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<link rel="stylesheet" href="/styles.css">
+<script src="/site.js" defer></script>
+</head>
+<body class="">
+<a class="skip" href="#main">Skip to the content</a>
+
+<header class="hdr" id="hdr">
+  <div class="wrap hdr-in">
+    <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+gantry</a>
+
+    <button class="burger" type="button" aria-expanded="false" aria-controls="nav" aria-label="Menu"><span></span></button>
+
+    <nav class="nav" id="nav" aria-label="Main">
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="product" aria-expanded="false" aria-controls="menu-product">Product<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu" id="menu-product">
+          <a href="/product/"><strong>How it works</strong><span>The request path, the controls, the audit log and the console</span></a>
+          <a href="/deploy/"><strong>Deploy</strong><span>Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare</span></a>
+          <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops</span></a>
+          <a href="/compare/"><strong>Compare</strong><span>Gantry next to LiteLLM and Bifrost, with sources</span></a>
+        </div>
+      </div>
+
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="use-cases" data-here aria-expanded="false" aria-controls="menu-use-cases">Use cases<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu menu-wide" id="menu-use-cases">
+          <div class="menu-col">
+            <p class="menu-title">By what you run</p>
+            <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Claude Code, Codex, Copilot, Cursor, Gemini CLI</span></a>
+            <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Apps and agents calling models from your cloud</span></a>
+            <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Your MCP servers behind one endpoint</span></a>
+            <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>Ollama, vLLM, on-prem, air-gapped</span></a>
+            <a href="/use-cases/regulated-data/" aria-current="page"><strong>Regulated data and residency</strong><span>Regions, masking and records</span></a>
+            <a href="/use-cases/cost-control/"><strong>Cost control</strong><span>Spend per person, budgets, forecasts</span></a>
+          </div>
+          <div class="menu-col">
+            <p class="menu-title">By role</p>
+            <a href="/for/security/"><strong>Security</strong><span>What left the company, with proof</span></a>
+            <a href="/for/platform/"><strong>Platform</strong><span>Model access without provider keys on laptops</span></a>
+            <a href="/for/finance/"><strong>Finance</strong><span>Who spent it, and will the budget last</span></a>
+            <a href="/for/engineering-leaders/"><strong>Engineering leaders</strong><span>Coding agents for every developer, tracked</span></a>
+            <a class="menu-all" href="/use-cases/">All use cases</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="learn" aria-expanded="false" aria-controls="menu-learn">Learn<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu" id="menu-learn">
+          <a href="/learn/what-is-an-ai-gateway/"><strong>What is an AI gateway</strong><span>The idea in plain words, with one picture</span></a>
+          <a href="/learn/why-companies-need-one/"><strong>Why companies need one</strong><span>Five questions most companies cannot answer</span></a>
+          <a href="/learn/five-steps/"><strong>The five steps</strong><span>See, Know, Limit, Protect, Prove</span></a>
+          <a href="/learn/rollout-plan/"><strong>Rollout plan</strong><span>One page to forward to your team</span></a>
+          <a href="/learn/glossary/"><strong>Glossary</strong><span>The words, explained</span></a>
+        </div>
+      </div>
+
+      <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
+      <a class="nav-link" href="https://gantry-docs.eliran.me/">Docs</a>
+
+      <div class="nav-actions">
+        <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
+        <button class="theme" type="button" aria-label="Switch between light and dark">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
+        </button>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>Regulated data and residency</span></nav>
+  <h1>Keep requests in the region you chose, and keep the record that shows it.</h1>
+  <p class="lead">Some teams handle patient, customer or financial data. Their requests may only go to endpoints you have an agreement with, personal data must not leave in a prompt, and someone will ask you to show both.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 40px">
+<figure class="gate" data-gate aria-label="Four requests go through Gantry. Requests for the clinical team go to an EU deployment. One request is refused because no deployment in an allowed region can serve it.">
+<div class="gate-lanes" aria-hidden="true">
+<div class="lane"><span class="lane-from">ruth.adler<i>clinical</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">azure-eu, region eu</span></div>
+<div class="lane"><span class="lane-from">omer.katz<i>research</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">openai, region us</span></div>
+<div class="lane"><span class="lane-from">yael.ron<i>clinical</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">region_not_allowed</span></span><span class="lane-to">no eu deployment</span></div>
+<div class="lane"><span class="lane-from">svc-notes<i>clinical</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">azure-eu, region eu</span></div>
+</div>
+<ol class="records" aria-label="Example audit records, newest first">
+<li><span>#41</span><span class="r-who">ruth.adler<i>clinical</i></span><span class="v v-allow">allow</span><span class="r-meta">clinical, region eu</span><span class="r-hash">4eacac &larr; 2f8010</span></li>
+<li><span>#40</span><span class="r-who">yael.ron<i>clinical</i></span><span class="v v-refused">refused</span><span class="r-meta">gpt-4o-mini, region_not_allowed</span><span class="r-hash">99f890 &larr; 4eacac</span></li>
+<li><span>#39</span><span class="r-who">svc-notes<i>clinical</i></span><span class="v v-allow">allow</span><span class="r-meta">clinical, region eu</span><span class="r-hash">c151ad &larr; 99f890</span></li>
+<li><span>#38</span><span class="r-who">omer.katz<i>research</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-4o, region us</span><span class="r-hash">000000 &larr; c151ad</span></li>
+</ol>
+<figcaption class="gate-foot"><span>Example requests. Team clinical may reach deployments labelled eu only.</span><button class="gate-pause" type="button" aria-pressed="false">Pause</button></figcaption>
+<script type="application/json">{"n": 41, "last": "2f8010", "seq": [[0, "ruth.adler", "clinical", "allow", "clinical, region eu"], [1, "omer.katz", "research", "allow", "gpt-4o, region us"], [3, "svc-notes", "clinical", "masked", "clinical, region eu, mrn masked"], [0, "ruth.adler", "clinical", "masked", "clinical, region eu, email masked"], [1, "omer.katz", "research", "allow", "gpt-4o, region us"], [3, "svc-notes", "clinical", "allow", "clinical, region eu"], [2, "yael.ron", "clinical", "refused", "gpt-4o-mini, region_not_allowed", "region_not_allowed"], [0, "ruth.adler", "clinical", "allow", "clinical, region eu"]]}</script>
+</figure>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>What goes wrong without control</h2></div>
+  <dl class="facts">
+    <div><dt>The region is a habit</dt><dd>People are told to use the EU endpoint. A fallback, a new SDK default or a copied config sends a request somewhere else, and nothing refuses it.</dd></div>
+    <div><dt>Personal data in prompts</dt><dd>A note pasted into a prompt holds an email address, a phone number and a record number. It reaches the provider as written.</dd></div>
+    <div><dt>No evidence</dt><dd>An auditor asks who used which model last quarter and how you know the list is complete. The provider's dashboard does not answer either part.</dd></div>
+    <div><dt>A gateway that is itself a new processor</dt><dd>A hosted gateway sees every prompt. For regulated data that adds a vendor to the review before the first request.</dd></div>
+  </dl>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>The steps</h2>
+    <p>Gantry runs in your own cloud account, so prompts go from your callers to the providers your policy names and nowhere else.</p>
+  </div>
+  <ol class="guide">
+    <li>
+      <div class="guide-text">
+        <h3>Run it in your own account and region</h3>
+        <p>The Terraform modules put the gateway, Postgres and the audit volume in an account and region you pick. Gantry never stores prompts or answers: not in the audit log and not in Postgres.</p>
+        <a class="more" href="/deploy/">Deploy <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+      </div>
+      <figure class="code"><figcaption>What stays where</figcaption><pre>prompts, answers   caller -> Gantry -> provider
+audit log          your volume
+keys, spend        your Postgres
+license check      offline, no network call</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Label deployments and name the allowed regions</h3>
+        <p>An alias serves one model name from several deployments. Label each one with its region. A rule with <code>regions: [eu]</code> reaches only those. A request with nowhere allowed to go is refused with <code>region_not_allowed</code>. It is never sent elsewhere, even when every allowed deployment is failing.</p>
+        <a class="more" href="https://gantry-docs.eliran.me/routing/strategies/">Residency in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>aliases:
+  - name: clinical
+    deployments:
+      - { provider: azure-eu, model: gpt-4o, region: eu }
+      - { provider: openai, model: gpt-4o, region: us }
+rules:
+  - name: clinical
+    principals: { team: clinical }
+    models: [clinical]
+    regions: [eu]</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Mask personal data and your own identifiers</h3>
+        <p>The <code>pii</code> detector finds email addresses, phone numbers, card numbers and similar. <code>mask</code> replaces each finding and forwards the rest. A <code>regex</code> guardrail does the same for identifiers only you know, such as a record number.</p>
+        <a class="more" href="https://gantry-docs.eliran.me/governance/guardrails/">Guardrails in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>guardrails:
+  - { name: mask-pii, type: pii, action: mask }
+  - name: patient-ids
+    type: regex
+    action: mask
+    patterns: { mrn: 'MRN-[0-9]{8}' }
+rules:
+  - name: clinical
+    principals: { team: clinical }
+    models: [clinical]
+    regions: [eu]
+    guardrails: [mask-pii, patient-ids]</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Keep the record, and check it</h3>
+        <p>Put the audit log on storage that outlives the container and verify its chain. Copy the last hash somewhere the Gantry host cannot write. Each record carries the regions the rule allows and the region the request went to.</p>
+        <a class="more" href="https://gantry-docs.eliran.me/start/step-5-prove/">Step 5 in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+      </div>
+      <figure class="code"><figcaption>Verify, then pin the last hash</figcaption><pre>gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+
+gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
+  --expect-last 1ae338b7...</pre></figure>
+    </li>
+    <li class="no-code">
+      <div class="guide-text">
+        <h3>Add export, retention and legal hold <span class="ent">Enterprise</span></h3>
+        <p>Gantry Enterprise sends every record to Splunk, Datadog, Elasticsearch, Microsoft Sentinel or object storage as it is written. Retention deletes records older than a set number of days while the chain stays verifiable, and a legal hold stops all deletion until an owner lifts it. In the open source edition you ship the audit file with Vector, Fluent Bit or the OpenTelemetry Collector.</p>
+        <a class="more" href="https://gantry-docs.eliran.me/operations/retention/">Retention and legal hold <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+      </div>
+    </li>
+  </ol>
+</section>
+
+<section class="wrap sec doc">
+  <h2>Limits to know before you start</h2>
+  <ul class="ticks out">
+    <li><strong>The region label is yours to set.</strong> Gantry enforces it exactly. It does not check where a provider runs. Label a deployment with the region of the endpoint and the data processing terms you have with that provider.</li>
+    <li><strong>Built-in guardrails match plain text.</strong> Text that is encoded, split across messages or translated is not found, and the detectors do not find names or street addresses. Add a vendor guardrail or your own service by webhook for those.</li>
+    <li><strong>Gantry holds no compliance certification</strong> and has not yet had an independent security audit. It gives you controls and a record. Your compliance program decides whether they are enough.</li>
+    <li><strong>Anyone who can write the audit file can rewrite the chain.</strong> The last hash kept somewhere else is what catches that.</li>
+  </ul>
+</section>
+
+<section class="wrap sec doc">
+  <h2>Questions people ask</h2>
+  <div class="qa">
+    <details><summary>Does the audit log itself hold personal data?</summary><p>It holds the person or workload that asked, the team, the model, the decision and the cost. It holds no prompt text, no answer text and never the text a guardrail matched.</p></details>
+    <details><summary>Can we see what a guardrail would do before it changes anything?</summary><p>Yes. Give it a <code>shadow_until</code> date and it records findings and changes nothing until then. You can also run it over a file of example prompts with <code>gantry guardrail test</code>.</p></details>
+    <details><summary>What about models that are not behind an alias?</summary><p>A model that is not an alias has no region label, so where it runs cannot be shown. Under a rule with <code>regions</code>, a request for it is refused.</p></details>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Read next</h2></div>
+  <nav class="rows tight" aria-label="Read next">
+    <a href="/security/"><strong>Security</strong><span>What Gantry protects, what it does not, and where your data goes.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>When the data may not leave your network at all.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    <a href="/for/security/"><strong>For security teams</strong><span>The controls and the record, from your side of the table.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+  </nav>
+</section>
+
+<section class="cta">
+  <div class="cta-box">
+    <h2>Start with step one. Block nothing, and find out what is in use.</h2>
+    <div class="actions">
+      <a class="btn btn-ink" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
+      <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
+    </div>
+  </div>
+</section>
+
+
+</main>
+
+<footer class="ftr">
+  <div class="wrap ftr-top">
+    <div class="ftr-about">
+      <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+gantry</a>
+      <p>A self-hosted AI gateway, governance first. One Docker image plus Postgres, in your cloud.</p>
+    </div>
+    <nav class="ftr-cols" aria-label="Site map">
+      <div>
+        <h2>Product</h2>
+        <a href="/product/">How it works</a>
+        <a href="/deploy/">Deploy</a>
+        <a href="/security/">Security</a>
+        <a href="/compare/">Compare</a>
+        <a href="/enterprise/">Enterprise</a>
+      </div>
+      <div>
+        <h2>Use cases</h2>
+        <a href="/use-cases/coding-agents/">Coding agents</a>
+        <a href="/use-cases/cloud-agents/">Cloud and production agents</a>
+        <a href="/use-cases/mcp-tools/">MCP tools</a>
+        <a href="/use-cases/local-models/">Local and self-hosted models</a>
+        <a href="/use-cases/regulated-data/" aria-current="page">Regulated data and residency</a>
+        <a href="/use-cases/cost-control/">Cost control</a>
+      </div>
+      <div>
+        <h2>By role</h2>
+        <a href="/for/security/">Security</a>
+        <a href="/for/platform/">Platform</a>
+        <a href="/for/finance/">Finance</a>
+        <a href="/for/engineering-leaders/">Engineering leaders</a>
+      </div>
+      <div>
+        <h2>Learn</h2>
+        <a href="/learn/what-is-an-ai-gateway/">What is an AI gateway</a>
+        <a href="/learn/why-companies-need-one/">Why companies need one</a>
+        <a href="/learn/five-steps/">The five steps</a>
+        <a href="/learn/rollout-plan/">Rollout plan</a>
+        <a href="/learn/glossary/">Glossary</a>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <a href="https://gantry-docs.eliran.me/">Docs</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>
+        <a href="https://gantry-docs.eliran.me/getting-started/changelog/">Changelog</a>
+      </div>
+    </nav>
+  </div>
+  <p class="wrap ftr-legal">Open source core under Apache 2.0. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
+</footer>
+</body>
+</html>

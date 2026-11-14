@@ -1,0 +1,77 @@
+<!--
+title: Gantry for engineering leaders: roll out coding agents and keep track
+description: For engineering leaders. Give every developer a coding agent with two settings each, a name on every session and a budget per team. What to tell finance and security afterwards.
+nav: use-cases
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>For engineering leaders</span></nav>
+  <h1>"Can we roll out coding agents without losing track of them?"</h1>
+  <p class="lead">You want every developer on a coding agent this quarter. Finance wants a number, security wants a record, and you do not want to pick one tool for everybody. Gantry sits under whichever tools your teams choose.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 40px">
+{{gate
+label: Four developers on three coding tools send requests through Gantry. Three are allowed. One is refused because that person reached the daily budget.
+foot: Example requests. Three tools, one policy.
+lane: maya.cohen | Claude Code | Anthropic
+lane: omer.katz | Codex | OpenAI
+lane: dana.levi | Claude Code | Anthropic
+lane: noa.bar | Gemini CLI | Gemini
+req: 0 | maya.cohen | payments | allow | claude-sonnet-5-5, rule engineering
+req: 1 | omer.katz | payments | allow | gpt-5-codex, rule engineering
+req: 3 | noa.bar | platform | allow | Gemini API, rule engineering
+req: 0 | maya.cohen | payments | allow | claude-haiku-5-5, rule engineering
+req: 1 | omer.katz | payments | allow | gpt-5-codex, rule engineering
+req: 3 | noa.bar | platform | allow | Gemini API, rule engineering
+req: 2 | dana.levi | interns | refused | claude-sonnet-5-5, budget_exceeded | budget_exceeded
+req: 0 | maya.cohen | payments | allow | claude-sonnet-5-5, rule engineering
+}}
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>What changes for a developer</h2>
+    <p>Close to nothing, which is the point.</p>
+  </div>
+  <dl class="facts">
+    <div><dt>Two settings, once</dt><dd>A base URL and a key, or one <code>gantry login</code> with the company account. The tool behaves as before.</dd></div>
+    <div><dt>Their own name on their work</dt><dd>Each session runs under the developer's key, inside the team's budget. Nobody shares a secret.</dd></div>
+    <div><dt>A refusal they can act on</dt><dd>When a budget or a rule stops a request, the reason shows up in the terminal they already use, with a decision ID.</dd></div>
+    <div><dt>The tool they chose</dt><dd>Claude Code, Codex, OpenCode, Copilot CLI, Gemini CLI and others go through the same gateway. <a href="/use-cases/coding-agents/#tools">Which tools were run against Gantry</a></dd></div>
+  </dl>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>What you can tell the others</h2>
+    <p>Three conversations get shorter.</p>
+  </div>
+  <table class="tbl">
+    <thead><tr><th>Who asks</th><th>What they ask</th><th>What you show them</th></tr></thead>
+    <tbody>
+      <tr><td>Finance</td><td>What will this cost?</td><td>Spend per team and person, a monthly budget per team, and a forecast for each.</td></tr>
+      <tr><td>Security</td><td>What are the agents sending out?</td><td>A secrets guardrail that ran on trial first, and a record of every request with no prompt text in it.</td></tr>
+      <tr><td>Your own managers</td><td>Is anyone using it?</td><td>The coverage report: requests per person and tool, and who holds a key and has sent nothing.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="wrap sec doc">
+  <h2>Where it stops</h2>
+  <ul class="ticks out">
+    <li>Developers on Claude Team or Enterprise seats cannot route through a gateway. Gantry has a watch setup for them that shows usage and does not enforce budgets.</li>
+    <li>Windsurf, Amazon Q Developer and Kiro document no setting for a gateway of your own.</li>
+    <li>Gantry measures requests, tokens and cost. It does not measure whether the agents make your team faster.</li>
+  </ul>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Read next</h2></div>
+  <nav class="rows tight" aria-label="Read next">
+    <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>The steps, the exact lines and the tool table.</span>{{> arrow}}</a>
+    <a href="/learn/rollout-plan/"><strong>Rollout plan</strong><span>One page to forward to your team.</span>{{> arrow}}</a>
+    <a href="/use-cases/cost-control/"><strong>Cost control</strong><span>Budgets you try before you enforce.</span>{{> arrow}}</a>
+  </nav>
+</section>
+
+{{> cta}}

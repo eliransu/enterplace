@@ -1,0 +1,138 @@
+<!--
+title: Gantry: put a name on every AI call
+description: Gantry is a self-hosted AI gateway. Every call from coding tools, agents, apps and MCP clients goes through it with a person's name, a budget, guardrails and a record in a hash-chained audit log. One Docker image plus Postgres, in your cloud.
+-->
+<section class="wrap hero">
+  <div class="hero-text">
+    <h1>Put a name on every AI call.</h1>
+    <p class="lead">Gantry is a self-hosted AI gateway. Coding tools, agents, apps and MCP clients call models through it, and each request gets a person's name, a budget, guardrails and a line in an audit log you can verify.</p>
+    <div class="actions">
+      <a class="btn btn-main" href="docs:/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-line" href="#use-cases">Find your use case</a>
+    </div>
+    <p class="muted">One Docker image plus Postgres, in your own cloud. Open source core under Apache 2.0.</p>
+  </div>
+
+{{gate
+label: Four callers send requests through the Gantry gate. Allowed requests pass to the provider. One request is refused because its team is over budget. Each request writes an audit record.
+foot: Example requests. Each record carries the hash of the one before it.
+lane: maya.cohen | Claude Code | Anthropic
+lane: svc-invoice-bot | internal app | OpenAI
+lane: dana.levi | Codex | OpenAI
+lane: ci.release | CI job | Anthropic
+req: 0 | maya.cohen | payments | allow | claude-sonnet-5-5, rule payments-team
+req: 3 | ci.release | platform | blocked | claude-haiku-5-5, aws_access_key | aws_access_key
+req: 1 | svc-invoice-bot | finance | allow | gpt-5-mini, rule finance-apps
+req: 0 | maya.cohen | payments | allow | claude-haiku-5-5, rule payments-team
+req: 1 | svc-invoice-bot | finance | masked | gpt-5-mini, credit_card masked
+req: 3 | ci.release | platform | allow | claude-haiku-5-5, rule platform
+req: 2 | dana.levi | interns | refused | gpt-5, budget_exceeded | budget_exceeded
+req: 0 | maya.cohen | payments | allow | claude-sonnet-5-5, rule payments-team
+}}
+</section>
+
+<section class="wrap works" aria-label="Works with">
+  <h2>Coding tools and clients</h2>
+  <ul>
+    <li><span class="logo" style="--m: url(/logos/claude.svg)"></span>Claude Code</li>
+    <li>OpenAI Codex</li>
+    <li><span class="logo" style="--m: url(/logos/githubcopilot.svg)"></span>GitHub Copilot</li>
+    <li><span class="logo" style="--m: url(/logos/cursor.svg)"></span>Cursor</li>
+    <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini CLI</li>
+    <li><span class="logo" style="--m: url(/logos/zedindustries.svg)"></span>Zed</li>
+    <li><span class="logo" style="--m: url(/logos/jetbrains.svg)"></span>JetBrains AI</li>
+    <li><span class="logo" style="--m: url(/logos/modelcontextprotocol.svg)"></span>MCP clients</li>
+  </ul>
+  <h2>Model providers</h2>
+  <ul>
+    <li>OpenAI</li>
+    <li><span class="logo" style="--m: url(/logos/anthropic.svg)"></span>Anthropic</li>
+    <li>Azure OpenAI</li>
+    <li>Amazon Bedrock</li>
+    <li><span class="logo" style="--m: url(/logos/googlecloud.svg)"></span>Vertex AI</li>
+    <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini</li>
+    <li><span class="logo" style="--m: url(/logos/mistralai.svg)"></span>Mistral</li>
+    <li>Ollama and vLLM</li>
+  </ul>
+  <p class="works-note">Named so you can find yours. Each mark belongs to its owner. <a href="/use-cases/coding-agents/#tools">Which tools were run against Gantry, and which were set up from their docs only</a></p>
+</section>
+
+<section class="wrap sec" id="use-cases">
+  <div class="sec-head">
+    <h2>Start from what you are running.</h2>
+    <p>Each page is a short path: the situation, what goes wrong without control, the steps with the exact policy lines, and what you see afterwards.</p>
+  </div>
+  <nav class="rows" aria-label="Use cases">
+    <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Developers run Claude Code, Codex, Copilot or Cursor on a shared provider key, and nobody can say who spent what.</span>{{> arrow}}</a>
+    <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Services and agents in your cloud call models with keys copied into environment files.</span>{{> arrow}}</a>
+    <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Agents call MCP servers for GitHub, the warehouse and deploys, and no one can list who may call which tool.</span>{{> arrow}}</a>
+    <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>You serve models with Ollama or vLLM, on-prem or in an air-gapped network, and want the same rules there.</span>{{> arrow}}</a>
+    <a href="/use-cases/regulated-data/"><strong>Regulated data and residency</strong><span>Some requests must stay in a region, and personal data must not leave in a prompt.</span>{{> arrow}}</a>
+    <a href="/use-cases/cost-control/"><strong>Cost control</strong><span>The provider sends one invoice with a total and no names.</span>{{> arrow}}</a>
+  </nav>
+  <p class="muted" style="margin-top: 24px">Or start from your role: <a href="/for/security/">security</a>, <a href="/for/platform/">platform</a>, <a href="/for/finance/">finance</a>, <a href="/for/engineering-leaders/">engineering leaders</a>.</p>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>What every call gets on its way through.</h2>
+    <p>Gantry sits between your tools and the model providers. It identifies the caller, decides by your policy and writes the record before anything is forwarded.</p>
+  </div>
+  <div class="split wide-right">
+    <div class="stack">
+      <dl class="facts">
+        <div><dt>A name</dt><dd>A key per person and per workload, or sign-in through your identity provider. The provider's key stays inside the gateway.</dd></div>
+        <div><dt>A budget</dt><dd>Dollars, requests and tokens per team, person, key or model. A refusal says why and when the budget starts again.</dd></div>
+        <div><dt>Guardrails</dt><dd>Secrets and personal data blocked or masked before they leave. Each one can run on trial first.</dd></div>
+        <div><dt>A kill switch</dt><dd>Stop a person, a team, a key or a model with one command and a reason.</dd></div>
+        <div><dt>A record</dt><dd>One line per request, chained by hash to the one before it. It holds no prompt or answer text.</dd></div>
+      </dl>
+      <a class="more" href="/product/">How it works, stage by stage {{> arrow}}</a>
+    </div>
+    <div>
+      <figure class="shot"><figcaption>Gantry console: Spend <span>light theme</span></figcaption><div class="shot-in"><img src="/img/console-spend-light.webp" width="1440" height="1090" loading="lazy" alt="The Spend page of the Gantry console: spend per day, who spent most, each budget with its limit, and spend by model."></div></figure>
+      <p class="shot-cap">The console's Spend page, on test data. Team payments reached its budget on 13 November and is refused until 1 December.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>Five steps, one change at a time.</h2>
+    <p>Start by watching. Nothing your people do today is blocked in step one, and each step works without the next.</p>
+  </div>
+  <ol class="five">
+    <li><span class="dots" aria-hidden="true"><i class="on"></i><i></i><i></i><i></i><i></i></span><h3>See</h3><p>Which tools and models are in use, and what they cost.</p></li>
+    <li><span class="dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><h3>Know</h3><p>Who uses what, by person and team.</p></li>
+    <li><span class="dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><h3>Limit</h3><p>A budget per team, and a stop button.</p></li>
+    <li><span class="dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><h3>Protect</h3><p>Secrets and personal data stay out of prompts.</p></li>
+    <li><span class="dots" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><h3>Prove</h3><p>A record of every request that anyone can verify.</p></li>
+  </ol>
+  <div class="actions" style="margin-top: 32px">
+    <a class="btn btn-line" href="/learn/five-steps/">Walk through the five steps</a>
+    <a class="more" href="/learn/what-is-an-ai-gateway/">New to this? What an AI gateway is {{> arrow}}</a>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>It runs where your data already is.</h2>
+    <p>Prompts and answers go from your callers, through Gantry, to the providers your policy names. Gantry never stores them, and nothing calls home.</p>
+  </div>
+  <div class="parts">
+    <div><b>ghcr.io/ggantry/gantry</b><h3>One image</h3><p>A single static binary in an image built from scratch, running as a non-root user. It serves the gateway, the console and the admin API.</p></div>
+    <div><b>DATABASE_URL</b><h3>Postgres</h3><p>Keys, kill switches, budgets and rate limits, shared by every replica. No Redis.</p></div>
+    <div><b>gantry.policy.yaml</b><h3>One policy file</h3><p>Providers, rules, budgets and guardrails, kept in git. An unknown field is an error with its line number.</p></div>
+  </div>
+  <div class="actions" style="margin-top: 32px">
+    <a class="more" href="/deploy/">Docker, Kubernetes, AWS, Google Cloud, Azure {{> arrow}}</a>
+    <a class="more" href="/enterprise/">Open source and Enterprise {{> arrow}}</a>
+    <a class="more" href="/security/">What it protects, and where it stops {{> arrow}}</a>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <p class="note"><strong>Where the project stands.</strong> Gantry is at version {{version}}, pre-1.0, and has not yet had an independent security audit. There are no customer stories on this site because there are none to publish yet. The docs say what is built, what is planned, and which integrations were run against what: <a href="docs:/getting-started/status/">Project status</a>.</p>
+</section>
+
+{{> cta}}

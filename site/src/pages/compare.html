@@ -1,0 +1,76 @@
+<!--
+title: Gantry compared with LiteLLM and Bifrost
+description: An honest comparison of Gantry with the LiteLLM and Bifrost open source AI gateways: what Gantry is built around, what each of the older projects does better, and the public sources for every claim.
+nav: product
+-->
+<section class="wrap head">
+  <h1>Gantry next to LiteLLM and Bifrost.</h1>
+  <p class="lead">Gantry covers the gateway work you expect: one endpoint, several providers, routing, retries, caching, budgets. It is younger than both projects and each of them does some jobs better. The difference is what Gantry does before a request leaves.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 48px">
+  <div class="sec-head">
+    <h2>Two rows that explain the rest</h2>
+    <p>What each project's open source edition gives you for the record and for sign-on, from each project's public documentation.</p>
+  </div>
+  <table class="tbl">
+    <thead><tr><th>In the open source edition</th><th>Gantry</th><th>LiteLLM</th><th>Bifrost</th></tr></thead>
+    <tbody>
+      <tr><td>A record of every request</td><td><span class="yes">Yes.</span> Hash-chained, written before the request is forwarded</td><td>Audit logs are an Enterprise feature and record admin changes</td><td>Audit logs are an Enterprise feature</td></tr>
+      <tr><td>Single sign-on for the admin console</td><td><span class="yes">Yes.</span> OpenID Connect and SAML</td><td>Free for up to 5 users, then Enterprise</td><td>Enterprise</td></tr>
+    </tbody>
+  </table>
+  <p class="tbl-note">Sources: <a href="https://docs.litellm.ai/docs/proxy/audit_logs">LiteLLM audit logs</a>, <a href="https://docs.litellm.ai/docs/proxy/admin_ui_sso">LiteLLM admin UI SSO</a>, <a href="https://docs.getbifrost.ai/enterprise/audit-logs.md">Bifrost audit logs</a>. These pages change. If one of them now says something else, the page it links to is right and this one is out of date.</p>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>What Gantry is built around</h2>
+    <p>Five design decisions. Each can be checked in the docs or by running the binary.</p>
+  </div>
+  <dl class="facts">
+    <div><dt>The record comes first</dt><dd>Every request, allowed or refused, gets a hash-chained audit record before it is forwarded. If the record cannot be written, the request is refused. The chain is checked with one command, in the open source edition.</dd></div>
+    <div><dt>A wrong policy is an error</dt><dd><code>gantry check</code> names the file, the line and the nearest known word for every mistake. A misspelled field does not start quietly.</dd></div>
+    <div><dt>Nothing is dropped silently</dt><dd>The request body is forwarded byte for byte, except where your policy changes it. An unknown query parameter is refused by name.</dd></div>
+    <div><dt>Keys shown once, no prompts in the log</dt><dd>Gantry keys are stored as a SHA-256 hash. The audit log holds no prompt text, answer text or keys.</dd></div>
+    <div><dt>One image, one database</dt><dd>A single static binary in an image built from scratch, running as a non-root user, with Postgres as the only other part. No Redis.</dd></div>
+  </dl>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>Where the others lead</h2>
+    <p>If one of these is what you need most, the older project is the better choice today.</p>
+  </div>
+  <div class="cols-2">
+    <div>
+      <h3>LiteLLM</h3>
+      <ul class="ticks out">
+        <li><strong>Providers.</strong> It supports far more providers, with translation between their APIs.</li>
+        <li><strong>A shared cache.</strong> Its cache is shared by every instance through Redis. Gantry's answer cache is per replica.</li>
+        <li><strong>Admin UI.</strong> A fuller admin interface. Gantry's console is smaller.</li>
+        <li><strong>History.</strong> More years in production at more companies.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Bifrost</h3>
+      <ul class="ticks out">
+        <li><strong>Forwarding speed.</strong> It is built for low overhead with features on, and publishes benchmarks. Gantry publishes no latency figures on this site.</li>
+        <li><strong>Governance objects in open source.</strong> Customers, teams and virtual keys with budgets and rate limits.</li>
+        <li><strong>Response headers</strong> that name the provider and the resolved model.</li>
+      </ul>
+    </div>
+  </div>
+  <p class="note" style="margin-top: 40px"><strong>How this was written.</strong> No source code of LiteLLM or Bifrost was read. The docs hold the full comparison, capability by capability, from a hands-on review and from the projects' public pages, with the versions compared. <a href="docs:/migrate/comparison/">Gantry, LiteLLM and Bifrost in the docs</a></p>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Moving over</h2></div>
+  <nav class="rows tight" aria-label="Migration guides">
+    <a href="docs:/migrate/from-litellm/"><strong>Migrate from LiteLLM</strong><span><code>gantry import litellm</code> turns a LiteLLM proxy config into a Gantry policy.</span>{{> arrow}}</a>
+    <a href="docs:/migrate/from-bifrost/"><strong>Migrate from Bifrost</strong><span>How Bifrost's objects map to Gantry's policy file.</span>{{> arrow}}</a>
+    <a href="docs:/getting-started/status/"><strong>Project status</strong><span>What is built, what is planned, and what was tested against what.</span>{{> arrow}}</a>
+  </nav>
+</section>
+
+{{> cta}}

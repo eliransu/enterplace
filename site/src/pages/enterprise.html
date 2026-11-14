@@ -1,0 +1,98 @@
+<!--
+title: Gantry editions: open source and Enterprise
+description: Gantry's gateway is open source under Apache 2.0. Gantry Enterprise is the same image with features a signed license key turns on: SCIM, SIEM export, alerts, retention and legal hold. The key is checked offline and a lapsed license never stops model traffic.
+nav: enterprise
+-->
+<section class="wrap head">
+  <h1>An open source gateway. A license adds what a larger company needs.</h1>
+  <p class="lead">The gateway, the console and the command line are open source under Apache 2.0, for any number of people. Gantry Enterprise is the same binary in the same image, with features that a signed license key turns on.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 48px">
+  <div class="editions">
+    <article class="edition open">
+      <h2>Open source</h2>
+      <p>Apache 2.0. One binary on files, or several replicas on Postgres. No license key and no account.</p>
+      <ul class="ticks">
+        <li>Keys per person and workload, <code>gantry login</code> through OpenID Connect or SAML, JWTs from your identity provider</li>
+        <li>Policy as one file, checked by <code>gantry check</code>, with observe mode and kill switches</li>
+        <li>The hash-chained audit log and the command that verifies it</li>
+        <li>Guardrails, the MCP gateway, budgets, rate limits and caching</li>
+        <li>Routing, retries and fallbacks across the major providers and local servers</li>
+        <li>The admin console with single sign-on, teams and roles</li>
+        <li>Prometheus metrics and OpenTelemetry traces</li>
+      </ul>
+      <a class="btn btn-main" href="docs:/getting-started/quickstart/">Read the quickstart</a>
+    </article>
+    <article class="edition paid">
+      <h2>Gantry Enterprise</h2>
+      <p>Everything in the open source edition, plus the features the license names.</p>
+      <ul class="ticks">
+        <li>Console members with roles, and SCIM 2.0 provisioning from Okta and Microsoft Entra ID</li>
+        <li>Audit export to a SIEM: Splunk, Datadog, Elastic, Microsoft Sentinel, OTLP, a webhook, or object storage</li>
+        <li>Alerts on budgets, errors and guardrail blocks, to Slack, Teams, PagerDuty or email</li>
+        <li>Audit retention with a legal hold</li>
+        <li>Export to LLM observability tools</li>
+        <li>The device agent, for coverage on laptops</li>
+        <li>Docker Compose, Helm, Terraform and Cloudflare deployment templates</li>
+      </ul>
+      <a class="btn btn-line" href="docs:/operations/license/">How the license works</a>
+    </article>
+  </div>
+  <p class="tbl-note">There are no prices on this site.</p>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>How the license behaves</h2>
+    <p>It was designed so that a license problem can never become an outage.</p>
+  </div>
+  <div class="split">
+    <dl class="facts">
+      <div><dt>Checked offline</dt><dd>The license is signed and checked against a public key built into the binary. The check never uses the network, so it works the same in an air-gapped network.</dd></div>
+      <div><dt>Nothing calls home</dt><dd>No usage data is sent to the Gantry project.</dd></div>
+      <div><dt>It never stops model traffic</dt><dd>Whatever the license says, the gateway keeps serving, governing and recording requests.</dd></div>
+    </dl>
+    <div class="stack">
+      <table class="tbl">
+        <thead><tr><th>When</th><th>What happens</th></tr></thead>
+        <tbody>
+          <tr><td>Before the expiry date</td><td>Everything the license names is on.</td></tr>
+          <tr><td>Up to 30 days after it</td><td>Everything stays on. A warning is printed at start.</td></tr>
+          <tr><td>After the 30 days</td><td>Enterprise features are off. Model traffic is still served.</td></tr>
+        </tbody>
+      </table>
+      <figure class="code"><figcaption>Set it, and see what it unlocks</figcaption><pre>export GANTRY_LICENSE='eyJjdXN0b21lciI6...'
+
+<span class="c">$</span> gantry license show --keys gantry.keys.yaml</pre></figure>
+    </div>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>Which step needs which edition</h2>
+    <p>All five steps work in the open source edition. Enterprise adds to three of them.</p>
+  </div>
+  <table class="tbl">
+    <thead><tr><th>Step</th><th>Open source</th><th>Added by Enterprise</th></tr></thead>
+    <tbody>
+      <tr><td><a href="/learn/five-steps/#see">1. See</a></td><td>Request log, analytics, coverage report</td><td></td></tr>
+      <tr><td><a href="/learn/five-steps/#know">2. Know</a></td><td>Keys, single sign-on, JWTs, teams</td><td>SCIM from Okta and Microsoft Entra ID</td></tr>
+      <tr><td><a href="/learn/five-steps/#limit">3. Limit</a></td><td>Budgets, rate limits, kill switches, forecasts</td><td>Alerts before a budget runs out</td></tr>
+      <tr><td><a href="/learn/five-steps/#protect">4. Protect</a></td><td>Guardrails, MCP approvals and tool pins</td><td></td></tr>
+      <tr><td><a href="/learn/five-steps/#prove">5. Prove</a></td><td>The audit log, the verify command, log shipping with Vector, Fluent Bit or the OpenTelemetry Collector</td><td>SIEM export, retention, legal hold</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Read next</h2></div>
+  <nav class="rows tight" aria-label="Read next">
+    <a href="/deploy/"><strong>Deploy</strong><span>One image plus Postgres, on Docker, Kubernetes or your cloud account.</span>{{> arrow}}</a>
+    <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops.</span>{{> arrow}}</a>
+    <a href="docs:/getting-started/status/"><strong>Project status</strong><span>What is built and what is planned, edition by edition.</span>{{> arrow}}</a>
+  </nav>
+</section>
+
+{{> cta}}

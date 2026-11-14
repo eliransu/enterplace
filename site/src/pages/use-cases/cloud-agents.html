@@ -1,0 +1,146 @@
+<!--
+title: Cloud and production agents: a key, a budget and a record per workload
+description: Agents and apps in your cloud call models and MCP tools through Gantry. Each workload has its own key and budget, a looping agent can be stopped with one command, and every call is recorded. Steps with the exact policy lines.
+nav: use-cases
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>Cloud and production agents</span></nav>
+  <h1>Agents and apps in your cloud, each with its own key and its own limit.</h1>
+  <p class="lead">A support agent, an invoice bot and a nightly batch job all call models from your cloud. Today they share a provider key from an environment file. This page gives each one a name, a budget and a stop button.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 40px">
+{{gate
+label: Four workloads send requests through Gantry. Three are allowed. The triage agent is refused because its key reached its budget.
+foot: Example requests from four workloads.
+lane: svc-invoice-bot | finance | OpenAI
+lane: svc-triage-agent | support | Bedrock
+lane: svc-search | product | Vertex AI
+lane: ci.release | platform | Anthropic
+req: 0 | svc-invoice-bot | finance | allow | gpt-5-mini, rule finance-apps
+req: 2 | svc-search | product | allow | gpt-5-mini, customer globex-shop
+req: 3 | ci.release | platform | allow | claude-haiku-5-5, rule platform
+req: 0 | svc-invoice-bot | finance | masked | gpt-5-mini, credit_card masked
+req: 2 | svc-search | product | allow | gpt-5-mini, customer acme-store
+req: 3 | ci.release | platform | allow | claude-haiku-5-5, rule platform
+req: 1 | svc-triage-agent | support | refused | claude-sonnet-5-5, key_budget_exceeded | key_budget_exceeded
+req: 0 | svc-invoice-bot | finance | allow | gpt-5-mini, rule finance-apps
+}}
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>What goes wrong without control</h2></div>
+  <dl class="facts">
+    <div><dt>One provider key per environment</dt><dd>Every service reads the same secret. The invoice has one line, and rotating the key means redeploying everything that uses it.</dd></div>
+    <div><dt>An agent that loops</dt><dd>An agent retries one task all night. The provider keeps answering, and the first signal is the bill.</dd></div>
+    <div><dt>No answer to "which service sent that?"</dt><dd>A customer asks whether their data went to a model. The provider's logs do not know your services, and yours do not record the call.</dd></div>
+    <div><dt>Credentials for three clouds in every repo</dt><dd>Azure, Google and AWS clients each need their own credentials, copied into each service that calls them.</dd></div>
+  </dl>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>The steps</h2>
+    <p>The services keep their SDKs, prompts, retries and streaming. They change a base URL and a key.</p>
+  </div>
+  <ol class="guide">
+    <li>
+      <div class="guide-text">
+        <h3>Issue a key per workload</h3>
+        <p>Give each service or job its own name, team and budget. The key is shown once and stored as a hash. Put it in the secret store the service already reads.</p>
+        <a class="more" href="docs:/governance/keys/">Keys in the docs {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>A key with its own budget</figcaption><pre>gantry key new svc-triage-agent \
+  --team support --budget 20/month</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Point the SDKs at Gantry</h3>
+        <p>The OpenAI and Anthropic SDKs read their base URL from the environment, so most services need no code change. The docs have a prompt you can give your coding agent to find and move every call site, then you read the diff.</p>
+        <a class="more" href="docs:/integrations/connect-a-project/">Connect a project {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>Where the service runs</figcaption><pre>OPENAI_BASE_URL=https://gantry.example.com/v1
+ANTHROPIC_BASE_URL=https://gantry.example.com
+GANTRY_API_KEY=gantry_...</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Write the rule and the limits</h3>
+        <p>A rule names the team and the models it may use. Limits cap dollars, requests per minute and requests in flight. A product that serves your own customers can carry a budget per end customer.</p>
+        <a class="more" href="docs:/governance/budgets-and-rate-limits/">Budgets and rate limits {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>rules:
+  - name: support-agents
+    principals: { team: support }
+    models: [claude-sonnet-5-5, claude-haiku-5-5]
+limits:
+  - { team: support, budget: { usd: 2000, per: month } }
+  - { customer: "*", budget: { usd: 2, per: 6h },
+      rate: { rpm: 30 }, parallel: 2 }</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Keep the stop button ready</h3>
+        <p>A kill switch needs no policy change. It stops a person, a team, a key or a model, and the callers it stops see the reason and who set it.</p>
+        <a class="more" href="docs:/governance/kill-switches/">Kill switches {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>When an agent loops</figcaption><pre>gantry kill --team support \
+  --reason "agent retrying one ticket in a loop"
+
+<span class="c"># when it is fixed</span>
+gantry unkill --team support</pre></figure>
+    </li>
+  </ol>
+</section>
+
+<section class="wrap sec">
+  <div class="split">
+    <div class="stack">
+      <h2>What you see afterwards</h2>
+      <ul class="ticks">
+        <li>Spend per service, team, end customer and model, with a forecast for each budget.</li>
+        <li>Every response carries <code>X-Gantry-Decision</code>. Log it beside your own request ID and you can find the record for any call.</li>
+        <li>OpenTelemetry traces over OTLP, joined to the caller's trace, and Prometheus metrics on an address of their own.</li>
+        <li>On AWS and Google Cloud, Bedrock and Vertex AI need no provider key. The gateway signs in as its own role or service account.</li>
+      </ul>
+      <a class="more" href="docs:/operations/observability/">Observability in the docs {{> arrow}}</a>
+    </div>
+    <figure class="code"><figcaption>What the stopped service reads, shortened</figcaption><pre>HTTP 403
+<span class="no">Refused (killed)</span>: ... Decision 01M79...
+
+<span class="c"># and in the audit log</span>
+{"person": "svc-triage-agent", "team": "support",
+ "verdict": "refused", "code": "killed", ...}</pre></figure>
+  </div>
+</section>
+
+<section class="wrap sec doc">
+  <h2>Limits to know before you start</h2>
+  <ul class="ticks out">
+    <li><strong>Gantry is in the request path.</strong> Run more than one replica on a Postgres store, and put it where your services can reach it. The deploy guides cover sizing.</li>
+    <li><strong>The decision record says what Gantry decided.</strong> How the provider answered arrives in a second record, with status, tokens and cost, when the answer ends.</li>
+    <li><strong>The answer cache is per replica.</strong> Budgets, rate limits and kill switches are shared through the store. Cached answers are not.</li>
+    <li><strong>One caller's requests in flight</strong> may hold at most 64 MiB of request bodies.</li>
+  </ul>
+</section>
+
+<section class="wrap sec doc">
+  <h2>Questions people ask</h2>
+  <div class="qa">
+    <details><summary>Our services already hold tokens from our identity provider. Do they need a Gantry key too?</summary><p>No. Gantry accepts JWTs from issuers you trust in place of a key, and reads the person and team from claims you name. <a href="docs:/governance/access-control/">Access control</a></p></details>
+    <details><summary>Does Gantry change the request?</summary><p>The body is forwarded byte for byte, except where your policy changes it: a guardrail that masks, or a translation you opted into. An unknown query parameter is refused by name, never dropped silently.</p></details>
+    <details><summary>What if Gantry cannot write its audit log?</summary><p>Requests are refused with <code>audit_unavailable</code> until it can. That is the design: no request leaves without a record.</p></details>
+    <details><summary>Do the agents' tool calls go through it too?</summary><p>If the tools are MCP servers, yes. Put the servers behind Gantry's MCP endpoint and each call is checked and recorded like a model call. <a href="/use-cases/mcp-tools/">MCP tools</a></p></details>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Read next</h2></div>
+  <nav class="rows tight" aria-label="Read next">
+    <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Which agent may call which tool, with approvals for the dangerous ones.</span>{{> arrow}}</a>
+    <a href="/deploy/"><strong>Deploy</strong><span>Terraform modules for AWS, Google Cloud and Azure, a Helm chart and Compose.</span>{{> arrow}}</a>
+    <a href="/for/platform/"><strong>For platform teams</strong><span>One endpoint for every provider, and a policy file checked in CI.</span>{{> arrow}}</a>
+  </nav>
+</section>
+
+{{> cta}}

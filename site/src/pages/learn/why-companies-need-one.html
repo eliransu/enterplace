@@ -1,0 +1,68 @@
+<!--
+title: Why companies need an AI gateway: five questions
+description: Five questions most companies cannot answer about their AI use: who uses which tools, what it costs, whether it can be capped and stopped, what leaves the company, and whether any of it can be proven.
+nav: learn
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/learn/">Learn</a><span>Why companies need one</span></nav>
+  <h1>Five questions most companies cannot answer about their AI use.</h1>
+  <p class="lead">Your people already use AI tools. Developers run coding agents. Other teams call model APIs from scripts and internal apps. Each tool talks to a provider on its own, so the company has no single place to look.</p>
+</section>
+
+<div class="wrap article">
+  <nav class="toc" aria-label="On this page">
+    <a href="#who">Who uses which tools?</a>
+    <a href="#cost">What does it cost?</a>
+    <a href="#cap">Can you cap it and stop it?</a>
+    <a href="#leaves">What leaves the company?</a>
+    <a href="#prove">Can you prove it?</a>
+    <a href="#start">What starting takes</a>
+    <a href="#limits">What a gateway does not do</a>
+  </nav>
+  <article class="prose">
+    <h2 id="who">1. Who uses which AI tools?</h2>
+    <p>Three teams adopted three coding tools this year, and nobody kept a list. One team wired an agent to an internal system. The tools were installed by the people who use them, which is how good tools spread, and the list lives in nobody's system.</p>
+    <p>A gateway answers this as a side effect. Once tools send their requests through it, it knows which tool sent each one, and once each person has their own key, it knows who.</p>
+
+    <h2 id="cost">2. What does it cost, and who spent it?</h2>
+    <p>The provider invoice gives one total per account. It does not say which team or tool spent it. When the total doubles, the only way to find out why is to ask around.</p>
+    <p>A gateway counts tokens and cost per request, so the same total breaks down by team, person, tool and model.</p>
+
+    <h2 id="cap">3. Can you cap it and stop it?</h2>
+    <p>An agent retries the same task all night. A key is pasted into a public issue. In both cases you need two controls you may not have: a limit that refuses the next request, and a switch that stops one person, one team or one key right now without stopping everyone else.</p>
+
+    <h2 id="leaves">4. What leaves the company?</h2>
+    <p>Someone pastes a config file into a prompt, and the file holds a database password. A support agent sends a customer's card number to a model. Nobody meant harm. There was no check on the way out, and there is no record that it happened.</p>
+    <p>A gateway can look at each prompt before it leaves, block the ones that hold a secret, and mask personal data in the rest.</p>
+
+    <h2 id="prove">5. Can you prove it?</h2>
+    <p>A customer or an auditor asks who used which model last quarter, and how you know the record is complete. Screenshots of a provider dashboard do not answer the second half.</p>
+    <p>A record that is written for every request, and that shows when a line has been changed or removed, does.</p>
+
+    <table class="tbl">
+      <thead><tr><th>Question</th><th>What answers it</th><th>Step</th></tr></thead>
+      <tbody>
+        <tr><td>Who uses which AI tools?</td><td>Every request passes one place, under a personal key</td><td><a href="/learn/five-steps/#see">See</a>, then <a href="/learn/five-steps/#know">Know</a></td></tr>
+        <tr><td>What does it cost?</td><td>Tokens and cost counted per request</td><td><a href="/learn/five-steps/#see">See</a></td></tr>
+        <tr><td>Can you cap it and stop it?</td><td>Budgets, rate limits and a kill switch</td><td><a href="/learn/five-steps/#limit">Limit</a></td></tr>
+        <tr><td>What leaves the company?</td><td>Guardrails on prompts and answers</td><td><a href="/learn/five-steps/#protect">Protect</a></td></tr>
+        <tr><td>Can you prove it?</td><td>A hash-chained audit log</td><td><a href="/learn/five-steps/#prove">Prove</a></td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="start">What starting takes</h2>
+    <p>Less than most people expect. The first step is one container, the provider keys you already have, and a settings change in each tool so it points at the gateway. In Gantry that first step runs in observe mode: every request from a key you issued is forwarded, and nothing your people do today is blocked.</p>
+    <p>You decide when to go further. Each step is one change on top of the last, and each one works without the next. Your provider accounts and contracts stay as they are, and people keep the tools they chose.</p>
+
+    <h2 id="limits">What a gateway does not do</h2>
+    <ul class="ticks out">
+      <li>It sees the requests that are sent through it. A tool that still calls a provider directly stays invisible until you point it at the gateway.</li>
+      <li>A check for secrets finds an API key in a prompt. It does not know that a paragraph is your unreleased roadmap unless you give it a pattern or a word list.</li>
+      <li>Some subscriptions cannot be routed. Developers on Claude Team or Enterprise seats, for example, cannot send requests through a gateway. Gantry has a watch setup for them that shows usage and does not block.</li>
+      <li>Gantry's audit log holds who asked, which model, the decision and the cost. It holds no prompt or answer text, so it will not tell you what was said.</li>
+    </ul>
+    <p>Next: <a href="/learn/five-steps/">the five steps</a>, or the <a href="/learn/rollout-plan/">rollout plan</a> if you need one page to forward.</p>
+  </article>
+</div>
+
+{{> cta}}

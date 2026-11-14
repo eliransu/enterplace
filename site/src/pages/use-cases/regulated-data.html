@@ -1,0 +1,143 @@
+<!--
+title: Regulated data and residency: regions, masking and a record per request
+description: Keep AI requests in the regions a rule allows, mask personal data before it leaves, and hold a hash-chained record of every request. Self-hosted in your own cloud account, with the exact policy lines and the limits.
+nav: use-cases
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>Regulated data and residency</span></nav>
+  <h1>Keep requests in the region you chose, and keep the record that shows it.</h1>
+  <p class="lead">Some teams handle patient, customer or financial data. Their requests may only go to endpoints you have an agreement with, personal data must not leave in a prompt, and someone will ask you to show both.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 40px">
+{{gate
+label: Four requests go through Gantry. Requests for the clinical team go to an EU deployment. One request is refused because no deployment in an allowed region can serve it.
+foot: Example requests. Team clinical may reach deployments labelled eu only.
+lane: ruth.adler | clinical | azure-eu, region eu
+lane: omer.katz | research | openai, region us
+lane: yael.ron | clinical | no eu deployment
+lane: svc-notes | clinical | azure-eu, region eu
+req: 0 | ruth.adler | clinical | allow | clinical, region eu
+req: 1 | omer.katz | research | allow | gpt-4o, region us
+req: 3 | svc-notes | clinical | masked | clinical, region eu, mrn masked
+req: 0 | ruth.adler | clinical | masked | clinical, region eu, email masked
+req: 1 | omer.katz | research | allow | gpt-4o, region us
+req: 3 | svc-notes | clinical | allow | clinical, region eu
+req: 2 | yael.ron | clinical | refused | gpt-4o-mini, region_not_allowed | region_not_allowed
+req: 0 | ruth.adler | clinical | allow | clinical, region eu
+}}
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>What goes wrong without control</h2></div>
+  <dl class="facts">
+    <div><dt>The region is a habit</dt><dd>People are told to use the EU endpoint. A fallback, a new SDK default or a copied config sends a request somewhere else, and nothing refuses it.</dd></div>
+    <div><dt>Personal data in prompts</dt><dd>A note pasted into a prompt holds an email address, a phone number and a record number. It reaches the provider as written.</dd></div>
+    <div><dt>No evidence</dt><dd>An auditor asks who used which model last quarter and how you know the list is complete. The provider's dashboard does not answer either part.</dd></div>
+    <div><dt>A gateway that is itself a new processor</dt><dd>A hosted gateway sees every prompt. For regulated data that adds a vendor to the review before the first request.</dd></div>
+  </dl>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>The steps</h2>
+    <p>Gantry runs in your own cloud account, so prompts go from your callers to the providers your policy names and nowhere else.</p>
+  </div>
+  <ol class="guide">
+    <li>
+      <div class="guide-text">
+        <h3>Run it in your own account and region</h3>
+        <p>The Terraform modules put the gateway, Postgres and the audit volume in an account and region you pick. Gantry never stores prompts or answers: not in the audit log and not in Postgres.</p>
+        <a class="more" href="/deploy/">Deploy {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>What stays where</figcaption><pre>prompts, answers   caller -> Gantry -> provider
+audit log          your volume
+keys, spend        your Postgres
+license check      offline, no network call</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Label deployments and name the allowed regions</h3>
+        <p>An alias serves one model name from several deployments. Label each one with its region. A rule with <code>regions: [eu]</code> reaches only those. A request with nowhere allowed to go is refused with <code>region_not_allowed</code>. It is never sent elsewhere, even when every allowed deployment is failing.</p>
+        <a class="more" href="docs:/routing/strategies/">Residency in the docs {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>aliases:
+  - name: clinical
+    deployments:
+      - { provider: azure-eu, model: gpt-4o, region: eu }
+      - { provider: openai, model: gpt-4o, region: us }
+rules:
+  - name: clinical
+    principals: { team: clinical }
+    models: [clinical]
+    regions: [eu]</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Mask personal data and your own identifiers</h3>
+        <p>The <code>pii</code> detector finds email addresses, phone numbers, card numbers and similar. <code>mask</code> replaces each finding and forwards the rest. A <code>regex</code> guardrail does the same for identifiers only you know, such as a record number.</p>
+        <a class="more" href="docs:/governance/guardrails/">Guardrails in the docs {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>guardrails:
+  - { name: mask-pii, type: pii, action: mask }
+  - name: patient-ids
+    type: regex
+    action: mask
+    patterns: { mrn: 'MRN-[0-9]{8}' }
+rules:
+  - name: clinical
+    principals: { team: clinical }
+    models: [clinical]
+    regions: [eu]
+    guardrails: [mask-pii, patient-ids]</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Keep the record, and check it</h3>
+        <p>Put the audit log on storage that outlives the container and verify its chain. Copy the last hash somewhere the Gantry host cannot write. Each record carries the regions the rule allows and the region the request went to.</p>
+        <a class="more" href="docs:/start/step-5-prove/">Step 5 in the docs {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>Verify, then pin the last hash</figcaption><pre>gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+
+gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
+  --expect-last 1ae338b7...</pre></figure>
+    </li>
+    <li class="no-code">
+      <div class="guide-text">
+        <h3>Add export, retention and legal hold <span class="ent">Enterprise</span></h3>
+        <p>Gantry Enterprise sends every record to Splunk, Datadog, Elasticsearch, Microsoft Sentinel or object storage as it is written. Retention deletes records older than a set number of days while the chain stays verifiable, and a legal hold stops all deletion until an owner lifts it. In the open source edition you ship the audit file with Vector, Fluent Bit or the OpenTelemetry Collector.</p>
+        <a class="more" href="docs:/operations/retention/">Retention and legal hold {{> arrow}}</a>
+      </div>
+    </li>
+  </ol>
+</section>
+
+<section class="wrap sec doc">
+  <h2>Limits to know before you start</h2>
+  <ul class="ticks out">
+    <li><strong>The region label is yours to set.</strong> Gantry enforces it exactly. It does not check where a provider runs. Label a deployment with the region of the endpoint and the data processing terms you have with that provider.</li>
+    <li><strong>Built-in guardrails match plain text.</strong> Text that is encoded, split across messages or translated is not found, and the detectors do not find names or street addresses. Add a vendor guardrail or your own service by webhook for those.</li>
+    <li><strong>Gantry holds no compliance certification</strong> and has not yet had an independent security audit. It gives you controls and a record. Your compliance program decides whether they are enough.</li>
+    <li><strong>Anyone who can write the audit file can rewrite the chain.</strong> The last hash kept somewhere else is what catches that.</li>
+  </ul>
+</section>
+
+<section class="wrap sec doc">
+  <h2>Questions people ask</h2>
+  <div class="qa">
+    <details><summary>Does the audit log itself hold personal data?</summary><p>It holds the person or workload that asked, the team, the model, the decision and the cost. It holds no prompt text, no answer text and never the text a guardrail matched.</p></details>
+    <details><summary>Can we see what a guardrail would do before it changes anything?</summary><p>Yes. Give it a <code>shadow_until</code> date and it records findings and changes nothing until then. You can also run it over a file of example prompts with <code>gantry guardrail test</code>.</p></details>
+    <details><summary>What about models that are not behind an alias?</summary><p>A model that is not an alias has no region label, so where it runs cannot be shown. Under a rule with <code>regions</code>, a request for it is refused.</p></details>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Read next</h2></div>
+  <nav class="rows tight" aria-label="Read next">
+    <a href="/security/"><strong>Security</strong><span>What Gantry protects, what it does not, and where your data goes.</span>{{> arrow}}</a>
+    <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>When the data may not leave your network at all.</span>{{> arrow}}</a>
+    <a href="/for/security/"><strong>For security teams</strong><span>The controls and the record, from your side of the table.</span>{{> arrow}}</a>
+  </nav>
+</section>
+
+{{> cta}}
