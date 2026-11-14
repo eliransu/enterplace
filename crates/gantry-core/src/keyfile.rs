@@ -4,7 +4,10 @@
 
 use std::{io::Write, path::Path};
 
-use crate::{config, id, policy::Budget};
+use crate::{
+    config, id,
+    policy::{Budget, KeyOptions},
+};
 
 /// What a key may carry besides its name and team.
 #[derive(Clone, Debug, Default)]
@@ -28,6 +31,8 @@ pub struct Attributes {
     pub parallel: Option<u32>,
     /// The console role the key signs in with.
     pub role: Option<String>,
+    /// rpm, metadata, routes, source addresses.
+    pub options: KeyOptions,
 }
 
 /// A key that was just made. `key` is shown once and kept nowhere.
@@ -148,6 +153,11 @@ pub fn add_with(
     if !config::valid_name(name) || !config::valid_name(team) {
         return Err("a name and a team use letters, digits, dots, dashes, underscores and @ only, at most 100 characters, for example maya.cohen and payments.".into());
     }
+    if let Some(problem) = config::key_options_problem(&attributes.options) {
+        return Err(format!(
+            "{problem}. Nothing was changed and no key was made."
+        ));
+    }
     let hash = id::sha256_hex(key.as_bytes());
     if let Some(store) = crate::store::attached(keys) {
         return store.add_key(&config::KeyEntry {
@@ -164,6 +174,7 @@ pub fn add_with(
             tags: attributes.tags.clone(),
             parallel: attributes.parallel,
             role: attributes.role.clone(),
+            options: attributes.options.clone(),
         });
     }
     let entry = entry_text(name, team, &hash, attributes);
@@ -206,6 +217,7 @@ pub fn keys_text(entries: &[config::KeyEntry]) -> String {
             tags: entry.tags.clone(),
             parallel: entry.parallel,
             role: entry.role.clone(),
+            options: entry.options.clone(),
         };
         text.push_str(&entry_text(
             &entry.name,
@@ -265,7 +277,249 @@ fn entry_text(name: &str, team: &str, hash: &str, attributes: &Attributes) -> St
     if let Some(role) = &attributes.role {
         entry.push_str(&format!("    role: {role}\n"));
     }
+    let o = &attributes.options;
+    if let Some(rpm) = o.rpm {
+        entry.push_str(&format!("    rpm: {rpm}\n"));
+    }
+    // Lists and maps are written as JSON, which YAML reads as written: a value YAML reads specially stays text.
+    let json = |value: serde_json::Value| value.to_string();
+    if !o.metadata.is_empty() {
+        let map: serde_json::Map<String, serde_json::Value> = o
+            .metadata
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone().into()))
+            .collect();
+        entry.push_str(&format!("    metadata: {}\n", json(map.into())));
+    }
+    if !o.routes.is_empty() {
+        entry.push_str(&format!("    routes: {}\n", json(o.routes.clone().into())));
+    }
+    if !o.from.is_empty() {
+        let from: Vec<String> = o.from.iter().map(ToString::to_string).collect();
+        entry.push_str(&format!("    from: {}\n", json(from.into())));
+    }
+    if let Some(prefix) = &o.replaced_by {
+        entry.push_str(&format!("    replaced_by: \"{prefix}\"\n"));
+    }
     entry
+}
+
+/// A key's options as one JSON object, for a store column. `None` when the key has none.
+pub fn options_json(options: &KeyOptions) -> Option<String> {
+    if options.is_empty() {
+        return None;
+    }
+    let mut map = serde_json::Map::new();
+    if let Some(rpm) = options.rpm {
+        map.insert("rpm".into(), rpm.into());
+    }
+    if !options.metadata.is_empty() {
+        let metadata: serde_json::Map<String, serde_json::Value> = options
+            .metadata
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone().into()))
+            .collect();
+        map.insert("metadata".into(), metadata.into());
+    }
+    if !options.routes.is_empty() {
+        map.insert("routes".into(), options.routes.clone().into());
+    }
+    if !options.from.is_empty() {
+        let from: Vec<String> = options.from.iter().map(ToString::to_string).collect();
+        map.insert("from".into(), from.into());
+    }
+    if let Some(prefix) = &options.replaced_by {
+        map.insert("replaced_by".into(), prefix.clone().into());
+    }
+    Some(serde_json::Value::Object(map).to_string())
+}
+
+/// The options `options_json` wrote. Anything it cannot read is an error, never a key with fewer limits.
+pub fn options_from_json(text: &str) -> Result<KeyOptions, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|err| format!("a key's options are not JSON: {err}"))?;
+    let wrong = |what: &str| format!("a key's options hold a {what} Gantry cannot read");
+    let number = |name: &str| -> Result<Option<u32>, String> {
+        value
+            .get(name)
+            .map(|n| {
+                n.as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .ok_or_else(|| wrong(name))
+            })
+            .transpose()
+    };
+    let list = |name: &str| -> Result<Vec<String>, String> {
+        value.get(name).map_or(Ok(Vec::new()), |l| {
+            l.as_array()
+                .ok_or_else(|| wrong(name))?
+                .iter()
+                .map(|v| v.as_str().map(str::to_string).ok_or_else(|| wrong(name)))
+                .collect()
+        })
+    };
+    let metadata = match value.get("metadata") {
+        None => Default::default(),
+        Some(m) => m
+            .as_object()
+            .ok_or_else(|| wrong("metadata"))?
+            .iter()
+            .map(|(k, v)| {
+                Ok((
+                    k.clone(),
+                    v.as_str().ok_or_else(|| wrong("metadata"))?.to_string(),
+                ))
+            })
+            .collect::<Result<_, String>>()?,
+    };
+    Ok(KeyOptions {
+        rpm: number("rpm")?,
+        metadata,
+        routes: list("routes")?,
+        from: config::cidrs(&list("from")?)?,
+        replaced_by: value
+            .get("replaced_by")
+            .map(|p| {
+                p.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| wrong("replaced_by"))
+            })
+            .transpose()?,
+    })
+}
+
+/// Changes the one entry whose hash starts with `prefix` to what `change` makes of it. Returns the entry before and
+/// after, or `Ok(None)` when no entry has that prefix. The entry keeps its name, team and hash, and the result is
+/// checked by the loader's rules before anything is written; in a file, only that entry's lines are replaced, and
+/// only while the file is as it was read.
+pub fn update(
+    keys: &Path,
+    prefix: &str,
+    change: &dyn Fn(&mut config::KeyEntry),
+) -> Result<Option<(config::KeyEntry, config::KeyEntry)>, String> {
+    let prefix = prefix.to_ascii_lowercase();
+    if prefix.len() < 8 || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("name the key by at least the first 8 hex characters of its hash, as `GET /admin/keys` lists it.".into());
+    }
+    retried(|| update_once(keys, &prefix, change))
+}
+
+fn update_once(
+    keys: &Path,
+    prefix: &str,
+    change: &dyn Fn(&mut config::KeyEntry),
+) -> Result<Option<(config::KeyEntry, config::KeyEntry)>, String> {
+    let store = crate::store::attached(keys);
+    let seen = match &store {
+        Some(store) => Seen {
+            text: Some(store.keys_text()),
+            stamp: None,
+        },
+        None => look(keys)?,
+    };
+    let Some(text) = &seen.text else {
+        return Ok(None);
+    };
+    let entries = config::key_entries(keys, text).map_err(|problems| {
+        format!(
+            "{} has a problem, so nothing was changed. Fix it first:\n{}",
+            keys.display(),
+            problems.join("\n")
+        )
+    })?;
+    let mut matching = entries.iter().filter(|e| e.sha256.starts_with(prefix));
+    let Some(before) = matching.next() else {
+        return Ok(None);
+    };
+    if matching.next().is_some() {
+        return Err(format!(
+            "more than one key hash starts with {prefix}. Give more of the hash. Nothing was changed."
+        ));
+    }
+    let mut after = before.clone();
+    change(&mut after);
+    // Who the key is for and which key it is are not changed here: a new name is a new key.
+    after.name.clone_from(&before.name);
+    after.team.clone_from(&before.team);
+    after.sha256.clone_from(&before.sha256);
+    // The organization too: moving a key to another tenant is issuing it a new key there.
+    after.org.clone_from(&before.org);
+    let attributes = |e: &config::KeyEntry| Attributes {
+        admin: e.admin,
+        expires: e.expires.clone(),
+        budget: e.budget,
+        models: e.models.clone(),
+        tpm: e.tpm,
+        org: e.org.clone(),
+        customer: e.customer.clone(),
+        tags: e.tags.clone(),
+        parallel: e.parallel,
+        role: e.role.clone(),
+        options: e.options.clone(),
+    };
+    let new_entry = entry_text(&after.name, &after.team, &after.sha256, &attributes(&after));
+    // The changed entry must load by itself exactly as meant, or nothing is written.
+    let alone = format!("keys:\n{new_entry}");
+    match config::key_entries(keys, &alone) {
+        Ok(read) if read.first() == Some(&after) => {}
+        Ok(_) => {
+            return Err("the change could not be written so that it reads back the same. Nothing was changed. Report this as a bug.".into());
+        }
+        Err(problems) => {
+            return Err(format!(
+                "{}. Nothing was changed.",
+                problems
+                    .iter()
+                    .map(|p| p.split_once(": ").map_or(p.as_str(), |(_, rest)| rest))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .trim_end_matches('.')
+            ));
+        }
+    }
+    if let Some(store) = store {
+        return match store.update_key(&after)? {
+            true => Ok(Some((before.clone(), after))),
+            false => Ok(None),
+        };
+    }
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let unclear = || {
+        format!(
+            "the entry for {} in {} is not written as `gantry key new` writes entries, so it was not changed. Change it by hand. Nothing was changed.",
+            before.name,
+            keys.display()
+        )
+    };
+    let at = lines
+        .iter()
+        .position(|line| line.contains(&before.sha256))
+        .ok_or_else(unclear)?;
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let start = (0..=at)
+        .rev()
+        .find(|&i| lines[i].trim_start().starts_with("- "))
+        .ok_or_else(unclear)?;
+    let depth = indent(lines[start]);
+    let end = (at + 1..lines.len())
+        .find(|&i| !lines[i].trim().is_empty() && indent(lines[i]) <= depth)
+        .unwrap_or(lines.len());
+    let indented: String = new_entry
+        .split_inclusive('\n')
+        .map(|line| format!("{}{}", " ".repeat(depth), &line[2..]))
+        .collect();
+    let rest: String = lines[..start].concat() + &indented + &lines[end..].concat();
+    // Whatever the text looked like, the result must be the same file with exactly this one entry changed.
+    let now = config::key_entries(keys, &rest).map_err(|_| unclear())?;
+    let expected: Vec<&config::KeyEntry> = entries
+        .iter()
+        .map(|e| if e.sha256 == after.sha256 { &after } else { e })
+        .collect();
+    if now.iter().collect::<Vec<_>>() != expected {
+        return Err(unclear());
+    }
+    replace(keys, &seen, &rest)?;
+    Ok(Some((before.clone(), after)))
 }
 
 /// Removes the one entry whose hash starts with `prefix`. `Ok(None)` when no entry has it.
@@ -738,6 +992,95 @@ mod tests {
     }
 
     #[test]
+    fn every_key_option_is_written_and_read_back_and_a_wrong_one_makes_no_key() -> TestResult {
+        let path = keys_file("options", "keys:\n")?;
+        let options = KeyOptions {
+            rpm: Some(60),
+            metadata: [("owner".to_string(), "maya: ops # not a comment".to_string())].into(),
+            routes: vec!["/v1/chat/completions".into()],
+            from: vec!["10.0.0.0/8".parse()?, "2001:db8::/32".parse()?],
+            replaced_by: None,
+        };
+        // The hierarchy's fields are written beside the options, a tag YAML reads specially ("yes") as text.
+        let attributes = Attributes {
+            options: options.clone(),
+            tags: vec!["batch".into(), "yes".into()],
+            parallel: Some(4),
+            ..Attributes::default()
+        };
+        issue_with("ci", "t", &attributes, &path)?;
+        let text = std::fs::read_to_string(&path)?;
+        let entries = config::key_entries(&path, &text).map_err(|e| e.join("\n"))?;
+        assert_eq!(entries[0].options, options);
+        assert_eq!(entries[0].tags, attributes.tags);
+        assert_eq!(entries[0].parallel, Some(4));
+        let json = options_json(&options).ok_or("options were written as nothing")?;
+        assert_eq!(options_from_json(&json)?, options);
+        assert_eq!(options_json(&KeyOptions::default()), None);
+        assert!(options_from_json(r#"{"rpm": "many"}"#).is_err());
+        let with = |options: KeyOptions| Attributes {
+            options,
+            ..Attributes::default()
+        };
+        for attributes in [
+            with(KeyOptions {
+                rpm: Some(0),
+                ..KeyOptions::default()
+            }),
+            Attributes {
+                parallel: Some(100_001),
+                ..Attributes::default()
+            },
+            with(KeyOptions {
+                routes: vec!["v1/chat".into()],
+                ..KeyOptions::default()
+            }),
+            Attributes {
+                tags: vec!["two words".into()],
+                ..Attributes::default()
+            },
+            with(KeyOptions {
+                metadata: [("k".to_string(), "x".repeat(300))].into(),
+                ..KeyOptions::default()
+            }),
+        ] {
+            assert!(issue_with("cd", "t", &attributes, &path).is_err());
+        }
+        assert_eq!(std::fs::read_to_string(&path)?, text);
+        Ok(())
+    }
+
+    #[test]
+    fn an_update_changes_one_entry_and_keeps_every_other_line() -> TestResult {
+        let path = keys_file(
+            "update",
+            "# hand notes stay\nkeys:\n  - name: a\n    team: t\n    sha256: aaaaaaaa00000000000000000000000000000000000000000000000000000000\n    tpm: 100 # a note\n  - name: b\n    team: t\n    sha256: bbbbbbbb00000000000000000000000000000000000000000000000000000000\n",
+        )?;
+        let changed = update(&path, "aaaaaaaa", &|e| {
+            e.tpm = None;
+            e.options.rpm = Some(30);
+            e.tags = vec!["eval".into()];
+            // Name and team are not changed by an update.
+            e.name = "someone-else".into();
+        })?
+        .ok_or("the key was not found")?;
+        assert_eq!(changed.0.tpm, Some(100));
+        assert_eq!((changed.1.tpm, changed.1.options.rpm), (None, Some(30)));
+        let text = std::fs::read_to_string(&path)?;
+        assert!(text.starts_with("# hand notes stay\n"), "{text}");
+        let entries = config::key_entries(&path, &text).map_err(|e| e.join("\n"))?;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "a");
+        assert_eq!(entries[0].tags, ["eval"]);
+        assert_eq!(entries[1].name, "b");
+        assert!(update(&path, "cccccccc", &|_| {})?.is_none());
+        let refused = update(&path, "bbbbbbbb", &|e| e.options.rpm = Some(0));
+        assert!(refused.is_err_and(|e| e.contains("rpm is") && e.contains("Nothing was changed")));
+        assert_eq!(std::fs::read_to_string(&path)?, text);
+        Ok(())
+    }
+
+    #[test]
     fn a_key_is_written_with_its_expiry_and_budget() -> TestResult {
         let path = keys_file("attrs", "keys:\n")?;
         let attributes = Attributes {
@@ -754,6 +1097,7 @@ mod tests {
             tags: vec!["ci".into(), "search".into()],
             parallel: Some(4),
             role: Some("finance".into()),
+            options: KeyOptions::default(),
         };
         issue_with("ci", "t", &attributes, &path)?;
         let text = std::fs::read_to_string(&path)?;

@@ -25,13 +25,14 @@ Gantry serves the OpenAI and Anthropic routes your clients already call, plus a 
 | `POST` | `/v1/messages/count_tokens` | yes | yes | Anthropic token counting |
 | `GET` | `/v1/models` | yes | yes | The models the caller's rule allows |
 | `POST` | `/mcp` | yes | `tools/call` and refusals | The [MCP gateway](/governance/mcp-gateway/), when the policy lists `mcp:` servers |
-| `GET` | `/healthz` | no | no | Health check |
+| `GET` | `/healthz` | no | no | Liveness: the process is up. 503 only once the audit log is lost |
+| `GET` | `/readyz` | no | no | Readiness: a request sent now would be served. See [Health, readiness and drain](/operations/operations/#health-readiness-and-drain) |
 | `HEAD` | `/api/hello` | no | no | Claude Code's startup probe. Answers 200 and reaches no provider |
 | `GET`, `POST` | `/console/...` | session | sign-ins and changes | The [admin console](/operations/console/) |
-| `GET`, `POST`, `DELETE` | `/admin/keys`, `/admin/keys/<prefix>`, `/admin/kills` | admin key | yes | The [admin API](/reference/admin-api/) |
+| `GET`, `POST`, `PATCH`, `DELETE` | `/admin/keys`, `/admin/keys/<prefix>`, `/admin/keys/<prefix>/rotate`, `/admin/kills` | admin key | yes | The [admin API](/reference/admin-api/) |
 | `GET` | `/metrics` | no | no | Prometheus metrics, only on the `--metrics` address |
 
-Any method other than `GET` on `/healthz`, or other than `HEAD` on `/api/hello`, is refused with `unknown_route` and recorded. The key is checked before the route, so an unknown route without a key gets `no_key`.
+Any method other than `GET` on `/healthz` or `/readyz`, or other than `HEAD` on `/api/hello`, is refused with `unknown_route` and recorded. The key is checked before the route, so an unknown route without a key gets `no_key`.
 
 ## Provider kinds per route
 

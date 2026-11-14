@@ -674,6 +674,56 @@ impl<I: Iterator + Unpin> futures_core::Stream for Frames<I> {
 }
 
 #[tokio::test]
+async fn readiness_says_why_the_gateway_would_refuse_and_liveness_stays_up() -> TestResult {
+    let (upstream, _provider) = provider().await?;
+    let dir = files("ready", upstream)?;
+    let log = dir.join("gantry-audit.jsonl");
+    let app = start(&dir, AuditLog::open(&log)?)?;
+    let ready = || Request::get("/readyz").body(Body::empty());
+    let response = app.clone().oneshot(ready()?).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await?.to_bytes())?;
+    assert_eq!(body["status"], "ready");
+    assert_eq!(body["checks"]["audit"]["ready"], true);
+    assert_eq!(body["checks"]["policy"]["ready"], true);
+    if cfg!(windows) {
+        return Ok(());
+    }
+    // The audit log is lost: every request would be refused, so the orchestrator must stop routing here.
+    std::fs::remove_file(&log)?;
+    let response = app.clone().oneshot(ready()?).await?;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await?.to_bytes())?;
+    assert_eq!(body["status"], "not_ready");
+    assert_eq!(body["checks"]["audit"]["ready"], false);
+    assert!(
+        body["checks"]["audit"]["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("audit_unavailable")),
+        "{body}"
+    );
+
+    // A policy with no key and no identity provider refuses everything: not ready either.
+    let empty = files("ready-empty", upstream)?;
+    std::fs::write(empty.join("gantry.keys.yaml"), "keys: []\n")?;
+    let app = start(&empty, AuditLog::open(&empty.join("gantry-audit.jsonl"))?)?;
+    let response = app.clone().oneshot(ready()?).await?;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await?.to_bytes())?;
+    assert_eq!(body["checks"]["policy"]["ready"], false, "{body}");
+    // Liveness is a different question: the process is up and answering.
+    let live = app
+        .clone()
+        .oneshot(Request::get("/healthz").body(Body::empty())?)
+        .await?;
+    assert_eq!(live.status(), StatusCode::OK);
+    Ok(())
+}
+
+#[tokio::test]
 async fn the_health_check_fails_once_the_audit_log_is_lost() -> TestResult {
     let (upstream, provider) = provider().await?;
     let dir = files("health", upstream)?;

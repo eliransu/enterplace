@@ -52,7 +52,10 @@ rules:
 | `deployments[].provider` | string | required | A provider name. |
 | `deployments[].model` | string | required | The name sent to that provider. For `azure` and `bedrock`, a key of its `deployments` or `model_ids`. |
 | `deployments[].weight` | integer | `1` | 1 to 1000. How often this deployment is picked against the others. |
-| `balance` | string | `round_robin` | `round_robin` or `least_busy`. |
+| `deployments[].region` | string | none | A region label such as `eu`. A rule with `regions:` reaches only deployments labelled with one. See [Residency](/routing/strategies/#residency-regions). |
+| `deployments[].for` | map | none | `{ team: <team> }` or `{ tag: <tag> }`: kept for those requests. See [Tags and teams](/routing/strategies/#tags-and-teams-pick-deployments). |
+| `balance` | string | `round_robin` | `round_robin`, `least_busy`, `lowest_latency` or `lowest_cost`. See [Routing strategies](/routing/strategies/). |
+| `session_affinity` | boolean | `false` | Keep a coding agent's session on one deployment while it answers. See [Session affinity](/routing/strategies/#session-affinity-for-coding-agents). |
 | `cooldown_seconds` | integer | `30` | 0 to 3600. How long a failed deployment is passed over after its first failure. Each further failure doubles it, up to 16 times. |
 | `context_window_fallback` | string | none | A model or alias to send a request to when a deployment says the prompt is too long. |
 | `content_policy_fallback` | string | none | A model or alias to send a request to when a deployment refuses it on content policy. |

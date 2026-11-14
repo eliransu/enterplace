@@ -116,6 +116,8 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `profiles` | list | `[]` | [Access profiles](#access-profiles) rules include. |
 | `limits` | list | `[]` | Budgets, rates and `parallel` per scope: global, organization, team, person, key, customer, tag, model. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#scopes-and-the-limits-list). |
 | `roles` | list | `[]` | [Console roles](#console-roles) beside the built-in `admin` and `read_only`. |
+| `jwt` | list | `[]` | Identity providers whose JWTs are accepted in place of a Gantry key. See [JWT sign-in](/governance/access-control/#jwts-from-your-identity-provider). |
+| `trusted_proxies` | list | `[]` | Address ranges of load balancers whose `X-Forwarded-For` names the client. See [Behind a load balancer](/governance/access-control/#behind-a-load-balancer). |
 
 ### Providers
 
@@ -161,6 +163,9 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `buffer_stream` | boolean | `false` | Hold a streamed answer whole so `on: [answer]` guardrails check it first. Needs a guardrail with `on: [answer]`. |
 | `check_stream_every` | integer | none | Check a streamed answer every this many characters, sending only what was checked. See [guardrails](/governance/guardrails/#checking-a-stream-as-it-comes-check_stream_every). |
 | `passthrough` | list | `[]` | Native provider paths the rule may reach as sent. See [Passthrough](#passthrough). |
+| `from` | list | `[]` | Address ranges the rule's callers may send from. See [Source address ranges](/governance/access-control/#source-address-ranges). |
+| `regions` | list | none | Residency: the regions an alias deployment must be labelled with. Anything else is refused, never sent elsewhere. See [Residency](/routing/strategies/#residency-regions). |
+| `tags` | list | `[]` | Tags callers may send in `x-gantry-tags`. Any other is refused with `tag_not_allowed`. |
 | `caller_provider_key` | string | `refused` | Whether a caller may send their own provider key in `x-gantry-provider-key`: `refused`, `allowed` (sent in place of Gantry's, spend recorded as caller-paid and not counted against budgets) or `allowed_budgeted` (counted). See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key). |
 
 Every model a budgeted rule reaches must have a price, built in or under `prices:`. For `models: ["*"]` that is every model every provider serves. `gantry check` refuses a file that breaks this.

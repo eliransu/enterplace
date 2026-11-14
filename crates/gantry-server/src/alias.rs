@@ -19,6 +19,8 @@ use gantry_core::config::{Alias, Balance};
 pub(crate) struct Pool {
     deployments: Mutex<HashMap<String, Deployed>>,
     turns: Mutex<HashMap<String, u64>>,
+    /// Which deployment each session of each alias is pinned to, and when it last sent.
+    sessions: Mutex<HashMap<String, (String, Instant)>>,
     /// With a store, a deployment that fails here is passed over by every gateway, and one that failed on another
     /// gateway is passed over here.
     store: Option<Arc<dyn gantry_core::store::Store>>,
@@ -36,6 +38,36 @@ struct Deployed {
     /// a probe that never reports back (its request went elsewhere, or the caller left) cannot shut it out.
     probe_since: Option<Instant>,
     base: Duration,
+    /// Time to first byte of its last answers here, in milliseconds, oldest first.
+    latency: std::collections::VecDeque<u32>,
+}
+
+/// What a request brings to the choice of deployment besides the alias.
+#[derive(Default)]
+pub(crate) struct Ask<'a> {
+    /// The person and the session their client names, for an alias with session affinity.
+    pub(crate) session: Option<String>,
+    /// Each deployment's price in dollars per million tokens in and out, by position, for lowest_cost.
+    pub(crate) cost: &'a [Option<f64>],
+}
+
+/// How many answers a deployment's latency is judged on: recent enough to follow a slow region, enough that one
+/// slow answer does not move the 90th percentile.
+const LATENCY_SAMPLES: usize = 32;
+
+/// A session with no request for this long is forgotten, and its next request is balanced afresh.
+// ponytail: fixed idle time and per gateway; a setting and the store when replicas behind a non-sticky balancer need it.
+const SESSION_IDLE: Duration = Duration::from_secs(3600);
+
+/// Most sessions remembered at once, about 10 MB at most.
+const MAX_SESSIONS: usize = 100_000;
+
+/// The `p`th percentile of `samples`, by nearest rank. `None` without samples.
+fn percentile(samples: &std::collections::VecDeque<u32>, p: usize) -> Option<u32> {
+    let mut sorted: Vec<u32> = samples.iter().copied().collect();
+    sorted.sort_unstable();
+    let rank = (sorted.len() * p).div_ceil(100).max(1);
+    sorted.get(rank - 1).copied()
 }
 
 /// How many times the base cooldown a deployment that keeps failing waits at most.
@@ -71,12 +103,26 @@ impl Pool {
         }
     }
 
-    /// The order to try `alias`'s deployments in: `eligible` holds the positions of those that can take this request.
-    /// The balance picks the first; the rest follow in the alias's order. Deployments cooling down go last, so a
-    /// request still goes somewhere when all have failed lately.
-    pub(crate) fn order(&self, alias: &Alias, eligible: &[usize], now: Instant) -> Vec<usize> {
+    /// The order to try `alias`'s deployments in, and why the first was picked: `eligible` holds the positions of
+    /// those that can take this request. A half-open deployment is probed first; then a session's pinned deployment,
+    /// while it is not cooling down; then the balance picks. The rest follow in the alias's order, and deployments
+    /// cooling down go last, so a request still goes somewhere when all have failed lately.
+    pub(crate) fn order(
+        &self,
+        alias: &Alias,
+        eligible: &[usize],
+        now: Instant,
+        ask: &Ask<'_>,
+    ) -> (Vec<usize>, String) {
         let shared = self.store.as_ref().map(|store| store.cooling());
         let mut deployments = locked(&self.deployments);
+        let name_of = |i: usize| {
+            alias
+                .deployments
+                .get(i)
+                .map(|d| label(&d.provider, &d.model))
+                .unwrap_or_default()
+        };
         // One half-open deployment at most is probed by this request, and it is tried first.
         let mut probe = None;
         let mut cooling = |i: &usize| {
@@ -117,45 +163,143 @@ impl Pool {
             warm.retain(|i| *i != probe);
             warm.extend(cold);
             warm.insert(0, probe);
-            return warm;
+            return (
+                warm,
+                format!("probe: {} is tried again after a failure", name_of(probe)),
+            );
         }
-        if let Some(first) = match alias.balance {
+        let session = ask
+            .session
+            .as_ref()
+            .filter(|_| alias.session_affinity)
+            .map(|s| format!("{}\n{s}", alias.name));
+        if let Some(key) = &session {
+            let pinned = locked(&self.sessions)
+                .get(key)
+                .filter(|(_, at)| now.duration_since(*at) < SESSION_IDLE)
+                .map(|(name, _)| name.clone());
+            if let Some(at) = pinned.and_then(|name| warm.iter().position(|i| name_of(*i) == name))
+            {
+                let picked = warm.remove(at);
+                warm.insert(0, picked);
+                warm.extend(cold);
+                let name = name_of(picked);
+                self.pin(key, &name, now);
+                return (warm, format!("session: pinned to {name}"));
+            }
+        }
+        let weight = |i: &usize| alias.deployments.get(*i).map_or(0, |d| u64::from(d.weight));
+        let (first, why) = match alias.balance {
             Balance::RoundRobin => {
-                let total: u64 = warm
-                    .iter()
-                    .filter_map(|i| alias.deployments.get(*i))
-                    .map(|d| u64::from(d.weight))
-                    .sum();
+                let total: u64 = warm.iter().map(weight).sum();
                 let mut turns = locked(&self.turns);
                 let turn = turns.entry(alias.name.clone()).or_default();
                 let mut at = *turn % total.max(1);
                 *turn = turn.wrapping_add(1);
-                warm.iter().position(|i| {
-                    let weight = alias.deployments.get(*i).map_or(0, |d| u64::from(d.weight));
-                    if at < weight {
+                let first = warm.iter().position(|i| {
+                    if at < weight(i) {
                         return true;
                     }
-                    at -= weight;
+                    at -= weight(i);
                     false
-                })
+                });
+                (first, "round_robin: its turn by weight".to_string())
             }
-            Balance::LeastBusy => warm
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, i)| {
-                    alias.deployments.get(**i).map_or(usize::MAX, |d| {
-                        deployments
-                            .get(&label(&d.provider, &d.model))
-                            .map_or(0, |s| s.busy.load(Ordering::Relaxed))
+            Balance::LeastBusy => {
+                let busy = |i: &usize| {
+                    deployments
+                        .get(&name_of(*i))
+                        .map_or(0, |s| s.busy.load(Ordering::Relaxed))
+                };
+                let first = warm
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, i)| busy(i))
+                    .map(|(at, _)| at);
+                let n = first.and_then(|at| warm.get(at)).map_or(0, busy);
+                (first, format!("least_busy: {n} in flight"))
+            }
+            Balance::LowestLatency => {
+                // A deployment with no answer yet counts as fastest, so each is measured before it is judged.
+                let p90 = |i: &usize| {
+                    deployments
+                        .get(&name_of(*i))
+                        .and_then(|s| percentile(&s.latency, 90))
+                };
+                let first = warm
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, i)| p90(i).unwrap_or(0))
+                    .map(|(at, _)| at);
+                let why = match first.and_then(|at| warm.get(at)).and_then(p90) {
+                    Some(ms) => format!("lowest_latency: p90 time to first byte {ms} ms"),
+                    None => "lowest_latency: not measured yet, so tried to measure it".to_string(),
+                };
+                (first, why)
+            }
+            Balance::LowestCost => {
+                // Unpriced deployments go after every priced one: their cost is unknown, not zero.
+                let cost = |i: &usize| ask.cost.get(*i).copied().flatten();
+                let first = warm
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, a), (_, b)| {
+                        cost(a)
+                            .unwrap_or(f64::INFINITY)
+                            .total_cmp(&cost(b).unwrap_or(f64::INFINITY))
                     })
-                })
-                .map(|(at, _)| at),
-        } {
+                    .map(|(at, _)| at);
+                let why = match first.and_then(|at| warm.get(at)).and_then(cost) {
+                    Some(usd) => format!("lowest_cost: ${usd} per million tokens in and out"),
+                    None => "lowest_cost: no deployment has a price, so the first".to_string(),
+                };
+                (first, why)
+            }
+        };
+        let mut why = why;
+        if let Some(first) = first {
             let picked = warm.remove(first);
             warm.insert(0, picked);
+        } else if warm.is_empty() {
+            why = "every deployment is cooling down after failures: tried in order anyway".into();
+        }
+        if let (Some(key), Some(first)) = (&session, warm.first()) {
+            self.pin(key, &name_of(*first), now);
         }
         warm.extend(cold);
-        warm
+        (warm, why)
+    }
+
+    /// Keeps `session` on `deployment` from `now`. The table is bounded: past its size, idle sessions are dropped,
+    /// and if none is idle the oldest goes.
+    fn pin(&self, session: &str, deployment: &str, now: Instant) {
+        let mut sessions = locked(&self.sessions);
+        if sessions.len() >= MAX_SESSIONS && !sessions.contains_key(session) {
+            sessions.retain(|_, (_, at)| now.duration_since(*at) < SESSION_IDLE);
+            if sessions.len() >= MAX_SESSIONS {
+                let oldest = sessions
+                    .iter()
+                    .min_by_key(|(_, (_, at))| *at)
+                    .map(|(k, _)| k.clone());
+                if let Some(oldest) = oldest {
+                    sessions.remove(&oldest);
+                }
+            }
+        }
+        sessions.insert(session.to_string(), (deployment.to_string(), now));
+    }
+
+    /// A deployment answered after `took` (its response headers arrived): one sample of its latency.
+    pub(crate) fn observed(&self, deployment: &str, took: Duration) {
+        let mut deployments = locked(&self.deployments);
+        let samples = &mut deployments
+            .entry(deployment.to_string())
+            .or_default()
+            .latency;
+        if samples.len() == LATENCY_SAMPLES {
+            samples.pop_front();
+        }
+        samples.push_back(u32::try_from(took.as_millis()).unwrap_or(u32::MAX));
     }
 
     /// Counts a request in flight at a deployment until the returned guard is dropped.
@@ -431,13 +575,98 @@ mod tests {
                     provider: format!("p{i}"),
                     model: "m".into(),
                     weight: *w,
+                    region: None,
+                    for_: None,
                 })
                 .collect(),
             balance,
             cooldown_seconds: 30,
             context_window_fallback: None,
             content_policy_fallback: None,
+            session_affinity: false,
         }
+    }
+
+    fn order(pool: &Pool, alias: &Alias, eligible: &[usize], now: Instant) -> Vec<usize> {
+        pool.order(alias, eligible, now, &Ask::default()).0
+    }
+
+    #[test]
+    fn lowest_latency_measures_each_deployment_then_picks_the_fastest_by_its_p90() {
+        let pool = Pool::default();
+        let smart = alias(Balance::LowestLatency, &[1, 1]);
+        let (first, why) = pool.order(&smart, &[0, 1], Instant::now(), &Ask::default());
+        assert!(why.contains("not measured yet"), "{why}");
+        assert_eq!(first[0], 0);
+        for _ in 0..20 {
+            pool.observed("p0/m", Duration::from_millis(300));
+            pool.observed("p1/m", Duration::from_millis(120));
+        }
+        // One slow answer is under the 90th percentile and does not move it.
+        pool.observed("p1/m", Duration::from_secs(5));
+        let (first, why) = pool.order(&smart, &[0, 1], Instant::now(), &Ask::default());
+        assert_eq!(first[0], 1, "{why}");
+        assert!(why.contains("p90 time to first byte 120 ms"), "{why}");
+        // A deployment that slows down for long enough loses its place.
+        for _ in 0..LATENCY_SAMPLES {
+            pool.observed("p1/m", Duration::from_millis(900));
+        }
+        assert_eq!(order(&pool, &smart, &[0, 1], Instant::now())[0], 0);
+    }
+
+    #[test]
+    fn lowest_cost_picks_the_cheapest_priced_deployment_and_leaves_unpriced_ones_last() {
+        let pool = Pool::default();
+        let smart = alias(Balance::LowestCost, &[1, 1, 1]);
+        let cost = [None, Some(15.0), Some(0.75)];
+        let ask = Ask {
+            cost: &cost,
+            ..Ask::default()
+        };
+        let (first, why) = pool.order(&smart, &[0, 1, 2], Instant::now(), &ask);
+        assert_eq!(first[0], 2);
+        assert!(why.contains("$0.75"), "{why}");
+        // The cheapest is cooling down: the next cheapest priced one, never the unpriced one.
+        pool.failed("p2/m", Duration::from_secs(30));
+        assert_eq!(pool.order(&smart, &[0, 1, 2], Instant::now(), &ask).0[0], 1);
+    }
+
+    #[test]
+    fn a_session_stays_on_its_deployment_while_it_is_healthy_and_moves_when_it_fails() {
+        let pool = Pool::default();
+        let mut smart = alias(Balance::RoundRobin, &[1, 1, 1]);
+        smart.session_affinity = true;
+        let ask = |s: &str| Ask {
+            session: Some(s.into()),
+            ..Ask::default()
+        };
+        let (first, _) = pool.order(&smart, &[0, 1, 2], Instant::now(), &ask("maya\ns1"));
+        let pinned = first[0];
+        for _ in 0..5 {
+            let (again, why) = pool.order(&smart, &[0, 1, 2], Instant::now(), &ask("maya\ns1"));
+            assert_eq!(again[0], pinned, "{why}");
+            assert!(why.starts_with("session: pinned"), "{why}");
+        }
+        // Another session is balanced as usual (round robin moves on).
+        let other = pool
+            .order(&smart, &[0, 1, 2], Instant::now(), &ask("maya\ns2"))
+            .0[0];
+        assert_ne!(other, pinned);
+        // The pinned deployment fails: the session moves, and stays where it moved.
+        pool.failed(&format!("p{pinned}/m"), Duration::from_secs(30));
+        let moved = pool
+            .order(&smart, &[0, 1, 2], Instant::now(), &ask("maya\ns1"))
+            .0[0];
+        assert_ne!(moved, pinned);
+        assert_eq!(
+            pool.order(&smart, &[0, 1, 2], Instant::now(), &ask("maya\ns1"))
+                .0[0],
+            moved
+        );
+        // Without affinity on the alias, the session header changes nothing.
+        smart.session_affinity = false;
+        let (_, why) = pool.order(&smart, &[0, 1, 2], Instant::now(), &ask("maya\ns1"));
+        assert!(why.starts_with("round_robin"), "{why}");
     }
 
     #[test]
@@ -446,13 +675,13 @@ mod tests {
         let smart = alias(Balance::RoundRobin, &[2, 1]);
         let now = Instant::now();
         let firsts: Vec<usize> = (0..6)
-            .map(|_| pool.order(&smart, &[0, 1], now)[0])
+            .map(|_| order(&pool, &smart, &[0, 1], now)[0])
             .collect();
         assert_eq!(firsts, [0, 0, 1, 0, 0, 1]);
         pool.failed("p0/m", Duration::from_secs(30));
-        assert_eq!(pool.order(&smart, &[0, 1], Instant::now()), [1, 0]);
+        assert_eq!(order(&pool, &smart, &[0, 1], Instant::now()), [1, 0]);
         pool.answered("p0/m");
-        assert_eq!(pool.order(&smart, &[0, 1], Instant::now()).len(), 2);
+        assert_eq!(order(&pool, &smart, &[0, 1], Instant::now()).len(), 2);
     }
 
     #[test]
@@ -462,14 +691,14 @@ mod tests {
         let base = Duration::from_secs(10);
         let start = Instant::now();
         pool.failed("p0/m", base);
-        let cold = |at: Instant| pool.order(&smart, &[0, 1, 2], at).last().copied();
+        let cold = |at: Instant| order(&pool, &smart, &[0, 1, 2], at).last().copied();
         assert_eq!(
             cold(start + Duration::from_secs(5)),
             Some(0),
             "open: tried last"
         );
         // Half open: once the cooldown is over, one request probes it first; the others still pass it over.
-        let probe = pool.order(&smart, &[0, 1, 2], start + Duration::from_secs(11));
+        let probe = order(&pool, &smart, &[0, 1, 2], start + Duration::from_secs(11));
         assert_eq!(
             probe[0], 0,
             "the probe goes to the recovering deployment first"
@@ -490,7 +719,7 @@ mod tests {
             "the second cooldown is 20 seconds"
         );
         assert_eq!(
-            pool.order(&smart, &[0, 1, 2], again + Duration::from_secs(21))[0],
+            order(&pool, &smart, &[0, 1, 2], again + Duration::from_secs(21))[0],
             0,
             "then one probe"
         );
@@ -499,14 +728,14 @@ mod tests {
         }
         let capped = Instant::now();
         assert_eq!(
-            pool.order(&smart, &[0, 1, 2], capped + Duration::from_secs(161))[0],
+            order(&pool, &smart, &[0, 1, 2], capped + Duration::from_secs(161))[0],
             0,
             "capped at 16 times the base"
         );
         // The probe answered: closed, in turn with the others again.
         pool.answered("p0/m");
         let firsts: Vec<usize> = (0..3)
-            .map(|_| pool.order(&smart, &[0, 1, 2], Instant::now())[0])
+            .map(|_| order(&pool, &smart, &[0, 1, 2], Instant::now())[0])
             .collect();
         assert!(
             firsts.contains(&0) && firsts.contains(&1) && firsts.contains(&2),
@@ -515,7 +744,12 @@ mod tests {
         pool.failed("p0/m", base);
         assert_eq!(cold(Instant::now() + Duration::from_secs(5)), Some(0));
         assert!(
-            pool.order(&smart, &[0, 1, 2], Instant::now() + Duration::from_secs(11))[0] == 0,
+            order(
+                &pool,
+                &smart,
+                &[0, 1, 2],
+                Instant::now() + Duration::from_secs(11)
+            )[0] == 0,
             "after a success the backoff starts over"
         );
     }
@@ -527,10 +761,10 @@ mod tests {
         let base = Duration::from_secs(10);
         pool.failed("p0/m", base);
         let after = Instant::now() + Duration::from_secs(11);
-        assert_eq!(pool.order(&smart, &[0, 1], after)[0], 0);
+        assert_eq!(order(&pool, &smart, &[0, 1], after)[0], 0);
         // That request went elsewhere or was dropped: after another base cooldown a new probe is let through.
         assert_eq!(
-            pool.order(&smart, &[0, 1], after + Duration::from_secs(11))[0],
+            order(&pool, &smart, &[0, 1], after + Duration::from_secs(11))[0],
             0
         );
     }
@@ -540,10 +774,10 @@ mod tests {
         let pool = Pool::default();
         let smart = alias(Balance::LeastBusy, &[1, 1]);
         let held = pool.busy("p0/m");
-        assert_eq!(pool.order(&smart, &[0, 1], Instant::now())[0], 1);
+        assert_eq!(order(&pool, &smart, &[0, 1], Instant::now())[0], 1);
         drop(held);
         let _other = pool.busy("p1/m");
-        assert_eq!(pool.order(&smart, &[0, 1], Instant::now())[0], 0);
+        assert_eq!(order(&pool, &smart, &[0, 1], Instant::now())[0], 0);
     }
 
     #[test]

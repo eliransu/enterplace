@@ -612,6 +612,9 @@ async fn with_postgres_down_known_keys_work_and_budgeted_requests_are_refused() 
     )
     .await?;
     assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = answer(&a.router, request("GET", "/readyz", ADMIN, "")?).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["checks"]["store"]["ready"], true);
 
     relay.down.store(true, Ordering::SeqCst);
     let start = Instant::now();
@@ -638,6 +641,10 @@ async fn with_postgres_down_known_keys_work_and_budgeted_requests_are_refused() 
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    // Readiness says so: an orchestrator stops sending here while the store is away.
+    let (status, body) = answer(&a.router, request("GET", "/readyz", ADMIN, "")?).await?;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["checks"]["store"]["ready"], false);
     // Known keys keep working from memory, and the kill switch keeps its last state.
     tokio::time::sleep(Duration::from_secs(1)).await;
     // A request under a rate limit every replica shares cannot be counted, so it is refused as a budgeted one is.
@@ -698,6 +705,113 @@ async fn with_postgres_down_known_keys_work_and_budgeted_requests_are_refused() 
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    let (status, body) = answer(&a.router, request("GET", "/readyz", ADMIN, "")?).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_changed_or_rotated_on_one_gateway_is_in_force_on_the_other_with_shared_spend()
+-> TestResult {
+    let Some(url) = database("keyops").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let (a_dir, b_dir) = (dir("keyops-a")?, dir("keyops-b")?);
+    let a = gateway(&a_dir, &url, port)?;
+    add_key(&a, "ops", "ops", ADMIN, true)?;
+    add_key(&a, "pat", "payments", PAT, false)?;
+    let b = gateway(&b_dir, &url, port)?;
+    let prefix = &gantry_core::id::sha256_hex(PAT.as_bytes())[..8];
+    let path = format!("/admin/keys/{prefix}");
+    let (status, body) = answer(
+        &a.router,
+        request("PATCH", &path, ADMIN, r#"{"rpm": 1, "tags": ["eval"], "routes": ["/v1/chat/completions"], "metadata": {"owner": "pat"}}"#)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // b reads the change from the store.
+    let start = Instant::now();
+    loop {
+        let (_, info) = answer(&b.router, request("GET", &path, ADMIN, "")?).await?;
+        if info["key"]["rpm"] == 1 {
+            assert_eq!(info["key"]["tags"], serde_json::json!(["eval"]));
+            assert_eq!(info["spend_counted_by"], "store");
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "b never saw the change: {info}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // One rpm across both gateways: the key's own limit is shared through the store.
+    let (status, body) = answer(
+        &a.router,
+        request("POST", "/v1/chat/completions", PAT, BUDGETED)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let (status, body) = answer(
+        &b.router,
+        request("POST", "/v1/chat/completions", PAT, BUDGETED)?,
+    )
+    .await?;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
+        "{body}"
+    );
+    // The key's spend is the store's, the same on both.
+    let (_, info) = answer(&b.router, request("GET", &path, ADMIN, "")?).await?;
+    let spent: f64 = info["spend"].as_array().map_or(0.0, |rows| {
+        rows.iter().filter_map(|r| r["spent_usd"].as_f64()).sum()
+    });
+    assert!(spent > 0.0, "{info}");
+    // A rotation on a: b accepts the new key, and records the old one's use as in its grace.
+    let (status, rotated) = answer(
+        &a.router,
+        request("PATCH", &path, ADMIN, r#"{"rpm": null}"#)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{rotated}");
+    let (status, rotated) = answer(
+        &a.router,
+        request(
+            "POST",
+            &format!("{path}/rotate"),
+            ADMIN,
+            r#"{"grace": "2h"}"#,
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "{rotated}");
+    let new_key = rotated["key"].as_str().ok_or("no key")?.to_string();
+    let start = Instant::now();
+    loop {
+        let (status, body) = answer(
+            &b.router,
+            request("POST", "/v1/chat/completions", &new_key, BUDGETED)?,
+        )
+        .await?;
+        if status == StatusCode::OK {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "b never took the new key: {body}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let (status, body) = answer(
+        &b.router,
+        request("POST", "/v1/chat/completions", PAT, BUDGETED)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let log = std::fs::read_to_string(b_dir.join("gantry-audit.jsonl"))?;
+    assert!(log.contains("\"key_rotated\""), "{log}");
     Ok(())
 }
 

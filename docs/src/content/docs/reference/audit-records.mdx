@@ -49,7 +49,7 @@ One per request Gantry decides. It records the decision, not the provider's answ
 | `time` | string | When the record was made |
 | `person` | string | The name the key was issued to, or `unknown` when the caller was not identified |
 | `team` | string or null | The key's team |
-| `client` | string or null | The IP address of the connection. Behind a proxy, the proxy's |
+| `client` | string or null | The IP address of the connection, or behind a [trusted proxy](/governance/access-control/#behind-a-load-balancer) the client it names in `X-Forwarded-For` |
 | `key` | string or null | The first 8 hex characters of the SHA-256 of the key the request came with, issued or not. `null` when it carried no key |
 | `method`, `path` | string | As the request came, without the query |
 | `model` | string or null | The `model` field of the body. `null` when refused before the body was read |
@@ -69,8 +69,13 @@ Fields present only in some cases:
 | `prompt_cache` | array | Where `prompt_cache: auto` placed cache breakpoints: `tools`, `system`, `messages` |
 | `translated` | `true` | The request was translated for the provider (`accept_chat`, `accept_messages`, Gemini, Vertex AI) |
 | `alias`, `deployment` | string | The model is an alias: the alias sent, and the deployment tried first as `provider/model` |
-| `limit` | object | Refused by a rate limit: `{"kind":"rpm","of":"rule","value":60}`, or `{"kind":"tpm","of":"rule","value":1000,"request_could_use":1228}` where `of` is `rule` or `key` |
+| `limit` | object | Refused by a limit: `{"kind":"rpm","of":"rule","value":60}`, `{"kind":"tpm","of":"rule","value":1000,"request_could_use":1228}` or `{"kind":"parallel","of":"key","value":4}`, where `of` is `rule` or `key` |
 | `key_models` | `true` | A `model_not_allowed` refusal by the key's own `models:` list |
+| `routing` | object | The model is an alias: `balance`, `reason`, `deployment`, and `region`, `regions` and `for` when they apply. See [Routing strategies](/routing/strategies/#the-record) |
+| `tags` | array | The request's tags: its key's and those sent in `x-gantry-tags` |
+| `key_rotated` | object | The key was rotated and is in its grace: `{"replaced_by": "8a41c2d0", "expires": "2026-11-16T09:14:02Z"}` |
+| `auth`, `jwt_issuer`, `jwt_subject` | string | The caller sent a [JWT](/governance/access-control/#jwts-from-your-identity-provider): `auth` is `jwt`, with the token's issuer and subject. Never the token |
+| `ip_not_allowed` | string | An `ip_not_allowed` refusal: `key` or `rule`, whichever `from` list refused it |
 | `guardrails` | array or string | The rule has guardrails. One entry per guardrail and kind found; an empty list means they ran and found nothing. The string `not_run: the body is audio` for a transcription |
 
 A `guardrails` entry:

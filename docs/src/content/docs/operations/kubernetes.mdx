@@ -116,7 +116,7 @@ kubectl exec deploy/gantry -- /gantry audit verify /var/lib/gantry/gantry-audit.
 - **Policy.** A ConfigMap mounted as a folder at `/etc/gantry/policy`. A `helm upgrade` that changes the policy does not restart the pod: the kubelet updates the file within about a minute, and Gantry checks and uses it within 2 seconds, or keeps the old one and records `config_rejected`.
 - **Data.** `/var/lib/gantry` is the volume, holding `gantry-audit.jsonl` and `gantry.keys.yaml`. The keys file is writable because the console and the admin API issue and revoke keys there.
 - **Init container.** Writes `keys: []` to the keys file on a new volume, because `serve --keys` does not start on a keys file that does not exist. It never touches an existing file.
-- **Probes.** Readiness and liveness call `/healthz`, which answers 503 when the audit log cannot be written. Gantry then refuses every request until a restart, which the liveness probe does after a minute.
+- **Probes.** Liveness calls `/healthz`, which answers 503 when the audit log cannot be written; Gantry then refuses every request until a restart, which the liveness probe does after a minute. Readiness should call [`/readyz`](/operations/operations/#health-readiness-and-drain), which is also 503 while the store is unreachable, the policy has no keys, or the pod is draining, so no request is routed to a pod that would refuse it.
 - **Shutdown.** `SIGTERM` gives requests in flight 30 seconds. The pod gets 40 before it is killed, so the last audit sync happens.
 
 <Aside type="caution">

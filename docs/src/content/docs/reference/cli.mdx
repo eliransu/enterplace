@@ -118,6 +118,34 @@ gantry key new maya.cohen --team payments --budget 20/month --expires 2026-12-31
 
 The entry is appended to the end of the file; nothing already there is rewritten. A running `gantry serve` accepts the key within 2 seconds. If the name already has a key, both work until you remove the old entry.
 
+## key info
+
+```text
+gantry key info <hash prefix> [--url <gantry url>]
+```
+
+A key's settings and its spend for the current day and month, from the running gateway's admin API. See [Key info and spend](/governance/keys/#key-info-and-spend).
+
+## key update
+
+```text
+gantry key update <hash prefix> [--expires <date>] [--budget <usd>/<day|month>] [--models <a,b>] [--tpm <n>]
+  [--rpm <n>] [--parallel <n>] [--tags <a,b>] [--routes <a,b>] [--from <cidr,cidr>] [--metadata <k=v,k=v>]
+  [--url <gantry url>]
+```
+
+Changes the settings given, at least one, through the admin API. `none` removes a setting (`--rpm none`). Every change is recorded with what the field was and became. See [Change a key](/governance/keys/#change-a-key).
+
+## key rotate
+
+```text
+gantry key rotate <hash prefix> [--grace <48h|30m|7d|0>] [--url <gantry url>]
+```
+
+Makes a new key with the same settings and prints it once. The old key works until the grace ends (default `24h`), and each use of it is recorded with `key_rotated`. See [Rotate a key](/governance/keys/#rotate-a-key).
+
+`key info`, `key update` and `key rotate` need an admin key in `GANTRY_ADMIN_KEY` (or the saved `gantry login` key, if it is an admin's) and the gateway in `--url`, `GANTRY_URL` or the saved login, as `gantry kill` does.
+
 ## key list
 
 Lists the keys in the keys file. Never a key.

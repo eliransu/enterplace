@@ -727,6 +727,27 @@ impl Spend {
         }
     }
 
+    /// What `scope` spent and holds in this process for the current day and month: `(per, period, spent, reserved)`.
+    pub(crate) fn usage(&self, scope: &str) -> Vec<(String, String, f64, f64)> {
+        let now = audit::timestamp();
+        let ledger = locked(&self.ledger);
+        [Period::Day, Period::Month]
+            .into_iter()
+            .map(|per| {
+                let period = period_of(&now, per);
+                let bucket = ledger
+                    .get(&(scope.to_string(), per))
+                    .filter(|b| b.period == period);
+                (
+                    per.word().to_string(),
+                    period.to_string(),
+                    bucket.map_or(0.0, |b| b.spent),
+                    bucket.map_or(0.0, |b| b.reserved),
+                )
+            })
+            .collect()
+    }
+
     /// Spend so far in the current period, for tests and the console.
     #[cfg(test)]
     fn spent(&self, scope: &str, per: Period) -> f64 {

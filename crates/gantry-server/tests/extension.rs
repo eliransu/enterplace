@@ -70,6 +70,46 @@ async fn routes_and_health_fields_are_added_and_never_replace_the_gateways_own()
     Ok(())
 }
 
+#[tokio::test]
+async fn an_embedder_check_that_says_not_ready_makes_readyz_503() -> TestResult {
+    let ready = Arc::new(Mutex::new(true));
+    let seen = ready.clone();
+    let extension = Extension {
+        health: Some(Arc::new(move || {
+            let ok = seen.lock().map(|r| *r).unwrap_or(false);
+            let mut fields = serde_json::Map::new();
+            fields.insert(
+                "license".into(),
+                if ok {
+                    json!({ "ready": true, "customer": "Acme" })
+                } else {
+                    json!({ "ready": false, "reason": "the license ended on 2026-11-01" })
+                },
+            );
+            fields
+        })),
+        ..Extension::default()
+    };
+    let app = gantry_server::app(Config {
+        extension,
+        ..Config::default()
+    })?;
+    let (status, body) = get_json(&app, "/readyz").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["checks"]["license"]["customer"], "Acme");
+    *ready.lock().map_err(|_| "poisoned")? = false;
+    let (status, body) = get_json(&app, "/readyz").await?;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        body["checks"]["license"]["reason"],
+        "the license ended on 2026-11-01"
+    );
+    // Liveness does not read readiness: the process is still alive.
+    let (status, _) = get_json(&app, "/healthz").await?;
+    assert_eq!(status, StatusCode::OK);
+    Ok(())
+}
+
 /// A fresh database for one test, as a connection string. `None` when GANTRY_TEST_DATABASE_URL is not set.
 async fn database(test: &str) -> Result<Option<String>, Error> {
     let Ok(url) = std::env::var("GANTRY_TEST_DATABASE_URL") else {
@@ -159,13 +199,13 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
         .collect::<Result<_, tokio_postgres::Error>>()?;
     assert_eq!(rows, vec![("demo".to_string(), 1)]);
-    // The gateway's own schema version is untouched by the namespace: its four migrations (keys, shared limits and
-    // sessions, credentials, the hierarchy's key fields).
+    // The gateway's own schema version is untouched by the namespace: its five migrations (keys, shared limits and
+    // sessions, credentials, the hierarchy's key fields, key options).
     let core: i32 = client
         .query_one("SELECT max(version) FROM gantry_schema", &[])
         .await?
         .try_get(0)?;
-    assert_eq!(core, 4);
+    assert_eq!(core, 5);
 
     // Its own connection, so a transaction is safe on it.
     let tx = client.transaction().await?;

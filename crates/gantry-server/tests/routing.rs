@@ -120,12 +120,15 @@ fn smart(balance: Balance, deployments: &[(&str, &str, u32)]) -> Alias {
                 provider: p.to_string(),
                 model: m.to_string(),
                 weight: *w,
+                region: None,
+                for_: None,
             })
             .collect(),
         balance,
         cooldown_seconds: 30,
         context_window_fallback: None,
         content_policy_fallback: None,
+        session_affinity: false,
     }
 }
 
@@ -216,6 +219,244 @@ fn model_of(body: &Bytes) -> String {
 }
 
 const CHAT_OK: &str = r#"{"id":"c","object":"chat.completion","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}"#;
+
+/// Sends a chat request for `smart` with extra headers, and returns the status and body.
+async fn chat_with(
+    gw: &Gateway,
+    headers: &[(&str, &str)],
+) -> Result<(StatusCode, String), Box<dyn std::error::Error>> {
+    let mut request = Request::post("/v1/chat/completions")
+        .header(header::AUTHORIZATION, format!("Bearer {MAYA}"))
+        .header(header::CONTENT_TYPE, "application/json");
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let response = gw
+        .app
+        .clone()
+        .oneshot(request.body(Body::from(r#"{"model":"smart","messages":[]}"#))?)
+        .await?;
+    let status = response.status();
+    let body = response.into_body().collect().await?.to_bytes();
+    Ok((status, String::from_utf8(body.to_vec())?))
+}
+
+fn regional() -> Alias {
+    let mut alias = smart(
+        Balance::RoundRobin,
+        &[("eu", "gpt-4o", 1), ("us", "gpt-4o-mini", 1)],
+    );
+    alias.deployments[0].region = Some("eu".into());
+    alias.deployments[1].region = Some("us".into());
+    alias
+}
+
+#[tokio::test]
+async fn residency_is_a_refusal_never_a_preference_and_the_region_is_recorded() -> TestResult {
+    let (a, eu) = mock(vec![(503, "application/json", "{}")]).await?;
+    let (b, us) = mock(vec![(200, "application/json", CHAT_OK)]).await?;
+    let providers = || {
+        vec![
+            route("eu", Kind::OpenAi, a, &["gpt-4o"]),
+            route("us", Kind::OpenAi, b, &["gpt-4o-mini"]),
+        ]
+    };
+    let eu_only = || {
+        Policy::new()
+            .with_key(MAYA, "maya.cohen", "payments")
+            .with_rule("eu-team", Who::Any, Models::Any)
+            .with_limits(Limits {
+                regions: Some(vec!["eu".into()]),
+                ..Limits::default()
+            })
+    };
+    let gw = gateway("residency", providers(), vec![regional()], eu_only())?;
+    // The eu deployment fails: the request is not sent to us, however healthy it is.
+    for _ in 0..3 {
+        let (status, body) = chat_with(&gw, &[]).await?;
+        assert_ne!(status, StatusCode::OK, "{body}");
+    }
+    assert!(eu.seen().len() >= 3);
+    assert!(us.seen().is_empty(), "a request left its region");
+    let decided = records(&gw, "").await?;
+    let first = decided
+        .iter()
+        .find(|r| r["routing"].is_object())
+        .ok_or("no routing record")?;
+    assert_eq!(first["routing"]["region"], "eu");
+    assert_eq!(first["routing"]["regions"], json!(["eu"]));
+    // No deployment at all in an allowed region: refused before anything is sent.
+    let mut only_us = regional();
+    only_us.deployments.remove(0);
+    let gw = gateway("residency-none", providers(), vec![only_us], eu_only())?;
+    let (status, body) = chat_with(&gw, &[]).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body.contains("region_not_allowed"), "{body}");
+    assert!(us.seen().is_empty());
+    // A model that is not an alias has no region to show: refused under residency.
+    let gw = gateway("residency-plain", providers(), vec![], eu_only())?;
+    let (status, _, body) = post(
+        &gw,
+        "/v1/chat/completions",
+        r#"{"model":"gpt-4o-mini","messages":[]}"#,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body.contains("region_not_allowed"), "{body}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_tag_the_rule_lists_picks_its_kept_deployment_and_an_unlisted_one_is_refused()
+-> TestResult {
+    let (a, general) = mock(vec![(200, "application/json", CHAT_OK)]).await?;
+    let (b, batch) = mock(vec![(200, "application/json", CHAT_OK)]).await?;
+    let mut alias = smart(
+        Balance::RoundRobin,
+        &[("general", "gpt-4o", 1), ("batch", "gpt-4o-mini", 1)],
+    );
+    alias.deployments[1].for_ = Some(gantry_core::config::For::Tag("batch".into()));
+    let policy = Policy::new()
+        .with_key(MAYA, "maya.cohen", "payments")
+        .with_rule("everyone", Who::Any, Models::Any)
+        .with_rule_change(|rule| rule.tags = vec!["batch".into()]);
+    let gw = gateway(
+        "tags",
+        vec![
+            route("general", Kind::OpenAi, a, &["gpt-4o"]),
+            route("batch", Kind::OpenAi, b, &["gpt-4o-mini"]),
+        ],
+        vec![alias],
+        policy,
+    )?;
+    for _ in 0..3 {
+        assert_eq!(chat_with(&gw, &[]).await?.0, StatusCode::OK);
+    }
+    assert_eq!(
+        (general.seen().len(), batch.seen().len()),
+        (3, 0),
+        "untagged requests stay off the kept deployment"
+    );
+    for _ in 0..3 {
+        assert_eq!(
+            chat_with(&gw, &[("x-gantry-tags", "batch")]).await?.0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(batch.seen().len(), 3);
+    // The tag header is Gantry's: it never reaches the provider.
+    assert!(
+        batch
+            .seen()
+            .iter()
+            .all(|(_, h, _)| !h.contains_key("x-gantry-tags"))
+    );
+    let (status, body) = chat_with(&gw, &[("x-gantry-tags", "batch,vip")]).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(
+        body.contains("tag_not_allowed") && body.contains("vip"),
+        "{body}"
+    );
+    let all = records(&gw, "").await?;
+    let tagged = all.iter().filter(|r| r["tags"] == json!(["batch"])).count();
+    assert!(tagged >= 3, "the tags are recorded");
+    assert!(all.iter().any(|r| r["routing"]["for"] == "tag:batch"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_coding_agent_session_stays_on_one_deployment_and_moves_only_when_it_fails() -> TestResult
+{
+    let (a, one) = mock(vec![(200, "application/json", CHAT_OK)]).await?;
+    let (b, two) = mock(vec![(200, "application/json", CHAT_OK)]).await?;
+    let mut alias = smart(
+        Balance::RoundRobin,
+        &[("one", "gpt-4o", 1), ("two", "gpt-4o-mini", 1)],
+    );
+    alias.session_affinity = true;
+    let gw = gateway(
+        "affinity",
+        vec![
+            route("one", Kind::OpenAi, a, &["gpt-4o"]),
+            route("two", Kind::OpenAi, b, &["gpt-4o-mini"]),
+        ],
+        vec![alias],
+        everyone(),
+    )?;
+    for _ in 0..6 {
+        assert_eq!(
+            chat_with(&gw, &[("x-claude-code-session-id", "s-1")])
+                .await?
+                .0,
+            StatusCode::OK
+        );
+    }
+    let (n1, n2) = (one.seen().len(), two.seen().len());
+    assert!(
+        n1 == 6 || n2 == 6,
+        "a session moved between deployments: {n1} and {n2}"
+    );
+    let pinned = if n1 == 6 { &one } else { &two };
+    let other = if n1 == 6 { &two } else { &one };
+    pinned.dead.store(true, std::sync::atomic::Ordering::SeqCst);
+    let before = other.seen().len();
+    for _ in 0..3 {
+        assert_eq!(
+            chat_with(&gw, &[("x-claude-code-session-id", "s-1")])
+                .await?
+                .0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        other.seen().len(),
+        before + 3,
+        "the session moves when its deployment fails"
+    );
+    let all = records(&gw, "").await?;
+    assert!(all.iter().any(|r| {
+        r["routing"]["reason"]
+            .as_str()
+            .is_some_and(|w| w.starts_with("session: pinned"))
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn lowest_cost_sends_to_the_cheapest_deployment_and_records_why() -> TestResult {
+    let (a, dear) = mock(vec![(200, "application/json", CHAT_OK)]).await?;
+    let (b, cheap) = mock(vec![(200, "application/json", CHAT_OK)]).await?;
+    let gw = gateway(
+        "cost",
+        vec![
+            route("dear", Kind::OpenAi, a, &["gpt-4o"]),
+            route("cheap", Kind::OpenAi, b, &["gpt-4o-mini"]),
+        ],
+        vec![smart(
+            Balance::LowestCost,
+            &[("dear", "gpt-4o", 1), ("cheap", "gpt-4o-mini", 1)],
+        )],
+        everyone(),
+    )?;
+    for _ in 0..3 {
+        assert_eq!(chat_with(&gw, &[]).await?.0, StatusCode::OK);
+    }
+    assert_eq!((dear.seen().len(), cheap.seen().len()), (0, 3));
+    let all = records(&gw, "").await?;
+    let routing = &all
+        .iter()
+        .find(|r| r["routing"].is_object())
+        .ok_or("no routing")?["routing"];
+    assert_eq!(routing["balance"], "lowest_cost");
+    assert_eq!(routing["deployment"], "cheap/gpt-4o-mini");
+    assert!(
+        routing["reason"]
+            .as_str()
+            .is_some_and(|r| r.starts_with("lowest_cost: $")),
+        "{routing}"
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn an_alias_spreads_requests_by_weight_and_records_the_deployment() -> TestResult {

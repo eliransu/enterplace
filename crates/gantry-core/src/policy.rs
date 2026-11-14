@@ -3,7 +3,8 @@
 //! This is the in-memory shape the hot path reads, so a decision never waits on a file or a store.
 //! `config` builds it from the policy and keys files.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::net::IpAddr;
 
 use crate::{guard::Guardrail, id::sha256, usage::PriceOverrides};
 
@@ -36,6 +37,133 @@ pub struct Principal {
     pub parallel: Option<u32>,
     /// The console role the key signs in with, from the policy's `roles:`. `admin: true` is the role `admin`.
     pub role: Option<String>,
+    /// The rest of the key's settings: rpm, metadata, routes, source addresses, rotation.
+    pub options: KeyOptions,
+    /// Set when the caller signed in with a JWT from a trusted issuer instead of a Gantry key.
+    pub jwt: Option<JwtIdentity>,
+}
+
+/// The issuer and subject of a verified JWT, for the record.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct JwtIdentity {
+    pub issuer: String,
+    pub subject: String,
+}
+
+/// A key's settings beyond budget, models, tpm and the hierarchy's fields (org, customer, tags, parallel, role),
+/// kept together in one store column. The default sets nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeyOptions {
+    /// Most requests this key may send per minute, on top of its rule's rpm.
+    pub rpm: Option<u32>,
+    /// The admin's own notes on the key (owner, ticket, cost center). Shown and recorded, never decided on.
+    pub metadata: BTreeMap<String, String>,
+    /// Path prefixes this key may call, such as /v1/chat/completions. Empty allows every route.
+    pub routes: Vec<String>,
+    /// Source addresses this key may be used from. Empty allows any.
+    pub from: Vec<Cidr>,
+    /// Set by a rotation: the hash prefix of the key that replaces this one. Every use is recorded as such.
+    pub replaced_by: Option<String>,
+}
+
+impl KeyOptions {
+    pub fn is_empty(&self) -> bool {
+        *self == KeyOptions::default()
+    }
+
+    /// Whether this key may call `path`. A prefix matches whole path segments.
+    pub fn reaches(&self, path: &str) -> bool {
+        self.routes.is_empty()
+            || self
+                .routes
+                .iter()
+                .any(|prefix| segment_prefix(path, prefix))
+    }
+}
+
+/// Whether `prefix` starts `path` on a segment boundary: `/v1/chat` reaches `/v1/chat/completions`, not `/v1/chatx`.
+pub fn segment_prefix(path: &str, prefix: &str) -> bool {
+    path.strip_prefix(prefix.trim_end_matches('/'))
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// An address range such as `10.0.0.0/8` or `2001:db8::/32`. A bare address is a range of one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cidr {
+    addr: IpAddr,
+    bits: u8,
+}
+
+impl Cidr {
+    /// Whether `ip` is in the range. An IPv4 address mapped into IPv6 (`::ffff:10.0.0.1`) counts as IPv4.
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        let ip = match ip {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+            v4 => v4,
+        };
+        match (self.addr, ip) {
+            (IpAddr::V4(net), IpAddr::V4(ip)) => {
+                let mask = u32::MAX.checked_shl(32 - u32::from(self.bits)).unwrap_or(0);
+                u32::from(net) & mask == u32::from(ip) & mask
+            }
+            (IpAddr::V6(net), IpAddr::V6(ip)) => {
+                let mask = u128::MAX
+                    .checked_shl(128 - u32::from(self.bits))
+                    .unwrap_or(0);
+                u128::from(net) & mask == u128::from(ip) & mask
+            }
+            _ => false,
+        }
+    }
+}
+
+impl std::str::FromStr for Cidr {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        let wrong = || {
+            format!(
+                "\"{text}\" is not an address range. Write one such as 10.0.0.0/8, 203.0.113.7 or 2001:db8::/32"
+            )
+        };
+        let (addr, bits) = match text.trim().split_once('/') {
+            Some((addr, bits)) => (addr, Some(bits)),
+            None => (text.trim(), None),
+        };
+        let addr: IpAddr = addr.parse().map_err(|_| wrong())?;
+        let most = if addr.is_ipv4() { 32 } else { 128 };
+        let bits = match bits {
+            None => most,
+            Some(bits) => bits
+                .parse::<u8>()
+                .ok()
+                .filter(|b| *b <= most)
+                .ok_or_else(wrong)?,
+        };
+        Ok(Cidr { addr, bits })
+    }
+}
+
+impl std::fmt::Display for Cidr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.addr, self.bits)
+    }
+}
+
+/// An identity provider whose JWTs Gantry accepts in place of a Gantry key on the model routes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JwtTrust {
+    /// `iss` must equal this.
+    pub issuer: String,
+    /// `aud` must be or contain this.
+    pub audience: String,
+    /// Where the issuer publishes its signing keys.
+    pub jwks_url: String,
+    /// The claim that names the person, `sub` unless set.
+    pub person_claim: String,
+    /// The claim that names the team, or `None` when every caller of this issuer has `team`.
+    pub team_claim: Option<String>,
+    pub team: Option<String>,
 }
 
 impl Principal {
@@ -480,6 +608,11 @@ pub struct Limits {
     pub check_stream_every: Option<u32>,
     /// Whether a caller may send their own provider key in `x-gantry-provider-key`.
     pub caller_provider_key: CallerKey,
+    /// Source addresses the rule's callers may send from. Empty allows any.
+    pub from: Vec<Cidr>,
+    /// Data residency: the regions an alias deployment must be labelled with. A request with no deployment in one
+    /// is refused, never sent elsewhere. `None` sets no residency.
+    pub regions: Option<Vec<String>>,
 }
 
 /// Whose requests share a rule's cached answers.
@@ -866,6 +999,10 @@ pub struct Policy {
     roles: Vec<Role>,
     /// The organizations `orgs:` lists.
     orgs: Vec<String>,
+    /// Identity providers whose JWTs stand in for a Gantry key.
+    jwt: Vec<JwtTrust>,
+    /// Proxies whose `X-Forwarded-For` names the client. A request from anywhere else is taken by its own address.
+    trusted_proxies: Vec<Cidr>,
 }
 
 impl Policy {
@@ -940,6 +1077,41 @@ impl Policy {
     /// The virtual MCP server served at `/mcp/<name>`, if the policy names one.
     pub fn mcp_bundle(&self, name: &str) -> Option<&crate::mcp::Bundle> {
         self.bundles.iter().find(|b| b.name == name)
+    }
+
+    pub fn with_jwt(mut self, jwt: Vec<JwtTrust>) -> Self {
+        self.jwt = jwt;
+        self
+    }
+
+    pub fn jwt(&self) -> &[JwtTrust] {
+        &self.jwt
+    }
+
+    pub fn with_trusted_proxies(mut self, proxies: Vec<Cidr>) -> Self {
+        self.trusted_proxies = proxies;
+        self
+    }
+
+    /// The client's address: the connection's, or, from a trusted proxy, the last address in `X-Forwarded-For`
+    /// that is not a trusted proxy itself. Anyone else can write that header, so it is not read for them.
+    pub fn client_ip(&self, peer: IpAddr, forwarded_for: &[&str]) -> IpAddr {
+        let trusted = |ip: IpAddr| self.trusted_proxies.iter().any(|c| c.contains(ip));
+        if !trusted(peer) {
+            return peer;
+        }
+        let mut client = peer;
+        for hop in forwarded_for.iter().flat_map(|v| v.split(',')).rev() {
+            let Ok(ip) = hop.trim().parse::<IpAddr>() else {
+                // A hop that is not an address cannot be checked: stop at the last one that could.
+                break;
+            };
+            client = ip;
+            if !trusted(ip) {
+                break;
+            }
+        }
+        client
     }
 
     pub fn with_prices(mut self, prices: PriceOverrides) -> Self {
@@ -1155,6 +1327,7 @@ impl Policy {
             && who.budget.is_none()
             && who.tpm.is_none()
             && who.parallel.is_none()
+            && who.options.rpm.is_none()
         {
             return out;
         }
@@ -1229,13 +1402,17 @@ impl Policy {
             org: None,
             line: 0,
             budgets: who.budget.into_iter().collect(),
-            rpm: None,
+            rpm: who.options.rpm,
             tpm: who.tpm,
             parallel: who.parallel,
         };
         let key_whose = format!("the key {} of \"{}\"", who.key, who.name);
         let mut keyed = Vec::new();
-        if !own.budgets.is_empty() || own.tpm.is_some() || own.parallel.is_some() {
+        if !own.budgets.is_empty()
+            || own.rpm.is_some()
+            || own.tpm.is_some()
+            || own.parallel.is_some()
+        {
             keyed.push((0, format!("key {} (keys file)", who.key), &own));
         }
         if self.limits.is_empty() {
@@ -1567,6 +1744,68 @@ mod tests {
             policy.decide(&omer, "c"),
             Decision::ModelNotAllowed(_)
         ));
+    }
+
+    #[test]
+    fn an_address_range_holds_what_it_says_and_nothing_else() -> Result<(), String> {
+        let ip = |s: &str| s.parse::<IpAddr>().map_err(|e| e.to_string());
+        let ten: Cidr = "10.0.0.0/8".parse()?;
+        assert!(ten.contains(ip("10.200.3.4")?));
+        assert!(!ten.contains(ip("11.0.0.1")?));
+        assert!(
+            ten.contains(ip("::ffff:10.1.2.3")?),
+            "a mapped IPv4 address is IPv4"
+        );
+        let one: Cidr = "203.0.113.7".parse()?;
+        assert!(one.contains(ip("203.0.113.7")?) && !one.contains(ip("203.0.113.8")?));
+        assert_eq!(one.to_string(), "203.0.113.7/32");
+        let any: Cidr = "0.0.0.0/0".parse()?;
+        assert!(any.contains(ip("8.8.8.8")?) && !any.contains(ip("::1")?));
+        let v6: Cidr = "2001:db8::/32".parse()?;
+        assert!(v6.contains(ip("2001:db8:1::1")?) && !v6.contains(ip("2001:db9::1")?));
+        for bad in ["10.0.0.0/33", "nope", "10.0.0/8", "::/129", ""] {
+            assert!(bad.parse::<Cidr>().is_err(), "{bad}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn forwarded_for_is_read_only_from_a_trusted_proxy() -> Result<(), String> {
+        let ip = |s: &str| s.parse::<IpAddr>().map_err(|e| e.to_string());
+        let policy = Policy::new().with_trusted_proxies(vec!["10.0.0.0/8".parse()?]);
+        // From the load balancer: the last address it did not add is the client's.
+        assert_eq!(
+            policy.client_ip(ip("10.0.0.5")?, &["198.51.100.9, 10.0.0.7"]),
+            ip("198.51.100.9")?
+        );
+        // A client cannot claim another address by writing the header itself: the proxy appends what it saw.
+        assert_eq!(
+            policy.client_ip(ip("10.0.0.5")?, &["1.2.3.4, 198.51.100.9"]),
+            ip("198.51.100.9")?
+        );
+        // From anywhere else the header is ignored.
+        assert_eq!(
+            policy.client_ip(ip("198.51.100.9")?, &["10.1.1.1"]),
+            ip("198.51.100.9")?
+        );
+        assert_eq!(
+            Policy::new().client_ip(ip("10.0.0.5")?, &["1.2.3.4"]),
+            ip("10.0.0.5")?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_key_route_list_matches_whole_segments() {
+        let options = KeyOptions {
+            routes: vec!["/v1/chat".into(), "/v1/messages/".into()],
+            ..KeyOptions::default()
+        };
+        assert!(options.reaches("/v1/chat/completions"));
+        assert!(options.reaches("/v1/messages"));
+        assert!(!options.reaches("/v1/chatx"));
+        assert!(!options.reaches("/v1/embeddings"));
+        assert!(KeyOptions::default().reaches("/anything"));
     }
 
     #[test]

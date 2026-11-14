@@ -1397,6 +1397,112 @@ fn kill_stops_a_person_with_the_reason_unkill_restores_and_logout_revokes_the_sa
 }
 
 #[test]
+fn key_info_update_and_rotate_go_through_the_admin_api_of_a_running_gateway() -> TestResult {
+    let dir = workdir("key-admin")?;
+    let policy = path(&dir, "gantry.policy.yaml");
+    let keys = path(&dir, "gantry.keys.yaml");
+    let new_key = |name: &str, admin: bool| -> Result<String, Box<dyn std::error::Error>> {
+        let mut args = vec![
+            "key", "new", name, "--team", "payments", "--quiet", "--keys", &keys,
+        ];
+        if admin {
+            args.push("--admin");
+        }
+        let out = gantry(&args, &[])?;
+        assert!(out.status.success());
+        Ok(String::from_utf8(out.stdout)?.trim().to_string())
+    };
+    let (admin, maya) = (new_key("ops", true)?, new_key("maya", false)?);
+    let prefix = gantry_core::id::sha256_hex(maya.as_bytes())[..8].to_string();
+    let stdout_path = dir.join("stdout.txt");
+    let child = Command::new(env!("CARGO_BIN_EXE_gantry"))
+        .args(["serve", &policy, "--listen", "127.0.0.1:0"])
+        .env("GANTRY_TEST_PROVIDER_KEY", "provider-secret")
+        .stdout(std::fs::File::create(&stdout_path)?)
+        .stderr(std::fs::File::create(dir.join("stderr.txt"))?)
+        .spawn()?;
+    let _server = Running(child);
+    let addr = listening(&stdout_path)?;
+    let url = format!("http://{addr}");
+    let home = path(&dir, "config");
+    let env = [
+        ("XDG_CONFIG_HOME", home.as_str()),
+        ("GANTRY_URL", url.as_str()),
+        ("GANTRY_ADMIN_KEY", admin.as_str()),
+    ];
+    let out = gantry(
+        &[
+            "key",
+            "update",
+            &prefix,
+            "--rpm",
+            "30",
+            "--tags",
+            "eval,batch",
+            "--metadata",
+            "owner=maya,ticket=OPS-1",
+        ],
+        &env,
+    )?;
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = gantry(&["key", "info", &prefix], &env)?;
+    let info = String::from_utf8(out.stdout)?;
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        info.contains("rpm: 30") && info.contains("eval") && info.contains("OPS-1"),
+        "{info}"
+    );
+    assert!(info.contains("Spend (counted by this gateway)"), "{info}");
+    let out = gantry(&["key", "update", &prefix, "--rpm", "none"], &env)?;
+    assert!(out.status.success());
+    let out = gantry(&["key", "update", &prefix, "--rpm", "0"], &env)?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("rpm is a whole number"));
+    let out = gantry(&["key", "update", &prefix], &env)?;
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "an update with no change is a usage error"
+    );
+    let out = gantry(&["key", "rotate", &prefix, "--grace", "2h"], &env)?;
+    let said = String::from_utf8(out.stdout)?;
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        said.contains("keeps working until") && said.contains("gantry_"),
+        "{said}"
+    );
+    let chat = r#"{"model":"model-a","messages":[]}"#;
+    // The old key is still let through in its grace (the test provider may not answer, but no key refusal comes).
+    let used = post(&addr, "/v1/chat/completions", &maya, chat)?;
+    assert!(
+        !used.contains("unknown_key") && !used.contains("key_expired"),
+        "{used}"
+    );
+    let log = std::fs::read_to_string(dir.join("gantry-audit.jsonl"))?;
+    for action in [
+        "\"update_key\"",
+        "\"key_info\"",
+        "\"rotate_key\"",
+        "\"key_rotated\"",
+    ] {
+        assert!(log.contains(action), "{action} is not in the audit log");
+    }
+    Ok(())
+}
+
+#[test]
 fn check_warns_on_an_expired_key_and_key_prune_removes_only_expired_entries() -> TestResult {
     let dir = workdir("prune")?;
     let policy = path(&dir, "gantry.policy.yaml");

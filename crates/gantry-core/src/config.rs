@@ -13,8 +13,8 @@ use crate::{
     guard::{self, Guardrail, GuardrailFile},
     id::sha256_hex,
     policy::{
-        Budget, CacheScope, CallerKey, Cap, Limits, Models, Period, Permission, Policy, Principal,
-        Role, Rule, ScopeKind, ScopeLimit, Semantic, Who,
+        Budget, CacheScope, CallerKey, Cap, Cidr, JwtTrust, KeyOptions, Limits, Models, Period,
+        Permission, Policy, Principal, Role, Rule, ScopeKind, ScopeLimit, Semantic, Who,
     },
     usage::{PriceOverrides, price_for},
 };
@@ -151,16 +151,29 @@ const KNOWN: &[&str] = &[
     "role",
     "permissions",
     "sso_values",
+    "jwt",
+    "audience",
+    "jwks_url",
+    "person_claim",
+    "team_claim",
+    "trusted_proxies",
+    "from",
+    "regions",
+    "session_affinity",
+    "routes",
+    "replaced_by",
 ];
 /// Keys whose value is a map whose keys the user chooses: model names, or header names under `headers_env`.
 /// Those names are not Gantry keys, so the unknown-key scan never reads them.
-/// A regex guardrail's `patterns` and a keywords guardrail's `keywords` are maps of entry names the user chooses.
+/// A regex guardrail's `patterns` and a keywords guardrail's `keywords` are maps of entry names the user chooses, and
+/// a key's `metadata` is the admin's own notes.
 const FREE_MAPS: &[&str] = &[
     "deployments",
     "model_ids",
     "headers_env",
     "patterns",
     "keywords",
+    "metadata",
 ];
 /// The most retries a provider may ask for. Each one can wait the whole first-byte timeout.
 pub const MAX_RETRIES: u32 = 5;
@@ -196,6 +209,10 @@ struct PolicyFile {
     profiles: Vec<ProfileFile>,
     #[serde(default)]
     roles: Vec<RoleFile>,
+    #[serde(default)]
+    jwt: Vec<JwtFile>,
+    #[serde(default)]
+    trusted_proxies: Vec<String>,
 }
 
 /// One entry of `limits:`: one kind of scope (`global: true`, or a name or `*`), its organization, and its limits.
@@ -276,6 +293,20 @@ impl BudgetsFile {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct JwtFile {
+    issuer: String,
+    audience: String,
+    jwks_url: String,
+    #[serde(default)]
+    person_claim: Option<String>,
+    #[serde(default)]
+    team_claim: Option<String>,
+    #[serde(default)]
+    team: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StoreFile {
     postgres_url_env: String,
 }
@@ -301,6 +332,8 @@ struct AliasFile {
     context_window_fallback: Option<String>,
     #[serde(default)]
     content_policy_fallback: Option<String>,
+    #[serde(default)]
+    session_affinity: bool,
 }
 
 #[derive(Deserialize)]
@@ -310,6 +343,19 @@ struct DeploymentFile {
     model: String,
     #[serde(default)]
     weight: Option<u32>,
+    #[serde(default)]
+    region: Option<String>,
+    #[serde(default, rename = "for")]
+    for_: Option<ForFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForFile {
+    #[serde(default)]
+    team: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
 }
 
 /// How an alias picks among its deployments.
@@ -320,6 +366,28 @@ pub enum Balance {
     RoundRobin,
     /// The one with the fewest requests in flight through this Gantry.
     LeastBusy,
+    /// The one with the lowest 90th percentile time to first byte over its recent answers on this Gantry.
+    LowestLatency,
+    /// The one whose model is cheapest by its price (input plus output per million tokens).
+    LowestCost,
+}
+
+impl Balance {
+    pub fn word(self) -> &'static str {
+        match self {
+            Balance::RoundRobin => "round_robin",
+            Balance::LeastBusy => "least_busy",
+            Balance::LowestLatency => "lowest_latency",
+            Balance::LowestCost => "lowest_cost",
+        }
+    }
+}
+
+/// Who a deployment is kept for: requests of one team, or requests that carry one tag.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum For {
+    Team(String),
+    Tag(String),
 }
 
 /// One place an alias can send a request: a provider and the model it is known by there.
@@ -328,6 +396,11 @@ pub struct Deployment {
     pub provider: String,
     pub model: String,
     pub weight: u32,
+    /// Where it runs, as the admin labels it (eu, us, eu-west-1). A rule with `regions:` reaches only these.
+    pub region: Option<String>,
+    /// Kept for one team or tag. A request that matches some kept deployments goes only to those; one that
+    /// matches none goes to the deployments kept for nobody.
+    pub for_: Option<For>,
 }
 
 /// A model name callers send that Gantry serves from one or more deployments.
@@ -342,6 +415,8 @@ pub struct Alias {
     pub context_window_fallback: Option<String>,
     /// The model or alias a request goes to when the provider refuses it under its content policy.
     pub content_policy_fallback: Option<String>,
+    /// One session of one person (a coding agent's conversation) stays on one deployment while it answers.
+    pub session_affinity: bool,
 }
 
 /// How long a failed deployment is passed over when its alias does not say.
@@ -439,6 +514,10 @@ struct RuleFile {
     approval_timeout_seconds: Option<i64>,
     #[serde(default)]
     caller_provider_key: Option<String>,
+    #[serde(default)]
+    from: Vec<String>,
+    #[serde(default)]
+    regions: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -731,10 +810,20 @@ struct KeyFile {
     parallel: Option<i64>,
     #[serde(default)]
     role: Option<String>,
+    #[serde(default)]
+    rpm: Option<i64>,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
+    #[serde(default)]
+    routes: Vec<String>,
+    #[serde(default)]
+    from: Vec<String>,
+    #[serde(default)]
+    replaced_by: Option<String>,
 }
 
 /// One entry of a keys file, as checked.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyEntry {
     pub name: String,
     pub team: String,
@@ -756,6 +845,63 @@ pub struct KeyEntry {
     pub parallel: Option<u32>,
     /// The console role the key signs in with.
     pub role: Option<String>,
+    pub options: KeyOptions,
+}
+
+/// Most routes or address ranges on one key or rule, and most metadata entries on one key: enough for any real
+/// use, and small enough that a key entry stays readable and its record small.
+pub const MAX_LIST: usize = 32;
+
+/// The longest metadata value: a ticket link or a cost center, not a document.
+pub const MAX_METADATA_VALUE: usize = 256;
+
+/// What is wrong with a key's options, or `None`. Shared by the keys file loader and the admin API, so both refuse
+/// the same things with the same words.
+pub fn key_options_problem(options: &KeyOptions) -> Option<String> {
+    if options.rpm.is_some_and(|n| !(1..=1_000_000).contains(&n)) {
+        return Some(
+            "rpm is the requests this key may send per minute, 1 to 1000000, for example rpm: 60"
+                .into(),
+        );
+    }
+    if options.routes.len() > MAX_LIST
+        || options.routes.iter().any(|r| {
+            !r.starts_with('/')
+                || r.contains("..")
+                || r.chars().any(|c| c.is_whitespace() || c.is_control())
+        })
+    {
+        return Some(format!(
+            "routes lists at most {MAX_LIST} path prefixes, each starting with /, for example routes: [/v1/chat/completions, /v1/messages]"
+        ));
+    }
+    if options.from.len() > MAX_LIST {
+        return Some(format!("from lists at most {MAX_LIST} address ranges"));
+    }
+    if options.metadata.len() > MAX_LIST
+        || options.metadata.iter().any(|(k, v)| {
+            !valid_name(k)
+                || v.chars().count() > MAX_METADATA_VALUE
+                || v.chars().any(char::is_control)
+        })
+    {
+        return Some(format!(
+            "metadata holds at most {MAX_LIST} entries, each name in letters, digits, '.', '-', '_' and '@' and each value at most {MAX_METADATA_VALUE} characters on one line, for example metadata: {{ owner: maya, ticket: OPS-12 }}"
+        ));
+    }
+    if options
+        .replaced_by
+        .as_ref()
+        .is_some_and(|p| p.len() != 8 || !p.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Some("replaced_by is the 8 hex characters of the key that replaced this one; `gantry key rotate` writes it. Remove it to end the rotation".into());
+    }
+    None
+}
+
+/// Address ranges as written, or what is wrong with the first that is not one.
+pub fn cidrs(list: &[String]) -> Result<Vec<Cidr>, String> {
+    list.iter().map(|c| c.parse::<Cidr>()).collect()
 }
 
 /// The most requests in flight a `parallel:` may allow.
@@ -2355,6 +2501,23 @@ fn limits(rule: &RuleFile, at: &dyn Fn(&str) -> String, errors: &mut Vec<String>
             CallerKey::Refused
         }
     };
+    match cidrs(&rule.from) {
+        Ok(from) if from.len() <= MAX_LIST => limits.from = from,
+        Ok(_) => errors.push(format!(
+            "{}: from lists at most {MAX_LIST} address ranges.",
+            at("from")
+        )),
+        Err(problem) => errors.push(format!("{}: from: {problem}.", at("from"))),
+    }
+    if let Some(regions) = &rule.regions {
+        if regions.is_empty() || regions.iter().any(|r| !valid_name(r)) {
+            errors.push(format!(
+                "{}: regions lists the regions this rule's requests may be served in, at least one, each as an alias deployment's region: labels it, for example regions: [eu]. To set no residency, remove the line.",
+                at("regions")
+            ));
+        }
+        limits.regions = Some(regions.clone());
+    }
     if let Some(every) = rule.check_stream_every {
         match u32::try_from(every) {
             Ok(every @ 50..=100_000) => limits.check_stream_every = Some(every),
@@ -2486,17 +2649,33 @@ fn aliases(
             if !(1..=1000).contains(&weight) {
                 errors.push(format!("{at}: weight is how often a deployment is picked against the others, 1 to 1000."));
             }
+            if d.region.as_deref().is_some_and(|r| !valid_name(r)) {
+                errors.push(format!("{at}: region is a label such as eu, us or eu-west-1, in letters, digits, '.', '-' and '_'."));
+            }
+            let for_ = match d.for_.as_ref().map(|f| (&f.team, &f.tag)) {
+                None => None,
+                Some((Some(team), None)) if valid_name(team) => Some(For::Team(team.clone())),
+                Some((None, Some(tag))) if valid_name(tag) => Some(For::Tag(tag.clone())),
+                Some(_) => {
+                    errors.push(format!("{at}: for keeps a deployment for exactly one of {{ team: <team> }} or {{ tag: <tag> }}."));
+                    None
+                }
+            };
             deployments.push(Deployment {
                 provider: d.provider.clone(),
                 model: d.model.clone(),
                 weight,
+                region: d.region.clone(),
+                for_,
             });
         }
         let balance = match entry.balance.as_deref() {
             None | Some("round_robin") => Balance::RoundRobin,
             Some("least_busy") => Balance::LeastBusy,
+            Some("lowest_latency") => Balance::LowestLatency,
+            Some("lowest_cost") => Balance::LowestCost,
             Some(other) => {
-                errors.push(format!("{at}: balance is \"{other}\". Write round_robin (in turn, by weight) or least_busy (fewest requests in flight)."));
+                errors.push(format!("{at}: balance is \"{other}\". Write round_robin (in turn, by weight), least_busy (fewest requests in flight), lowest_latency (fastest first byte lately) or lowest_cost (cheapest by price)."));
                 Balance::RoundRobin
             }
         };
@@ -2527,6 +2706,7 @@ fn aliases(
                 cooldown_seconds,
                 context_window_fallback: entry.context_window_fallback.clone(),
                 content_policy_fallback: entry.content_policy_fallback.clone(),
+                session_affinity: entry.session_affinity,
             });
         }
     }
@@ -3170,6 +3350,25 @@ fn keys(file: &Path, text: &str, errors: &mut Vec<String>) -> Vec<KeyEntry> {
         if entry.models.as_ref().is_some_and(Vec::is_empty) {
             errors.push(format!("{at}: models is empty, so this key could use no model. List the models it may use, or remove the line to leave its rule's list."));
         }
+        let from = match cidrs(&entry.from) {
+            Ok(from) => from,
+            Err(problem) => {
+                errors.push(format!("{at}: from: {problem}."));
+                continue;
+            }
+        };
+        let wide = |n: Option<i64>| n.map(|n| u32::try_from(n).unwrap_or(0));
+        let options = KeyOptions {
+            rpm: wide(entry.rpm),
+            metadata: entry.metadata,
+            routes: entry.routes,
+            from,
+            replaced_by: entry.replaced_by.map(|p| p.to_ascii_lowercase()),
+        };
+        if let Some(problem) = key_options_problem(&options) {
+            errors.push(format!("{at}: {problem}."));
+            continue;
+        }
         entries.push(KeyEntry {
             name: entry.name,
             team: entry.team,
@@ -3184,6 +3383,7 @@ fn keys(file: &Path, text: &str, errors: &mut Vec<String>) -> Vec<KeyEntry> {
             tags: entry.tags,
             parallel,
             role: entry.role,
+            options,
         });
     }
     entries
@@ -3215,6 +3415,8 @@ fn principals(entries: Vec<KeyEntry>) -> HashMap<[u8; 32], Principal> {
                 tags: entry.tags,
                 parallel: entry.parallel,
                 role: entry.role,
+                options: entry.options,
+                jwt: None,
             },
         );
     }
@@ -3307,6 +3509,62 @@ fn store_setting(
     })
 }
 
+/// The identity providers under `jwt:`, each checked.
+fn jwt_trusts(
+    file: &Path,
+    text: &str,
+    parsed: &PolicyFile,
+    errors: &mut Vec<String>,
+) -> Vec<JwtTrust> {
+    let mut out = Vec::new();
+    for entry in &parsed.jwt {
+        let at = format!(
+            "{}:{}: jwt issuer \"{}\"",
+            file.display(),
+            line_of_key(text, &entry.issuer, 1, usize::MAX),
+            entry.issuer
+        );
+        let before = errors.len();
+        if entry.issuer.trim().is_empty() || entry.audience.trim().is_empty() {
+            errors.push(format!("{at}: issuer and audience are the iss and aud your identity provider writes in its tokens. Give both."));
+        }
+        if !secure_url(&entry.jwks_url) {
+            errors.push(format!("{at}: jwks_url is where the issuer publishes its signing keys, over https (http only on this machine), for example https://login.example.com/.well-known/jwks.json."));
+        }
+        let person_claim = entry.person_claim.clone().unwrap_or_else(|| "sub".into());
+        if person_claim.trim().is_empty() {
+            errors.push(format!(
+                "{at}: person_claim names the claim that holds the person, such as email or sub."
+            ));
+        }
+        match (&entry.team_claim, &entry.team) {
+            (Some(claim), None) if !claim.trim().is_empty() => {}
+            (None, Some(team)) if valid_name(team) => {}
+            _ => errors.push(format!("{at}: give exactly one of team_claim (the claim that names the caller's team, such as team) or team (one team for every caller of this issuer).")),
+        }
+        if parsed
+            .jwt
+            .iter()
+            .filter(|j| j.issuer == entry.issuer)
+            .count()
+            > 1
+        {
+            errors.push(format!("{at} is listed twice. Keep one."));
+        }
+        if errors.len() == before {
+            out.push(JwtTrust {
+                issuer: entry.issuer.clone(),
+                audience: entry.audience.clone(),
+                jwks_url: entry.jwks_url.clone(),
+                person_claim,
+                team_claim: entry.team_claim.clone(),
+                team: entry.team.clone(),
+            });
+        }
+    }
+    out
+}
+
 /// Checks the text of both files, as read by the caller, with the same rules as `load`.
 pub fn load_texts(
     policy_path: &Path,
@@ -3387,6 +3645,18 @@ pub fn load_texts(
             ));
         }
     }
+    let jwt = jwt_trusts(policy_path, policy_text, &parsed, &mut errors);
+    let trusted_proxies = match cidrs(&parsed.trusted_proxies) {
+        Ok(list) => list,
+        Err(problem) => {
+            errors.push(format!(
+                "{}:{}: trusted_proxies: {problem}. List the addresses of the load balancers in front of Gantry.",
+                policy_path.display(),
+                line_of_key(policy_text, "trusted_proxies", 1, usize::MAX)
+            ));
+            Vec::new()
+        }
+    };
     let audit_path = match &parsed.audit {
         Some(audit) => audit.path.clone(),
         None => policy_path.with_file_name("gantry-audit.jsonl"),
@@ -3398,7 +3668,9 @@ pub fn load_texts(
                 .with_mcp_bundles(bundles)
                 .with_scope_limits(scope_limits)
                 .with_roles(roles)
-                .with_orgs(parsed.orgs.clone()),
+                .with_orgs(parsed.orgs.clone())
+                .with_jwt(jwt)
+                .with_trusted_proxies(trusted_proxies),
             providers,
             audit_path,
             keys_path: keys_file.to_path_buf(),
@@ -3812,6 +4084,163 @@ mcp_bundles:
             "tool \"nowhere.search\" is on MCP server \"nowhere\"",
         ] {
             assert!(errors.contains(expected), "missing {expected}:\n{errors}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn routing_residency_access_and_jwt_settings_load_and_wrong_ones_are_named() -> TestResult {
+        let policy = "\
+version: 1
+providers:
+  - name: eu
+    kind: openai
+    url: https://eu.example.com
+    key_env: EU_KEY
+    models: [gpt-4o]
+  - name: us
+    kind: openai
+    url: https://us.example.com
+    key_env: US_KEY
+    models: [gpt-4o-mini]
+trusted_proxies: [10.0.0.0/8]
+jwt:
+  - issuer: https://login.example.com
+    audience: gantry
+    jwks_url: https://login.example.com/jwks
+    person_claim: email
+    team_claim: team
+aliases:
+  - name: smart
+    balance: lowest_latency
+    session_affinity: true
+    deployments:
+      - { provider: eu, model: gpt-4o, region: eu }
+      - { provider: us, model: gpt-4o-mini, region: us, for: { tag: batch } }
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [smart]
+    from: [203.0.113.0/24, 10.1.2.3]
+    regions: [eu]
+    tags: [batch]
+";
+        let loaded = check("routing", policy, None)?.map_err(|e| e.join("\n"))?;
+        let alias = &loaded.aliases[0];
+        assert_eq!(alias.balance, Balance::LowestLatency);
+        assert!(alias.session_affinity);
+        assert_eq!(alias.deployments[0].region.as_deref(), Some("eu"));
+        assert_eq!(alias.deployments[1].for_, Some(For::Tag("batch".into())));
+        let limits = &loaded.policy.rule_list()[0].limits;
+        assert_eq!(limits.from.len(), 2);
+        assert_eq!(limits.regions, Some(vec!["eu".to_string()]));
+        assert_eq!(loaded.policy.rule_list()[0].tags, ["batch"]);
+        let jwt = &loaded.policy.jwt()[0];
+        assert_eq!(
+            (jwt.person_claim.as_str(), jwt.team_claim.as_deref()),
+            ("email", Some("team"))
+        );
+        assert_eq!(
+            loaded
+                .policy
+                .client_ip("10.0.0.1".parse()?, &["198.51.100.4"]),
+            "198.51.100.4".parse::<IpAddr>()?
+        );
+        for (from, to, expected) in [
+            ("balance: lowest_latency", "balance: lowest_cost", ""),
+            (
+                "balance: lowest_latency",
+                "balance: fastest",
+                "lowest_latency (fastest",
+            ),
+            ("region: eu }", "region: \"e u\" }", "region is a label"),
+            (
+                "for: { tag: batch }",
+                "for: { tag: batch, team: x }",
+                "exactly one of",
+            ),
+            (
+                "from: [203.0.113.0/24, 10.1.2.3]",
+                "from: [203.0.113.0/33]",
+                "is not an address range",
+            ),
+            ("regions: [eu]", "regions: []", "regions lists the regions"),
+            (
+                "tags: [batch]",
+                "tags: [\"a b\"]",
+                "\"a b\" in tags is not a name",
+            ),
+            (
+                "trusted_proxies: [10.0.0.0/8]",
+                "trusted_proxies: [lb]",
+                "trusted_proxies:",
+            ),
+            (
+                "jwks_url: https://login.example.com/jwks",
+                "jwks_url: http://login.example.com/jwks",
+                "jwks_url is where",
+            ),
+            (
+                "    team_claim: team\n",
+                "",
+                "give exactly one of team_claim",
+            ),
+            (
+                "    team_claim: team\n",
+                "    team_claim: team\n    team: x\n",
+                "give exactly one of team_claim",
+            ),
+        ] {
+            let text = policy.replace(from, to);
+            assert_ne!(text, policy, "{from}");
+            let result = check("routing", &text, None)?;
+            if expected.is_empty() {
+                assert!(result.is_ok(), "{to}: {:?}", result.err());
+            } else {
+                let problems = errors(result)?;
+                assert!(problems.contains(expected), "{to}: {problems}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_keys_file_carries_every_key_option_and_a_wrong_one_is_named() -> TestResult {
+        let policy = "version: 1\nproviders:\n  - name: openai\n    kind: openai\n    url: https://api.openai.com\n    key_env: K\n    models: [gpt-4o]\nrules:\n  - name: all\n    principals: { any: true }\n    models: [gpt-4o]\n";
+        let keys = "keys:\n  - name: ci\n    team: t\n    sha256: aaaaaaaa00000000000000000000000000000000000000000000000000000000\n    rpm: 60\n    parallel: 2\n    tags: [batch]\n    metadata: { owner: maya, ticket: OPS-1 }\n    routes: [/v1/chat/completions]\n    from: [10.0.0.0/8]\n    replaced_by: \"bbbbbbbb\"\n";
+        let loaded = check("key-options", policy, Some(keys))?.map_err(|e| e.join("\n"))?;
+        let Some((_, who)) = loaded.policy.entries().next() else {
+            return Err("no key loaded".into());
+        };
+        assert_eq!((who.options.rpm, who.parallel), (Some(60), Some(2)));
+        assert_eq!(who.tags, ["batch"]);
+        assert_eq!(
+            who.options.metadata.get("ticket").map(String::as_str),
+            Some("OPS-1")
+        );
+        assert_eq!(who.options.replaced_by.as_deref(), Some("bbbbbbbb"));
+        for (from, to, expected) in [
+            ("rpm: 60", "rpm: 0", "rpm is the requests"),
+            ("parallel: 2", "parallel: -1", "parallel"),
+            (
+                "from: [10.0.0.0/8]",
+                "from: [ten]",
+                "is not an address range",
+            ),
+            (
+                "routes: [/v1/chat/completions]",
+                "routes: [v1]",
+                "routes lists",
+            ),
+            (
+                "replaced_by: \"bbbbbbbb\"",
+                "replaced_by: \"zz\"",
+                "replaced_by is",
+            ),
+        ] {
+            let text = keys.replace(from, to);
+            let problems = errors(check("key-options", policy, Some(&text))?)?;
+            assert!(problems.contains(expected), "{to}: {problems}");
         }
         Ok(())
     }
