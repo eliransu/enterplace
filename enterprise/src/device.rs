@@ -16,17 +16,49 @@ pub struct Options {
     pub home: Option<PathBuf>,
 }
 
+/// The operating system whose paths the agent uses: the one it was built for, or another in tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Os {
+    Macos,
+    Linux,
+    Windows,
+}
+
+impl Os {
+    fn this() -> Os {
+        if cfg!(target_os = "windows") {
+            Os::Windows
+        } else if cfg!(target_os = "macos") {
+            Os::Macos
+        } else {
+            Os::Linux
+        }
+    }
+
+    /// Where Claude Code reads managed settings and managed MCP servers on this OS (code.claude.com/docs, settings).
+    fn managed_dir(self) -> PathBuf {
+        match self {
+            Os::Macos => PathBuf::from("/Library/Application Support/ClaudeCode"),
+            Os::Linux => PathBuf::from("/etc/claude-code"),
+            Os::Windows => PathBuf::from(r"C:\Program Files\ClaudeCode"),
+        }
+    }
+}
+
 /// Where each managed file lives for one user.
 struct Paths {
+    os: Os,
     home: PathBuf,
+    /// The per-user application settings folder: ~/Library/Application Support, %APPDATA%, or ~/.config.
+    config: PathBuf,
     claude_settings: PathBuf,
-    /// The agent runs as root under the LaunchDaemon: files it writes in the user's home go back to the user.
+    /// The agent runs as root under the LaunchDaemon or a systemd unit: files it writes in the user's home go back to
+    /// the user.
     owner: Option<(u32, u32)>,
     system: bool,
 }
 
-const MANAGED_SETTINGS: &str = "/Library/Application Support/ClaudeCode/managed-settings.json";
-
+#[cfg(unix)]
 fn is_root() -> bool {
     std::process::Command::new("id")
         .arg("-u")
@@ -35,59 +67,110 @@ fn is_root() -> bool {
         .unwrap_or(false)
 }
 
-fn paths(home: Option<&Path>) -> Result<Paths, String> {
-    if let Some(home) = home {
-        return Ok(Paths {
-            home: home.to_path_buf(),
-            claude_settings: home.join(".claude/settings.json"),
-            owner: None,
-            system: false,
-        });
+/// The per-user settings folder of `home` on `os`, from the environment unless a test fixed the home.
+fn config_dir(os: Os, home: &Path, from_env: bool) -> PathBuf {
+    let env = |name: &str| {
+        from_env
+            .then(|| std::env::var_os(name))
+            .flatten()
+            .map(PathBuf::from)
+    };
+    match os {
+        Os::Macos => home.join("Library/Application Support"),
+        Os::Windows => env("APPDATA").unwrap_or_else(|| home.join("AppData").join("Roaming")),
+        Os::Linux => env("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config")),
     }
-    if is_root() {
-        // The person at the screen owns /dev/console on macOS.
-        use std::os::unix::fs::MetadataExt;
-        let out = std::process::Command::new("stat")
-            .args(["-f", "%Su", "/dev/console"])
-            .output()
-            .map_err(|e| format!("stat /dev/console: {e}"))?;
-        let user = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-        if user.is_empty() || user == "root" {
-            return Err("no one is signed in at the screen; trying again next interval.".into());
-        }
-        let home = PathBuf::from("/Users").join(&user);
-        let meta = std::fs::metadata(&home).map_err(|e| format!("{}: {e}", home.display()))?;
-        return Ok(Paths {
-            home,
-            claude_settings: PathBuf::from(MANAGED_SETTINGS),
-            owner: Some((meta.uid(), meta.gid())),
-            system: true,
-        });
-    }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or("HOME is not set. Set it or pass --home.")?;
-    Ok(Paths {
-        claude_settings: home.join(".claude/settings.json"),
+}
+
+fn user_paths(os: Os, home: PathBuf, from_env: bool) -> Paths {
+    Paths {
+        os,
+        config: config_dir(os, &home, from_env),
+        claude_settings: home.join(".claude").join("settings.json"),
         home,
         owner: None,
-        system: true,
-    })
+        system: from_env,
+    }
+}
+
+/// The person signed in at the screen, when the agent runs as root: the owner of /dev/console on macOS, the first
+/// user `who` lists on Linux.
+#[cfg(unix)]
+fn console_user(os: Os) -> Result<PathBuf, String> {
+    let (cmd, args): (&str, &[&str]) = match os {
+        Os::Macos => ("stat", &["-f", "%Su", "/dev/console"]),
+        _ => ("who", &[]),
+    };
+    let out = std::process::Command::new(cmd)
+        .args(args)
+        .output()
+        .map_err(|e| format!("{cmd}: {e}"))?;
+    let user = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    if user.is_empty() || user == "root" {
+        return Err("no one is signed in at the screen; trying again next interval.".into());
+    }
+    let base = if os == Os::Macos { "/Users" } else { "/home" };
+    Ok(PathBuf::from(base).join(user))
+}
+
+fn paths(home: Option<&Path>) -> Result<Paths, String> {
+    let os = Os::this();
+    if let Some(home) = home {
+        return Ok(user_paths(os, home.to_path_buf(), false));
+    }
+    #[cfg(unix)]
+    if is_root() {
+        use std::os::unix::fs::MetadataExt;
+        let home = console_user(os)?;
+        let meta = std::fs::metadata(&home).map_err(|e| format!("{}: {e}", home.display()))?;
+        let mut p = user_paths(os, home, false);
+        p.claude_settings = os.managed_dir().join("managed-settings.json");
+        p.owner = Some((meta.uid(), meta.gid()));
+        p.system = true;
+        return Ok(p);
+    }
+    // On Windows the agent runs as the signed-in user, a scheduled task at logon, so its own profile is the one.
+    let var = if os == Os::Windows {
+        "USERPROFILE"
+    } else {
+        "HOME"
+    };
+    let home = std::env::var_os(var)
+        .map(PathBuf::from)
+        .ok_or(format!("{var} is not set. Set it or pass --home."))?;
+    Ok(user_paths(os, home, true))
 }
 
 fn on_path(bin: &str) -> bool {
+    let exe = format!("{bin}.exe");
     std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
+        .map(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file() || d.join(&exe).is_file()))
         .unwrap_or(false)
 }
 
 /// Which tools are installed. With `--home` only that folder counts, so tests do not depend on the machine.
 fn installed(p: &Paths, tool: &str) -> bool {
     let h = &p.home;
-    let app = |name: &str| {
+    // Where each OS's installer puts the app: /Applications, %LOCALAPPDATA%\Programs, or a command on PATH.
+    let app = |mac: &str, windows: &str, linux_bin: &str| {
         p.system
-            && (Path::new("/Applications").join(name).exists()
-                || h.join("Applications").join(name).exists())
+            && match p.os {
+                Os::Macos => {
+                    Path::new("/Applications").join(mac).exists()
+                        || h.join("Applications").join(mac).exists()
+                }
+                Os::Windows => std::env::var_os("LOCALAPPDATA")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| h.join("AppData").join("Local"))
+                    .join("Programs")
+                    .join(windows)
+                    .exists(),
+                Os::Linux => on_path(linux_bin),
+            }
     };
     match tool {
         "claude-code" => {
@@ -96,8 +179,10 @@ fn installed(p: &Paths, tool: &str) -> bool {
                 || (p.system && on_path("claude"))
         }
         "codex" => h.join(".codex").is_dir() || (p.system && on_path("codex")),
-        "cursor" => h.join(".cursor").is_dir() || app("Cursor.app"),
-        "vscode" => h.join(".vscode").is_dir() || app("Visual Studio Code.app"),
+        "cursor" => h.join(".cursor").is_dir() || app("Cursor.app", "cursor", "cursor"),
+        "vscode" => {
+            h.join(".vscode").is_dir() || app("Visual Studio Code.app", "Microsoft VS Code", "code")
+        }
         _ => false,
     }
 }
@@ -223,10 +308,191 @@ fn write(c: &Change, owner: Option<(u32, u32)>) -> Result<(), String> {
     let tmp = c.path.with_extension("gantry-tmp");
     std::fs::write(&tmp, &c.desired).map_err(err)?;
     std::fs::rename(&tmp, &c.path).map_err(err)?;
+    #[cfg(unix)]
     if let Some((uid, gid)) = owner {
         std::os::unix::fs::chown(&c.path, Some(uid), Some(gid)).map_err(err)?;
     }
+    #[cfg(not(unix))]
+    let _ = owner;
     Ok(())
+}
+
+// ---- MCP inventory: the MCP servers each tool is configured with, and whether they go through the gateway. ----
+
+/// Each MCP config file of each tool for this user: (tool, file, the key that holds the servers). Paths from each
+/// tool's docs: Claude Desktop (modelcontextprotocol.io quickstart), Claude Code (code.claude.com/docs, mcp and
+/// managed-mcp), Cursor (cursor.com/docs/context/mcp), VS Code (code.visualstudio.com, MCP configuration) and Zed
+/// (zed.dev/docs/ai/mcp).
+fn mcp_files(p: &Paths) -> Vec<(&'static str, PathBuf, &'static str)> {
+    let zed = match p.os {
+        Os::Windows => p.config.join("Zed").join("settings.json"),
+        Os::Linux => p.config.join("zed").join("settings.json"),
+        Os::Macos => p.home.join(".config").join("zed").join("settings.json"),
+    };
+    let mut files = vec![
+        (
+            "claude-desktop",
+            p.config.join("Claude").join("claude_desktop_config.json"),
+            "mcpServers",
+        ),
+        ("claude-code", p.home.join(".claude.json"), "mcpServers"),
+        (
+            "cursor",
+            p.home.join(".cursor").join("mcp.json"),
+            "mcpServers",
+        ),
+        (
+            "vscode",
+            p.config.join("Code").join("User").join("mcp.json"),
+            "servers",
+        ),
+        ("zed", zed, "context_servers"),
+    ];
+    if p.system {
+        files.push((
+            "claude-code",
+            p.os.managed_dir().join("managed-mcp.json"),
+            "mcpServers",
+        ));
+    }
+    files
+}
+
+/// JSON with comments and trailing commas (VS Code's and Zed's settings) as plain JSON.
+fn jsonc(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut in_string = false;
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            match c {
+                '\\' => {
+                    if let Some(n) = chars.next() {
+                        out.push(n);
+                    }
+                }
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match (c, chars.peek()) {
+            ('"', _) => {
+                in_string = true;
+                out.push(c);
+            }
+            ('/', Some('/')) => {
+                for n in chars.by_ref() {
+                    if n == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            ('/', Some('*')) => {
+                chars.next();
+                let mut last = ' ';
+                for n in chars.by_ref() {
+                    if last == '*' && n == '/' {
+                        break;
+                    }
+                    last = n;
+                }
+            }
+            (',', _) => {
+                // A comma whose next non-space character closes a list or object is dropped.
+                let rest: String = chars.clone().take_while(|n| n.is_whitespace()).collect();
+                let after = chars.clone().nth(rest.chars().count());
+                if !matches!(after, Some('}' | ']')) {
+                    out.push(c);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// A URL without its login, query or fragment, which may hold credentials: scheme, host and path only.
+fn bare_url(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    let rest = rest.rsplit_once('@').map_or(rest, |(_, host)| host);
+    let rest = rest.trim_end_matches('/');
+    if scheme.is_empty() {
+        rest.to_owned()
+    } else {
+        format!("{scheme}://{rest}")
+    }
+}
+
+/// One server entry as reported: its name, transport and target (a bare URL, or the command's file name only, never
+/// its arguments, environment or headers), and whether it is Gantry's MCP gateway (`<gateway>/mcp` or a bundle under
+/// it).
+fn mcp_entry(tool: &str, file: &Path, name: &str, entry: &Value, gateway: &str) -> Value {
+    let url = ["url", "serverUrl", "httpUrl"]
+        .iter()
+        .find_map(|k| entry[*k].as_str());
+    let (transport, target, via) = match url {
+        Some(url) => {
+            let bare = bare_url(url);
+            let mcp = format!("{}/mcp", gateway.trim_end_matches('/'));
+            let via = bare == mcp || bare.starts_with(&format!("{mcp}/"));
+            ("http", bare, via)
+        }
+        None => {
+            let command = entry["command"]
+                .as_str()
+                .or_else(|| entry["command"]["path"].as_str())
+                .unwrap_or_default();
+            let file_name = command
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            ("stdio", file_name, false)
+        }
+    };
+    json!({
+        "tool": tool,
+        "file": file.display().to_string(),
+        "server": name,
+        "transport": transport,
+        "target": target,
+        "via_gantry": via,
+    })
+}
+
+/// Every MCP server configured in each tool this user has, and a line for each file that could not be read.
+fn mcp_inventory(p: &Paths, gateway: &str) -> Vec<Value> {
+    let mut out = Vec::new();
+    for (tool, file, key) in mcp_files(p) {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let Ok(config) = serde_json::from_str::<Value>(&jsonc(&text)) else {
+            out.push(json!({"tool": tool, "file": file.display().to_string(), "error": "the file is not JSON"}));
+            continue;
+        };
+        let mut lists = vec![&config[key]];
+        // Claude Code keeps servers added in one project under projects.<path>.mcpServers.
+        if file.ends_with(".claude.json") {
+            lists.extend(
+                config["projects"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(_, project)| &project[key]),
+            );
+        }
+        for list in lists {
+            for (name, entry) in list.as_object().into_iter().flatten() {
+                out.push(mcp_entry(tool, &file, name, entry, gateway));
+            }
+        }
+    }
+    out
 }
 
 /// Tools this agent has configured before, kept so a later mismatch counts as drift, not first setup.
@@ -328,7 +594,9 @@ fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<V
         "os_user": os_user,
         "email": email,
         "agent_version": env!("CARGO_PKG_VERSION"),
+        "os": format!("{:?}", p.os).to_lowercase(),
         "tools": tools,
+        "mcp": mcp_inventory(p, gateway),
     }))
 }
 
@@ -483,6 +751,100 @@ mod tests {
         );
         let r = cycle(&p, GW, &manage, false)?;
         assert_eq!(tool(&r, "claude-code")["drift"], false);
+        let _ = std::fs::remove_dir_all(&home);
+        Ok(())
+    }
+
+    #[test]
+    fn windows_and_linux_paths_follow_each_tools_docs() {
+        let home = PathBuf::from("/h");
+        let win = user_paths(Os::Windows, home.clone(), false);
+        let files: Vec<PathBuf> = mcp_files(&win).into_iter().map(|(_, f, _)| f).collect();
+        assert!(files.contains(&home.join("AppData/Roaming/Claude/claude_desktop_config.json")));
+        assert!(files.contains(&home.join("AppData/Roaming/Code/User/mcp.json")));
+        assert!(files.contains(&home.join("AppData/Roaming/Zed/settings.json")));
+        assert_eq!(win.claude_settings, home.join(".claude/settings.json"));
+        assert_eq!(
+            Os::Windows.managed_dir(),
+            PathBuf::from(r"C:\Program Files\ClaudeCode")
+        );
+        let linux = user_paths(Os::Linux, home.clone(), false);
+        let files: Vec<PathBuf> = mcp_files(&linux).into_iter().map(|(_, f, _)| f).collect();
+        assert!(files.contains(&home.join(".config/Claude/claude_desktop_config.json")));
+        assert!(files.contains(&home.join(".config/Code/User/mcp.json")));
+        assert!(files.contains(&home.join(".config/zed/settings.json")));
+        assert!(files.contains(&home.join(".cursor/mcp.json")));
+        assert_eq!(Os::Linux.managed_dir(), PathBuf::from("/etc/claude-code"));
+        let mac = user_paths(Os::Macos, home.clone(), false);
+        let files: Vec<PathBuf> = mcp_files(&mac).into_iter().map(|(_, f, _)| f).collect();
+        assert!(
+            files.contains(
+                &home.join("Library/Application Support/Claude/claude_desktop_config.json")
+            )
+        );
+    }
+
+    #[test]
+    fn the_mcp_inventory_lists_each_tools_servers_and_which_go_through_gantry() -> Result<(), String>
+    {
+        let home = std::env::temp_dir().join(format!("gantry-device-mcp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let p = user_paths(Os::Linux, home.clone(), false);
+        let put = |rel: &str, text: &str| -> Result<(), String> {
+            let path = home.join(rel);
+            std::fs::create_dir_all(path.parent().ok_or("no parent")?)
+                .map_err(|e| e.to_string())?;
+            std::fs::write(path, text).map_err(|e| e.to_string())
+        };
+        put(
+            ".config/Claude/claude_desktop_config.json",
+            r#"{"mcpServers":{"files":{"command":"/usr/bin/npx","args":["-y","@x/fs","/secret/path"],"env":{"TOKEN":"t0ps3cret"}}}}"#,
+        )?;
+        put(
+            ".claude.json",
+            r#"{"mcpServers":{"gantry":{"type":"http","url":"https://gw.example.com/mcp"}},"projects":{"/repo":{"mcpServers":{"bundle":{"type":"http","url":"https://gw.example.com/mcp/eng?key=abc"}}}}}"#,
+        )?;
+        put(
+            ".cursor/mcp.json",
+            r#"{"mcpServers":{"github":{"url":"https://user:pw@api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer x"}}}}"#,
+        )?;
+        put(
+            ".config/Code/User/mcp.json",
+            "{\n  // my servers\n  \"servers\": {\"docs\": {\"type\": \"http\", \"url\": \"https://gw.example.com/mcp\",},},\n}",
+        )?;
+        put(
+            ".config/zed/settings.json",
+            r#"{"theme":"One","context_servers":{"local":{"command":{"path":"C:\\tools\\srv.exe","args":[]}}}}"#,
+        )?;
+        let found = mcp_inventory(&p, GW);
+        let row = |server: &str| {
+            found
+                .iter()
+                .find(|r| r["server"] == server)
+                .cloned()
+                .unwrap_or_default()
+        };
+        assert_eq!(found.len(), 6, "{found:?}");
+        assert_eq!(row("files")["tool"], "claude-desktop");
+        assert_eq!(
+            (
+                row("files")["transport"].clone(),
+                row("files")["target"].clone()
+            ),
+            (json!("stdio"), json!("npx"))
+        );
+        assert_eq!(row("gantry")["via_gantry"], true);
+        assert_eq!(row("bundle")["via_gantry"], true);
+        assert_eq!(row("bundle")["target"], "https://gw.example.com/mcp/eng");
+        assert_eq!(row("github")["via_gantry"], false);
+        assert_eq!(row("github")["target"], "https://api.githubcopilot.com/mcp");
+        assert_eq!(row("docs")["tool"], "vscode");
+        assert_eq!(row("docs")["via_gantry"], true);
+        assert_eq!(row("local")["target"], "srv.exe");
+        let text = serde_json::to_string(&found).map_err(|e| e.to_string())?;
+        for secret in ["t0ps3cret", "/secret/path", "key=abc", "pw@", "Bearer x"] {
+            assert!(!text.contains(secret), "{secret} reported: {text}");
+        }
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
     }

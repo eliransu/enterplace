@@ -27,7 +27,9 @@ const USAGE: &str = "usage:
   gantry device --control-plane <url> [--interval <seconds>] [--dry-run] [--once] [--home <folder>]
       Point the signed-in user's coding tools at the org's gateway every --interval seconds (default 300) and
       report coverage. The enrolment token goes in GANTRY_DEVICE_TOKEN, or in the file GANTRY_DEVICE_TOKEN_FILE
-      names (default /Library/Application Support/Gantry/device-token, which the MDM profile installs).
+      names (default /Library/Application Support/Gantry/device-token on macOS, which the MDM profile installs;
+      /etc/gantry/device-token on Linux; C:\\ProgramData\\Gantry\\device-token on Windows).
+      Each report also lists the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed.
   gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
       Run the gateway on local files, as `gantry serve` does.
   gantry serve --unchecked
@@ -55,8 +57,15 @@ fn device_token() -> Option<String> {
         .ok()
         .and_then(set)
         .or_else(|| {
-            let path = std::env::var("GANTRY_DEVICE_TOKEN_FILE")
-                .unwrap_or_else(|_| "/Library/Application Support/Gantry/device-token".to_owned());
+            let default = if cfg!(target_os = "windows") {
+                r"C:\ProgramData\Gantry\device-token"
+            } else if cfg!(target_os = "macos") {
+                "/Library/Application Support/Gantry/device-token"
+            } else {
+                "/etc/gantry/device-token"
+            };
+            let path =
+                std::env::var("GANTRY_DEVICE_TOKEN_FILE").unwrap_or_else(|_| default.to_owned());
             std::fs::read_to_string(path).ok().and_then(set)
         })
 }
