@@ -148,21 +148,14 @@ a.more:hover, .works-note a:hover, .compare-note a:hover, .try-foot a:hover { te
 /* Hero */
 .hero { padding-top: 88px; padding-bottom: 88px; gap: 36px; }
 .hero h1 { font-size: clamp(38px, 6.1vw, 84px); line-height: 0.98; font-weight: 700; letter-spacing: -0.04em; max-width: 1100px; text-wrap: balance; }
-.hero-cols { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 56px; align-items: start; margin-top: 12px; }
+.hero-cols { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 56px; align-items: center; margin-top: 12px; }
 .hero-text { display: flex; flex-direction: column; gap: 28px; }
-.hero-steps { margin: 0; padding: 0; list-style: none; counter-reset: hs; border-top: 1px solid var(--line-strong); }
-.hero-steps li { counter-increment: hs; display: flex; align-items: baseline; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line-strong); color: var(--soft); font-size: 16px; }
-.hero-steps li::before { content: counter(hs); font-family: var(--mono); font-size: 13px; color: var(--muted); width: 18px; flex: none; }
-.hero-steps b { color: var(--fg); font-weight: 700; }
 .hero-note { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.bar-note { padding-right: 12px; color: #6f6f6f; }
 .terminal-bar { min-height: 48px; border-bottom: 1px solid var(--code-line); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 8px 0 20px; font-family: var(--mono); font-size: 13px; color: #9e9e9e; }
 .terminal-bar button { height: 44px; padding: 0 16px; border-radius: 999px; border: 0; background: transparent; color: #f2f2f2; font: 13px var(--mono); cursor: pointer; }
 .terminal-bar button:hover { background: #292929; }
 .try-body { padding: 20px; display: flex; flex-direction: column; gap: 12px; color: var(--code-text); }
-.try-label { font-size: 15px; color: #f2f2f2; font-weight: 600; }
-.try-label:not(:first-child) { margin-top: 12px; }
-.try .code { background: var(--code-panel); border: 0; }
-.try .code.out { background: transparent; padding: 0 22px; color: #9e9e9e; }
 .records { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; font-family: var(--mono); font-size: 13.5px; }
 .records li { background: var(--code-panel); border-radius: 16px; padding: 14px 18px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; }
 .rec-n { color: #6f6f6f; }

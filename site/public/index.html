@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gantry: know who uses AI at your company, what it costs, and what left</title>
+<title>Gantry: put a name on every AI call</title>
 <meta name="description" content="Gantry is a self-hosted AI gateway. Every call from coding tools, apps and MCP clients goes through it with a person's name, a budget, guardrails and a record in a hash-chained audit log. One Docker image and Postgres, in your cloud.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://gantry.eliran.me/">
-<meta property="og:title" content="Gantry: know who uses AI at your company, what it costs, and what left">
+<meta property="og:title" content="Gantry: put a name on every AI call">
 <meta property="og:description" content="A self-hosted AI gateway, governance first. A name, a budget and a verifiable record on every model and MCP request.">
 <meta property="og:image" content="https://gantry.eliran.me/og.png">
 <meta property="og:image:width" content="1200">
@@ -62,33 +62,20 @@
 
 <section class="wrap hero" id="top">
   <p class="eyebrow live">Self-hosted AI gateway, open source core</p>
-  <h1>Your company already uses AI. Nobody can say who, what it costs, or what left.</h1>
+  <h1>Put a name on every AI call.</h1>
   <div class="hero-cols">
     <div class="hero-text">
-      <p class="lead">Gantry is one gateway in your own cloud that every AI call goes through: coding tools, internal apps and MCP clients. Each request gets a person's name, a budget and a line in an audit log you can verify. On the first day it only watches.</p>
+      <p class="lead">Gantry is a self-hosted AI gateway: coding tools, apps and MCP clients call models through it, each request tied to a person and a budget.</p>
       <div class="actions">
         <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
         <a class="btn btn-line" href="#steps">See the five steps</a>
       </div>
-      <ol class="hero-steps" aria-label="The five steps">
-        <li><b>See</b> who uses which tool, and what it costs</li>
-        <li><b>Know</b> the person behind every request</li>
-        <li><b>Limit</b> spend, rate and runaway agents</li>
-        <li><b>Protect</b> prompts, answers and MCP tools</li>
-        <li><b>Prove</b> it with a log anyone can verify</li>
-      </ol>
-      <p class="hero-note">One Docker image and Postgres. Apache 2.0 core. Nothing calls home.</p>
+      <p class="hero-note">One Docker image plus Postgres, in your cloud.</p>
     </div>
 
-    <div class="terminal try" aria-label="Try Gantry on your laptop">
-      <div class="terminal-bar"><span>Try it on your laptop</span><button type="button" data-copy="try-cmd">Copy</button></div>
+    <div class="terminal" aria-label="Two example records from a Gantry audit log">
+      <div class="terminal-bar"><span>gantry-audit.jsonl</span><span class="bar-note">example records</span></div>
       <div class="try-body">
-        <p class="try-label">1. Start a gateway. Three commands, after you build the binary.</p>
-        <pre class="code" id="try-cmd"><span class="dim">$ </span>gantry init --provider openai
-<span class="dim">$ </span>export OPENAI_PROVIDER_KEY=sk-...
-<span class="dim">$ </span>gantry serve gantry.policy.yaml</pre>
-        <pre class="code out">gantry listening on http://127.0.0.1:8080</pre>
-        <p class="try-label">2. Point a tool at it. This is what the audit log holds afterwards.</p>
         <ul class="records">
           <li>
             <span class="rec-n">#41</span>
@@ -103,7 +90,7 @@
             <span class="rec-meta">gpt-4o, budget_exceeded: interns has a 50 USD daily budget</span>
           </li>
         </ul>
-        <p class="try-foot">Example records. Each one carries the hash of the record before it, and refusals are recorded too. <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">The quickstart</a> has the build step and the full walk.</p>
+        <p class="try-foot">Each record carries the hash of the one before it, so an edited log fails <a href="https://gantry-docs.eliran.me/governance/audit-log/">gantry audit verify</a>.</p>
       </div>
     </div>
   </div>
