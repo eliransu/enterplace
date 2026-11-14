@@ -36,6 +36,8 @@ pub(crate) struct Metrics {
     overhead: Histogram,
     /// (team, model): US dollars charged, as usage records write them.
     spend: Mutex<BTreeMap<(String, String), f64>>,
+    /// (team, kind): US dollars caching saved, `answer` for Gantry's answer cache, `prompt` for a provider's.
+    saved: Mutex<BTreeMap<(String, &'static str), f64>>,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -89,6 +91,15 @@ impl Metrics {
         if usd > 0.0 && usd.is_finite() {
             *locked(&self.spend)
                 .entry((team.to_string(), model.to_string()))
+                .or_default() += usd;
+        }
+    }
+
+    /// Can be less than zero: a provider's cache write costs more than the input it caches.
+    pub(crate) fn saved(&self, team: &str, kind: &'static str, usd: f64) {
+        if usd.is_finite() && usd != 0.0 {
+            *locked(&self.saved)
+                .entry((team.to_string(), kind))
                 .or_default() += usd;
         }
     }
@@ -158,6 +169,15 @@ impl Metrics {
                 "gantry_spend_usd_total{{team=\"{}\",model=\"{}\"}} {}",
                 label(team),
                 label(model),
+                usd_text(*usd)
+            );
+        }
+        out.push_str("# HELP gantry_cache_saved_usd US dollars caching saved since start, by team and kind: answer (Gantry's answer cache) or prompt (a provider's prompt cache, net of cache writes).\n# TYPE gantry_cache_saved_usd gauge\n");
+        for ((team, kind), usd) in locked(&self.saved).iter() {
+            let _ = writeln!(
+                out,
+                "gantry_cache_saved_usd{{team=\"{}\",kind=\"{kind}\"}} {}",
+                label(team),
                 usd_text(*usd)
             );
         }

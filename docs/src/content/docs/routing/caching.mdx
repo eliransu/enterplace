@@ -1,13 +1,15 @@
 ---
 title: Caching
-description: Serve the same answer again for an identical request, per rule, without calling the provider.
+description: Serve a stored answer again to the same person or team, match questions asked in other words, mark provider prompt caches, and see what caching saved.
 sidebar:
   order: 4
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A rule with `cache` serves a stored answer to a request identical to one answered before. A hit costs nothing and never reaches the provider, but is still identified, decided and recorded.
+A rule with `cache` serves a stored answer to a request that matches one answered before. A hit never reaches the provider and costs nothing, but is still identified, decided and recorded. A cached answer is served only within its scope: the person it was made for, or their team.
+
+A rule with `prompt_cache: auto` asks the provider to cache the stable start of a messages request, so the next call pays the cached input price.
 
 ## Example
 
@@ -18,12 +20,24 @@ providers:
     kind: openai
     url: https://api.openai.com
     key_env: OPENAI_PROVIDER_KEY
-    models: [gpt-4o-mini]
+    models: [gpt-4o-mini, text-embedding-3-small]
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_PROVIDER_KEY
+    models: [claude-sonnet-4-5]
 rules:
-  - name: support-bot
-    principals: { name: support.bot }
-    models: [gpt-4o-mini]
-    cache: { ttl_seconds: 300 }
+  - name: support
+    principals: { team: support }
+    models: [gpt-4o-mini, text-embedding-3-small]
+    cache:
+      ttl_seconds: 300
+      scope: team
+      semantic: { model: text-embedding-3-small, threshold: 0.95 }
+  - name: agents
+    principals: { team: platform }
+    models: [claude-sonnet-4-5]
+    prompt_cache: auto
 ```
 
 ## Fields
@@ -31,10 +45,22 @@ rules:
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `cache.ttl_seconds` | integer | none | 1 to 86400. How long an answer is served again. Without `cache`, nothing is cached. |
+| `cache.scope` | string | `person` | `person`: an answer is served only to the person it was made for. `team`: to anyone on their team under the same rule. |
+| `cache.semantic.model` | string | none | The embeddings model requests are compared with. The rule must allow it. |
+| `cache.semantic.threshold` | number | none | Above 0, at most 1. The cosine similarity at or above which a cached answer is served. |
+| `prompt_cache` | string | `off` | `auto` marks the system prompt, tools and conversation of a messages request with cache breakpoints. |
+
+## Scope
+
+The scope is the rule plus the person (`person:<name>`) or the team (`team:<team>`). It is part of the cache key and is checked again on every read.
+
+- Under `scope: person`, two people asking the same question each get their own answer.
+- Under `scope: team`, a teammate gets the answer cached for another under the same rule. A person without a team keeps their own person scope.
+- No wider scope exists. Under a rule with `principals: { any: true }`, one team never reads another team's answers.
 
 ## What is a hit
 
-A request is a hit when it has the same provider, model, route (path and query) and request body, byte for byte, and the same `anthropic-beta` and `anthropic-version` headers, as a stored answer within its TTL.
+An exact hit has the same scope, provider, model, route (path and query) and request body, byte for byte, and the same `anthropic-beta` and `anthropic-version` headers, as a stored answer within its TTL.
 
 Never cached:
 
@@ -42,27 +68,46 @@ Never cached:
 - requests with `Cache-Control: no-store`,
 - `count_tokens` requests,
 - Responses requests that name stored context (`previous_response_id`, `conversation` or `prompt`), because the conversation can change at the provider while the body stays the same,
-- answers without a 2xx status, or that did not end whole.
+- answers without a 2xx status, or that did not end whole,
+- answers an answer guardrail blocked or masked, or that it could not read or record. An answer is kept only after an answer guardrail passed it and that pass was recorded.
 
-The cache is in memory, 64 MiB across all rules, least recently used out first. It is kept across a policy reload and empties on restart.
+The cache is in memory, 64 MiB across all rules, least recently used out first. It is kept across a policy reload, empties on restart, and is per replica.
 
-## Records and headers
+## Semantic cache
+
+With `cache.semantic`, a request with no exact hit is compared with earlier ones in other words. "What is the capital of France?" can be served the answer to "Which city is France's capital?".
+
+- Gantry embeds the request's text through its own `/v1/embeddings`, as the person who sent the request. That embedding is a request of its own: it has its own decision, guardrails, rate limits, usage and cost, charged to the same person.
+- It is compared only with requests that match in everything but their text: the same scope, provider, model, route, headers and body with the text left out. Roles, tools and parameters must be the same.
+- The closest stored answer at or above `threshold` is served. The lower the threshold, the looser the match. Start at 0.95.
+- A request with more than 32 KiB of text gets an exact match only. A request that is already an exact hit is not embedded.
+- Vectors are kept in memory per replica, at most 4096, oldest out first. They point at answers in the cache above and are never written to the store.
+
+`gantry check` refuses a semantic model the rule does not allow, since every embedding would be refused.
+
+## Prompt caching
+
+With `prompt_cache: auto`, Gantry adds `"cache_control": {"type": "ephemeral"}` to the last tool, the end of the system prompt and the last block of the conversation. The provider then caches that prefix, and the next request that starts the same way reads it at the cached input price.
+
+It applies only to `/v1/messages` requests whose every deployment is `anthropic`, `bedrock` or `vertex_anthropic`. It is skipped when the caller already placed any `cache_control`, or when a key appears twice in the body. OpenAI and Gemini are left alone: OpenAI caches prompts on its own, and Gemini's caching is a stored resource the caller creates.
+
+## Records, headers and metrics
 
 | Where | Hit | Miss |
 |---|---|---|
-| Decision record | `"cache": "hit"` | `"cache": "miss"` |
-| Usage record | Cost 0 | The provider's usage |
+| Decision record | `"cache": "hit"`, `cache_match` (`exact` or `semantic`), `cache_scope` (`person` or `team`), `cache_origin` (the decision that made the answer), `cache_similarity` (semantic only) | `"cache": "miss"`, and `cache_embedding` (the embeddings decision) when the semantic cache embedded it |
+| Usage record | Cost 0, `cache_saved_usd`: what the original answer cost | The provider's usage |
 | Response header | `x-gantry-cache: hit` | none |
+
+When `prompt_cache: auto` marked a request, its decision record has `prompt_cache` with where: `tools`, `system`, `messages`. Its usage record has `cache_saved_usd`: the price of the input without caching minus what it cost, from the provider's cache read and write counts. It can be negative on a call that wrote the cache.
+
+`gantry_cache_saved_usd{team, kind}` on `/metrics` sums the savings since start by team, with `kind` `answer` (Gantry's cache) or `prompt` (the provider's).
 
 A request answered from the cache does not count against the rule's `rpm` limit.
 
-<Aside type="caution">
-Two people whose requests are identical byte for byte get the same answer. Give a rule a cache only where that is acceptable.
-</Aside>
-
 ## Order on the request path
 
-Guardrails run before the cache. A cached answer is served only to a request that passes the guardrails in force now, so a guardrail added by a reload also covers answers cached before it. A request a guardrail blocks never reads the cache.
+Guardrails run before the cache. A cached answer is served only to a request that passes the guardrails in force now, so a guardrail added by a reload also covers answers cached before it. A request a guardrail blocks never reads the cache and is never embedded.
 
 The cache key is the body actually sent: masked if a guardrail masked it, translated if it was translated. A translated chat caller gets the hit translated, as the first answer was. A webhook guardrail is called on a cache hit too.
 
@@ -71,4 +116,5 @@ The cache key is the body actually sent: masked if a guardrail masked it, transl
 <CardGrid>
 	<LinkCard title="Policy file" href="/governance/policy/" description="Every field of a rule." />
 	<LinkCard title="Guardrails" href="/governance/guardrails/" description="What runs before the cache." />
+	<LinkCard title="Pricing" href="/routing/pricing/" description="How cache reads and writes are priced." />
 </CardGrid>

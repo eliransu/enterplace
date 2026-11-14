@@ -98,6 +98,12 @@ pub struct Limits {
     pub tpm: Option<u32>,
     /// How long an answer is served again for the same request, in seconds.
     pub cache_ttl_seconds: Option<u64>,
+    /// Whose requests share cached answers: one person's (the default) or one team's. Never wider.
+    pub cache_scope: CacheScope,
+    /// Serve a cached answer to a request that means the same, not only one identical byte for byte.
+    pub semantic: Option<Semantic>,
+    /// Mark the stable prefix of a messages request with cache breakpoints when the caller placed none.
+    pub prompt_cache: bool,
     /// Hold a streamed answer whole so the answer guardrails check it before the caller sees any of it.
     pub buffer_stream: bool,
     /// Check a streamed answer every this many characters, letting through only what was checked.
@@ -105,6 +111,35 @@ pub struct Limits {
     /// Whether a caller may send their own provider key in `x-gantry-provider-key`.
     pub caller_provider_key: CallerKey,
 }
+
+/// Whose requests share a rule's cached answers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CacheScope {
+    #[default]
+    Person,
+    /// A person without a team keeps a scope of their own: an empty team is not a team.
+    Team,
+}
+
+impl CacheScope {
+    pub fn word(self) -> &'static str {
+        match self {
+            CacheScope::Person => "person",
+            CacheScope::Team => "team",
+        }
+    }
+}
+
+/// The semantic cache of a rule: requests are compared by the embeddings of their text, made by `model` through
+/// Gantry's own embeddings route, and an answer is served again above `threshold` (cosine similarity).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Semantic {
+    pub model: String,
+    pub threshold: f64,
+}
+
+// The loader refuses a threshold that is not a finite number, so equality is total.
+impl Eq for Semantic {}
 
 /// What a rule does with a provider key the caller sends in `x-gantry-provider-key`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

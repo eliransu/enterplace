@@ -12,7 +12,10 @@ use serde::Deserialize;
 use crate::{
     guard::{self, Guardrail, GuardrailFile},
     id::sha256_hex,
-    policy::{Budget, CallerKey, Limits, Models, Period, Policy, Principal, Rule, Who},
+    policy::{
+        Budget, CacheScope, CallerKey, Limits, Models, Period, Policy, Principal, Rule, Semantic,
+        Who,
+    },
     usage::{PriceOverrides, price_for},
 };
 
@@ -59,6 +62,10 @@ const KNOWN: &[&str] = &[
     "rpm",
     "cache",
     "ttl_seconds",
+    "scope",
+    "semantic",
+    "threshold",
+    "prompt_cache",
     "buffer_stream",
     "check_stream_every",
     "passthrough",
@@ -275,6 +282,8 @@ struct RuleFile {
     #[serde(default)]
     cache: Option<CacheFile>,
     #[serde(default)]
+    prompt_cache: Option<String>,
+    #[serde(default)]
     buffer_stream: bool,
     #[serde(default)]
     check_stream_every: Option<i64>,
@@ -314,6 +323,17 @@ struct RateFile {
 #[serde(deny_unknown_fields)]
 struct CacheFile {
     ttl_seconds: i64,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    semantic: Option<SemanticFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SemanticFile {
+    model: String,
+    threshold: f64,
 }
 
 /// The longest an answer may be served from the cache: a day.
@@ -1617,6 +1637,47 @@ fn limits(rule: &RuleFile, at: &dyn Fn(&str) -> String, errors: &mut Vec<String>
                 at("cache")
             ));
         }
+        match cache.scope.as_deref() {
+            None | Some("person") => {}
+            Some("team") => limits.cache_scope = CacheScope::Team,
+            Some(other) => errors.push(format!(
+                "{}: scope is \"{other}\". It is person (the default: a cached answer is served only to the person it was made for) or team (to their team). No wider scope exists, so one team never reads another's answers.",
+                at("cache")
+            )),
+        }
+        if let Some(semantic) = &cache.semantic {
+            if semantic.model.trim().is_empty() {
+                errors.push(format!(
+                    "{}: semantic needs the embeddings model to compare requests with, for example semantic: {{ model: text-embedding-3-small, threshold: 0.95 }}.",
+                    at("cache")
+                ));
+            } else if !(semantic.threshold > 0.0 && semantic.threshold <= 1.0) {
+                errors.push(format!(
+                    "{}: threshold is the cosine similarity above which a cached answer is served again, above 0 and at most 1, for example 0.95. The lower it is, the looser the match.",
+                    at("cache")
+                ));
+            } else if !rule.models.iter().any(|m| m == "*" || *m == semantic.model) {
+                errors.push(format!(
+                    "{}: the semantic cache embeds each request with model \"{}\" as the person who sent it, and this rule does not allow that model, so every embedding would be refused. Add \"{}\" to the rule's models.",
+                    at("cache"),
+                    semantic.model,
+                    semantic.model
+                ));
+            } else {
+                limits.semantic = Some(Semantic {
+                    model: semantic.model.clone(),
+                    threshold: semantic.threshold,
+                });
+            }
+        }
+    }
+    match rule.prompt_cache.as_deref() {
+        None | Some("off") => {}
+        Some("auto") => limits.prompt_cache = true,
+        Some(other) => errors.push(format!(
+            "{}: prompt_cache is \"{other}\". It is auto (Gantry marks the system prompt, tools and conversation of a messages request with cache breakpoints when the caller placed none) or off (the default).",
+            at("prompt_cache")
+        )),
     }
     limits.buffer_stream = rule.buffer_stream;
     limits.caller_provider_key = match rule.caller_provider_key.as_deref() {
@@ -3096,6 +3157,7 @@ rules:
                 buffer_stream: false,
                 check_stream_every: None,
                 caller_provider_key: CallerKey::Refused,
+                ..Limits::default()
             }
         );
         assert_eq!(
@@ -3120,6 +3182,59 @@ rules:
         let loaded = check("per-image", &text, None)?.map_err(|e| e.join("\n"))?;
         let o3 = loaded.policy.prices().get("o3").ok_or("no price for o3")?;
         assert_eq!(o3.per_image, Some(0.04));
+        Ok(())
+    }
+
+    #[test]
+    fn cache_scope_semantic_and_prompt_cache_load_and_wrong_ones_are_named() -> TestResult {
+        let text = LIMITED.replace(
+            "    cache: { ttl_seconds: 300 }\n",
+            "    cache: { ttl_seconds: 300, scope: team, semantic: { model: gpt-4o-mini, threshold: 0.95 } }\n    prompt_cache: auto\n",
+        );
+        let loaded = check("cache-options", &text, None)?.map_err(|e| e.join("\n"))?;
+        let limits = &loaded.policy.rule_list()[0].limits;
+        assert_eq!(limits.cache_scope, CacheScope::Team);
+        assert_eq!(
+            limits.semantic,
+            Some(Semantic {
+                model: "gpt-4o-mini".into(),
+                threshold: 0.95
+            })
+        );
+        assert!(limits.prompt_cache);
+        // The default scope is the person, and prompt caching is off.
+        let plain = check("cache-plain", LIMITED, None)?.map_err(|e| e.join("\n"))?;
+        let limits = &plain.policy.rule_list()[0].limits;
+        assert_eq!(
+            (limits.cache_scope, limits.prompt_cache),
+            (CacheScope::Person, false)
+        );
+        let cases = [
+            (
+                "scope: team",
+                "scope: everyone",
+                "one team never reads another's",
+            ),
+            ("threshold: 0.95", "threshold: 1.5", "above 0 and at most 1"),
+            (
+                "model: gpt-4o-mini",
+                "model: emb",
+                "Add \"emb\" to the rule's models",
+            ),
+            (
+                "prompt_cache: auto",
+                "prompt_cache: always",
+                "auto (Gantry marks",
+            ),
+        ];
+        for (i, (from, to, fix)) in cases.into_iter().enumerate() {
+            let problems = errors(check(
+                &format!("cache-bad-{i}"),
+                &text.replace(from, to),
+                None,
+            )?)?;
+            assert!(problems.contains(fix), "{to}: {problems}");
+        }
         Ok(())
     }
 

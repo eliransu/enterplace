@@ -987,6 +987,14 @@ struct Seen<'a> {
     cache: Option<&'static str>,
     /// The cached answer's request, settled once the decision is recorded.
     hit: Option<Box<spend::Admitted>>,
+    /// How the cached answer was found: exact or semantic, its similarity, scope and the decision that made it.
+    found: Option<spend::Hit>,
+    /// The decision of the embeddings request a semantic cache made for this one.
+    embedding: Option<String>,
+    /// Where `prompt_cache: auto` placed cache breakpoints in the body.
+    prompt_cache: Option<Vec<&'static str>>,
+    /// The caller's Gantry key, for the embeddings request a semantic cache makes as the same person. Never recorded.
+    credential: Option<String>,
     /// The first 8 hex characters of the SHA-256 of a provider key the caller sent, never the key.
     caller_key: Option<String>,
 }
@@ -1084,6 +1092,7 @@ async fn check<'a>(
     let (parts, body) = request.into_parts();
     let key = caller_key(&parts.headers)?;
     let provider_key = caller_provider_key(&parts.headers)?;
+    seen.credential = Some(key.to_string());
     seen.caller_key = provider_key
         .as_deref()
         .map(|k| id::sha256_hex(k.as_bytes())[..8].to_string());
@@ -2017,7 +2026,18 @@ async fn decide(
     // Limits come after the guardrails: the cache key and the budget's estimate are of the body that is sent, masked
     // if a guardrail masked it, and a request a guardrail blocks is never served from the cache or counted.
     outcome = match outcome {
-        Ok(Next::Forward(mut parts, bytes, held)) => {
+        Ok(Next::Forward(mut parts, mut bytes, held)) => {
+            // Cache breakpoints are placed after the guardrails read the body (they change no text) and before the
+            // cache key is taken of what is sent.
+            if prompt_cacheable(version, &seen, &parts) {
+                if let Some((marked, marks)) = spend::prompt_cache(&bytes) {
+                    parts
+                        .headers
+                        .insert(header::CONTENT_LENGTH, HeaderValue::from(marked.len()));
+                    bytes = marked;
+                    seen.prompt_cache = Some(marks);
+                }
+            }
             match limit(
                 state, version, policy, &mut seen, decision, &mut parts, &bytes,
             )
@@ -2043,9 +2063,16 @@ async fn decide(
                 .rule
                 .and_then(|r| r.limits.check_stream_every)
                 .map(|n| n as usize),
+            gate: None,
         };
         match &mut outcome {
             Ok(Next::Forward(parts, _, _)) => {
+                let mut check = check;
+                // An answer the guardrails block or mask is never cached: it waits for their pass.
+                check.gate = parts
+                    .extensions
+                    .get::<spend::Meter>()
+                    .and_then(spend::Meter::gate);
                 parts.extensions.insert(check);
             }
             Ok(Next::Answer(response)) if seen.cache == Some("hit") => {
@@ -2108,6 +2135,20 @@ async fn decide(
             record.insert("caller_provider_key".into(), true.into());
             record.insert("caller_provider_key_sha256".into(), prefix.as_str().into());
         }
+        if let Some(found) = &seen.found {
+            record.insert("cache_match".into(), found.matched.into());
+            record.insert("cache_scope".into(), found.scope.into());
+            record.insert("cache_origin".into(), found.origin.as_str().into());
+            if let Some(similarity) = found.similarity {
+                record.insert("cache_similarity".into(), similarity.into());
+            }
+        }
+        if let Some(embedding) = &seen.embedding {
+            record.insert("cache_embedding".into(), embedding.as_str().into());
+        }
+        if let Some(marks) = &seen.prompt_cache {
+            record.insert("prompt_cache".into(), marks.clone().into());
+        }
         if let Some(deployment) = &seen.deployment {
             // The model on the record is the alias the caller sent and the rule decided on; this is where it went first.
             record.insert(
@@ -2167,7 +2208,7 @@ async fn limit(
     let deployed = plan.and_then(|p| p.chain.first()).map(|(_, m)| m.clone());
     let sent = model;
     let model = deployed.as_deref().unwrap_or(model);
-    let ask = spend::Ask {
+    let mut ask = spend::Ask {
         decision,
         person,
         rule,
@@ -2183,11 +2224,28 @@ async fn limit(
         caller_paid: plan
             .and_then(|p| p.caller_key.as_ref())
             .map(|_| rule.limits.caller_provider_key == CallerKey::AllowedBudgeted),
+        probe: None,
     };
+    if let (Some(semantic), Some((partition, text)), Some(credential)) = (
+        &rule.limits.semantic,
+        spend::semantic_text(&state.spend, &ask),
+        seen.credential.as_deref(),
+    ) {
+        let (vector, id) = embed(state, credential, &semantic.model, &text).await;
+        seen.embedding = id;
+        // An embedding that failed costs the request its semantic lookup, not its answer: the exact cache and the
+        // provider still serve it. The embeddings decision says why it failed.
+        ask.probe = vector.map(|vector| spend::Probe {
+            partition,
+            vector,
+            threshold: semantic.threshold,
+        });
+    }
     match spend::admit(&state.spend, state.audit.as_ref().map(|a| &a.log), ask).await? {
-        spend::Admit::Hit(response, admitted) => {
+        spend::Admit::Hit(response, admitted, found) => {
             seen.cache = Some("hit");
             seen.hit = Some(admitted);
+            seen.found = Some(found);
             // The cache holds the provider's own format, so a translated request gets its hit translated too.
             let plan = parts.extensions.get::<Plan>();
             Ok(Some(
@@ -2200,6 +2258,85 @@ async fn limit(
             Ok(None)
         }
     }
+}
+
+/// Whether `prompt_cache: auto` may mark this request: a messages request whose every possible destination speaks the
+/// messages API, where `cache_control` breakpoints are documented (Anthropic, Bedrock and Vertex AI for Claude). A
+/// request translated to chat completions is left alone.
+fn prompt_cacheable(version: &Snapshot, seen: &Seen<'_>, parts: &Parts) -> bool {
+    if !seen.rule.is_some_and(|r| r.limits.prompt_cache) || parts.uri.path() != MESSAGES {
+        return false;
+    }
+    let messages = |i: &usize| {
+        version.providers.get(*i).is_some_and(|p| {
+            matches!(
+                p.kind,
+                Kind::Anthropic | Kind::Bedrock | Kind::VertexAnthropic
+            )
+        })
+    };
+    match parts.extensions.get::<Plan>() {
+        Some(plan) => {
+            !plan.from_messages
+                && plan
+                    .chain
+                    .iter()
+                    .chain(&plan.context)
+                    .all(|(i, _)| messages(i))
+                && messages(&plan.provider)
+        }
+        None => seen.provider.as_ref().is_some_and(messages),
+    }
+}
+
+/// Boxed, so the request path can make a request of its own through itself.
+fn handle_boxed(
+    state: AppState,
+    request: Request,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>> {
+    Box::pin(handle(State(state), request))
+}
+
+/// Embeds a request's text for the semantic cache through Gantry's own embeddings route, as the person who sent the
+/// request: decided by the policy, guarded, limited, charged and recorded as a request of its own. Returns the
+/// vector, if one came back, and the embeddings request's decision ID.
+async fn embed(
+    state: &AppState,
+    credential: &str,
+    model: &str,
+    text: &str,
+) -> (Option<Vec<f32>>, Option<String>) {
+    let body = serde_json::json!({ "model": model, "input": text }).to_string();
+    let Ok(request) = Request::post(EMBEDDINGS)
+        .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+    else {
+        return (None, None);
+    };
+    let response = handle_boxed(state.clone(), request).await;
+    let id = response
+        .headers()
+        .get(DECISION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    if !response.status().is_success() {
+        return (None, id);
+    }
+    let Ok(bytes) = whole(response.into_body()).await else {
+        return (None, id);
+    };
+    let vector = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|answer| {
+            answer["data"][0]["embedding"]
+                .as_array()?
+                .iter()
+                .map(|n| n.as_f64().map(|n| n as f32))
+                .collect::<Option<Vec<f32>>>()
+        })
+        .filter(|v| !v.is_empty());
+    (vector, id)
 }
 
 /// Runs a rule's guardrails on an allowed request: the built-in ones first, then each webhook in order.
@@ -2369,6 +2506,8 @@ struct AnswerCheck {
     buffer_stream: bool,
     /// The rule's `check_stream_every`: a streamed answer is checked every this many characters as it comes.
     stream_every: Option<usize>,
+    /// A cacheable answer waiting for these guardrails to pass it.
+    gate: Option<spend::Gate>,
 }
 
 /// Runs `on: [answer]` guardrails on a whole answer before it reaches the caller: a block replaces it with a
@@ -2434,6 +2573,8 @@ async fn answer_guarded(
         (None, true) => "mask",
         (None, false) => "pass",
     };
+    // Only a pass that is recorded lets the answer be cached: anything else drops the gate unopened.
+    let gate = check.gate.clone().filter(|_| word == "pass");
     if let Some(audit) = &state.audit {
         let record = record(
             serde_json::to_value(&verdict.audit).unwrap_or_default(),
@@ -2450,6 +2591,9 @@ async fn answer_guarded(
                 "Refused: Gantry could not write the guardrails' check of this answer to its audit log, and it does not pass on what it cannot record. Tell your Gantry admin.",
             ));
         }
+    }
+    if let Some(gate) = gate {
+        gate.passed(true);
     }
     if let Some(blocked) = verdict.blocked {
         let kinds: Vec<String> = verdict
