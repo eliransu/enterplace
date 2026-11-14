@@ -24,7 +24,7 @@ use crate::{
     AppState, ClientAddr, DECISION, Refusal, Reload, Snapshot, Trigger, caller_key, read_body,
 };
 
-const ROUTES: &str = "GET /admin/keys, POST /admin/keys, DELETE /admin/keys/<first 8 hex characters of the hash>, DELETE /admin/keys/self, GET, POST and DELETE /admin/kills, GET and POST /admin/credentials, and PUT and DELETE /admin/credentials/<name>";
+const ROUTES: &str = "GET /admin/keys, POST /admin/keys, DELETE /admin/keys/<first 8 hex characters of the hash>, DELETE /admin/keys/self, GET, POST and DELETE /admin/kills, GET and POST /admin/credentials, PUT and DELETE /admin/credentials/<name>, and POST /admin/guardrails/test";
 
 /// Why there is no credential to add or list on a gateway without a store.
 const NEED_STORE: &str = "Refused: provider credentials are kept in the store, sealed with a master key, and this gateway's policy has no store: section. Keep provider keys in environment variables with key_env (or in files with key_file), or add `store: { postgres_url_env: DATABASE_URL }` to the policy and set GANTRY_MASTER_KEY.";
@@ -65,6 +65,20 @@ enum Plan {
         store: Arc<dyn Store>,
         name: String,
     },
+    /// A finished backtest: nothing is changed, so it is run while the call is checked.
+    Backtest(Value),
+}
+
+/// `POST /admin/guardrails/test`: a guardrail by name (one a rule of the policy in use runs) or a definition not in
+/// the policy yet, and the examples to run it over.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TestGuardrail {
+    guardrail: Value,
+    #[serde(default)]
+    corpus: Vec<Value>,
+    #[serde(default)]
+    since: Option<String>,
 }
 
 /// A credential to add, or the new value of one.
@@ -274,6 +288,7 @@ async fn allow(
         .strip_prefix("/admin/keys/")
         .map(str::to_string);
     let kills = parts.uri.path() == "/admin/kills";
+    let backtest = parts.uri.path() == "/admin/guardrails/test";
     let credential = parts
         .uri
         .path()
@@ -289,6 +304,8 @@ async fn allow(
     };
     call.action = match (&parts.method, prefix.as_deref(), kills) {
         _ if credential.is_some() => call.action,
+        (&Method::POST, None, false) if backtest => Some("test_guardrail"),
+        _ if backtest => None,
         (&Method::GET, None, false) => Some("list_keys"),
         (&Method::POST, None, false) => Some("issue_key"),
         (&Method::DELETE, Some("self"), _) => Some("revoke_own_key"),
@@ -435,6 +452,83 @@ async fn allow(
         }
         "list_keys" => Ok(Plan::List),
         "list_kills" => Ok(Plan::Kills),
+        "test_guardrail" => {
+            let (bytes, _held) = read_body(Some(&person.name), state, &parts.headers, body).await?;
+            let bad = |message: String| {
+                refused(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    format!("Refused: {message}"),
+                )
+            };
+            let ask: TestGuardrail = serde_json::from_slice(&bytes).map_err(|err| {
+                bad(format!("{err}. Send {{\"guardrail\": \"<name>\" or a definition, \"corpus\": [{{\"text\": \"...\", \"expect\": true}}]}}."))
+            })?;
+            let guard = match &ask.guardrail {
+                Value::String(name) => {
+                    call.target = Some(json!({ "guardrail": name }));
+                    policy
+                        .rule_list()
+                        .iter()
+                        .flat_map(|rule| &rule.guardrails)
+                        .find(|g| &g.name == name)
+                        .cloned()
+                        .ok_or_else(|| {
+                            refused(
+                                StatusCode::NOT_FOUND,
+                                "unknown_guardrail",
+                                format!("Refused: no rule of the policy in use runs a guardrail named \"{name}\". Name one that does, or send its definition as an object to test it before it goes live."),
+                            )
+                        })?
+                }
+                definition @ Value::Object(_) => {
+                    let def: gantry_core::guard::GuardrailFile =
+                        serde_json::from_value(definition.clone()).map_err(|err| {
+                            bad(format!("the guardrail definition does not read: {err}."))
+                        })?;
+                    call.target = Some(json!({ "guardrail": def.name, "definition": true }));
+                    gantry_core::guard::guardrails(&[def])
+                        .map_err(|errors| bad(errors.join(" ")))?
+                        .pop()
+                        .ok_or_else(|| bad("the definition holds no guardrail.".into()))?
+                }
+                _ => return Err(bad("guardrail is a name or a definition object.".into())),
+            };
+            if let Some(since) = &ask.since {
+                gantry_core::guard::since_seconds(since).map_err(bad)?;
+                if ask.corpus.is_empty() {
+                    return Err(refused(
+                        StatusCode::CONFLICT,
+                        "capture_unavailable",
+                        format!("Refused: {}", gantry_core::guard::NO_CAPTURE),
+                    ));
+                }
+            }
+            if ask.corpus.is_empty() {
+                return Err(bad(
+                    "corpus is empty. Send the examples to run the guardrail over.".into(),
+                ));
+            }
+            let samples = ask
+                .corpus
+                .iter()
+                .enumerate()
+                .map(|(i, row)| {
+                    gantry_core::guard::sample(row, i + 1)
+                        .map_err(|why| format!("corpus item {}: {why}", i + 1))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(bad)?;
+            let report = gantry_core::guard::backtest(&guard, &samples).map_err(bad)?;
+            let report = serde_json::to_value(report).map_err(|err| {
+                refused(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal",
+                    format!("Refused: {err}"),
+                )
+            })?;
+            Ok(Plan::Backtest(report))
+        }
         action @ ("set_kill" | "clear_kill") => {
             let (bytes, _held) = read_body(Some(&person.name), state, &parts.headers, body).await?;
             let switch: Switch = serde_json::from_slice(&bytes).map_err(|err| {
@@ -879,6 +973,7 @@ async fn act(state: &AppState, version: &Snapshot, plan: Plan) -> Result<Respons
                 }),
             ))
         }
+        Plan::Backtest(report) => Ok(json_response(StatusCode::OK, &report)),
         Plan::Kills => {
             let kills = switches()?.current().map_err(kills_error)?;
             Ok(json_response(StatusCode::OK, &json!({ "kills": *kills })))

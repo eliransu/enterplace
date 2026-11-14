@@ -1026,6 +1026,7 @@ async fn guardrails_run_before_the_cache_and_a_translated_hit_is_translated() ->
             action: Action::Block,
             check: Check::Secrets,
             on: gantry_core::guard::On::REQUEST,
+            shadow_until: None,
         }])
         .with_limits(Limits {
             cache_ttl_seconds: Some(60),

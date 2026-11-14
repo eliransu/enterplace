@@ -834,3 +834,236 @@ with OUT.open("w", encoding="utf-8") as fh:
     for i, row in enumerate(rows, 1):
         fh.write(json.dumps({"id": i, **row}, ensure_ascii=False) + "\n")
 print(f"wrote {len(rows)} lines to {OUT}")
+
+# ==============================================================================================================
+# gantry-detectors-v2: v1, with OpenAI project and Anthropic keys given their own kinds, and the cloud and service
+# keys v2 added. v1 above is written unchanged (same seed, same order); v2 draws from a seed of its own.
+# ==============================================================================================================
+import copy
+
+OUT2 = OUT.with_name("gantry-detectors-v2.jsonl")
+R2 = random.Random(20261114)
+
+
+def rnd2(alphabet, n):
+    return "".join(R2.choice(alphabet) for _ in range(n))
+
+
+def relabel(row):
+    row = copy.deepcopy(row)
+    text = row["text"]
+    if row["target"] == "api_key" and row["expect"]:
+        if "sk-proj-" in text:
+            row["target"], row["expect"] = "openai_project_key", ["openai_project_key"]
+        elif "sk-ant-api" in text:
+            row["target"], row["expect"] = "anthropic_key", ["anthropic_key"]
+    return row
+
+
+rows2 = [relabel(r) for r in rows]
+
+
+def add2(target, text, expect):
+    rows2.append({"target": target, "text": text, "expect": sorted(expect)})
+
+
+def pos2(kind, value, label, key, i, extra=()):
+    shapes = contexts(label, value, key)
+    add2(kind, shapes[i % len(shapes)], [kind, *extra])
+
+
+def neg2(kind, texts):
+    for text in texts:
+        add2(kind, text, [])
+
+
+LOWER = string.ascii_lowercase
+B64STD = string.ascii_letters + string.digits + "+/"
+
+# gcp_service_account_key: the key file names its key by private_key_id; with the PEM in it, that is a private_key too.
+for i in range(40):
+    kid = rnd2(HEX, 40)
+    proj = f"acme-{rnd2(LOWER, 6)}"
+    if i % 2 == 0:
+        block = f"-----BEGIN PRIVATE KEY-----\n{''.join(R2.choice(B64STD) for _ in range(64))}\n-----END PRIVATE KEY-----\n"
+        doc = {"type": "service_account", "project_id": proj, "private_key_id": kid, "private_key": block,
+               "client_email": f"ci@{proj}.iam.gserviceaccount.com"}
+        extra = ["private_key"]
+    else:
+        doc = {"type": "service_account", "project_id": proj, "private_key_id": kid,
+               "client_email": f"ci@{proj}.iam.gserviceaccount.com"}
+        extra = []
+    text = json.dumps(doc, indent=2 if i % 4 < 2 else None)
+    if i % 3 == 0:
+        text = f"User: gcloud says invalid_grant with this key file:\n{text}"
+    # client_email is an address, so a careful reader reports it too.
+    add2("gcp_service_account_key", text, ["gcp_service_account_key", "email_address", *extra])
+neg2("gcp_service_account_key", [
+    json.dumps({"type": "service_account", "project_id": "acme-prod", "private_key_id": "<KEY_ID>"}),
+    json.dumps({"type": "service_account", "private_key_id": rnd2(HEX, 39)}),
+    json.dumps({"type": "service_account", "private_key_id": rnd2(HEX, 40).upper()}),
+    '"private_key_id": "${PRIVATE_KEY_ID}"',
+    "Set private_key_id to the ID shown in the console.",
+    json.dumps({"type": "authorized_user", "client_id": f"{R2.randint(10**11, 10**12)}.apps.googleusercontent.com"}),
+    json.dumps({"key_id": rnd2(HEX, 40), "type": "service_account"}),
+])
+add2("gcp_service_account_key", "gcloud iam service-accounts keys list --iam-account ci@acme.iam.gserviceaccount.com",
+     ["email_address"])
+for _ in range(32):
+    neg2("gcp_service_account_key", [
+        f"commit {rnd2(HEX, 40)} Author: ci-bot"
+        if R2.random() < 0.5 else
+        json.dumps({"sha": rnd2(HEX, 40), "type": "commit", "private": False})
+    ])
+
+# gcp_api_key
+for i in range(40):
+    key = "AIza" + rnd2(ALNUM + "-_", 35)
+    pos2("gcp_api_key", key, "Google API key", "google_api_key", i)
+neg2("gcp_api_key", [
+    "AIza...",
+    "key=AIzaYOUR_API_KEY",
+    "AIza" + rnd2(ALNUM, 20),
+    "Google API keys start with AIza and are 39 characters long.",
+    "maps.googleapis.com/maps/api/js?key=YOUR_KEY",
+    "GOOGLE_API_KEY=${GOOGLE_API_KEY}",
+])
+for _ in range(34):
+    neg2("gcp_api_key", [f"session=AIz{rnd2(ALNUM, 36)} " if R2.random() < 0.5 else f"id=GAIza{rnd2(ALNUM, 30)}"])
+
+# azure_connection_string
+for i in range(40):
+    acct = f"acme{rnd2(LOWER + string.digits, 8)}"
+    if i % 2 == 0:
+        value = f"DefaultEndpointsProtocol=https;AccountName={acct};AccountKey={rnd2(B64STD, 86)}==;EndpointSuffix=core.windows.net"
+    else:
+        value = f"Endpoint=sb://{acct}.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey={rnd2(B64STD, 43)}="
+    pos2("azure_connection_string", value, "Azure connection string", "azure_storage_connection_string", i)
+neg2("azure_connection_string", [
+    "DefaultEndpointsProtocol=https;AccountName=acme;AccountKey=<your-account-key>;EndpointSuffix=core.windows.net",
+    "UseDevelopmentStorage=true",
+    "Endpoint=sb://acme.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=${SB_KEY}",
+    "AccountKey=",
+    "Find the AccountKey under Access keys in the portal.",
+    "BlobEndpoint=https://acme.blob.core.windows.net/;SharedAccessSignature=sv=2022-11-02&ss=b",
+    "Server=tcp:acme.database.windows.net,1433;Initial Catalog=app;Authentication=Active Directory Default;",
+])
+for _ in range(33):
+    neg2("azure_connection_string", [f"AccountName=acme{rnd2(LOWER, 6)};EndpointSuffix=core.windows.net;Key={rnd2(B64STD, 12)}"])
+
+# stripe_key: secret and restricted keys; publishable keys are public by design.
+for i in range(40):
+    prefix = R2.choice(["sk_live_", "sk_test_", "rk_live_", "rk_test_"])
+    key = prefix + rnd2(ALNUM, R2.choice([24, 32, 99]))
+    pos2("stripe_key", key, "Stripe key", "stripe_secret_key", i)
+neg2("stripe_key", [
+    "pk_live_" + rnd2(ALNUM, 24),
+    "pk_test_" + rnd2(ALNUM, 24),
+    "sk_live_...",
+    "sk_test_" + rnd2(ALNUM, 10),
+    "STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}",
+    "Stripe secret keys start with sk_live_ in live mode.",
+    "whsec_" + rnd2(ALNUM, 32) + " is the webhook signing secret name in the docs",
+    "desk_live_chat_widget_enabled",
+])
+for _ in range(32):
+    neg2("stripe_key", [f"cus_{rnd2(ALNUM, 14)} pi_{rnd2(ALNUM, 24)} ch_{rnd2(ALNUM, 24)}"])
+
+# twilio_api_key: API key SIDs; account SIDs are identifiers.
+for i in range(40):
+    pos2("twilio_api_key", "SK" + rnd2(HEX, 32), "Twilio API key", "twilio_api_key", i)
+neg2("twilio_api_key", [
+    "AC" + rnd2(HEX, 32),
+    "SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "SK" + rnd2(HEX, 31),
+    "SK" + rnd2(HEX, 32).upper(),
+    "TWILIO_ACCOUNT_SID=AC" + rnd2(HEX, 32),
+    "MG" + rnd2(HEX, 32),
+])
+for _ in range(34):
+    neg2("twilio_api_key", [f"{R2.choice(['AC', 'PN', 'MG', 'CA', 'SM'])}{rnd2(HEX, 32)} status=delivered"])
+
+# sendgrid_key
+for i in range(40):
+    pos2("sendgrid_key", f"SG.{rnd2(ALNUM + '-_', 22)}.{rnd2(ALNUM + '-_', 43)}", "SendGrid API key", "sendgrid_api_key", i)
+neg2("sendgrid_key", [
+    "SG.xxxxx.yyyyy",
+    "SENDGRID_API_KEY=SG.your-key-here",
+    f"SG.{rnd2(ALNUM, 22)}.{rnd2(ALNUM, 20)}",
+    "Keys look like SG.<22 characters>.<43 characters>.",
+    "Singapore is SG.",
+])
+for _ in range(35):
+    neg2("sendgrid_key", [f"version SG.{R2.randint(1, 9)}.{R2.randint(0, 99)} build {rnd2(HEX, 12)}"])
+
+# openai_project_key: project, service account and admin keys (v1 rows with sk-proj- were relabelled above).
+for i in range(30):
+    prefix = R2.choice(["sk-proj-", "sk-svcacct-", "sk-admin-"])
+    pos2("openai_project_key", prefix + rnd2(ALNUM + "-_", R2.choice([48, 74, 156])), "OpenAI key", "openai_api_key", i)
+neg2("openai_project_key", [
+    "sk-proj-...",
+    "sk-proj-YOUR_KEY",
+    "OPENAI_API_KEY=sk-proj-${KEY}",
+    "Project keys start with sk-proj- and service accounts with sk-svcacct-.",
+    "https://platform.openai.com/settings/proj_" + rnd2(ALNUM, 24) + "/api-keys",
+    "sk-admin-",
+])
+for _ in range(34):
+    neg2("openai_project_key", [f"proj_{rnd2(ALNUM, 24)} org-{rnd2(ALNUM, 24)} user-{rnd2(ALNUM, 24)}"])
+
+# anthropic_key
+for i in range(30):
+    prefix = R2.choice(["sk-ant-api03-", "sk-ant-admin01-"])
+    pos2("anthropic_key", prefix + rnd2(ALNUM + "-_", 93) + "AA", "Anthropic key", "anthropic_api_key", i)
+neg2("anthropic_key", [
+    "sk-ant-...",
+    "sk-ant-api03-YOUR-KEY",
+    "ANTHROPIC_API_KEY=sk-ant-${KEY}",
+    "Anthropic keys start with sk-ant-api03-.",
+    "sk-ant-admin01-",
+    "x-api-key: $ANTHROPIC_API_KEY",
+])
+for _ in range(34):
+    neg2("anthropic_key", [f"msg_{rnd2(ALNUM, 24)} req_{rnd2(ALNUM, 24)} toolu_{rnd2(ALNUM, 24)}"])
+
+# api_key: more generic sk- keys, so the kind keeps 40 positives once project and Anthropic keys have their own.
+for i in range(20):
+    key = R2.choice([f"sk-{rnd2(ALNUM, 48)}", f"sk-{rnd2(HEX, 32)}", f"sk-or-v1-{rnd2(HEX, 64)}"])
+    pos2("api_key", key, "API key", "api_key", i)
+
+# database_url: a URL with a password; placeholders and password-less URLs are not secrets.
+schemes = ["postgres", "postgresql", "mysql", "mariadb", "mongodb", "mongodb+srv", "redis", "rediss", "amqp", "amqps"]
+for i in range(40):
+    scheme = schemes[i % len(schemes)]
+    user = R2.choice(["app", "svc_orders", "admin", "root", "reporting", ""])
+    pw = rnd2(ALNUM + "-._~", R2.randint(10, 32))
+    host = R2.choice(["db.internal", "10.0.3.12", f"{rnd2(LOWER, 8)}.rds.amazonaws.com", "cluster0.example.net"])
+    port = {"postgres": 5432, "postgresql": 5432, "mysql": 3306, "mariadb": 3306, "redis": 6379, "rediss": 6380,
+            "amqp": 5672, "amqps": 5671}.get(scheme)
+    url = f"{scheme}://{user}:{pw}@{host}" + (f":{port}" if port else "") + "/app"
+    pos2("database_url", url, "database URL", "database_url", i)
+neg2("database_url", [
+    "postgres://app@db.internal:5432/app",
+    "postgres://db.internal/app",
+    "postgres://app:${DB_PASSWORD}@db.internal/app",
+    "mysql://root:password@localhost/test",
+    "postgresql://user:<password>@host:5432/db",
+    "mongodb+srv://svc:****@cluster0.example.net/prod",
+    "redis://:${REDIS_PASSWORD}@cache:6379/0",
+    "DATABASE_URL=postgres://$PGUSER:$PGPASSWORD@$PGHOST/app",
+    "amqp://guest:xxx@localhost:5672/",
+    "jdbc:postgresql://db.internal:5432/app?user=app",
+    "Use the form postgres://user:pass@host/db.",
+    "https://admin:changeme@grafana.example.com",
+])
+for _ in range(28):
+    neg2("database_url", [f"{R2.choice(schemes)}://{R2.choice(['db.internal', 'cache', 'mq'])}:{R2.randint(1000, 9999)}/{rnd2(LOWER, 5)}"])
+
+HEADER2 = [h.replace("gantry-detectors-v1", "gantry-detectors-v2") for h in HEADER]
+HEADER2.insert(1, "# v2 is v1 with sk-proj- and sk-ant- keys labelled openai_project_key and anthropic_key, plus the cloud and")
+HEADER2.insert(2, "# service key kinds v2 added (GCP, Azure, Stripe, Twilio, SendGrid, database URLs). Every key is random.")
+with OUT2.open("w", encoding="utf-8") as fh:
+    fh.write("\n".join(HEADER2) + "\n")
+    for i, row in enumerate(rows2, 1):
+        fh.write(json.dumps({"id": i, **row}, ensure_ascii=False) + "\n")
+print(f"wrote {len(rows2)} lines to {OUT2}")

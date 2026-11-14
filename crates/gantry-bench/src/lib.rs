@@ -128,6 +128,7 @@ fn bench_policy() -> Policy {
         action: Action::Block,
         check: Check::Secrets,
         on: gantry_core::guard::On::REQUEST,
+        shadow_until: None,
     }])
 }
 

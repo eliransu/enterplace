@@ -11,19 +11,28 @@ use serde_json::Value;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
-const CORPUS: &str = "gantry-detectors-v1";
+const CORPUS: &str = "gantry-detectors-v2";
 const START: &str = "{/* detector-corpus-table:start */}";
 const END: &str = "{/* detector-corpus-table:end */}";
 
 /// Every kind, in the order the docs list them, with its detector.
-const KINDS: [(&str, &str); 15] = [
+const KINDS: [(&str, &str); 24] = [
     ("private_key", "secrets"),
     ("aws_access_key", "secrets"),
     ("github_token", "secrets"),
     ("slack_token", "secrets"),
     ("gantry_key", "secrets"),
     ("jwt", "secrets"),
+    ("gcp_service_account_key", "secrets"),
+    ("gcp_api_key", "secrets"),
+    ("azure_connection_string", "secrets"),
+    ("stripe_key", "secrets"),
+    ("twilio_api_key", "secrets"),
+    ("sendgrid_key", "secrets"),
+    ("openai_project_key", "secrets"),
+    ("anthropic_key", "secrets"),
     ("api_key", "secrets"),
+    ("database_url", "secrets"),
     ("email_address", "pii"),
     ("phone_number", "pii"),
     ("credit_card", "pii"),
@@ -34,16 +43,26 @@ const KINDS: [(&str, &str); 15] = [
     ("date_of_birth", "pii"),
 ];
 
-/// The lowest precision and recall (in percent) each kind may score on this corpus: the v1 measurement, rounded down
-/// to the next whole percent. A change that loses ground fails here even if the docs table is rewritten with it.
-const FLOORS: [(&str, f64, f64); 15] = [
+/// The lowest precision and recall (in percent) each kind may score on this corpus: the v1 measurement for the v1
+/// kinds, and the v2 measurement for the kinds v2 added, each rounded down to the next whole percent. A change that
+/// loses ground fails here even if the docs table is rewritten with it.
+const FLOORS: [(&str, f64, f64); 24] = [
     ("private_key", 100.0, 100.0),
     ("aws_access_key", 100.0, 100.0),
     ("github_token", 100.0, 100.0),
     ("slack_token", 97.0, 100.0),
     ("gantry_key", 100.0, 100.0),
     ("jwt", 100.0, 100.0),
+    ("gcp_service_account_key", 100.0, 100.0),
+    ("gcp_api_key", 100.0, 100.0),
+    ("azure_connection_string", 100.0, 100.0),
+    ("stripe_key", 100.0, 100.0),
+    ("twilio_api_key", 100.0, 100.0),
+    ("sendgrid_key", 100.0, 100.0),
+    ("openai_project_key", 100.0, 100.0),
+    ("anthropic_key", 100.0, 100.0),
     ("api_key", 95.0, 100.0),
+    ("database_url", 100.0, 100.0),
     ("email_address", 86.0, 100.0),
     ("phone_number", 80.0, 90.0),
     ("credit_card", 94.0, 100.0),
@@ -116,13 +135,13 @@ fn measure() -> Result<BTreeMap<&'static str, Score>, Box<dyn Error>> {
             role: "user".into(),
             text: text.into(),
         }];
-        let mut found: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut found: BTreeMap<String, usize> = BTreeMap::new();
         for finding in scan(&parts)? {
-            *found.entry(finding.kind).or_default() += 1;
+            *found.entry(finding.kind.to_string()).or_default() += 1;
         }
         for (kind, score) in scores.iter_mut() {
             let want = expected.get(kind).copied().unwrap_or(0);
-            let got = found.get(kind).copied().unwrap_or(0);
+            let got = found.get(*kind).copied().unwrap_or(0);
             let hit = want.min(got);
             score.positives += want;
             score.negatives += usize::from(target == *kind && want == 0);
@@ -133,7 +152,7 @@ fn measure() -> Result<BTreeMap<&'static str, Score>, Box<dyn Error>> {
                 misses.push(format!("line {id}: {kind} expected {want}, found {got}"));
             }
         }
-        if let Some(kind) = found.keys().find(|k| !scores.contains_key(*k)) {
+        if let Some(kind) = found.keys().find(|k| !scores.contains_key(k.as_str())) {
             return Err(format!(
                 "the detectors report kind {kind}, which this test does not know. Add it to KINDS."
             )

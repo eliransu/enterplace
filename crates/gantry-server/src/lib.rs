@@ -565,7 +565,8 @@ fn build(
             .route("/admin/keys/{prefix}", any(admin::handle))
             .route("/admin/kills", any(admin::handle))
             .route("/admin/credentials", any(admin::handle))
-            .route("/admin/credentials/{name}", any(admin::handle));
+            .route("/admin/credentials/{name}", any(admin::handle))
+            .route("/admin/guardrails/test", any(admin::handle));
     }
     let mcp = mcp::router(&state, config.mcp)?;
     let router = router.fallback(handle).with_state(state);

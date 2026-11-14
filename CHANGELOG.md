@@ -7,6 +7,19 @@ same version. How a release is made: RELEASING.md in the gantry-enterprise repos
 
 ## [Unreleased]
 
+### Guardrails
+
+- `type: regex` and `type: keywords` guardrails: the policy's own RE2 patterns and word or phrase lists (case and
+  whole-word options), each entry named so findings, refusals and masks say which one matched; block, mask or warn,
+  on requests, answers or both.
+- `shadow_until` on any guardrail: until that UTC date it records `action: shadow` and enforces nothing.
+- `gantry guardrail test <name> --corpus <file>` and `POST /admin/guardrails/test`: a backtest of a guardrail over
+  examples before it goes live, with hits, kinds, masked sample spans, and precision and recall on labelled examples.
+- Nine more secrets kinds: `gcp_service_account_key`, `gcp_api_key`, `azure_connection_string`, `stripe_key`,
+  `twilio_api_key`, `sendgrid_key`, `openai_project_key`, `anthropic_key` and `database_url`, measured on the new
+  `gantry-detectors-v2` corpus. A URL's login part is no longer reported as an email address.
+- `type: model_armor`: Google Cloud Model Armor through sanitizeUserPrompt and sanitizeModelResponse.
+
 ## [0.1.0] - Unreleased
 
 The first tagged release: a governed AI gateway in one static binary. Every request carries a person's or workload's

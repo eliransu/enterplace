@@ -98,6 +98,10 @@ const KNOWN: &[&str] = &[
     "threshold",
     "anonymizer_url",
     "project_id",
+    "template_id",
+    "case_sensitive",
+    "whole_word",
+    "shadow_until",
     // An alias's deployments sit under `deployments`, a free map, so provider, model and weight are not listed: as
     // known words they would be the nearest match for a misspelled "models".
     "aliases",
@@ -115,7 +119,14 @@ const KNOWN: &[&str] = &[
 ];
 /// Keys whose value is a map whose keys the user chooses: model names, or header names under `headers_env`.
 /// Those names are not Gantry keys, so the unknown-key scan never reads them.
-const FREE_MAPS: &[&str] = &["deployments", "model_ids", "headers_env"];
+/// A regex guardrail's `patterns` and a keywords guardrail's `keywords` are maps of entry names the user chooses.
+const FREE_MAPS: &[&str] = &[
+    "deployments",
+    "model_ids",
+    "headers_env",
+    "patterns",
+    "keywords",
+];
 /// The most retries a provider may ask for. Each one can wait the whole first-byte timeout.
 pub const MAX_RETRIES: u32 = 5;
 

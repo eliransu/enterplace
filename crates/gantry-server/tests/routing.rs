@@ -517,6 +517,7 @@ async fn images_are_charged_by_the_image_and_their_prompt_is_guarded() -> TestRe
             action: Action::Mask,
             check: Check::Pii,
             on: gantry_core::guard::On::REQUEST,
+            shadow_until: None,
         }])
         .with_limits(Limits {
             budget: Some(Budget {
@@ -570,6 +571,7 @@ async fn a_transcription_form_is_decided_on_its_model_field_and_forwarded_as_sen
             action: Action::Block,
             check: Check::Secrets,
             on: gantry_core::guard::On::REQUEST,
+            shadow_until: None,
         }]);
     let gw = gateway(
         "audio",
@@ -636,6 +638,7 @@ async fn speech_moderations_and_rerank_are_governed_and_forwarded() -> TestResul
         action: Action::Mask,
         check: Check::Pii,
         on: gantry_core::guard::On::REQUEST,
+        shadow_until: None,
     }]);
     let gw = gateway(
         "speech",
@@ -873,6 +876,7 @@ async fn guardrails_read_every_documented_text_shape_of_the_newer_routes() -> Te
         action: Action::Block,
         check: Check::Secrets,
         on: gantry_core::guard::On::REQUEST,
+        shadow_until: None,
     }]);
     let gw = gateway(
         "text-shapes",
@@ -963,6 +967,7 @@ async fn a_masking_guardrail_rewrites_a_transcription_prompt_in_place() -> TestR
         action: Action::Mask,
         check: Check::Pii,
         on: gantry_core::guard::On::REQUEST,
+        shadow_until: None,
     }]);
     let gw = gateway(
         "form-mask",
