@@ -988,18 +988,21 @@ async fn prepare<'a>(
     let op = op(&parts.method, parts.uri.path()).ok_or_else(unknown_batch_route)?;
     // A file or batch Gantry keeps for a region-labelled Bedrock or Vertex AI deployment shows its region, and is
     // checked where it is resolved. The rest are kept at one provider account, with no region Gantry can show.
-    let cloud_capable = matches!(
-        op,
-        Op::FileUpload
-            | Op::FileList
-            | Op::File(_)
-            | Op::FileContent(_)
-            | Op::FileDelete(_)
-            | Op::BatchCreate
-            | Op::BatchList
-            | Op::Batch(_)
-            | Op::BatchCancel(_)
-    );
+    let kept_lists = version
+        .providers
+        .iter()
+        .any(|p| crate::cloud_batch::is_cloud(p) && p.batch.is_some());
+    let cloud_capable = (kept_lists && matches!(op, Op::FileList | Op::BatchList))
+        || matches!(
+            op,
+            Op::FileUpload
+                | Op::File(_)
+                | Op::FileContent(_)
+                | Op::FileDelete(_)
+                | Op::BatchCreate
+                | Op::Batch(_)
+                | Op::BatchCancel(_)
+        );
     if let Some(regions) = rule.limits.regions.as_ref().filter(|_| !cloud_capable) {
         crate::enforce(
             seen,
