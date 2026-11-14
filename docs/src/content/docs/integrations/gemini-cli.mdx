@@ -1,54 +1,106 @@
 ---
 title: Gemini CLI
-description: What Gemini CLI sends when pointed at Gantry, and why Gantry refuses it until it serves Google's native API.
+description: Send Gemini CLI through Gantry on Google's own Gemini API, with every request checked, metered and recorded.
 sidebar:
   order: 11
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gemini CLI speaks Google's native Gemini API only. Gantry does not serve that API inbound, so Gemini CLI cannot use Gantry yet. Every request it sends is refused and recorded.
+Gemini CLI speaks Google's Gemini API. Gantry serves that API on `/v1beta/models/<model>:<method>`, so Gemini CLI goes through Gantry with two environment variables. Each request is checked against your policy, guarded, metered and recorded like a chat completions request.
 
-## What Gemini CLI sends
+## Setup
 
-Gemini CLI's only base URL setting is the environment variable `GOOGLE_GEMINI_BASE_URL`, used with Gemini API key auth:
+Point Gemini CLI at Gantry and give it your Gantry key as its Gemini API key:
 
 ```bash
-export GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8080
+export GOOGLE_GEMINI_BASE_URL=https://gantry.example.com   # or http://127.0.0.1:8080 on this machine
 export GEMINI_API_KEY=gantry_...
 gemini
 ```
+
+Gemini CLI takes `http://` only for `localhost`, `127.0.0.1` and `[::1]`; any other Gantry must be on HTTPS. With `GOOGLE_GEMINI_BASE_URL` set, Gemini CLI uses its gateway sign-in and sends the key in `x-goog-api-key`. To set the sign-in in settings instead:
 
 ```json title="~/.gemini/settings.json"
 { "security": { "auth": { "selectedType": "gemini-api-key" } } }
 ```
 
-With this, Gemini CLI sends `POST /v1beta/models/<model>:streamGenerateContent` with the key in `x-goog-api-key`. Gantry has no such route and does not read a key from `x-goog-api-key`, so the request is refused with `no_key` before any provider is chosen:
+On the Gantry side, the models Gemini CLI asks for must be on a provider of `kind: gemini` or `kind: vertex`, or be an alias whose deployments are there, and the caller's rule must allow them:
 
-```text
-/v1beta/models/gemini-2.5-pro:streamGenerateContent refused no_key  user_agent GeminiCLI-tui/0.68.0/...
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: gemini
+    kind: gemini
+    url: https://generativelanguage.googleapis.com
+    key_env: GEMINI_PROVIDER_KEY
+    models: [gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite]
+rules:
+  - name: engineering
+    principals: { team: eng }
+    models: [gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite]
 ```
 
-Gemini CLI shows this as a 401 error.
+Gemini CLI picks its model with `-m` or `/model`. A model the rule does not allow is refused with `model_not_allowed`, and Gemini CLI shows the refusal with the allowed models.
 
-## What is missing in Gantry
+## What Gantry serves
 
-- An inbound route for `generateContent` and `streamGenerateContent`, with the model checked against the policy and usage read from the answer. Gantry already translates chat completions to Google's format outbound, to `gemini` and `vertex` providers.
-- `x-goog-api-key` as a place for the Gantry key, with the same check as `Authorization` and `x-api-key`.
+| Route | What it does |
+|---|---|
+| `POST /v1beta/models/<model>:generateContent` | One answer |
+| `POST /v1beta/models/<model>:streamGenerateContent?alt=sse` | Server-sent events, as Gemini CLI asks |
+| `POST /v1beta/models/<model>:streamGenerateContent` | The same stream as one JSON array, as Google sends it without `alt=sse` |
+| `POST /v1beta/models/<model>:countTokens` | Free: never counted against a budget |
+| `POST /v1beta/models/<model>:embedContent` and `:batchEmbedContents` | Embeddings |
+| `GET /v1beta/models` and `GET /v1beta/models/<model>` | Only the models the caller's rule (and key) allow |
 
-Both are open items on the [Project status](/getting-started/status/) page. Until they land, use a client that speaks OpenAI's or Anthropic's API for Gemini models: [Qwen Code](/integrations/qwen-code/), [OpenCode](/integrations/opencode/) or Claude Code with `accept_messages` on a `gemini` provider ([Translation](/routing/translation/)).
+The `/v1/models/<model>:<method>` forms work too. The key is read from `x-goog-api-key`, from `?key=`, or from `Authorization: Bearer`, exactly one of them. A key in the query is taken out before anything else sees the request: it is never forwarded, traced or written to the audit log.
 
-## What Gantry would not see
+## What applies
 
-Even with the route in place, Gantry would not see Google sign-in (not used with a key), usage statistics (`privacy.usageStatisticsEnabled`, on by default) or telemetry sent to an OTLP endpoint of your own. Gemini CLI's docs do not say whether its web search and URL fetch tools use the base URL.
+Everything a chat completions request gets:
+
+- The rule's decision on the model in the path, aliases, kill switches, observe mode and regions.
+- Guardrails on the request's text: `contents`, `systemInstruction`, tool calls and tool results (`functionCall.args`, `functionResponse.response`), and the embedding methods' `content`. A mask is written back where the text was.
+- Guardrails on the answer's text, whole or streamed (`buffer_stream` or `check_stream_every`). A stream a guardrail stops ends with an error event in Google's shape.
+- Budgets, rate and parallel limits, with usage read from `usageMetadata`. The output limit is `generationConfig.maxOutputTokens`. A whole `generateContent` answer can be cached; a stream and `countTokens` never are.
+- A decision record with the caller's user agent (`GeminiCLI/<version>/<model> ...`), and a usage record.
+
+The body goes to the provider as sent: a field Gantry does not know passes through untouched. A body that names a model other than the path's is refused with `ambiguous_model`. Refusals come back in Google's error shape (`{"error": {"code": 403, "status": "PERMISSION_DENIED", ...}}`) with Gantry's code as the reason and the decision ID in the message.
+
+## Run it locally
+
+This is how the setup was checked, with Gemini CLI 0.68.0 and a mock of the Gemini API on port 9701 (any server that answers `streamGenerateContent` with an event will do). With `allow_private: true` on the provider so Gantry may reach the mock:
+
+```bash
+gantry key new dana --team eng --keys gantry.keys.yaml
+MOCK_GEMINI_KEY=mock-key gantry serve gantry.policy.yaml --keys gantry.keys.yaml --listen 127.0.0.1:9700
+
+GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:9700 GEMINI_API_KEY=gantry_... GEMINI_CLI_TRUST_WORKSPACE=true \
+  npx @google/gemini-cli -m gemini-2.5-flash -p "Say hello"
+```
+
+Gemini CLI printed the mock's answer. The audit log held one allowed decision and its usage:
+
+```text
+POST /v1beta/models/gemini-2.5-flash:streamGenerateContent  allow  rule everyone  provider gemini
+  user_agent GeminiCLI-tui/0.68.0/gemini-2.5-flash (darwin; arm64; terminal)
+usage  input_tokens 12  output_tokens 5  ended complete
+```
+
+With `-m gemini-1.5-pro`, which the rule does not allow, Gemini CLI showed `Refused (model_not_allowed): ...` with status 403, and nothing reached the mock.
+
+## What Gantry does not see
+
+Google sign-in (not used with a key), usage statistics (`privacy.usageStatisticsEnabled`, on by default, sent to Google) and telemetry sent to an OTLP endpoint of your own do not go through the base URL. Gemini CLI's docs do not say whether its web search and URL fetch tools use it.
 
 <Aside type="note">
-This follows Gemini CLI's configuration and authentication documentation. It was run headless (`gemini -p`) against a local Gantry: the refusal above is from that run. Google has replaced Gemini CLI with Antigravity CLI for free-tier users.
+Google has replaced Gemini CLI with Antigravity CLI for free-tier users. Gemini CLI with an API key, as here, still works.
 </Aside>
 
 ## Related
 
 <CardGrid>
 	<LinkCard title="Gemini provider" href="/providers/gemini/" description="Gantry sending to Google's Gemini API." />
-	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="no_key and every other code." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="model_not_allowed and every other code." />
 </CardGrid>

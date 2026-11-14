@@ -102,6 +102,42 @@ const COMPLETIONS: &str = "/v1/completions";
 /// `/passthrough/<provider>/<native path>`: a provider's own API, reached as sent on the paths a rule names.
 const PASSTHROUGH: &str = "/passthrough/";
 
+/// Google's own Gemini API, as Gemini CLI and Google's SDKs send it: `/v1beta/models/<model>:<method>` (or `/v1/`),
+/// forwarded as sent to providers of kind gemini or vertex. `GET` of this path lists the models a caller may use.
+const GEMINI_MODELS: &str = "/v1beta/models";
+const GEMINI_METHODS: [&str; 5] = [
+    "generateContent",
+    "streamGenerateContent",
+    "countTokens",
+    "embedContent",
+    "batchEmbedContents",
+];
+
+/// A native Gemini path's API version, model and method. A model with a slash or an escape is not one: it could
+/// name another resource at the provider than the one the policy checked.
+pub(crate) fn gemini_native(path: &str) -> Option<(&'static str, &str, &'static str)> {
+    let (version, rest) = ["v1beta", "v1"].into_iter().find_map(|version| {
+        let rest = path
+            .strip_prefix('/')?
+            .strip_prefix(version)?
+            .strip_prefix("/models/")?;
+        Some((version, rest))
+    })?;
+    let (model, method) = rest.rsplit_once(':')?;
+    let method = GEMINI_METHODS.into_iter().find(|m| *m == method)?;
+    (!model.is_empty() && !model.contains(['/', '%', ':'])).then_some((version, model, method))
+}
+
+/// Any path of Google's Gemini API Gantry serves: the methods and the model list. Its key may come in
+/// `x-goog-api-key` or `?key=`, and its refusals are in Google's shape.
+pub(crate) fn gemini_path(path: &str) -> bool {
+    path == GEMINI_MODELS || path.starts_with("/v1beta/models/") || gemini_native(path).is_some()
+}
+
+fn gemini_streams(path: &str) -> bool {
+    gemini_native(path).is_some_and(|(_, _, method)| method == "streamGenerateContent")
+}
+
 /// The routes forwarded as sent, to providers of kind openai only.
 fn openai_only(path: &str) -> bool {
     matches!(
@@ -125,6 +161,7 @@ fn route_kind(method: &Method, path: &str) -> Option<Kind> {
         CHAT => Some(Kind::OpenAi),
         _ if openai_only(path) => Some(Kind::OpenAi),
         MESSAGES | COUNT_TOKENS => Some(Kind::Anthropic),
+        _ if gemini_native(path).is_some() => Some(Kind::Gemini),
         _ => None,
     }
 }
@@ -144,6 +181,12 @@ fn allowed_query(path: &str) -> &'static [Param] {
             v.len() <= 4
                 && v.bytes().all(|b| b.is_ascii_digit())
                 && v.parse::<u16>().is_ok_and(|n| (1..=1000).contains(&n))
+        })],
+        // Google's SDKs ask for server-sent events; without alt=sse the stream is a JSON array (see `handle`).
+        _ if gemini_streams(path) => &[("alt", "sse", |v| v == "sse")],
+        // Gantry lists every model at once, so a page size is taken and has nothing to cut.
+        GEMINI_MODELS => &[("pageSize", "a whole number from 1 to 1000", |v| {
+            v.len() <= 4 && v.parse::<u16>().is_ok_and(|n| (1..=1000).contains(&n))
         })],
         _ => &[],
     }
@@ -911,10 +954,7 @@ impl Refusal {
     /// The response, in the shape the caller's client already knows how to show: Anthropic's on the messages
     /// routes, OpenAI's everywhere else. The decision ID is inside the message because most clients show only that.
     fn respond(self, decision: &str, anthropic: bool) -> Response {
-        let message = match self.message.strip_prefix("Refused: ") {
-            Some(rest) => format!("Refused ({}): {rest} Decision {decision}.", self.code),
-            None => format!("{} Decision {decision}.", self.message),
-        };
+        let message = self.shown(decision);
         let body = if anthropic {
             serde_json::json!({
                 "type": "error",
@@ -925,6 +965,23 @@ impl Refusal {
         } else {
             serde_json::json!({ "error": { "message": message, "type": "gantry_error", "code": self.code, "decision": decision } })
         };
+        self.with_body(body)
+    }
+
+    fn shown(&self, decision: &str) -> String {
+        match self.message.strip_prefix("Refused: ") {
+            Some(rest) => format!("Refused ({}): {rest} Decision {decision}.", self.code),
+            None => format!("{} Decision {decision}.", self.message),
+        }
+    }
+
+    /// The response in Google's error shape, for Gemini CLI and Google's SDKs on the Gemini API's routes.
+    fn respond_gemini(self, decision: &str) -> Response {
+        let body = gemini_error(self.status, self.code, &self.shown(decision), decision);
+        self.with_body(body)
+    }
+
+    fn with_body(self, body: serde_json::Value) -> Response {
         let mut response = (
             self.status,
             [(header::CONTENT_TYPE, "application/json")],
@@ -945,6 +1002,36 @@ impl Refusal {
         );
         response
     }
+}
+
+/// An error as Google's APIs send one: the HTTP status as a number, its gRPC name, and Gantry's code as the reason.
+fn gemini_error(
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    decision: &str,
+) -> serde_json::Value {
+    let name = match status.as_u16() {
+        400 | 413 => "INVALID_ARGUMENT",
+        401 => "UNAUTHENTICATED",
+        403 => "PERMISSION_DENIED",
+        404 => "NOT_FOUND",
+        429 => "RESOURCE_EXHAUSTED",
+        503 => "UNAVAILABLE",
+        504 => "DEADLINE_EXCEEDED",
+        _ => "INTERNAL",
+    };
+    serde_json::json!({ "error": {
+        "code": status.as_u16(),
+        "message": message,
+        "status": name,
+        "details": [{
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": code,
+            "domain": "gantry",
+            "metadata": { "decision": decision },
+        }],
+    }})
 }
 
 /// The error type Anthropic's clients expect for each Gantry code. Fixed, so a client can rely on it.
@@ -1096,6 +1183,69 @@ fn caller_key(headers: &HeaderMap) -> Result<&str, Refusal> {
         (Some(key), _) | (None, Some(key)) if !key.is_empty() => Ok(key),
         _ => Err(no_key()),
     }
+}
+
+/// On the Gemini API's routes, Google's SDKs (Gemini CLI among them) send the key in `x-goog-api-key` or `?key=`.
+/// It is moved to the Authorization header, where the rest of the check reads it, and taken out of the query, so the
+/// query that is forwarded, traced or shown never holds it. More than one key, or one beside another credential,
+/// is refused: checking one and forwarding another is how a proxy gets bypassed.
+fn gemini_key(parts: &mut Parts) -> Result<(), Refusal> {
+    const GOOG: &str = "x-goog-api-key";
+    if !gemini_path(parts.uri.path()) {
+        return Ok(());
+    }
+    let ambiguous = || {
+        Refusal::new(
+            StatusCode::BAD_REQUEST,
+            "ambiguous_key",
+            "Refused: this request carries more than one credential. Send exactly one: your Gantry key, in x-goog-api-key (GEMINI_API_KEY in Gemini CLI), in ?key= or as a Bearer token.",
+        )
+    };
+    let mut found: Vec<String> = parts
+        .headers
+        .get_all(GOOG)
+        .iter()
+        .map(|v| String::from_utf8_lossy(v.as_bytes()).trim().to_string())
+        .collect();
+    let mut kept = Vec::new();
+    let query = parts.uri.query().unwrap_or_default();
+    for pair in query.split('&').filter(|p| !p.is_empty()) {
+        match pair.split_once('=') {
+            Some(("key", value)) => found.push(value.trim().to_string()),
+            _ if pair == "key" => found.push(String::new()),
+            _ => kept.push(pair),
+        }
+    }
+    if found.is_empty() {
+        return Ok(());
+    }
+    if parts.uri.query().is_some() {
+        let path = parts.uri.path();
+        let rebuilt = if kept.is_empty() {
+            path.to_string()
+        } else {
+            format!("{path}?{}", kept.join("&"))
+        };
+        parts.uri = rebuilt.parse().map_err(|_| unknown_route())?;
+    }
+    parts.headers.remove(GOOG);
+    let key = found.swap_remove(0);
+    if !found.is_empty()
+        || parts.headers.contains_key(header::AUTHORIZATION)
+        || parts.headers.contains_key("x-api-key")
+    {
+        return Err(ambiguous());
+    }
+    let mut value = HeaderValue::from_str(&format!("Bearer {key}")).map_err(|_| {
+        Refusal::new(
+            StatusCode::UNAUTHORIZED,
+            "no_key",
+            "Refused: the Gemini API key holds characters a Gantry key never has. Set GEMINI_API_KEY to your Gantry key alone.",
+        )
+    })?;
+    value.set_sensitive(true);
+    parts.headers.insert(header::AUTHORIZATION, value);
+    Ok(())
 }
 
 /// Reads a request body into memory, within the size limit, the time limit and the memory budget.
@@ -1497,7 +1647,8 @@ async fn check<'a>(
     minted: &'a std::sync::OnceLock<Principal>,
     client_ip: Option<std::net::IpAddr>,
 ) -> Result<Next, Refusal> {
-    let (parts, body) = request.into_parts();
+    let (mut parts, body) = request.into_parts();
+    gemini_key(&mut parts)?;
     let key = caller_key(&parts.headers)?;
     let provider_key = caller_provider_key(&parts.headers)?;
     seen.credential = Some(key.to_string());
@@ -1552,7 +1703,9 @@ async fn check<'a>(
             parts.headers.remove(name);
         }
     }
-    if parts.method == Method::GET && parts.uri.path() == MODELS {
+    let listing = parts.uri.path() == MODELS
+        || (gemini_path(parts.uri.path()) && gemini_native(parts.uri.path()).is_none());
+    if parts.method == Method::GET && listing {
         check_query(&parts.uri)?;
         // In observe mode a caller no rule names lists what observe mode would forward: every model.
         seen.rule = policy.rule_for(person).or_else(|| {
@@ -1561,6 +1714,10 @@ async fn check<'a>(
                 .map(|_| &*gantry_core::policy::OBSERVED)
         });
         caller_paid(seen.rule, None, provider_key.as_deref())?;
+        if parts.uri.path() != MODELS {
+            return gemini_model_list(version, seen.rule, person, parts.uri.path())
+                .map(Next::Answer);
+        }
         return Ok(Next::Answer(model_list(
             version,
             seen.rule,
@@ -1605,7 +1762,14 @@ async fn check<'a>(
         ));
     }
     let (bytes, permit) = read_body(Some(&person.name), state, &parts.headers, body).await?;
-    let peek = if parts.uri.path() == TRANSCRIPTIONS {
+    let peek = if let Some((_, model, _)) = gemini_native(parts.uri.path()) {
+        // The model is in the path. One named in the body as well must be the same, or the policy would check one
+        // model while the provider runs another.
+        gemini_body_model(&bytes, model)?;
+        Peek {
+            model: model.to_string(),
+        }
+    } else if parts.uri.path() == TRANSCRIPTIONS {
         form_model(&parts.headers, &bytes)?
     } else {
         serde_json::from_slice(&bytes).map_err(|_| {
@@ -2222,7 +2386,7 @@ fn unknown_route() -> Refusal {
     Refusal::new(
         StatusCode::NOT_FOUND,
         "unknown_route",
-        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/completions, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models, GET /healthz and GET /readyz. Check the method and the path.",
+        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/completions, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models, Google's Gemini API (POST /v1beta/models/<model>:generateContent, :streamGenerateContent, :countTokens, :embedContent, :batchEmbedContents, and GET /v1beta/models), GET /healthz and GET /readyz. Check the method and the path.",
     )
 }
 
@@ -2521,6 +2685,20 @@ fn provider_for(
 
 /// Whether this provider can take a request on `route` and `path`, and if so whether it is translated.
 fn fits(provider: &Upstream, route: Kind, path: &str, model: &str) -> Result<bool, Refusal> {
+    if gemini_native(path).is_some() {
+        if provider.kind.google() {
+            return Ok(false);
+        }
+        return Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            "wrong_route",
+            format!(
+                "Refused: model \"{model}\" is served by provider \"{}\" of kind {}, and Gantry sends Google's Gemini API ({path}) to providers of kind gemini or vertex only. Use a model on one of those, or send this request to {CHAT} instead.",
+                provider.name,
+                provider.kind.word()
+            ),
+        ));
+    }
     if provider.kind.api() == route {
         if matches!(provider.kind, Kind::Bedrock | Kind::VertexAnthropic) && path == COUNT_TOKENS {
             return Err(Refusal::new(
@@ -2685,6 +2863,104 @@ fn model_list(
         .into_response()
 }
 
+/// Refuses a Gemini API body that is not a JSON object, or that names a model other than the one in the path, at the
+/// top or in countTokens' generateContentRequest.
+fn gemini_body_model(bytes: &[u8], model: &str) -> Result<(), Refusal> {
+    let body: serde_json::Value = serde_json::from_slice(bytes).unwrap_or_default();
+    if !body.is_object() {
+        return Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            "unreadable_request",
+            "Refused: the request body must be a JSON object, as Google's Gemini API takes it, so the policy and guardrails can read it.",
+        ));
+    }
+    for named in [&body["model"], &body["generateContentRequest"]["model"]] {
+        let Some(named) = named.as_str() else {
+            continue;
+        };
+        if named != model && named.strip_prefix("models/") != Some(model) {
+            return Err(Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "ambiguous_model",
+                format!(
+                    "Refused: the path names model \"{model}\" and the body names \"{named}\". Name one model: remove it from the body, or make the two the same."
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The models this caller may use on Google's Gemini API, as its `models.list` (or `models.get`, for a path that
+/// names one) answers: those of gemini and vertex providers, and aliases whose deployments are there, that the
+/// rule (and the key's own list) allows.
+fn gemini_model_list(
+    version: &Snapshot,
+    rule: Option<&Rule>,
+    person: &Principal,
+    path: &str,
+) -> Result<Response, Refusal> {
+    let allowed = |model: &str| {
+        rule.is_some_and(|rule| rule.allows(model))
+            && person
+                .models
+                .as_ref()
+                .is_none_or(|m| m.iter().any(|k| k == model))
+    };
+    let google = |name: &str| {
+        version
+            .providers
+            .iter()
+            .any(|p| p.name == name && p.kind.google())
+    };
+    let mut models: Vec<&String> = version
+        .providers
+        .iter()
+        .filter(|p| p.kind.google())
+        .flat_map(|p| p.models.iter())
+        .chain(
+            version
+                .aliases
+                .iter()
+                .filter(|a| a.deployments.first().is_some_and(|d| google(&d.provider)))
+                .map(|a| &a.name),
+        )
+        .filter(|model| allowed(model))
+        .collect();
+    models.dedup();
+    let entry = |model: &str| {
+        serde_json::json!({
+            "name": format!("models/{model}"),
+            "displayName": model,
+            "description": rule.map(|r| format!("Allowed by Gantry rule \"{}\"", r.name)),
+            "supportedGenerationMethods": GEMINI_METHODS,
+        })
+    };
+    let body = match path.strip_prefix("/v1beta/models/") {
+        None => {
+            serde_json::json!({ "models": models.iter().map(|m| entry(m)).collect::<Vec<_>>() })
+        }
+        Some(one) => {
+            if !models.iter().any(|m| *m == one) {
+                return Err(Refusal::new(
+                    StatusCode::NOT_FOUND,
+                    "unknown_model",
+                    format!(
+                        "Refused: model \"{one}\" is not one you may use through this Gantry. List the ones you may with GET {GEMINI_MODELS}."
+                    ),
+                ));
+            }
+            entry(one)
+        }
+    };
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        body.to_string(),
+    )
+        .into_response())
+}
+
 /// Every query parameter must be one the route allows, once, with a value it may take. One that is not is refused
 /// by name, never dropped. The value is never repeated in the refusal: it could be a secret.
 fn check_query(uri: &Uri) -> Result<(), Refusal> {
@@ -2753,6 +3029,21 @@ async fn handle(State(state): State<AppState>, mut request: Request) -> Response
         }
     }
     let anthropic = matches!(request.uri().path(), MESSAGES | COUNT_TOKENS);
+    let gemini = gemini_path(request.uri().path());
+    let respond = |refusal: Refusal| {
+        if gemini {
+            refusal.respond_gemini(&decision)
+        } else {
+            refusal.respond(&decision, anthropic)
+        }
+    };
+    // Google's streamGenerateContent without alt=sse answers with one JSON array. Gantry asks the provider for events
+    // (to meter and guard the stream as it comes) and writes them out as that array at the end.
+    let as_array = gemini_streams(request.uri().path())
+        && !request
+            .uri()
+            .query()
+            .is_some_and(|q| q.split('&').any(|p| p == "alt=sse"));
     // One snapshot for the whole request: a reload that lands meanwhile applies to the next request, not this one.
     let version = state.version();
     let outcome = match &version.policy {
@@ -2766,17 +3057,20 @@ async fn handle(State(state): State<AppState>, mut request: Request) -> Response
                 Ok(response) => response,
                 Err(failure) => {
                     upstream_failed(&state, &version, &decision, &failure, arrived);
-                    failure.respond(&decision, anthropic)
+                    respond(failure)
                 }
             }
         }
-        Err(refusal) => refusal.respond(&decision, anthropic),
+        Err(refusal) => respond(refusal),
     };
     if let Some(check) = response.extensions_mut().remove::<AnswerCheck>() {
         response = match answer_guarded(&state, check, &decision, response).await {
             Ok(response) => response,
-            Err(refusal) => refusal.respond(&decision, anthropic),
+            Err(refusal) => respond(refusal),
         };
+    }
+    if as_array && response.status().is_success() && is_type(&response, "text/event-stream") {
+        response = events_as_array(response);
     }
     if let Ok(value) = HeaderValue::from_str(&decision) {
         response.headers_mut().insert(DECISION, value);
@@ -2785,6 +3079,39 @@ async fn handle(State(state): State<AppState>, mut request: Request) -> Response
         tracer.answered(&decision, response.status().as_u16());
     }
     response
+}
+
+/// A Gemini event stream as the JSON array Google's streamGenerateContent sends without alt=sse: each event's data
+/// as an element, written out as the events come.
+fn events_as_array(response: Response) -> Response {
+    let mut pending: Vec<u8> = Vec::new();
+    let mut started = false;
+    map_body(response, "application/json", move |input| {
+        let done = input.is_none();
+        pending.extend_from_slice(input.unwrap_or_default());
+        let end = if done {
+            pending.len()
+        } else {
+            whole_events(&pending)
+        };
+        let mut out = Vec::new();
+        let events: Vec<u8> = pending.drain(..end).collect();
+        for line in String::from_utf8_lossy(&events).lines() {
+            let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+                continue;
+            };
+            if data.is_empty() {
+                continue;
+            }
+            out.extend_from_slice(if started { b",\r\n" } else { b"[" });
+            started = true;
+            out.extend_from_slice(data.as_bytes());
+        }
+        if done {
+            out.extend_from_slice(if started { b"]" } else { b"[]" });
+        }
+        Ok(out)
+    })
 }
 
 /// Records a request that was decided and forwarded, and got no answer from any provider, so the request log counts
@@ -2928,7 +3255,10 @@ async fn decide(
     };
     // Guardrails on the answer travel with the request (or a cached answer) to the end, where the answer is whole.
     let on_answer: Vec<Guardrail> = guards.iter().filter(|g| g.on.answer).cloned().collect();
-    if !on_answer.is_empty() && matches!(path.as_str(), CHAT | MESSAGES | RESPONSES) {
+    let generates = gemini_native(&path)
+        .is_some_and(|(_, _, m)| matches!(m, "generateContent" | "streamGenerateContent"));
+    if !on_answer.is_empty() && (matches!(path.as_str(), CHAT | MESSAGES | RESPONSES) || generates)
+    {
         let check = AnswerCheck {
             guards: on_answer,
             person: seen.person.map(|p| p.name.clone()).unwrap_or_default(),
@@ -3140,7 +3470,8 @@ async fn limit(
         headers: &parts.headers,
         route: parts.uri.path_and_query().map_or("/", |pq| pq.as_str()),
         body: bytes,
-        free: parts.uri.path() == COUNT_TOKENS,
+        free: parts.uri.path() == COUNT_TOKENS
+            || gemini_native(parts.uri.path()).is_some_and(|(_, _, m)| m == "countTokens"),
         caller_paid: plan
             .and_then(|p| p.caller_key.as_ref())
             .map(|_| rule.limits.caller_provider_key == CallerKey::AllowedBudgeted),
@@ -3603,15 +3934,25 @@ async fn answer_verdict(
 
 /// The end of the last whole event in a stream read so far: just after its blank line.
 fn whole_events(bytes: &[u8]) -> usize {
-    bytes
+    // Gemini ends its events with CRLF pairs.
+    let lf = bytes
         .windows(2)
         .rposition(|w| w == b"\n\n")
-        .map_or(0, |at| at + 2)
+        .map_or(0, |at| at + 2);
+    let crlf = bytes
+        .windows(4)
+        .rposition(|w| w == b"\r\n\r\n")
+        .map_or(0, |at| at + 4);
+    lf.max(crlf)
 }
 
 /// The event that ends a stream a guardrail stopped, in the caller's API.
 fn blocked_event(path: &str, message: &str) -> String {
     match path {
+        _ if gemini_native(path).is_some() => format!(
+            "data: {}\n\n",
+            gemini_error(StatusCode::FORBIDDEN, guard::BLOCKED_CODE, message, "")
+        ),
         MESSAGES => format!(
             "event: error\ndata: {}\n\n",
             serde_json::json!({"type": "error", "error": {"type": "permission_error", "message": message}})
@@ -3777,6 +4118,29 @@ fn event_texts(event: &serde_json::Value) -> Vec<(String, String)> {
             }
         }
     }
+    // Gemini: each candidate's text parts build one text, its thoughts another.
+    for (i, candidate) in event["candidates"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let n = candidate["index"].as_u64().unwrap_or(i as u64);
+        for (j, part) in candidate["content"]["parts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if part["text"].is_string() {
+                let slot = if part["thought"] == true { "gt" } else { "g" };
+                found.push((
+                    format!("{slot}{n}"),
+                    format!("/candidates/{i}/content/parts/{j}/text"),
+                ));
+            }
+        }
+    }
     if event["type"] == "content_block_delta" && event["delta"]["text"].is_string() {
         found.push((format!("m{}", event["index"]), "/delta/text".into()));
     }
@@ -3904,6 +4268,13 @@ fn answer_texts(answer: &serde_json::Value) -> Vec<String> {
             }
         }
     }
+    for (i, candidate) in list(&answer["candidates"]).iter().enumerate() {
+        for (j, part) in list(&candidate["content"]["parts"]).iter().enumerate() {
+            if part["text"].is_string() {
+                pointers.push(format!("/candidates/{i}/content/parts/{j}/text"));
+            }
+        }
+    }
     for (i, item) in list(&answer["output"]).iter().enumerate() {
         for (j, part) in list(&item["content"]).iter().enumerate() {
             if part["text"].is_string() {
@@ -3959,10 +4330,60 @@ fn text_fields(path: &str, body: &serde_json::Value) -> Result<Vec<String>, Stri
             _ => {}
         }
     }
+    // A Gemini Content: the text of each part, a tool call's arguments, a tool's result, and code and its output.
+    fn content(value: &Value, at: &str, out: &mut Vec<String>) {
+        for (j, part) in value["parts"].as_array().into_iter().flatten().enumerate() {
+            let at = format!("{at}/parts/{j}");
+            for field in [
+                "text",
+                "functionCall/args",
+                "functionResponse/response",
+                "executableCode/code",
+                "codeExecutionResult/output",
+            ] {
+                if let Some(found) = part.pointer(&format!("/{field}")) {
+                    strings(found, format!("{at}/{field}"), out);
+                }
+            }
+        }
+    }
+    // The Contents of a Gemini request: generateContent's, countTokens' (also inside generateContentRequest), and
+    // the embedding methods'.
+    fn contents(body: &Value, at: &str, out: &mut Vec<String>) {
+        for (i, item) in body["contents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            content(item, &format!("{at}/contents/{i}"), out);
+        }
+        for field in ["systemInstruction", "system_instruction", "content"] {
+            if body[field].is_object() {
+                content(&body[field], &format!("{at}/{field}"), out);
+            }
+        }
+        if body["generateContentRequest"].is_object() {
+            contents(
+                &body["generateContentRequest"],
+                &format!("{at}/generateContentRequest"),
+                out,
+            );
+        }
+        for (i, item) in body["requests"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            contents(item, &format!("{at}/requests/{i}"), out);
+        }
+    }
     let mut pointers = Vec::new();
     match path {
         // A provider's own API has no shape Gantry knows: every string in the body is text.
         _ if path.starts_with(PASSTHROUGH) => strings(body, String::new(), &mut pointers),
+        _ if gemini_native(path).is_some() => contents(body, "", &mut pointers),
         IMAGES => match &body["prompt"] {
             Value::String(_) => pointers.push("/prompt".into()),
             Value::Null => {}
@@ -4436,8 +4857,10 @@ fn outbound(
 ) -> Result<axum::http::Request<Body>, Refusal> {
     // The body names the model the caller sent. Sent to another, it names that one.
     let rewritten;
+    let native = gemini_native(route.split('?').next().unwrap_or_default());
     let bytes = match plan {
-        Some(plan) if plan.model != model => {
+        // A Gemini API body names no model: it is in the path.
+        Some(plan) if plan.model != model && native.is_none() => {
             let content_type = parts
                 .headers
                 .get(header::CONTENT_TYPE)
@@ -4483,6 +4906,28 @@ fn outbound(
             ),
             bytes.clone(),
         ),
+        // Google's own API, as sent: only the provider's base, the model it knows, and events for a stream.
+        Kind::Gemini | Kind::Vertex if native.is_some() => {
+            let (version, _, method) = native.unwrap_or_default();
+            let has_path = provider
+                .url
+                .split_once("://")
+                .is_some_and(|(_, rest)| rest.contains('/'));
+            let base = if has_path {
+                provider.url.clone()
+            } else {
+                format!("{}/{version}", provider.url)
+            };
+            let method = if method == "streamGenerateContent" {
+                "streamGenerateContent?alt=sse"
+            } else {
+                method
+            };
+            (
+                format!("{base}/models/{}:{method}", sigv4::uri_encode(model, false)),
+                bytes.clone(),
+            )
+        }
         Kind::Gemini | Kind::Vertex => {
             let (body, stream, _) = to_gemini(bytes)?;
             let has_path = provider

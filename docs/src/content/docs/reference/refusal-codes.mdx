@@ -11,10 +11,14 @@ Every refusal has a stable code, an HTTP status, a message that names the cause 
 
 ## Response shape
 
-On `/v1/messages` and `/v1/messages/count_tokens` a refusal uses Anthropic's error shape, so Claude Code and Anthropic's SDKs show the message. Everywhere else, the admin API included, it uses OpenAI's shape.
+On `/v1/messages` and `/v1/messages/count_tokens` a refusal uses Anthropic's error shape, so Claude Code and Anthropic's SDKs show the message. On Google's Gemini API routes (`/v1beta/models...`) it uses Google's shape, so Gemini CLI shows it. Everywhere else, the admin API included, it uses OpenAI's shape.
 
 ```json title="Anthropic shape"
 {"type":"error","error":{"type":"permission_error","message":"Refused (model_not_allowed): ... Decision 01M79..."},"gantry_code":"model_not_allowed","decision":"01M79..."}
+```
+
+```json title="Google shape"
+{"error":{"code":403,"message":"Refused (model_not_allowed): ... Decision 01M79...","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"model_not_allowed","domain":"gantry","metadata":{"decision":"01M79..."}}]}}
 ```
 
 ```json title="OpenAI shape"
@@ -35,6 +39,7 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 |---|---|---|
 | [`no_key`](#no_key) | 401 | `authentication_error` |
 | [`ambiguous_key`](#ambiguous_key) | 400 | `invalid_request_error` |
+| [`ambiguous_model`](#ambiguous_model) | 400 | `invalid_request_error` |
 | [`unknown_key`](#unknown_key) | 401 | `authentication_error` |
 | [`key_expired`](#key_expired) | 401 | `authentication_error` |
 | [`killed`](#killed) | 403 | `permission_error` |
@@ -91,13 +96,21 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 
 **401.** No credential, an empty one, an `Authorization` header that is not `Bearer`, or a header that is not text. The key is checked before the route, so an unknown route without a key gets `no_key`.
 
-**Fix:** send the Gantry key as `Authorization: Bearer gantry_...` or `x-api-key: gantry_...`.
+**Fix:** send the Gantry key as `Authorization: Bearer gantry_...` or `x-api-key: gantry_...`. On Google's Gemini API routes, `x-goog-api-key: gantry_...` or `?key=gantry_...` (Gemini CLI: `GEMINI_API_KEY`) work too.
 
 ### ambiguous_key
 
 **400.** `Authorization` and `x-api-key` hold different values, one of them is empty beside the other (the message names the empty one), or one of them appears twice. On the admin API, also a key prefix that more than one key hash starts with.
 
+On Google's Gemini API routes, also a key in `x-goog-api-key` or `?key=` beside another one, there or in `Authorization` or `x-api-key`.
+
 **Fix:** send exactly one credential, the Gantry key. On the admin API, send more of the hash.
+
+### ambiguous_model
+
+**400.** On Google's Gemini API routes, the body names a model (`model`, or `generateContentRequest.model` for `countTokens`) other than the one in the path. The policy decides on the path's model, so the provider must not be told another.
+
+**Fix:** remove the model from the body, or make it the same as the path's (`models/<model>` or `<model>`).
 
 ### unknown_key
 
