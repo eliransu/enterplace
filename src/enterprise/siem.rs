@@ -561,11 +561,13 @@ impl Exporter {
         Ok(rows.len())
     }
 
+    /// Each destination and when it was added, to the microsecond the database keeps: records are timed to the
+    /// millisecond, and the record of adding it is written in the same millisecond as the row, just before it.
     async fn destinations(&self) -> Result<Vec<(Dest, String)>, String> {
         let client = self.db.client().await?;
         let rows = client
             .query(
-                "SELECT id, kind, url, secret, options, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') \
+                "SELECT id, kind, url, secret, options, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
                  FROM enterprise_export_destinations ORDER BY id",
                 &[],
             )
