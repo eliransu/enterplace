@@ -26,6 +26,8 @@ serde = { version = "1", features = ["derive"] }
 axum = { version = "0.8", default-features = false }
 # Members and every later feature write audit records and hash tokens with the open source helpers.
 gantry-console = { path = "../gantry/crates/gantry-console" }
+# The audit archive streams pages of rows as the response body; already in the build through axum.
+futures-util = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 # The feature tests drive the gateway's router in process; both are already in the build through gantry-server.

@@ -6,6 +6,7 @@
 
 mod members;
 mod scim;
+mod siem;
 
 use std::sync::Arc;
 
@@ -20,33 +21,76 @@ use crate::license::{self, State, Status};
 /// The enterprise tables, one migration per entry, applied in order under the namespace `enterprise` (its own
 /// version row in `gantry_migrations`, apart from the gateway's tables). Never edit an entry that has shipped: add
 /// one. Every feature's tables are here, so one version says where a database is.
-const MIGRATIONS: &[&str] = &[members::MIGRATION, scim::MIGRATION];
+const MIGRATIONS: &[&str] = &[members::MIGRATION, scim::MIGRATION, siem::MIGRATION];
 
 /// What the enterprise binary adds to the gateway it serves, for `status` (the license loaded at start).
 pub fn extend(status: &Status, host: Host<'_>) -> Result<Extension, String> {
+    extend_with(
+        status,
+        host,
+        Arc::new(|variable| std::env::var(variable).ok()),
+    )
+}
+
+/// `extend`, reading the environment through `env` (tests give theirs).
+pub fn extend_with(
+    status: &Status,
+    host: Host<'_>,
+    env: siem::sinks::Env,
+) -> Result<Extension, String> {
     let mut extension = Extension {
         health: Some(health(status)),
         ..Extension::default()
     };
-    if !status.unlocked(members::FEATURE) {
+    let members_on = status.unlocked(members::FEATURE);
+    let scim_on = members_on && status.unlocked(scim::FEATURE);
+    let (siem_on, retention_on) = (
+        status.unlocked(siem::SIEM),
+        status.unlocked(siem::RETENTION),
+    );
+    if !members_on {
         members::locked(&mut extension, status);
+    }
+    // SCIM provisions the people that members keeps, so it needs both.
+    if !scim_on {
         scim::locked(&mut extension, status);
+    }
+    if !siem_on && !retention_on {
+        siem::locked(&mut extension, status);
+    }
+    if !(members_on || siem_on || retention_on) {
         return Ok(extension);
     }
     // The license never stops traffic: a feature that cannot run says why and the gateway starts without it.
     let Some(pg) = host.postgres else {
         eprintln!(
-            "warning: the license unlocks members, and they are kept in Postgres, but the policy has no store. Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then the console signs in with admin keys only."
+            "warning: the license unlocks enterprise features (members, audit export, retention) that are kept in Postgres, but the policy has no store. Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then they are off and the console signs in with admin keys only."
         );
         return Ok(extension);
     };
     pg.migrate("enterprise", MIGRATIONS)?;
     let db = Arc::new(Db::new(pg.clone()));
-    members::register(&mut extension, db.clone(), host.keys.to_path_buf());
-    if status.unlocked(scim::FEATURE) {
+    if members_on {
+        members::register(&mut extension, db.clone(), host.keys.to_path_buf());
+    }
+    if scim_on {
         scim::register(&mut extension, db.clone(), host.keys.to_path_buf());
-    } else {
-        scim::locked(&mut extension, status);
+    }
+    if siem_on || retention_on {
+        let registered = siem::register(
+            &mut extension,
+            siem::Setup {
+                db,
+                log: host.audit.clone(),
+                audit_path: host.audit_path.to_path_buf(),
+                env,
+                siem: siem_on,
+                retention: retention_on,
+            },
+        );
+        if let Err(err) = registered {
+            eprintln!("warning: audit export and retention are off: {err}");
+        }
     }
     Ok(extension)
 }
@@ -181,11 +225,24 @@ pub(crate) mod testing {
         pub app: Router,
         pub keys: PathBuf,
         pub dir: PathBuf,
+        /// The gateway's audit log, and its path.
+        pub log: std::sync::Arc<gantry_core::audit::AuditLog>,
+        pub audit: PathBuf,
         _gw: gantry_server::Governed,
     }
 
     /// The gateway `serve` runs, with the enterprise features `status` unlocks, and one admin key, noa's.
     pub fn gateway(test: &str, url: &str, status: &Status) -> Result<Gateway, Error> {
+        gateway_with(test, url, status, &[])
+    }
+
+    /// `gateway`, with the enterprise features reading `env` as their environment.
+    pub fn gateway_with(
+        test: &str,
+        url: &str,
+        status: &Status,
+        vars: &[(&str, &str)],
+    ) -> Result<Gateway, Error> {
         let dir = std::env::temp_dir().join(format!("gantry-ent-{}-{test}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
@@ -199,14 +256,23 @@ pub(crate) mod testing {
             "GANTRY_STORE_URL" => Some(url.clone()),
             _ => Some("provider-secret".into()),
         };
-        let gw =
-            gantry_server::governed_with(&policy, None, &env, &|host| super::extend(status, host))?;
+        let vars: std::collections::HashMap<String, String> = vars
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        let vars: super::siem::sinks::Env =
+            std::sync::Arc::new(move |name| vars.get(name).cloned());
+        let gw = gantry_server::governed_with(&policy, None, &env, &|host| {
+            super::extend_with(status, host, vars.clone())
+        })?;
         let keys = gw.loaded.keys_path.clone();
         gantry_core::keyfile::add_entry("noa", "platform", ADMIN_KEY, true, &keys)?;
         Ok(Gateway {
             app: gw.router.clone(),
             keys,
             dir,
+            log: gw.log.clone(),
+            audit: gw.loaded.audit_path.clone(),
             _gw: gw,
         })
     }
