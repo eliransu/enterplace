@@ -460,6 +460,7 @@ dependencies = [
  "http-body-util",
  "hyper-rustls",
  "hyper-util",
+ "ring",
  "serde",
  "serde_json",
  "tokio",

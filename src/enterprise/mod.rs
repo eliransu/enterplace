@@ -254,6 +254,9 @@ pub(crate) mod testing {
         let url = url.to_string();
         let env = move |variable: &str| match variable {
             "GANTRY_STORE_URL" => Some(url.clone()),
+            // Unset, as on a gateway that keeps no provider credentials in the store: a catch-all answer would set
+            // both of these, which the gateway refuses.
+            "GANTRY_MASTER_KEY" | "GANTRY_MASTER_KEY_FILE" => None,
             _ => Some("provider-secret".into()),
         };
         let vars: std::collections::HashMap<String, String> = vars
