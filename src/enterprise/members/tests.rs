@@ -518,9 +518,15 @@ async fn a_revoked_invite_link_no_longer_works() -> Result<(), Error> {
 
 #[tokio::test]
 async fn without_the_feature_the_console_keeps_admin_keys_only() -> Result<(), Error> {
-    // "reports" is a feature with no tables yet. A license with siem or retention makes every enterprise table,
-    // members' included, since the migrations are one list; that gate is tested in siem/tests.rs.
-    for (name, status) in [("none", unlicensed()), ("other", licensed(&["reports"]))] {
+    // Every other feature, alone, makes none of members' tables: each runs its own migrations only. SCIM without
+    // members is off, since it keeps the people members does.
+    for (name, status) in [
+        ("none", unlicensed()),
+        ("siem", licensed(&["siem"])),
+        ("retention", licensed(&["retention"])),
+        ("scim", licensed(&["scim"])),
+        ("reports", licensed(&["reports"])),
+    ] {
         let test = format!("gate_{name}");
         let Some(url) = database(&test).await? else {
             return Ok(());
@@ -556,17 +562,24 @@ async fn without_the_feature_the_console_keeps_admin_keys_only() -> Result<(), E
             StatusCode::OK,
             "{name}: an invite was made without the feature"
         );
-        // No tables were made: without the feature the database is as the open source gateway leaves it.
+        // None of members' tables were made, and no other feature's when nothing else is unlocked.
         let config: gantry_server::store::tokio_postgres::Config = url.parse()?;
         let (client, connection) = config
             .connect(gantry_server::store::tokio_postgres::NoTls)
             .await?;
         tokio::spawn(connection);
         let tables: i64 = client
-            .query_one("SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'enterprise_%'", &[])
+            .query_one("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('enterprise_people', 'enterprise_invites')", &[])
             .await?
             .try_get(0)?;
         assert_eq!(tables, 0, "{name}");
+        if matches!(name, "none" | "scim" | "reports") {
+            let any: i64 = client
+                .query_one("SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'enterprise_%'", &[])
+                .await?
+                .try_get(0)?;
+            assert_eq!(any, 0, "{name}");
+        }
     }
     Ok(())
 }

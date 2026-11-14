@@ -18,10 +18,26 @@ use serde_json::json;
 
 use crate::license::{self, State, Status};
 
-/// The enterprise tables, one migration per entry, applied in order under the namespace `enterprise` (its own
-/// version row in `gantry_migrations`, apart from the gateway's tables). Never edit an entry that has shipped: add
-/// one. Every feature's tables are here, so one version says where a database is.
-const MIGRATIONS: &[&str] = &[members::MIGRATION, scim::MIGRATION, siem::MIGRATION];
+/// Each feature's tables, one migration per entry, applied in order under the feature's own namespace (its own
+/// version row in `gantry_migrations`), and only when the license unlocks the feature. Never edit an entry that has
+/// shipped: add one.
+const MEMBERS: &[&str] = &[members::MIGRATION];
+/// Alters members' table, so it runs after `MEMBERS`, and only with members on.
+const SCIM: &[&str] = &[scim::MIGRATION];
+/// For siem and retention, which share their tables.
+const SIEM: &[&str] = &[siem::MIGRATION];
+
+/// Before each feature had its namespace, every enterprise table was one list under `enterprise`: members, scim,
+/// siem. On a database a binary of then wrote, this records the per-feature version that list's version implies, so
+/// none of that DDL runs again. It runs once, as the namespace `enterprise.split`, before any feature's migrations;
+/// on a new database it records nothing. The old row stays, so an older replica in a rolling upgrade still starts.
+const SPLIT: &[&str] = &["
+INSERT INTO gantry_migrations (namespace, version)
+SELECT feature, 1
+FROM gantry_migrations, (VALUES ('enterprise.members', 1), ('enterprise.scim', 2), ('enterprise.siem', 3)) AS old (feature, entry)
+WHERE namespace = 'enterprise' AND version >= entry
+ON CONFLICT (namespace) DO NOTHING;
+"];
 
 /// What the enterprise binary adds to the gateway it serves, for `status` (the license loaded at start).
 pub fn extend(status: &Status, host: Host<'_>) -> Result<Extension, String> {
@@ -68,7 +84,16 @@ pub fn extend_with(
         );
         return Ok(extension);
     };
-    pg.migrate("enterprise", MIGRATIONS)?;
+    pg.migrate("enterprise.split", SPLIT)?;
+    if members_on {
+        pg.migrate("enterprise.members", MEMBERS)?;
+    }
+    if scim_on {
+        pg.migrate("enterprise.scim", SCIM)?;
+    }
+    if siem_on || retention_on {
+        pg.migrate("enterprise.siem", SIEM)?;
+    }
     let db = Arc::new(Db::new(pg.clone()));
     if members_on {
         members::register(&mut extension, db.clone(), host.keys.to_path_buf());
@@ -403,6 +428,162 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(&answer.text)?;
         assert_eq!(body["license"]["state"], "missing");
         assert!(body["license"]["customer"].is_null());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::testing::*;
+    use gantry_server::store::tokio_postgres::{self, Client, NoTls};
+
+    async fn connect(url: &str) -> Result<Client, Error> {
+        let (client, connection) = tokio_postgres::connect(url, NoTls).await?;
+        tokio::spawn(connection);
+        Ok(client)
+    }
+
+    async fn versions(client: &Client) -> Result<Vec<(String, i32)>, Error> {
+        let mut rows = Vec::new();
+        for row in client
+            .query(
+                "SELECT namespace, version FROM gantry_migrations WHERE namespace LIKE 'enterprise%' ORDER BY namespace",
+                &[],
+            )
+            .await?
+        {
+            rows.push((row.try_get(0)?, row.try_get(1)?));
+        }
+        Ok(rows)
+    }
+
+    /// The gateway started again on the same database, as a later start or another replica: `gateway` adds noa's
+    /// admin key, which the store refuses twice.
+    async fn restart(
+        test: &str,
+        url: &str,
+        client: &Client,
+        features: &[&str],
+    ) -> Result<(), Error> {
+        client.batch_execute("DELETE FROM gantry_keys").await?;
+        gateway(test, url, &licensed(features))?;
+        Ok(())
+    }
+
+    /// A database as a binary from before the per-feature namespaces left it: the first `ran` entries of the one
+    /// `enterprise` list (members, scim, siem) applied, and its version row.
+    async fn old_database(url: &str, ran: usize) -> Result<Client, Error> {
+        let client = connect(url).await?;
+        client
+            .batch_execute(
+                "CREATE TABLE gantry_migrations (namespace text PRIMARY KEY, version integer NOT NULL)",
+            )
+            .await?;
+        let old = [
+            super::members::MIGRATION,
+            super::scim::MIGRATION,
+            super::siem::MIGRATION,
+        ];
+        for sql in old.iter().take(ran) {
+            client.batch_execute(sql).await?;
+        }
+        let version = i32::try_from(ran)?;
+        client
+            .execute(
+                "INSERT INTO gantry_migrations VALUES ('enterprise', $1)",
+                &[&version],
+            )
+            .await?;
+        client
+            .batch_execute("INSERT INTO enterprise_people (id, email, name, password_salt, password_hash, role) VALUES ('p1', 'old@acme.co', 'Old', 's', 'h', 'owner')")
+            .await?;
+        Ok(client)
+    }
+
+    #[tokio::test]
+    async fn a_new_database_gets_one_version_per_unlocked_feature() -> Result<(), Error> {
+        let Some(url) = database("mig_new").await? else {
+            return Ok(());
+        };
+        gateway("mig_new", &url, &licensed(&["members", "siem"]))?;
+        let client = connect(&url).await?;
+        assert_eq!(
+            versions(&client).await?,
+            [
+                ("enterprise.members".to_string(), 1),
+                ("enterprise.siem".to_string(), 1),
+                ("enterprise.split".to_string(), 1),
+            ]
+        );
+        // Unlocking another feature later runs its migrations only.
+        restart("mig_new", &url, &client, &["members", "scim", "siem"]).await?;
+        assert!(
+            versions(&client)
+                .await?
+                .contains(&("enterprise.scim".to_string(), 1))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_database_from_the_one_list_moves_forward_without_running_its_ddl_again()
+    -> Result<(), Error> {
+        let Some(url) = database("mig_old").await? else {
+            return Ok(());
+        };
+        let client = old_database(&url, 3).await?;
+        // Running any of the old DDL again would fail on a table that exists, and the gateway would not start.
+        gateway(
+            "mig_old",
+            &url,
+            &licensed(&["members", "scim", "siem", "retention"]),
+        )?;
+        assert_eq!(
+            versions(&client).await?,
+            [
+                // Kept, so an older replica in a rolling upgrade still starts.
+                ("enterprise".to_string(), 3),
+                ("enterprise.members".to_string(), 1),
+                ("enterprise.scim".to_string(), 1),
+                ("enterprise.siem".to_string(), 1),
+                ("enterprise.split".to_string(), 1),
+            ]
+        );
+        let kept: i64 = client
+            .query_one("SELECT count(*) FROM enterprise_people", &[])
+            .await?
+            .try_get(0)?;
+        assert_eq!(kept, 1);
+        // And again, as every later start does.
+        restart("mig_old", &url, &client, &["members", "scim", "siem"]).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_database_part_way_through_the_one_list_runs_only_what_it_lacks() -> Result<(), Error>
+    {
+        let Some(url) = database("mig_part").await? else {
+            return Ok(());
+        };
+        let client = old_database(&url, 1).await?;
+        gateway("mig_part", &url, &licensed(&["members", "siem"]))?;
+        assert_eq!(
+            versions(&client).await?,
+            [
+                ("enterprise".to_string(), 1),
+                ("enterprise.members".to_string(), 1),
+                ("enterprise.siem".to_string(), 1),
+                ("enterprise.split".to_string(), 1),
+            ]
+        );
+        let audit: i64 = client
+            .query_one(
+                "SELECT count(*) FROM information_schema.tables WHERE table_name = 'enterprise_audit'",
+                &[],
+            )
+            .await?
+            .try_get(0)?;
+        assert_eq!(audit, 1);
         Ok(())
     }
 }

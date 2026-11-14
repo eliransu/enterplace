@@ -806,9 +806,10 @@ fn secrets_at_rest_open_only_with_the_same_key() -> Result<(), String> {
 
 #[tokio::test]
 async fn without_the_features_the_page_and_api_say_why_and_nothing_is_made() -> Result<(), Error> {
-    for (name, status, tables) in [
-        ("siem_gate", unlicensed(), false),
-        ("siem_gate_members", licensed(&["members"]), true),
+    for (name, status) in [
+        ("siem_gate", unlicensed()),
+        ("siem_gate_members", licensed(&["members"])),
+        ("siem_gate_scim", licensed(&["members", "scim"])),
     ] {
         let Some(url) = database(name).await? else {
             return Ok(());
@@ -832,15 +833,15 @@ async fn without_the_features_the_page_and_api_say_why_and_nothing_is_made() -> 
         )
         .await?;
         tokio::spawn(connection);
-        let made = client
-            .query_opt(
-                "SELECT 1 FROM information_schema.tables WHERE table_name = 'enterprise_audit'",
+        let made: i64 = client
+            .query_one(
+                "SELECT count(*) FROM information_schema.tables WHERE table_name IN ('enterprise_audit', 'enterprise_replicas', 'enterprise_export_destinations')",
                 &[],
             )
             .await?
-            .is_some();
-        // The migrations are one list: a license with members makes every enterprise table, but runs no exporter.
-        assert_eq!(made, tables);
+            .try_get(0)?;
+        // Each feature runs its own migrations: other features never make the export's tables.
+        assert_eq!(made, 0, "{name}");
     }
     Ok(())
 }

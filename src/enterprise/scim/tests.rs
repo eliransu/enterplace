@@ -1126,14 +1126,18 @@ async fn without_the_feature_scim_answers_license_required() -> Result<(), Error
                 .is_some_and(|d| d.contains("license")),
             "{name}"
         );
-        if name == "none" {
-            let tables: i64 = client(&url)
-                .await?
-                .query_one("SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'enterprise_%'", &[])
-                .await?
-                .try_get(0)?;
-            assert_eq!(tables, 0);
-        }
+        // SCIM's tables and column are made only when it is on; members' only when members is.
+        let db = client(&url).await?;
+        let scim: i64 = db
+            .query_one("SELECT count(*) FROM information_schema.columns WHERE table_name LIKE 'enterprise_%' AND (table_name LIKE 'enterprise_scim_%' OR table_name = 'enterprise_password_links' OR column_name = 'scim_external_id')", &[])
+            .await?
+            .try_get(0)?;
+        assert_eq!(scim, 0, "{name}");
+        let people: i64 = db
+            .query_one("SELECT count(*) FROM information_schema.tables WHERE table_name = 'enterprise_people'", &[])
+            .await?
+            .try_get(0)?;
+        assert_eq!(people, i64::from(name == "members_only"), "{name}");
     }
     Ok(())
 }
