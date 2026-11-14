@@ -28,7 +28,7 @@ pub trait Source: Send + Sync {
 }
 
 static SOURCE: OnceLock<Arc<dyn Source>> = OnceLock::new();
-/// Values by reference.
+/// Secrets read, by the name of the variable that points at them.
 static CACHE: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
 /// Moves on each refresh that changed a value, so the gateway knows to take the new keys.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -43,22 +43,21 @@ pub fn install(source: Arc<dyn Source>) -> bool {
 }
 
 /// A variable of the process environment, with a reference replaced by the secret it points at. A reference not
-/// fetched (no source, or [`load`] not run) is `None`, as an unset variable is: it is never handed on as a key.
+/// read (no source, or [`load`] not run) is `None`, as an unset variable is: it is never handed on as a key.
 pub fn var(name: &str) -> Option<String> {
-    let value = std::env::var(name).ok()?;
-    if !is_reference(&value) {
-        return Some(value);
-    }
-    let cache = match cache().read() {
-        Ok(cache) => cache,
-        Err(poisoned) => poisoned.into_inner(),
+    let read = match cache().read() {
+        Ok(cache) => cache.get(name).cloned(),
+        Err(poisoned) => poisoned.into_inner().get(name).cloned(),
     };
-    cache.get(value.trim()).cloned()
+    if read.is_some() {
+        return read;
+    }
+    std::env::var(name).ok().filter(|v| !is_reference(v))
 }
 
-/// The references in the process environment, as (variable, reference).
-fn references() -> Vec<(String, String)> {
-    let mut found: Vec<(String, String)> = std::env::vars()
+/// The references among `vars`, as (variable, reference), in name order.
+fn references(vars: impl Iterator<Item = (String, String)>) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = vars
         .filter(|(_, v)| is_reference(v))
         .map(|(k, v)| (k, v.trim().to_string()))
         .collect();
@@ -66,10 +65,15 @@ fn references() -> Vec<(String, String)> {
     found
 }
 
-/// Fetches every reference in the environment, at start. `Err` names each one that failed, or says that this
+/// Reads every reference in the process environment, at start. `Err` names each one that failed, or says that this
 /// binary cannot read secret managers.
 pub fn load() -> Result<usize, String> {
-    let found = references();
+    load_from(std::env::vars())
+}
+
+/// [`load`], from the variables given: for an embedder that passes its own environment, and for tests.
+pub fn load_from(vars: impl Iterator<Item = (String, String)>) -> Result<usize, String> {
+    let found = references(vars);
     if found.is_empty() {
         return Ok(0);
     }
@@ -82,15 +86,18 @@ pub fn load() -> Result<usize, String> {
             SCHEMES.join(", ")
         ));
     };
+    let mut by_reference: HashMap<&str, String> = HashMap::new();
     let mut values = HashMap::new();
     let mut failed = Vec::new();
     for (name, reference) in &found {
-        if values.contains_key(reference) {
-            continue;
-        }
-        match source.fetch(reference) {
+        let value = match by_reference.get(reference.as_str()) {
+            Some(value) => Ok(value.clone()),
+            None => source.fetch(reference),
+        };
+        match value {
             Ok(value) => {
-                values.insert(reference.clone(), value);
+                by_reference.insert(reference, value.clone());
+                values.insert(name.clone(), value);
             }
             Err(err) => failed.push(format!("{name} ({reference}): {err}")),
         }
@@ -103,7 +110,7 @@ pub fn load() -> Result<usize, String> {
             failed.join("; ")
         ));
     }
-    let count = values.len();
+    let count = by_reference.len();
     match cache().write() {
         Ok(mut cache) => *cache = values,
         Err(poisoned) => *poisoned.into_inner() = values,
@@ -111,17 +118,22 @@ pub fn load() -> Result<usize, String> {
     Ok(count)
 }
 
-/// Fetches every reference again. A value that changed is taken; one that cannot be read keeps the value in hand,
+/// Reads every reference again. A value that changed is taken; one that cannot be read keeps the value in hand,
 /// and the failure is returned for the log. Without a source, or with nothing to read, it does nothing.
 pub fn refresh() -> Vec<String> {
+    refresh_from(std::env::vars())
+}
+
+/// [`refresh`], from the variables given.
+pub fn refresh_from(vars: impl Iterator<Item = (String, String)>) -> Vec<String> {
     let Some(source) = SOURCE.get() else {
         return Vec::new();
     };
     let mut failed = Vec::new();
     let mut fresh = Vec::new();
-    for (name, reference) in references() {
+    for (name, reference) in references(vars) {
         match source.fetch(&reference) {
-            Ok(value) => fresh.push((reference, value)),
+            Ok(value) => fresh.push((name, value)),
             Err(err) => failed.push(format!(
                 "{name} ({reference}): {err}. Gantry keeps the value it read before."
             )),
@@ -132,9 +144,9 @@ pub fn refresh() -> Vec<String> {
         Err(poisoned) => poisoned.into_inner(),
     };
     let mut changed = false;
-    for (reference, value) in fresh {
-        if cache.get(&reference) != Some(&value) {
-            cache.insert(reference, value);
+    for (name, value) in fresh {
+        if cache.get(&name) != Some(&value) {
+            cache.insert(name, value);
             changed = true;
         }
     }
@@ -161,5 +173,28 @@ mod tests {
         assert!(is_reference("azure-kv://vault/secret"));
         assert!(!is_reference("sk-abc"));
         assert!(!is_reference("https://vault.example.com"));
+    }
+
+    #[test]
+    fn without_a_source_a_reference_stops_the_start_with_the_fix() {
+        // No source is installed in this test binary: the open source gateway.
+        let err = load_from(
+            [(
+                "OPENAI_KEY".to_string(),
+                "vault://secret/data/x#k".to_string(),
+            )]
+            .into_iter(),
+        )
+        .err()
+        .unwrap_or_default();
+        assert!(
+            err.contains("OPENAI_KEY holds a secret manager reference"),
+            "{err}"
+        );
+        assert!(err.contains("licensed feature"), "{err}");
+        assert_eq!(
+            load_from([("A".to_string(), "sk".to_string())].into_iter()),
+            Ok(0)
+        );
     }
 }

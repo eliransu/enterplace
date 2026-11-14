@@ -71,6 +71,8 @@ struct Current {
     key_prints: Vec<Option<String>>,
     /// The generation of each credential a provider names, as last read: a rotation shows as a new one.
     credential_prints: Vec<i64>,
+    /// How many times secrets read from secret managers had changed when the keys were last taken.
+    secrets: u64,
 }
 
 /// Watches the files and swaps the version in use. One per served policy file.
@@ -639,6 +641,7 @@ pub fn governed_with(
             current: Mutex::new(Current {
                 key_prints: key_prints(&loaded),
                 credential_prints: credential_prints(shared.as_ref(), &loaded),
+                secrets: gantry_core::secrets::generation(),
                 loaded: loaded.clone(),
                 prints,
                 rejected: HashMap::new(),
@@ -725,12 +728,23 @@ impl Reloader {
             Ok(current) => current,
             Err(poisoned) => poisoned.into_inner(),
         };
+        // A reload asked for (SIGHUP, the admin API) reads the secret managers again too.
+        if trigger == Trigger::Signal {
+            for problem in gantry_core::secrets::refresh() {
+                eprintln!("gantry: {problem}");
+            }
+        }
         let keys_now = key_prints(&current.loaded);
         let credentials_now = credential_prints(self.store.as_ref(), &current.loaded);
-        if keys_now != current.key_prints || credentials_now != current.credential_prints {
+        let secrets_now = gantry_core::secrets::generation();
+        if keys_now != current.key_prints
+            || credentials_now != current.credential_prints
+            || secrets_now != current.secrets
+        {
             self.rotate(&current.loaded);
             current.key_prints = keys_now;
             current.credential_prints = credentials_now;
+            current.secrets = secrets_now;
         }
         let keys = match &self.store {
             // From memory: the store's poll keeps it current, and a database that is down keeps the keys known.
@@ -805,7 +819,7 @@ impl Reloader {
         };
         let new = config::load_texts(&self.policy_path, &policy, &self.keys_path, &keys)?;
         let unset = guard::unset_webhook_env(new.policy.rule_list(), &|variable| {
-            std::env::var(variable).is_ok_and(|value| !value.trim().is_empty())
+            gantry_core::secrets::var(variable).is_some_and(|value| !value.trim().is_empty())
         });
         if !unset.is_empty() {
             return Err(unset);
@@ -871,7 +885,7 @@ impl Reloader {
                 None => {
                     let built = route(
                         provider,
-                        &|variable| std::env::var(variable).ok(),
+                        &gantry_core::secrets::var,
                         self.store.as_ref(),
                         &self.policy_path,
                         &new.policy_text,
@@ -973,6 +987,14 @@ impl Reloader {
                         Err(err) => Err(err),
                     },
                     format!("credential \"{name}\""),
+                ),
+                // A key in a variable changes only when it points at a secret manager that rotated it.
+                (None, None, _) if !provider.key_env.is_empty() && upstream.key.is_some() => (
+                    gantry_core::secrets::var(&provider.key_env)
+                        .filter(|v| !v.trim().is_empty())
+                        .map(|v| Secret::new(v.trim()))
+                        .ok_or_else(|| format!("{} is no longer set.", provider.key_env)),
+                    provider.key_env.clone(),
                 ),
                 _ => continue,
             };

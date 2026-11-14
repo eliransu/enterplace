@@ -78,3 +78,36 @@ fn the_enterprise_commands_keep_precedence() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn a_secret_manager_reference_without_the_secrets_feature_stops_serve_with_the_fix() -> TestResult {
+    let dir =
+        std::env::temp_dir().join(format!("gantry-enterprise-secrets-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let policy = dir.join("gantry.policy.yaml");
+    std::fs::write(
+        &policy,
+        "version: 1\nproviders:\n  - name: openai\n    kind: openai\n    url: https://api.openai.com\n    key_env: OPENAI_KEY\n    models: [m]\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [m]\n",
+    )?;
+    let out = Command::new(env!("CARGO_BIN_EXE_gantry-enterprise"))
+        .args([
+            "serve",
+            policy.to_str().ok_or("path")?,
+            "--listen",
+            "127.0.0.1:0",
+        ])
+        .env_remove("GANTRY_LICENSE")
+        .env_remove("GANTRY_LICENSE_FILE")
+        .env("OPENAI_KEY", "vault://secret/data/gantry#openai")
+        .output()?;
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(
+        stderr.contains("OPENAI_KEY holds a secret manager reference")
+            && stderr.contains("license that has `secrets`"),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

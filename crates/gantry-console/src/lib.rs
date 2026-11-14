@@ -1281,7 +1281,7 @@ async fn sso_start(
             .sso_refused(None, &refused("sso_self_issue", message))
             .await;
     }
-    if std::env::var(&sso.client_secret_env).map_or(true, |v| v.is_empty()) {
+    if gantry_core::secrets::var(&sso.client_secret_env).is_none_or(|v| v.is_empty()) {
         let message = format!(
             "Single sign-on is unavailable: the client secret variable {} is not set where Gantry runs. Set it and restart Gantry.",
             sso.client_secret_env
@@ -1985,7 +1985,7 @@ async fn sso_finish(console: &Console, headers: &HeaderMap, query: &Form) -> Sso
             ));
         }
     };
-    let secret = std::env::var(&sso.client_secret_env).unwrap_or_default();
+    let secret = gantry_core::secrets::var(&sso.client_secret_env).unwrap_or_default();
     if secret.is_empty() {
         let message = format!(
             "The client secret variable {} is not set where Gantry runs. Set it and restart Gantry.",

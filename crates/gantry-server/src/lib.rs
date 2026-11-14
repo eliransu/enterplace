@@ -4029,7 +4029,7 @@ async fn ask(
 ) -> Result<guard::WebhookAnswer, String> {
     // ponytail: credentials are read from the environment on each call. Start and reload refuse a policy whose
     // variables are unset, and a running process's environment does not change, so this is only a lookup.
-    let env = |variable: &str| std::env::var(variable).ok();
+    let env = |variable: &str| gantry_core::secrets::var(variable);
     let mut exchange = gantry_core::vendors::Exchange::new(
         &hook.vendor,
         &hook.url,
@@ -5325,12 +5325,15 @@ pub async fn serve_policy_with(
     if metrics_addr == Some(addr) {
         return Err("--metrics and --listen name the same address. Give /metrics a port of its own, for example --metrics 127.0.0.1:9464.".into());
     }
-    let started = governed_with(
-        policy_path,
-        keys_path,
-        &|variable| std::env::var(variable).ok(),
-        extend,
-    )?;
+    // A variable that points at a secret manager is read now: a start that cannot read one says which, and stops.
+    let read = gantry_core::secrets::load()?;
+    if read > 0 {
+        println!(
+            "{name}: read {} from secret managers.",
+            gantry_core::count(read, "secret")
+        );
+    }
+    let started = governed_with(policy_path, keys_path, &gantry_core::secrets::var, extend)?;
     let loaded = &started.loaded;
     // Listen first, then say so: "listening" must be true when it is printed.
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|err| {
@@ -5362,7 +5365,7 @@ pub async fn serve_policy_with(
     );
     // Without the secret every single sign-on fails at the identity provider, long after this start looked fine.
     if let Some(sso) = &loaded.sso
-        && std::env::var_os(&sso.client_secret_env).is_none_or(|v| v.is_empty())
+        && gantry_core::secrets::var(&sso.client_secret_env).is_none_or(|v| v.is_empty())
     {
         eprintln!(
             "warning: console single sign-on is set in the policy, and {} (its client secret) is not set, so every sign-on will fail. Set it (`export {}=...`) and restart; signing in with an admin key still works.",

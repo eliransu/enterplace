@@ -4,6 +4,7 @@
 mod device;
 mod enterprise;
 mod license;
+mod managers;
 mod node;
 mod secrets;
 
@@ -72,6 +73,34 @@ fn start_license(keys: PathBuf) -> Result<(), String> {
         eprintln!("{warning}");
     }
     Ok(())
+}
+
+/// Lets `*_env` variables point at secret managers (feature `secrets`), and reads them again every
+/// GANTRY_SECRETS_REFRESH_SECONDS (300 unless set): a key rotated in the manager is used within that time, or at once
+/// on SIGHUP.
+fn start_secret_managers() {
+    let env: managers::Env = std::sync::Arc::new(|name: &str| std::env::var(name).ok());
+    gantry_core::secrets::install(std::sync::Arc::new(managers::Managers::new(env)));
+    let every = std::env::var("GANTRY_SECRETS_REFRESH_SECONDS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|s| *s >= 10)
+        .unwrap_or(300);
+    let spawned = std::thread::Builder::new()
+        .name("gantry-secrets".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(every));
+                for problem in gantry_core::secrets::refresh() {
+                    eprintln!("gantry: {problem}");
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        eprintln!(
+            "gantry: the thread that reads secret managers again could not start ({err}). Secrets are read at start and on SIGHUP only."
+        );
+    }
 }
 
 fn license_command(args: &[String]) -> Result<(), String> {
@@ -275,6 +304,9 @@ async fn main() -> ExitCode {
             ) {
                 Err(err) => Err(err),
                 Ok(()) => {
+                    if license::unlocked("secrets") {
+                        start_secret_managers();
+                    }
                     let served = gantry_server::serve_policy_with(
                         &name,
                         Path::new(&args[1]),
