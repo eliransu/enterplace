@@ -121,6 +121,11 @@ CREATE TABLE gantry_credentials (
 CREATE TABLE gantry_master (id integer PRIMARY KEY CHECK (id = 1), sealed bytea NOT NULL);
 INSERT INTO gantry_versions VALUES ('credentials', 0);
 ",
+    // rpm, parallel, tags, metadata, routes, source ranges and rotation of each key, as the JSON object
+    // `keyfile::options_json` writes. One column, so the next key setting needs no migration.
+    "
+ALTER TABLE gantry_keys ADD COLUMN options text;
+",
 ];
 
 /// What the master key seals once per database, so a gateway with another master key is refused at start rather
@@ -750,7 +755,7 @@ impl Inner {
     async fn read_keys(&self, client: &Client) -> Result<Vec<KeyEntry>, String> {
         let rows = client
             .query(
-                "SELECT name, team, sha256, admin, expires, budget_usd, budget_per, models, tpm FROM gantry_keys ORDER BY id",
+                "SELECT name, team, sha256, admin, expires, budget_usd, budget_per, models, tpm, options FROM gantry_keys ORDER BY id",
                 &[],
             )
             .await
@@ -761,6 +766,7 @@ impl Inner {
             let usd: Option<f64> = row.try_get(5).map_err(field)?;
             let per: Option<String> = row.try_get(6).map_err(field)?;
             let tpm: Option<i32> = row.try_get(8).map_err(field)?;
+            let options: Option<String> = row.try_get(9).map_err(field)?;
             keys.push(KeyEntry {
                 name: row.try_get(0).map_err(field)?,
                 team: row.try_get(1).map_err(field)?,
@@ -779,6 +785,12 @@ impl Inner {
                 models: row.try_get(7).map_err(field)?,
                 // A value out of range becomes 0, which the loader refuses: the change is then not used at all.
                 tpm: tpm.map(|t| u32::try_from(t).unwrap_or(0)),
+                // Unreadable options stop the refresh: the last keys stay in force, never one with fewer limits.
+                options: options
+                    .as_deref()
+                    .map(keyfile::options_from_json)
+                    .transpose()?
+                    .unwrap_or_default(),
             });
         }
         Ok(keys)
@@ -1264,8 +1276,8 @@ impl Store for PgStore {
                 let row = client
                     .query_one(
                         "WITH added AS (\
-                           INSERT INTO gantry_keys (sha256, name, team, admin, expires, budget_usd, budget_per, models, tpm) \
-                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (sha256) DO NOTHING RETURNING 1), \
+                           INSERT INTO gantry_keys (sha256, name, team, admin, expires, budget_usd, budget_per, models, tpm, options) \
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (sha256) DO NOTHING RETURNING 1), \
                          bumped AS (UPDATE gantry_versions SET version = version + 1 \
                            WHERE name = 'keys' AND EXISTS (SELECT 1 FROM added)) \
                          SELECT EXISTS (SELECT 1 FROM added), EXISTS (SELECT 1 FROM gantry_keys WHERE name = $2)",
@@ -1279,6 +1291,7 @@ impl Store for PgStore {
                             &per,
                             &entry.models,
                             &tpm,
+                            &keyfile::options_json(&entry.options),
                         ],
                     )
                     .await
@@ -1289,6 +1302,73 @@ impl Store for PgStore {
                 }
                 row.try_get(1).map_err(|err| err.to_string())
             })
+        })
+    }
+
+    fn update_key(&self, entry: &KeyEntry) -> Result<bool, String> {
+        let entry = entry.clone();
+        self.change("key", move |client| {
+            Box::pin(async move {
+                let per = entry.budget.map(|b| b.per.word());
+                let tpm = entry.tpm.map(|t| i32::try_from(t).unwrap_or(i32::MAX));
+                let row = client
+                    .query_one(
+                        "WITH changed AS (UPDATE gantry_keys SET admin = $2, expires = $3, budget_usd = $4, \
+                           budget_per = $5, models = $6, tpm = $7, options = $8 WHERE sha256 = $1 RETURNING 1), \
+                         bumped AS (UPDATE gantry_versions SET version = version + 1 \
+                           WHERE name = 'keys' AND EXISTS (SELECT 1 FROM changed)) \
+                         SELECT EXISTS (SELECT 1 FROM changed)",
+                        &[
+                            &entry.sha256,
+                            &entry.admin,
+                            &entry.expires,
+                            &entry.budget.map(|b| b.usd),
+                            &per,
+                            &entry.models,
+                            &tpm,
+                            &keyfile::options_json(&entry.options),
+                        ],
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+                row.try_get(0).map_err(|err| err.to_string())
+            })
+        })
+    }
+
+    fn reachable(&self) -> Result<(), String> {
+        if self.inner.down.load(Ordering::Relaxed) {
+            return Err(format!(
+                "the store cannot be reached: check Postgres and {}",
+                self.inner.env
+            ));
+        }
+        self.inner.client().map(|_| ())
+    }
+
+    fn spend(&self, scope: String) -> Pending<Vec<(String, String, f64, f64)>> {
+        let inner = self.inner.clone();
+        self.ask(async move {
+            let rows = inner
+                .client()?
+                .query(
+                    "SELECT per, period, spent, reserved FROM gantry_spend WHERE scope = $1 \
+                     AND period IN (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD'), to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM'))",
+                    &[&scope],
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+            rows.iter()
+                .map(|row| {
+                    let field = |err: tokio_postgres::Error| err.to_string();
+                    Ok((
+                        row.try_get(0).map_err(field)?,
+                        row.try_get(1).map_err(field)?,
+                        row.try_get(2).map_err(field)?,
+                        row.try_get(3).map_err(field)?,
+                    ))
+                })
+                .collect()
         })
     }
 

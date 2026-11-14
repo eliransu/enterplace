@@ -7,6 +7,23 @@ same version. How a release is made: RELEASING.md in the gantry-enterprise repos
 
 ## [Unreleased]
 
+### Added
+
+- `GET /readyz`: ready only when a request would be served (audit log writable, store reachable when set, a policy
+  with keys or a JWT issuer, not draining, and any check an embedder adds). `/healthz` stays liveness. On `SIGTERM`
+  Gantry stops accepting, answers `/readyz` with 503 and finishes requests in flight.
+- Key management: `PATCH /admin/keys/<prefix>` and `gantry key update` change a key's expiry, budget, models, tpm,
+  rpm, parallel, tags, metadata, routes and source ranges, each change recorded with its before and after;
+  `GET /admin/keys/<prefix>` and `gantry key info` show a key with its spend; `POST /admin/keys/<prefix>/rotate` and
+  `gantry key rotate --grace 48h` make a new key and keep the old one for the grace, recording every use of it.
+- Access: `from:` address ranges on keys and rules with `trusted_proxies:` for `X-Forwarded-For` (`ip_not_allowed`),
+  key `routes` (`route_not_allowed`), key `rpm` and `parallel` (`parallel_limit`), and `jwt:` issuers whose RS256 or
+  ES256 tokens are accepted in place of a Gantry key and recorded with their issuer and subject.
+- Routing: `balance: lowest_latency` (90th percentile time to first byte) and `lowest_cost`, deployments kept `for:` a
+  team or tag with `x-gantry-tags` limited to the rule's `tags:`, `region:` labels with `regions:` residency on rules
+  (a refusal, never a preference), and `session_affinity` for coding agent sessions. Each choice and its reason is in
+  the decision record's `routing`.
+
 ## [0.1.0] - Unreleased
 
 The first tagged release: a governed AI gateway in one static binary. Every request carries a person's or workload's

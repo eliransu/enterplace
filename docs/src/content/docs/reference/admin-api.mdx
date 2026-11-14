@@ -36,6 +36,9 @@ The admin API exists only when Gantry serves from a keys file. Under `gantry ser
 |---|---|---|---|
 | `GET` | `/admin/keys` | `list_keys` | Lists the keys in use |
 | `POST` | `/admin/keys` | `issue_key` | Issues a key |
+| `GET` | `/admin/keys/<prefix>` | `key_info` | A key's settings and spend |
+| `PATCH` | `/admin/keys/<prefix>` | `update_key` | Changes a key's settings |
+| `POST` | `/admin/keys/<prefix>/rotate` | `rotate_key` | Makes a new key and ends the old one after a grace |
 | `DELETE` | `/admin/keys/<prefix>` | `revoke_key` | Revokes a key by its hash prefix |
 | `DELETE` | `/admin/keys/self` | `revoke_own_key` | Revokes the key that sends the request |
 | `GET` | `/admin/kills` | `list_kills` | Lists the kill switches that are on |
@@ -109,6 +112,51 @@ Unknown fields are refused with `invalid_request`.
 | `in_effect` | boolean | `true` when the new keys file is in use |
 | `problems` | array of strings | Only when `false`: the files on disk fail the check for another reason, so Gantry keeps the version it has |
 | `message` | string | Only when `false`: what to do. The change applies within 2 seconds of the files passing |
+
+## GET /admin/keys/&lt;prefix&gt;
+
+A key's settings and what it spent, never the key.
+
+```json
+{"key": {"name": "maya.cohen", "team": "payments", "sha256_prefix": "5d1e4a07", "admin": false, "expires": null,
+  "budget": {"usd": 20.0, "per": "month"}, "models": null, "tpm": null, "rpm": 60, "parallel": null,
+  "tags": ["eval"], "metadata": {"owner": "maya"}, "routes": [], "from": [], "replaced_by": null},
+ "spend": [{"per": "day", "period": "2026-11-14", "spent_usd": 0.412, "reserved_usd": 0.03},
+           {"per": "month", "period": "2026-11", "spent_usd": 7.905, "reserved_usd": 0.03}],
+ "spend_counted_by": "store"}
+```
+
+`spend_counted_by` is `store` when the policy has `store:` (every gateway on it), else `this gateway`. `reserved_usd` is held by requests in flight.
+
+## PATCH /admin/keys/&lt;prefix&gt;
+
+Changes the fields sent and leaves the rest. `null` removes a field.
+
+| Field | Value |
+|---|---|
+| `expires` | `"2026-12-31"` or `"2026-12-31T18:00:00Z"`, not in the past |
+| `budget` | `{"usd": 20, "per": "month"}` |
+| `models` | Models or aliases the policy serves, at least one |
+| `tpm` | 1 to 1000000000 |
+| `rpm` | 1 to 1000000 |
+| `parallel` | 1 to 10000 |
+| `tags` | Names, at most 32 |
+| `metadata` | Object of names to text, at most 32 entries, values at most 256 characters |
+| `routes` | Path prefixes starting with `/`, at most 32 |
+| `from` | Address ranges such as `"10.0.0.0/8"`, at most 32 |
+
+Name, team and `admin` cannot be changed: a new name is a new key, and admin rights are given only by `gantry key new --admin`. Any other field, or a wrong value, is refused with 400 `invalid_request` and nothing is changed. The `admin` record's `target.changes` holds `{"<field>": {"from": ..., "to": ...}}` for each field sent. The answer is the key as changed, with [`status`](#status).
+
+## POST /admin/keys/&lt;prefix&gt;/rotate
+
+Body `{"grace": "48h"}` (optional, default `24h`; `90s`, `30m`, `48h`, `7d`, at most `90d`, or `0`).
+
+```json
+{"key": "gantry_8a41...", "name": "maya.cohen", "team": "payments", "sha256_prefix": "8a41c2d0",
+ "replaces": "5d1e4a07", "old_key_until": "2026-11-16T09:14:02Z", "status": {"in_effect": true}, "message": "..."}
+```
+
+The new key has the old one's settings and is shown once. The old key gets `expires` at `old_key_until` (or keeps an earlier one) and `replaced_by`, and every request with it until then is recorded with `key_rotated`. A key already rotated: 409 `already_rotated`. If the old key cannot be changed, the new one is removed again and the call fails with nothing changed.
 
 ## DELETE /admin/keys/&lt;prefix&gt;
 

@@ -39,6 +39,17 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`key_expired`](#key_expired) | 401 | `authentication_error` |
 | [`killed`](#killed) | 403 | `permission_error` |
 | [`kills_unreadable`](#kills_unreadable) | 503 | `api_error` |
+| [`ip_not_allowed`](#ip_not_allowed) | 403 | `permission_error` |
+| [`route_not_allowed`](#route_not_allowed) | 403 | `permission_error` |
+| [`jwt_untrusted`](#jwt_untrusted) | 401 | `authentication_error` |
+| [`jwt_invalid`](#jwt_invalid) | 401 | `authentication_error` |
+| [`jwt_expired`](#jwt_expired) | 401 | `authentication_error` |
+| [`jwt_claims`](#jwt_claims) | 401 | `authentication_error` |
+| [`jwt_keys_unavailable`](#jwt_keys_unavailable) | 503 | `api_error` |
+| [`tag_not_allowed`](#tag_not_allowed) | 403 | `permission_error` |
+| [`region_not_allowed`](#region_not_allowed) | 403 | `permission_error` |
+| [`no_deployment`](#no_deployment) | 403 | `permission_error` |
+| [`parallel_limit`](#parallel_limit) | 429 | `rate_limit_error` |
 | [`unknown_route`](#unknown_route) | 404 | `not_found_error` |
 | [`body_too_large`](#body_too_large) | 413 | `request_too_large` |
 | [`body_timeout`](#body_timeout) | 408 | `invalid_request_error` |
@@ -108,6 +119,34 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 **503.** `gantry.kills.json` beside the keys file cannot be read, so Gantry cannot tell whether a switch stops the request. Every request is refused.
 
 **Fix:** the admin fixes the file, or deletes it, which turns every switch off.
+
+### ip_not_allowed
+
+The request came from an address outside the key's or the rule's `from` list; the record's `ip_not_allowed` says which. Send it from an allowed network, or ask an admin to change the list. See [Source address ranges](/governance/access-control/#source-address-ranges).
+
+### route_not_allowed
+
+The key's `routes` do not include this path. Ask an admin to change the key's routes.
+
+### jwt_untrusted
+
+The bearer token is a JWT from an issuer the policy's `jwt:` does not list. Use a token from a trusted issuer, or a Gantry key.
+
+### jwt_invalid
+
+The JWT is malformed, signed with an algorithm other than RS256 or ES256, signed with a key not in its issuer's key set, has a wrong signature or audience, or is not valid yet. The message names which.
+
+### jwt_expired
+
+The JWT's `exp` has passed. Get a new token from the identity provider.
+
+### jwt_claims
+
+The JWT's person or team claim is missing, holds more than one value, or is not a name. Check `person_claim` and `team_claim` under `jwt:` against the tokens.
+
+### jwt_keys_unavailable
+
+The issuer's key set could not be read and no copy was cached. Retry; check `jwks_url` if it repeats.
 
 ## Route and body
 
@@ -275,6 +314,22 @@ Also 403 when a guardrail with `on: [answer]` withheld the model's whole answer.
 
 **Fix:** add the model's price under `prices:`.
 
+### tag_not_allowed
+
+`x-gantry-tags` holds a tag the rule's `tags:` does not list. The message names the tag and the list.
+
+### region_not_allowed
+
+The rule has `regions:` and the request has no deployment in one of them: an alias with no deployment labelled so, a model that is not an alias, or a passthrough call. Nothing was sent. See [Residency](/routing/strategies/#residency-regions).
+
+### no_deployment
+
+Every deployment of the alias that the request may use is kept (`for:`) for another team or tag.
+
+### parallel_limit
+
+The key already has as many requests in flight as its `parallel` allows. Retry when one finishes; `Retry-After` is set.
+
 ## Audit and provider
 
 ### audit_unavailable
@@ -344,6 +399,10 @@ These come from `/admin/keys`, `/admin/kills` and `/admin/credentials`, in OpenA
 **400.** The kill switch names a person, team, key or model that no key holds and no provider serves, so it would stop nothing. The message lists names close to it.
 
 **Fix:** name one that exists, or send `"force": true` (`gantry kill --force`).
+
+### already_rotated
+
+`POST /admin/keys/<prefix>/rotate` on a key that was already rotated. Rotate the key that replaced it.
 
 ### no_such_key
 

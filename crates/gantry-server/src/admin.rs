@@ -24,7 +24,7 @@ use crate::{
     AppState, ClientAddr, DECISION, Refusal, Reload, Snapshot, Trigger, caller_key, read_body,
 };
 
-const ROUTES: &str = "GET /admin/keys, POST /admin/keys, DELETE /admin/keys/<first 8 hex characters of the hash>, DELETE /admin/keys/self, GET, POST and DELETE /admin/kills, GET and POST /admin/credentials, and PUT and DELETE /admin/credentials/<name>";
+const ROUTES: &str = "GET /admin/keys, POST /admin/keys, GET, PATCH and DELETE /admin/keys/<first 8 hex characters of the hash>, POST /admin/keys/<prefix>/rotate, DELETE /admin/keys/self, GET, POST and DELETE /admin/kills, GET and POST /admin/credentials, and PUT and DELETE /admin/credentials/<name>";
 
 /// Why there is no credential to add or list on a gateway without a store.
 const NEED_STORE: &str = "Refused: provider credentials are kept in the store, sealed with a master key, and this gateway's policy has no store: section. Keep provider keys in environment variables with key_env (or in files with key_file), or add `store: { postgres_url_env: DATABASE_URL }` to the policy and set GANTRY_MASTER_KEY.";
@@ -40,6 +40,17 @@ enum Plan {
     },
     Revoke {
         prefix: String,
+    },
+    Info(config::KeyEntry),
+    Update {
+        prefix: String,
+        changes: Vec<(String, Value)>,
+    },
+    Rotate {
+        old: config::KeyEntry,
+        key: String,
+        /// When the old key stops working, as `expires` takes it.
+        until: String,
     },
     Kills,
     Kill(kill::Kill),
@@ -199,6 +210,184 @@ struct NewKey {
     models: Option<Vec<String>>,
     #[serde(default)]
     tpm: Option<u32>,
+    #[serde(default)]
+    rpm: Option<Value>,
+    #[serde(default)]
+    parallel: Option<Value>,
+    #[serde(default)]
+    tags: Option<Value>,
+    #[serde(default)]
+    metadata: Option<Value>,
+    #[serde(default)]
+    routes: Option<Value>,
+    #[serde(default)]
+    from: Option<Value>,
+}
+
+/// The key fields `PATCH /admin/keys/<prefix>` changes. Name, team and admin are not among them: a new name is a
+/// new key, and admin rights are given only by `gantry key new --admin`.
+const UPDATABLE: &str =
+    "expires, budget, models, tpm, rpm, parallel, tags, metadata, routes and from";
+
+/// Sets one field of `entry` from its JSON value, or says what is wrong with it. `null` clears the field.
+fn apply(
+    entry: &mut config::KeyEntry,
+    field: &str,
+    value: &Value,
+    served: &[&String],
+) -> Result<(), String> {
+    let number = |most: u64| -> Result<Option<u32>, String> {
+        match value {
+            Value::Null => Ok(None),
+            v => v
+                .as_u64()
+                .filter(|n| (1..=most).contains(n))
+                .and_then(|n| u32::try_from(n).ok())
+                .map(Some)
+                .ok_or_else(|| {
+                    format!("{field} is a whole number from 1 to {most}, or null to remove it")
+                }),
+        }
+    };
+    let list = || -> Result<Vec<String>, String> {
+        match value {
+            Value::Null => Ok(Vec::new()),
+            Value::Array(items) => items
+                .iter()
+                .map(|v| v.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| format!("{field} is a list of strings, or null to remove it")),
+            _ => Err(format!(
+                "{field} is a list of strings, or null to remove it"
+            )),
+        }
+    };
+    match field {
+        "expires" => {
+            entry.expires = match value {
+                Value::Null => None,
+                Value::String(at) => {
+                    config::issuable_expiry(at)?;
+                    Some(at.clone())
+                }
+                _ => return Err(
+                    "expires is a UTC date or time such as \"2026-12-31\", or null to remove it"
+                        .into(),
+                ),
+            }
+        }
+        "budget" => {
+            entry.budget = match value {
+                Value::Null => None,
+                v => {
+                    let usd = v["usd"].as_f64().filter(|u| u.is_finite() && *u > 0.0);
+                    let per = match v["per"].as_str() {
+                        Some("day") => Some(gantry_core::policy::Period::Day),
+                        Some("month") => Some(gantry_core::policy::Period::Month),
+                        _ => None,
+                    };
+                    match (usd, per) {
+                        (Some(usd), Some(per)) => Some(gantry_core::policy::Budget { usd, per }),
+                        _ => return Err("budget takes US dollars above 0 and a period, for example {\"usd\": 20, \"per\": \"month\"}, or null to remove it".into()),
+                    }
+                }
+            }
+        }
+        "models" => {
+            entry.models = match value {
+                Value::Null => None,
+                _ => {
+                    let models = list()?;
+                    if models.is_empty() {
+                        return Err("models lists at least one model the key may use, or is null to leave its rule's list".into());
+                    }
+                    if let Some(unknown) = models.iter().find(|m| *m != "*" && !served.contains(m))
+                    {
+                        return Err(format!(
+                            "model \"{unknown}\" is not served here, so the key could never use it. List models or aliases of the policy, as GET /v1/models lists them"
+                        ));
+                    }
+                    Some(models)
+                }
+            }
+        }
+        "tpm" => entry.tpm = number(1_000_000_000)?,
+        "rpm" => entry.options.rpm = number(1_000_000)?,
+        "parallel" => entry.options.parallel = number(10_000)?,
+        "tags" => entry.options.tags = list()?,
+        "routes" => entry.options.routes = list()?,
+        "from" => entry.options.from = config::cidrs(&list()?)?,
+        "metadata" => {
+            entry.options.metadata = match value {
+                Value::Null => Default::default(),
+                Value::Object(map) => map
+                    .iter()
+                    .map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
+                    .collect::<Option<_>>()
+                    .ok_or("metadata is an object of names to text values, or null to remove it")?,
+                _ => {
+                    return Err(
+                        "metadata is an object of names to text values, or null to remove it"
+                            .into(),
+                    );
+                }
+            }
+        }
+        other => {
+            return Err(format!(
+                "\"{other}\" is not a key field the admin API changes. It changes {UPDATABLE}"
+            ));
+        }
+    }
+    config::key_options_problem(&entry.options).map_or(Ok(()), Err)
+}
+
+/// A key's settings as the admin API shows them. Never the key.
+fn key_json(entry: &config::KeyEntry) -> Value {
+    let o = &entry.options;
+    json!({
+        "name": entry.name,
+        "team": entry.team,
+        "sha256_prefix": &entry.sha256[..8],
+        "admin": entry.admin,
+        "expires": entry.expires,
+        "budget": entry.budget.map(|b| json!({ "usd": b.usd, "per": b.per.word() })),
+        "models": entry.models,
+        "tpm": entry.tpm,
+        "rpm": o.rpm,
+        "parallel": o.parallel,
+        "tags": o.tags,
+        "metadata": o.metadata,
+        "routes": o.routes,
+        "from": o.from.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "replaced_by": o.replaced_by,
+    })
+}
+
+/// How long the old key keeps working after a rotation: `48h`, `30m`, `7d`, `90s` or `0`. At most 90 days.
+fn grace(text: &str) -> Result<std::time::Duration, String> {
+    let wrong = || {
+        format!(
+            "grace is \"{text}\". Write how long the old key keeps working, such as 48h, 30m or 7d (at most 90d), or 0 to end it now"
+        )
+    };
+    let text = text.trim();
+    if text == "0" {
+        return Ok(std::time::Duration::ZERO);
+    }
+    let (number, unit) = text.split_at(text.len().saturating_sub(1));
+    let n: u64 = number.parse().map_err(|_| wrong())?;
+    let seconds = match unit {
+        "s" => n,
+        "m" => n.saturating_mul(60),
+        "h" => n.saturating_mul(3600),
+        "d" => n.saturating_mul(86_400),
+        _ => return Err(wrong()),
+    };
+    if seconds > 90 * 86_400 {
+        return Err(wrong());
+    }
+    Ok(std::time::Duration::from_secs(seconds))
 }
 
 #[derive(serde::Deserialize)]
@@ -292,7 +481,11 @@ async fn allow(
         (&Method::GET, None, false) => Some("list_keys"),
         (&Method::POST, None, false) => Some("issue_key"),
         (&Method::DELETE, Some("self"), _) => Some("revoke_own_key"),
+        (&Method::POST, Some(p), _) if p.ends_with("/rotate") => Some("rotate_key"),
+        (_, Some(p), _) if p.contains('/') => None,
         (&Method::DELETE, Some(_), _) => Some("revoke_key"),
+        (&Method::GET, Some(_), _) => Some("key_info"),
+        (&Method::PATCH, Some(_), _) => Some("update_key"),
         (&Method::GET, None, true) => Some("list_kills"),
         (&Method::POST, None, true) => Some("set_kill"),
         (&Method::DELETE, None, true) => Some("clear_kill"),
@@ -485,8 +678,27 @@ async fn allow(
         "issue_key" => {
             let (bytes, _held) = read_body(Some(&person.name), state, &parts.headers, body).await?;
             let new: NewKey = serde_json::from_slice(&bytes).map_err(|err| {
-                refused(StatusCode::BAD_REQUEST, "invalid_request", format!("Refused: send a JSON object with \"name\" and \"team\", and optionally \"expires\", \"budget\", \"models\" and \"tpm\" ({err})."))
+                refused(StatusCode::BAD_REQUEST, "invalid_request", format!("Refused: send a JSON object with \"name\" and \"team\", and optionally \"expires\", \"budget\", \"models\", \"tpm\", \"rpm\", \"parallel\", \"tags\", \"metadata\", \"routes\" and \"from\" ({err})."))
             })?;
+            let mut extra = config::KeyEntry::default();
+            for (field, value) in [
+                ("rpm", &new.rpm),
+                ("parallel", &new.parallel),
+                ("tags", &new.tags),
+                ("metadata", &new.metadata),
+                ("routes", &new.routes),
+                ("from", &new.from),
+            ] {
+                if let Some(value) = value {
+                    apply(&mut extra, field, value, &[]).map_err(|problem| {
+                        refused(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request",
+                            format!("Refused: {problem}."),
+                        )
+                    })?;
+                }
+            }
             if !valid_name(&new.name) || !valid_name(&new.team) {
                 return Err(refused(
                     StatusCode::BAD_REQUEST,
@@ -569,7 +781,132 @@ async fn allow(
                     budget,
                     models: new.models,
                     tpm: new.tpm,
+                    options: extra.options,
                 },
+            })
+        }
+        action @ ("key_info" | "update_key" | "rotate_key") => {
+            let raw = prefix.unwrap_or_default();
+            let prefix = raw.trim_end_matches("/rotate").to_ascii_lowercase();
+            let found = one_key(state, &prefix)?;
+            let named = json!({ "name": found.name, "team": found.team, "sha256_prefix": &found.sha256[..8] });
+            call.target = Some(named.clone());
+            if action == "key_info" {
+                return Ok(Plan::Info(found));
+            }
+            let (bytes, _held) = read_body(Some(&person.name), state, &parts.headers, body).await?;
+            let sent: Value = if bytes.is_empty() {
+                json!({})
+            } else {
+                serde_json::from_slice(&bytes).map_err(|_| {
+                    refused(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request",
+                        "Refused: send a JSON object.",
+                    )
+                })?
+            };
+            let Value::Object(sent) = sent else {
+                return Err(refused(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "Refused: send a JSON object.",
+                ));
+            };
+            if action == "rotate_key" {
+                if let Some(other) = sent.keys().find(|k| *k != "grace") {
+                    return Err(refused(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request",
+                        format!(
+                            "Refused: a rotation takes only \"grace\", such as {{\"grace\": \"48h\"}}, not \"{other}\"."
+                        ),
+                    ));
+                }
+                if found.options.replaced_by.is_some() {
+                    return Err(refused(
+                        StatusCode::CONFLICT,
+                        "already_rotated",
+                        format!(
+                            "Refused: the key {} was already rotated and replaced by {}. Rotate the new key instead, or revoke this one.",
+                            &found.sha256[..8],
+                            found.options.replaced_by.as_deref().unwrap_or_default()
+                        ),
+                    ));
+                }
+                let wait = grace(sent.get("grace").and_then(Value::as_str).unwrap_or("24h"))
+                    .map_err(|problem| {
+                        refused(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request",
+                            format!("Refused: {problem}."),
+                        )
+                    })?;
+                let key = id::new_key().map_err(|err| {
+                    refused(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "no_randomness",
+                        format!("Refused: {err}. Try again."),
+                    )
+                })?;
+                let at = audit::rfc3339(std::time::SystemTime::now() + wait);
+                // An expiry already earlier than the grace stays: a rotation never lengthens a key's life.
+                let until = match &found.expires {
+                    Some(old) if gantry_core::policy::expiry_passed(old, &at) => old.clone(),
+                    _ => format!("{}Z", &at[..19]),
+                };
+                let mut target = named;
+                target["replaced_by"] = id::sha256_hex(key.as_bytes())[..8].into();
+                target["old_key_until"] = until.clone().into();
+                call.target = Some(target);
+                return Ok(Plan::Rotate {
+                    old: found,
+                    key,
+                    until,
+                });
+            }
+            let served: Vec<&String> = version
+                .providers
+                .iter()
+                .flat_map(|p| p.models.iter())
+                .chain(version.aliases.iter().map(|a| &a.name))
+                .collect();
+            if sent.is_empty() {
+                return Err(refused(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    format!(
+                        "Refused: send the fields to change, such as {{\"rpm\": 60, \"tags\": [\"batch\"]}}. The admin API changes {UPDATABLE}; null removes one."
+                    ),
+                ));
+            }
+            let mut after = found.clone();
+            for (field, value) in &sent {
+                apply(&mut after, field, value, &served).map_err(|problem| {
+                    refused(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request",
+                        format!("Refused: {problem}. Nothing was changed."),
+                    )
+                })?;
+            }
+            // The record says what each field was and what it becomes.
+            let (was, now) = (key_json(&found), key_json(&after));
+            let changes: Map<String, Value> = sent
+                .keys()
+                .map(|field| {
+                    (
+                        field.clone(),
+                        json!({ "from": was[field.as_str()], "to": now[field.as_str()] }),
+                    )
+                })
+                .collect();
+            let mut target = named;
+            target["changes"] = changes.into();
+            call.target = Some(target);
+            Ok(Plan::Update {
+                prefix,
+                changes: sent.into_iter().collect(),
             })
         }
         _ => {
@@ -623,6 +960,46 @@ async fn allow(
                 )),
             }
         }
+    }
+}
+
+/// The one key whose hash starts with `prefix`, from the keys file or the store, which may hold an entry the version
+/// in use does not have yet.
+fn one_key(state: &AppState, prefix: &str) -> Result<config::KeyEntry, Refusal> {
+    if prefix.len() < 8 || prefix.len() > 64 || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(refused(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Refused: name the key by the first 8 hex characters of its hash, as GET /admin/keys lists it.",
+        ));
+    }
+    let keys_path = state
+        .reloader
+        .as_ref()
+        .map(|r| r.keys_path().to_path_buf())
+        .unwrap_or_default();
+    let entries = config::read_keys(&keys_path)
+        .map_err(|err| refused(StatusCode::CONFLICT, "keys_file", format!("Refused: {err}")))?
+        .map(|text| config::key_entries(&keys_path, &text).unwrap_or_default())
+        .unwrap_or_default();
+    let matching: Vec<_> = entries
+        .into_iter()
+        .filter(|e| e.sha256.starts_with(prefix))
+        .collect();
+    match <[config::KeyEntry; 1]>::try_from(matching) {
+        Ok([found]) => Ok(found),
+        Err(none) if none.is_empty() => Err(refused(
+            StatusCode::NOT_FOUND,
+            "no_such_key",
+            format!(
+                "Refused: no key has a hash that starts with {prefix}. GET /admin/keys lists them."
+            ),
+        )),
+        Err(_) => Err(refused(
+            StatusCode::BAD_REQUEST,
+            "ambiguous_key",
+            format!("Refused: more than one key hash starts with {prefix}. Send more of the hash."),
+        )),
     }
 }
 
@@ -849,6 +1226,13 @@ async fn act(state: &AppState, version: &Snapshot, plan: Plan) -> Result<Respons
                         "budget": who.budget.map(|b| json!({ "usd": b.usd, "per": b.per.word() })),
                         "models": who.models,
                         "tpm": who.tpm,
+                        "rpm": who.options.rpm,
+                        "parallel": who.options.parallel,
+                        "tags": who.options.tags,
+                        "metadata": who.options.metadata,
+                        "routes": who.options.routes,
+                        "from": who.options.from.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                        "replaced_by": who.options.replaced_by,
                     })
                 })
                 .collect();
@@ -876,6 +1260,109 @@ async fn act(state: &AppState, version: &Snapshot, plan: Plan) -> Result<Respons
                     "rotated": rotated,
                     "status": status,
                     "message": "This key is shown once and is not stored anywhere. Only its hash is in the keys file.",
+                }),
+            ))
+        }
+        Plan::Info(entry) => {
+            let scope = format!("key:{}", &entry.sha256[..8]);
+            let (rows, source) = match &state.spend.store {
+                Some(store) => (store.spend(scope).await.map_err(store_error)?, "store"),
+                None => (state.spend.usage(&scope), "this gateway"),
+            };
+            let spend: Vec<Value> = rows
+                .into_iter()
+                .map(|(per, period, spent, reserved)| {
+                    json!({ "per": per, "period": period, "spent_usd": spent, "reserved_usd": reserved })
+                })
+                .collect();
+            Ok(json_response(
+                StatusCode::OK,
+                &json!({ "key": key_json(&entry), "spend": spend, "spend_counted_by": source }),
+            ))
+        }
+        Plan::Update { prefix, changes } => {
+            let served: Vec<String> = version
+                .providers
+                .iter()
+                .flat_map(|p| p.models.iter().cloned())
+                .chain(version.aliases.iter().map(|a| a.name.clone()))
+                .collect();
+            let changed = blocking(move || {
+                let served: Vec<&String> = served.iter().collect();
+                keyfile::update(&keys_path, &prefix, &|entry| {
+                    for (field, value) in &changes {
+                        // Checked before the call was recorded; a field that fails now changes nothing.
+                        let _ = apply(entry, field, value, &served);
+                    }
+                })
+            })
+            .await?
+            .map_err(file_error)?;
+            let Some((_, after)) = changed else {
+                return Err(refused(
+                    StatusCode::NOT_FOUND,
+                    "no_such_key",
+                    "Refused: the key was removed by someone else meanwhile.",
+                ));
+            };
+            let status = reload(state).await?;
+            Ok(json_response(
+                StatusCode::OK,
+                &json!({ "key": key_json(&after), "status": status }),
+            ))
+        }
+        Plan::Rotate { old, key, until } => {
+            let attributes = keyfile::Attributes {
+                admin: old.admin,
+                expires: old.expires.clone(),
+                budget: old.budget,
+                models: old.models.clone(),
+                tpm: old.tpm,
+                options: gantry_core::policy::KeyOptions {
+                    replaced_by: None,
+                    ..old.options.clone()
+                },
+            };
+            let new_prefix = id::sha256_hex(key.as_bytes())[..8].to_string();
+            let (o, k, p, u, np) = (
+                old.clone(),
+                key.clone(),
+                keys_path.clone(),
+                until.clone(),
+                new_prefix.clone(),
+            );
+            blocking(move || {
+                keyfile::add_with(&o.name, &o.team, &k, &attributes, &p)?;
+                let ended = keyfile::update(&p, &o.sha256, &|entry| {
+                    entry.expires = Some(u.clone());
+                    entry.options.replaced_by = Some(np.clone());
+                });
+                match ended {
+                    Ok(Some(_)) => Ok(()),
+                    // The new key was never shown: it is taken out again, so nobody holds a key the record does not explain.
+                    other => {
+                        let _ = keyfile::revoke(&p, &id::sha256_hex(k.as_bytes()));
+                        Err(match other {
+                            Err(err) => err,
+                            _ => "the old key was removed by someone else meanwhile. No new key was made.".into(),
+                        })
+                    }
+                }
+            })
+            .await?
+            .map_err(file_error)?;
+            let status = reload(state).await?;
+            Ok(json_response(
+                StatusCode::CREATED,
+                &json!({
+                    "key": key,
+                    "name": old.name,
+                    "team": old.team,
+                    "sha256_prefix": new_prefix,
+                    "replaces": &old.sha256[..8],
+                    "old_key_until": until,
+                    "status": status,
+                    "message": "This key is shown once and is not stored anywhere. The old key keeps working until old_key_until, and every request made with it until then is recorded with key_rotated.",
                 }),
             ))
         }

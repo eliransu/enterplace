@@ -113,6 +113,20 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     fn session(&self, id_sha256: String) -> Pending<Option<String>>;
     /// Ends a console session on every gateway. Does not wait: retried while the database is away.
     fn end_session(&self, id_sha256: String);
+    /// Replaces the settings of the key with `entry.sha256` (name, team and hash stay). `Ok(false)` when there is
+    /// no such key. Blocks until the database answers.
+    fn update_key(&self, _entry: &KeyEntry) -> Result<bool, String> {
+        Err("this store cannot change a key in place. Revoke it and issue a new one.".into())
+    }
+    /// Whether the store can be reached now, or why not. Asked by `GET /readyz`, so it answers from memory.
+    fn reachable(&self) -> Result<(), String> {
+        Ok(())
+    }
+    /// What `scope` (`key:1a2b3c4d`) has spent and holds, as `(per, period, spent, reserved)` for the current day
+    /// and month, across every gateway on the store.
+    fn spend(&self, _scope: String) -> Pending<Vec<(String, String, f64, f64)>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
     /// The provider credentials, from memory. `Err` names why there are none to show: the feature is off.
     fn credentials(&self) -> Result<Arc<Vec<Credential>>, String> {
         Err(NO_CREDENTIALS.into())

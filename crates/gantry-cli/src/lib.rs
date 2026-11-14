@@ -34,6 +34,18 @@ Commands:
   key revoke <hash prefix> [--keys <file>]
         Remove the key whose hash starts with the prefix (at least 8 hex characters, as `key list` shows
         it). A running Gantry refuses it within 2 seconds.
+  key info <hash prefix> [--url <gantry url>]
+        Show a key's settings and what it spent today and this month (across every gateway on a store).
+  key update <hash prefix> [--expires <date>] [--budget <usd>/<day|month>] [--models <a,b>] [--tpm <n>]
+          [--rpm <n>] [--parallel <n>] [--tags <a,b>] [--routes </v1/...,...>] [--from <cidr,cidr>]
+          [--metadata <k=v,k=v>] [--url <gantry url>]
+        Change a key's settings on a running gateway. `none` removes one, for example --rpm none. Each change is
+        recorded in the audit log with what the field was and what it became.
+  key rotate <hash prefix> [--grace <48h|30m|7d|0>] [--url <gantry url>]
+        Make a new key with the same settings and print it once. The old key keeps working for the grace (24h
+        unless given), and every request made with it until then is recorded as made with a rotated key.
+        info, update and rotate go through the admin API: an admin key in GANTRY_ADMIN_KEY (or the saved login
+        key, if it is an admin's), and --url, GANTRY_URL or the saved login for the gateway.
   key prune [--keys <file>]
         Remove the entries whose expiry has passed, such as old `gantry login` keys. Each is removed
         as `DELETE /admin/keys` removes one, safe while Gantry runs; every other line is kept.
@@ -259,6 +271,50 @@ pub async fn run(args: &[String]) -> ExitCode {
             }
             _ => None,
         },
+        ["key", "info", rest @ ..] => match options(rest, &["--url"]) {
+            Some((positional, named)) if positional.len() == 1 => Some(
+                key_info(positional[0], &named)
+                    .await
+                    .map_or_else(fail, |()| ExitCode::SUCCESS),
+            ),
+            _ => None,
+        },
+        ["key", "update", rest @ ..] => match options(
+            rest,
+            &[
+                "--url",
+                "--expires",
+                "--budget",
+                "--models",
+                "--tpm",
+                "--rpm",
+                "--parallel",
+                "--tags",
+                "--routes",
+                "--from",
+                "--metadata",
+            ],
+        ) {
+            Some((positional, named))
+                if positional.len() == 1
+                    && named.len() > usize::from(named.contains_key("--url")) =>
+            {
+                Some(
+                    key_update(positional[0], &named)
+                        .await
+                        .map_or_else(fail, |()| ExitCode::SUCCESS),
+                )
+            }
+            _ => None,
+        },
+        ["key", "rotate", rest @ ..] => match options(rest, &["--url", "--grace"]) {
+            Some((positional, named)) if positional.len() == 1 => Some(
+                key_rotate(positional[0], &named)
+                    .await
+                    .map_or_else(fail, |()| ExitCode::SUCCESS),
+            ),
+            _ => None,
+        },
         ["store", "import", rest @ ..] => match options(rest, &["--keys", "--policy"]) {
             Some((positional, named)) if positional.is_empty() && named.contains_key("--keys") => {
                 Some(
@@ -384,6 +440,13 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["check", ..] => Some("gantry check <policy> [--keys <file>]"),
             ["key", "list", ..] => Some("gantry key list [--keys <file>] [--policy <file>]"),
             ["key", "prune", ..] => Some("gantry key prune [--keys <file>] [--policy <file>]"),
+            ["key", "info", ..] => Some("gantry key info <hash prefix> [--url <gantry url>]"),
+            ["key", "update", ..] => Some(
+                "gantry key update <hash prefix> [--expires <date>] [--budget <usd>/<day|month>] [--models <a,b>] [--tpm <n>] [--rpm <n>] [--parallel <n>] [--tags <a,b>] [--routes <a,b>] [--from <cidr,cidr>] [--metadata <k=v,k=v>] [--url <gantry url>] (at least one change; none removes a setting)",
+            ),
+            ["key", "rotate", ..] => {
+                Some("gantry key rotate <hash prefix> [--grace <48h|30m|7d|0>] [--url <gantry url>]")
+            }
             ["key", "revoke", ..] => {
                 Some("gantry key revoke <hash prefix> [--keys <file>] [--policy <file>]")
             }
@@ -575,6 +638,7 @@ fn attributes(admin: bool, named: &HashMap<&str, &str>) -> Result<keyfile::Attri
         budget,
         models,
         tpm,
+        options: Default::default(),
     })
 }
 
@@ -1223,6 +1287,176 @@ async fn logout() -> Result<(), String> {
 }
 
 /// `gantry kill` (`on`) and `gantry unkill`.
+/// The gateway and the admin key an admin command calls it with: --url, GANTRY_URL or the saved login, and
+/// GANTRY_ADMIN_KEY or the saved login key.
+fn admin_target(named: &HashMap<&str, &str>) -> Result<(String, String), String> {
+    let saved = credentials()?.unwrap_or_default();
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let url = named
+        .get("--url")
+        .map(|u| u.to_string())
+        .or_else(|| env("GANTRY_URL"))
+        .or_else(|| saved.get("url").cloned())
+        .ok_or("name the gateway with --url, GANTRY_URL or `gantry login`.")?;
+    let url = gantry_console::cli::gateway(&url)?;
+    let key = env("GANTRY_ADMIN_KEY")
+        .or_else(|| saved.get("key").cloned())
+        .ok_or("put an admin key in GANTRY_ADMIN_KEY.")?;
+    Ok((url, key))
+}
+
+/// Calls the admin API and returns its answer, or the gateway's refusal as the error.
+async fn admin_call(
+    method: &str,
+    path: &str,
+    named: &HashMap<&str, &str>,
+    body: Option<&serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let (url, key) = admin_target(named)?;
+    let (status, answer) =
+        gantry_console::cli::call(method, &format!("{url}{path}"), &key, body).await?;
+    if !(200..300).contains(&status) {
+        return Err(answer["error"]["message"]
+            .as_str()
+            .map_or_else(|| format!("Gantry answered HTTP {status}."), str::to_string));
+    }
+    Ok(answer)
+}
+
+async fn key_info(prefix: &str, named: &HashMap<&str, &str>) -> Result<(), String> {
+    let answer = admin_call("GET", &format!("/admin/keys/{prefix}"), named, None).await?;
+    let key = &answer["key"];
+    println!(
+        "{} (team {}), key {}",
+        key["name"].as_str().unwrap_or(""),
+        key["team"].as_str().unwrap_or(""),
+        key["sha256_prefix"].as_str().unwrap_or("")
+    );
+    if let Some(fields) = key.as_object() {
+        for (name, value) in fields {
+            let shown = match value {
+                serde_json::Value::Null => continue,
+                serde_json::Value::Array(list) if list.is_empty() => continue,
+                serde_json::Value::Object(map) if map.is_empty() => continue,
+                serde_json::Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            if !matches!(name.as_str(), "name" | "team" | "sha256_prefix") {
+                println!("  {name}: {shown}");
+            }
+        }
+    }
+    println!(
+        "Spend (counted by {}):",
+        answer["spend_counted_by"].as_str().unwrap_or("the gateway")
+    );
+    for row in answer["spend"].as_array().into_iter().flatten() {
+        println!(
+            "  {} {}: ${:.4} spent, ${:.4} held by requests in flight",
+            row["per"].as_str().unwrap_or(""),
+            row["period"].as_str().unwrap_or(""),
+            row["spent_usd"].as_f64().unwrap_or(0.0),
+            row["reserved_usd"].as_f64().unwrap_or(0.0)
+        );
+    }
+    Ok(())
+}
+
+async fn key_update(prefix: &str, named: &HashMap<&str, &str>) -> Result<(), String> {
+    let mut body = serde_json::Map::new();
+    let list = |text: &str| -> serde_json::Value {
+        text.split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+            .into()
+    };
+    for (flag, value) in named {
+        let field = flag.trim_start_matches("--");
+        if field == "url" {
+            continue;
+        }
+        let value = if *value == "none" {
+            serde_json::Value::Null
+        } else {
+            match field {
+                "tpm" | "rpm" | "parallel" => value
+                    .parse::<u64>()
+                    .map(serde_json::Value::from)
+                    .map_err(|_| {
+                        format!(
+                            "--{field} is \"{value}\". Write a whole number, or none to remove it."
+                        )
+                    })?,
+                "budget" => {
+                    let wrong = || {
+                        format!(
+                            "--budget is \"{value}\". Write US dollars and a period, for example --budget 20/month, or none to remove it."
+                        )
+                    };
+                    let (usd, per) = value.split_once('/').ok_or_else(wrong)?;
+                    let usd: f64 = usd.trim_start_matches('$').parse().map_err(|_| wrong())?;
+                    serde_json::json!({ "usd": usd, "per": per })
+                }
+                "models" | "tags" | "routes" | "from" => list(value),
+                "metadata" => {
+                    let mut map = serde_json::Map::new();
+                    for pair in value.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                        let (k, v) = pair.split_once('=').ok_or_else(|| {
+                            format!("--metadata is \"{value}\". Write name=value pairs with commas between, for example --metadata owner=maya,ticket=OPS-12.")
+                        })?;
+                        map.insert(k.trim().to_string(), v.trim().into());
+                    }
+                    map.into()
+                }
+                _ => (*value).into(),
+            }
+        };
+        body.insert(field.to_string(), value);
+    }
+    let answer = admin_call(
+        "PATCH",
+        &format!("/admin/keys/{prefix}"),
+        named,
+        Some(&body.into()),
+    )
+    .await?;
+    let key = &answer["key"];
+    println!(
+        "Changed the key {} of \"{}\". The change is recorded in the audit log and in force within 2 seconds on every gateway serving the same keys.",
+        key["sha256_prefix"].as_str().unwrap_or(prefix),
+        key["name"].as_str().unwrap_or("")
+    );
+    Ok(())
+}
+
+async fn key_rotate(prefix: &str, named: &HashMap<&str, &str>) -> Result<(), String> {
+    let mut body = serde_json::Map::new();
+    if let Some(grace) = named.get("--grace") {
+        body.insert("grace".into(), (*grace).into());
+    }
+    let answer = admin_call(
+        "POST",
+        &format!("/admin/keys/{prefix}/rotate"),
+        named,
+        Some(&body.into()),
+    )
+    .await?;
+    println!(
+        "New key for {} (team {}). It is shown once and is not stored anywhere:\n\n  {}\n",
+        answer["name"].as_str().unwrap_or(""),
+        answer["team"].as_str().unwrap_or(""),
+        answer["key"].as_str().unwrap_or("")
+    );
+    println!(
+        "The old key {} keeps working until {} (UTC). Every request made with it until then is recorded with key_rotated, so you can find who still uses it.",
+        answer["replaces"].as_str().unwrap_or(prefix),
+        answer["old_key_until"].as_str().unwrap_or("")
+    );
+    Ok(())
+}
+
 async fn switch(
     on: bool,
     all: bool,

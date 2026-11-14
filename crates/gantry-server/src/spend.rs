@@ -519,6 +519,27 @@ impl Spend {
         }
     }
 
+    /// What `scope` spent and holds in this process for the current day and month: `(per, period, spent, reserved)`.
+    pub(crate) fn usage(&self, scope: &str) -> Vec<(String, String, f64, f64)> {
+        let now = audit::timestamp();
+        let ledger = locked(&self.ledger);
+        [Period::Day, Period::Month]
+            .into_iter()
+            .map(|per| {
+                let period = period_of(&now, per);
+                let bucket = ledger
+                    .get(&(scope.to_string(), per))
+                    .filter(|b| b.period == period);
+                (
+                    per.word().to_string(),
+                    period.to_string(),
+                    bucket.map_or(0.0, |b| b.spent),
+                    bucket.map_or(0.0, |b| b.reserved),
+                )
+            })
+            .collect()
+    }
+
     /// Spend so far in the current period, for tests and the console.
     #[cfg(test)]
     fn spent(&self, scope: &str, per: Period) -> f64 {
@@ -936,16 +957,30 @@ pub(crate) async fn admit(
             admitted.cache = Some((key, Duration::from_secs(ttl)));
         }
     }
-    if let Some(rpm) = limits.rpm {
+    // The rule's rpm counts per person, the key's own per key: both must pass.
+    let rates = [
+        limits.rpm.map(|n| {
+            (
+                ask.person.name.clone(),
+                n,
+                format!("\"{}\" has sent {n} requests in the last minute, the most rule \"{}\" allows", ask.person.name, ask.rule.name),
+                "rule",
+            )
+        }),
+        ask.person.options.rpm.map(|n| {
+            (
+                format!("key:{}", ask.person.key),
+                n,
+                format!("the key {} of \"{}\" has sent {n} requests in the last minute, the most it may", ask.person.key, ask.person.name),
+                "key",
+            )
+        }),
+    ];
+    for (scope, rpm, said, of) in rates.into_iter().flatten() {
         let counted = match &spend.store {
-            None => spend.rate(&ask.person.name, rpm, Instant::now()),
+            None => spend.rate(&scope, rpm, Instant::now()),
             Some(store) => match spend
-                .take(
-                    store,
-                    &format!("rpm:{}", ask.person.name),
-                    1,
-                    u64::from(rpm),
-                )
+                .take(store, &format!("rpm:{scope}"), 1, u64::from(rpm))
                 .await
             {
                 Ok(_) => Ok(()),
@@ -957,14 +992,11 @@ pub(crate) async fn admit(
             let mut refusal = Refusal::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limited",
-                format!(
-                    "Refused: \"{}\" has sent {rpm} requests in the last minute, the most rule \"{}\" allows. Send this one again in {wait} seconds.",
-                    ask.person.name, ask.rule.name
-                ),
+                format!("Refused: {said}. Send this one again in {wait} seconds."),
             );
             refusal.retry_after = Some(wait);
             refusal.record = Some(Box::new(
-                serde_json::json!({ "limit": { "kind": "rpm", "of": "rule", "value": rpm } }),
+                serde_json::json!({ "limit": { "kind": "rpm", "of": of, "value": rpm } }),
             ));
             return Err(refusal);
         }

@@ -113,6 +113,68 @@ Use `budget` and `expires` for a CI job or an agent that shares a team with peop
 
 See [Budgets and rate limits](/governance/budgets-and-rate-limits/) for how spend and tokens are counted.
 
+## Key fields
+
+Besides name, team, `admin`, `expires`, `budget`, `models` and `tpm`, a key may carry:
+
+| Field | Type | Description | Refusal |
+|---|---|---|---|
+| `rpm` | integer, 1 to 1000000 | Requests per minute for this key, on top of the rule's `rpm`. Shared across gateways on a store | `rate_limited` (429), `limit.of: key` |
+| `parallel` | integer, 1 to 10000 | Requests in flight at once with this key, per gateway. A place is held until the answer has been read to its end | `parallel_limit` (429) |
+| `tags` | list | Tags every request with the key carries: recorded, and used by [tag routing](/routing/strategies/#tags-and-teams-pick-deployments) | |
+| `metadata` | map | Your own notes, such as owner or ticket: at most 32 entries, each value at most 256 characters on one line. Shown and recorded, never decided on | |
+| `routes` | list | Path prefixes the key may call, such as `/v1/messages`. A prefix matches whole path segments. Empty allows every route | `route_not_allowed` (403) |
+| `from` | list | [Address ranges](/governance/access-control/#source-address-ranges) the key may be used from | `ip_not_allowed` (403) |
+| `replaced_by` | string | Set by a [rotation](#rotate-a-key): the key that replaces this one | |
+
+```yaml title="gantry.keys.yaml"
+keys:
+  - name: ci.release
+    team: platform
+    sha256: 0d6c...(64 hex characters)
+    rpm: 60
+    parallel: 4
+    tags: ["release"]
+    metadata: {"owner": "maya", "ticket": "OPS-12"}
+    routes: ["/v1/chat/completions"]
+    from: ["10.20.0.0/16"]
+```
+
+## Change a key
+
+Change any field but name, team and `admin` on a running gateway. `none` (CLI) or `null` (API) removes a field. Each change is recorded in the audit log with what each field was and what it became, and is in force within 2 seconds on every gateway serving the same keys.
+
+```bash
+gantry key update 5d1e4a07 --rpm 60 --tags eval,batch --metadata owner=maya --url https://gantry.example.com
+gantry key update 5d1e4a07 --budget none
+```
+
+```bash
+curl -X PATCH https://gantry.example.com/admin/keys/5d1e4a07 \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+  -d '{"rpm": 60, "budget": {"usd": 20, "per": "month"}, "routes": null}'
+```
+
+A change that is wrong in any field is refused whole, and nothing is written.
+
+## Key info and spend
+
+```bash
+gantry key info 5d1e4a07 --url https://gantry.example.com
+```
+
+```text
+maya.cohen (team payments), key 5d1e4a07
+  admin: false
+  budget: {"per":"month","usd":20.0}
+  rpm: 60
+Spend (counted by store):
+  day 2026-11-14: $0.4120 spent, $0.0300 held by requests in flight
+  month 2026-11: $7.9050 spent, $0.0300 held by requests in flight
+```
+
+With a [store](/operations/store/), spend is counted across every gateway on it. Without one, it is what this gateway counted, including the audit log's records of the month at start. `GET /admin/keys/<prefix>` gives the same as JSON.
+
 ## The keys file
 
 ```yaml title="gantry.keys.yaml"
@@ -234,17 +296,26 @@ A request with a revoked key is refused with `unknown_key`. Its record holds the
 
 ## Rotate a key
 
-<Steps>
+```bash
+gantry key rotate 5d1e4a07 --grace 48h --url https://gantry.example.com
+```
 
-1. Run `gantry key new` with the same name and team. It says `maya.cohen already had a key. Both work until you remove the old entry from the file.`
+```text
+New key for maya.cohen (team payments). It is shown once and is not stored anywhere:
 
-2. Hand the new key over. Both keys work.
+  gantry_8a41...(64 hex characters)
 
-3. Watch the audit log. Every record names the key it came with by its hash prefix (`key`), so you see when the old one stops being used.
+The old key 5d1e4a07 keeps working until 2026-11-16T09:14:02Z (UTC). Every request made with it until then is recorded with key_rotated, so you can find who still uses it.
+```
 
-4. Revoke the old key: the entry with the older `sha256`, higher in the file.
+A rotation makes a new key with the same name, team and settings, and gives the old key `expires` at the end of the grace and `replaced_by` naming the new key. An expiry already earlier stays: a rotation never lengthens a key's life.
 
-</Steps>
+- `--grace` takes `90s`, `30m`, `48h` or `7d`, at most `90d`, and `0` to end the old key now. Default `24h`.
+- Every request with the old key during the grace carries `"key_rotated": {"replaced_by": "8a41...", "expires": "..."}` on its record. Search for it to find the callers who still have to switch.
+- A key already rotated is refused with `already_rotated`: rotate the new one.
+- The new key's budget counts from zero, as any new key's does.
+
+The API form is `POST /admin/keys/<prefix>/rotate` with `{"grace": "48h"}`. Without the API, issuing a second key under the same name with `gantry key new` and revoking the old one later still works.
 
 ## Prune expired keys
 
@@ -279,7 +350,11 @@ gantry key prune --keys gantry.keys.yaml
 | `ambiguous_key` | 400 | Two different credentials on one request. |
 | `key_expired` | 401 | The key's `expires` has passed. |
 | `not_admin` | 403 | An admin API call with a key that is not `admin: true`. |
-| `no_such_key` | 404 | `DELETE /admin/keys/<prefix>` matched no entry. |
+| `no_such_key` | 404 | `<prefix>` matched no entry. |
+| `already_rotated` | 409 | A rotation of a key that was already rotated. |
+| `route_not_allowed` | 403 | The key's `routes` do not include the request's path. |
+| `parallel_limit` | 429 | The key has `parallel` requests in flight already. |
+| `ip_not_allowed` | 403 | The request came from outside the key's `from`. |
 
 ## Related
 

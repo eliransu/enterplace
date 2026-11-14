@@ -28,6 +28,54 @@ The body also names the versions in use and any rejected version on disk:
 
 `rejected` is `{"policy_sha256": ..., "keys_sha256": ...}` while a saved change fails the check. The health check needs no key and is not recorded. Any method other than `GET` on `/healthz` is refused with `unknown_route` and recorded.
 
+## Health, readiness and drain
+
+`/healthz` is liveness: the process is up. `/readyz` is readiness: a request sent now would be served, not refused for a reason of the gateway's own. An orchestrator should send traffic only while `/readyz` answers 200, and restart a pod only when `/healthz` fails.
+
+```text
+GET /readyz
+```
+
+```json
+{"status":"not_ready","policy_sha256":"5d41...","keys_sha256":"7c21...","checks":{
+  "audit":{"ready":true},
+  "store":{"ready":false,"reason":"the store cannot be reached: check Postgres and DATABASE_URL. Requests under a budget or rate limit would be refused (store_unavailable) until it is back."},
+  "policy":{"ready":true}}}
+```
+
+| Check | Not ready when | Why |
+|---|---|---|
+| `audit` | The audit log cannot be written | Every request would be refused with `audit_unavailable` |
+| `store` | The policy has `store:` and the database cannot be reached | Requests under a budget or a rate limit would be refused with `store_unavailable` |
+| `policy` | The policy has no keys and no `jwt:` issuer | Every request would be refused |
+| `draining` | A stop signal came | The gateway is finishing what it has and takes nothing new |
+| an embedder's field | A binary that embeds Gantry reports `{"ready": false}` for something it checks, such as a license | It would refuse requests |
+
+200 means every check is ready; 503 lists the one that is not, with the reason and the fix. Without a policy (`serve --unchecked`) or an audit log (tests), the check says so and stays ready. `/readyz` needs no key and is not recorded.
+
+### Drain on SIGTERM
+
+On `SIGTERM` or Ctrl-C, Gantry stops accepting connections, answers `/readyz` with 503 (`draining`) on any connection still open, and gives requests in flight 30 seconds to finish, streams included. Every record handed to the audit writer is written before the process ends.
+
+In Kubernetes, point readiness at `/readyz` and liveness at `/healthz`, and give the pod longer than the drain to end:
+
+```yaml title="gantry-pod.yaml"
+spec:
+  terminationGracePeriodSeconds: 45
+  containers:
+    - name: gantry
+      readinessProbe:
+        httpGet: { path: /readyz, port: 8080 }
+        periodSeconds: 5
+        failureThreshold: 2
+      livenessProbe:
+        httpGet: { path: /healthz, port: 8080 }
+        periodSeconds: 10
+        failureThreshold: 6
+```
+
+Kubernetes removes a terminating pod from its Service endpoints at the same time as it sends `SIGTERM`, so a load balancer may still send a new connection for a moment, which is refused. If your load balancer needs longer to stop, set its deregistration delay, or add a `preStop` hook in an image that has a shell.
+
 ## Change policy and keys without a restart
 
 Save the policy file or the keys file and Gantry uses the new version within 2 seconds. Gantry compares the SHA-256 of both files once a second, so an editor that saves by renaming a new file into place, and a symlink switched to another file, are both noticed.
@@ -82,7 +130,7 @@ A key removed by hand works for up to 2 seconds, until the reload picks the chan
 | Signal | Effect |
 |---|---|
 | `SIGHUP` | Checks the policy and keys files at once. The `config_loaded` record's `trigger` is `signal` |
-| `SIGTERM` or Ctrl-C | Stops accepting connections and gives requests in flight 30 seconds to finish |
+| `SIGTERM` or Ctrl-C | Stops accepting connections, answers `/readyz` with 503, and gives requests in flight 30 seconds to finish |
 | A second `SIGTERM` or Ctrl-C | Ends the wait |
 
 Before the process ends, every record already handed to the audit writer is written and synced, including the usage record of an answer that ended just before the stop.

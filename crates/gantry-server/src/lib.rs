@@ -34,6 +34,7 @@ mod admin;
 mod alias;
 pub mod cloud;
 mod credentials;
+mod jwt;
 mod mcp;
 mod metrics;
 mod reload;
@@ -252,7 +253,8 @@ pub struct Config {
     pub extension: Extension,
 }
 
-/// Fields added to the body of `GET /healthz`. Asked on every call, so keep it cheap.
+/// Fields added to the body of `GET /healthz` and `GET /readyz`. Asked on every call, so keep it cheap. A field
+/// whose value is an object with `"ready": false` (a license that ran out, say) makes `/readyz` answer 503.
 pub type Health = Arc<dyn Fn() -> serde_json::Map<String, serde_json::Value> + Send + Sync>;
 
 /// What a binary that embeds the gateway adds to it. The open source binary adds nothing.
@@ -290,6 +292,10 @@ impl std::error::Error for ConfigError {}
 /// The address of the client on the other end of a connection.
 #[derive(Clone, Copy)]
 struct ClientAddr(SocketAddr);
+
+/// Set by the accept loop once a stop signal came: `/readyz` then answers 503 while requests in flight finish.
+#[derive(Clone)]
+struct Draining(Arc<std::sync::atomic::AtomicBool>);
 
 /// What decides requests: the policy with its keys, the providers' models, and the hashes of the files they came
 /// from. A reload replaces it whole, so a request is decided, recorded and sent under one version from start to end.
@@ -331,6 +337,8 @@ struct AppState {
     tracer: Option<Arc<traces::Tracer>>,
     // Fields an embedding binary adds to /healthz.
     health: Option<Health>,
+    // The signing keys of the identity providers whose JWTs the policy trusts. Kept across reloads.
+    jwks: Arc<jwt::Keys>,
 }
 
 impl AppState {
@@ -544,6 +552,7 @@ fn build(
         }),
         pool: Arc::new(alias::Pool::new(config.store.clone())),
         health: config.extension.health.clone(),
+        jwks: Arc::default(),
     };
     let metrics = Router::new()
         .route("/metrics", get(metrics::serve))
@@ -552,6 +561,7 @@ fn build(
         // Every other method on these two paths goes to `handle`, which refuses it with a decision and a record,
         // as it does any other request it does not serve.
         .route("/healthz", get(healthz).fallback(handle))
+        .route("/readyz", get(readyz).fallback(handle))
         // Claude Code warms its connection with this probe at startup. Answering it keeps one refused record per launch
         // out of the audit log. It reaches no provider and says nothing about who may do what.
         .route(
@@ -563,6 +573,7 @@ fn build(
         router = router
             .route("/admin/keys", any(admin::handle))
             .route("/admin/keys/{prefix}", any(admin::handle))
+            .route("/admin/keys/{prefix}/rotate", any(admin::handle))
             .route("/admin/kills", any(admin::handle))
             .route("/admin/credentials", any(admin::handle))
             .route("/admin/credentials/{name}", any(admin::handle));
@@ -627,6 +638,80 @@ async fn healthz(State(state): State<AppState>) -> Response {
     }
     (
         status,
+        [(header::CONTENT_TYPE, "application/json")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+/// Ready means a request sent now would be served, not refused for a reason of the gateway's own: the audit log
+/// takes records, the store answers when there is one, a policy with keys (or an identity provider) is loaded,
+/// nothing an embedder checks says otherwise, and the gateway is not draining after a stop signal. An orchestrator
+/// sends traffic only while this is 200. `/healthz` stays the liveness check: a gateway that is not ready is alive.
+async fn readyz(
+    State(state): State<AppState>,
+    draining: Option<axum::Extension<Draining>>,
+) -> Response {
+    let mut checks = serde_json::Map::new();
+    let check = |ready: bool, reason: Option<String>| {
+        let mut entry = serde_json::json!({ "ready": ready });
+        if let Some(reason) = reason {
+            entry["reason"] = reason.into();
+        }
+        entry
+    };
+    checks.insert(
+        "audit".into(),
+        match &state.audit {
+            Some(audit) if audit.log.is_broken() => check(false, Some("the audit log cannot be written, so every request would be refused (audit_unavailable). Free disk space or fix the file's permissions, then restart Gantry.".into())),
+            Some(_) => check(true, None),
+            None => check(true, Some("no audit log: this gateway forwards without recording, for tests and benchmarks".into())),
+        },
+    );
+    if let Some(store) = &state.spend.store {
+        checks.insert(
+            "store".into(),
+            match store.reachable() {
+                Ok(()) => check(true, None),
+                Err(err) => check(false, Some(format!("{err}. Requests under a budget or rate limit would be refused (store_unavailable) until it is back."))),
+            },
+        );
+    }
+    let version = state.version();
+    checks.insert(
+        "policy".into(),
+        match &version.policy {
+            None => check(true, Some("no policy: this gateway forwards unchecked, on loopback, for benchmarks".into())),
+            Some(policy) if policy.keys() == 0 && policy.jwt().is_empty() => check(false, Some("the policy has no keys and no jwt: issuer, so every request would be refused. Add a key with `gantry key new <name> --team <team>`.".into())),
+            Some(_) => check(true, None),
+        },
+    );
+    if draining.is_some_and(|d| d.0.0.load(std::sync::atomic::Ordering::Relaxed)) {
+        checks.insert(
+            "draining".into(),
+            check(false, Some("a stop signal came: requests in flight are finishing and no new connection is taken".into())),
+        );
+    }
+    if let Some(health) = &state.health {
+        for (name, value) in health() {
+            checks.entry(name).or_insert(value);
+        }
+    }
+    let ready = checks
+        .values()
+        .all(|c| c.get("ready").and_then(serde_json::Value::as_bool) != Some(false));
+    let body = serde_json::json!({
+        "status": if ready { "ready" } else { "not_ready" },
+        "policy_sha256": version.policy_sha256,
+        "keys_sha256": version.keys_sha256,
+        "checks": checks,
+    });
+    (
+        if ready {
+            StatusCode::OK
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        },
         [(header::CONTENT_TYPE, "application/json")],
         body.to_string(),
     )
@@ -989,6 +1074,65 @@ struct Seen<'a> {
     hit: Option<Box<spend::Admitted>>,
     /// The first 8 hex characters of the SHA-256 of a provider key the caller sent, never the key.
     caller_key: Option<String>,
+    /// How an alias chose its deployment, and why.
+    routing: Option<serde_json::Value>,
+    /// The key's tags and those the caller sent in `x-gantry-tags`.
+    tags: Vec<String>,
+    /// Set when the key was replaced by a rotation and is in its grace period.
+    rotated: Option<serde_json::Value>,
+}
+
+/// The header a caller adds tags to its request in, comma separated. Only tags its rule lists are accepted.
+const TAGS: &str = "x-gantry-tags";
+
+/// Headers a coding agent names its session in, the first found wins: Gantry's own, then Claude Code's and Codex's.
+const SESSION_HEADERS: [&str; 4] = [
+    "x-gantry-session",
+    "x-claude-code-session-id",
+    "session_id",
+    "x-session-id",
+];
+
+/// The tags of a request: the key's, and those the caller sent, each of which its rule must list. An unlisted tag
+/// is refused by name, so a caller cannot charge spend to a tag or reach a deployment kept for one.
+fn request_tags(
+    headers: &HeaderMap,
+    person: &Principal,
+    rule: &Rule,
+) -> Result<Vec<String>, Refusal> {
+    let mut tags = person.options.tags.clone();
+    for value in headers.get_all(TAGS) {
+        let text = value.to_str().unwrap_or("\u{fffd}");
+        for tag in text.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+            if !rule.limits.tags.iter().any(|t| t == tag) {
+                let listed = if rule.limits.tags.is_empty() {
+                    "it lists none".to_string()
+                } else {
+                    format!("it lists {}", rule.limits.tags.join(", "))
+                };
+                return Err(Refusal::new(
+                    StatusCode::FORBIDDEN,
+                    "tag_not_allowed",
+                    format!(
+                        "Refused: tag \"{tag}\" in {TAGS} is not one rule \"{}\" lets callers send ({listed}). Remove it, or ask a Gantry admin to add it to the rule's tags.",
+                        rule.name
+                    ),
+                ));
+            }
+            if !tags.iter().any(|t| t == tag) {
+                tags.push(tag.to_string());
+            }
+        }
+    }
+    Ok(tags)
+}
+
+/// The person and the session their client names, for session affinity. Hashed: a session ID may be a secret.
+fn session_of(headers: &HeaderMap, person: &Principal) -> Option<String> {
+    SESSION_HEADERS
+        .iter()
+        .find_map(|name| headers.get(*name)?.to_str().ok().filter(|v| !v.is_empty()))
+        .map(|session| id::sha256_hex(format!("{}\n{session}", person.name).as_bytes()))
 }
 
 /// On the messages routes the caller is most likely Claude Code asking for its default model: the fix is the
@@ -1080,6 +1224,8 @@ async fn check<'a>(
     policy: &'a Policy,
     request: Request,
     seen: &mut Seen<'a>,
+    minted: &'a std::sync::OnceLock<Principal>,
+    client_ip: Option<std::net::IpAddr>,
 ) -> Result<Next, Refusal> {
     let (parts, body) = request.into_parts();
     let key = caller_key(&parts.headers)?;
@@ -1091,7 +1237,28 @@ async fn check<'a>(
     let anthropic_client =
         parts.headers.contains_key("x-api-key") || parts.headers.contains_key("anthropic-version");
     // A stranger is refused before their body is read, so an unknown caller cannot make the gateway buffer anything.
-    let Some(person) = policy.identify(key) else {
+    // A JWT from an issuer the policy trusts stands in for a key; it is checked before anything else is read too.
+    let identified: Option<&'a Principal> = match policy.identify(key) {
+        Some(person) => Some(person),
+        None if !policy.jwt().is_empty() && jwt::looks_like(key) => {
+            seen.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
+            let person = jwt::verify(&state.client, &state.jwks, policy.jwt(), key)
+                .await
+                .map_err(|refused| {
+                    let status = if refused.unavailable {
+                        StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        StatusCode::UNAUTHORIZED
+                    };
+                    let mut refusal = Refusal::new(status, refused.code, refused.message);
+                    refusal.retry = refused.unavailable;
+                    refusal
+                })?;
+            Some(minted.get_or_init(|| person))
+        }
+        None => None,
+    };
+    let Some(person) = identified else {
         // Enough of the hash to tell two unknown keys apart in the audit log, and far too little to find the key.
         seen.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
         let hint = if key.starts_with("sk-") {
@@ -1122,8 +1289,61 @@ async fn check<'a>(
             ),
         ));
     }
-    let key_sha256 = id::sha256_hex(key.as_bytes());
+    // A JWT caller is named by its issuer and subject, as a key by its hash, so a key_prefix switch can stop it.
+    let key_sha256 = match &person.jwt {
+        Some(jwt) => id::sha256_hex(format!("{}\n{}", jwt.issuer, jwt.subject).as_bytes()),
+        None => id::sha256_hex(key.as_bytes()),
+    };
     killed(state, person, &key_sha256, None)?;
+    let blocked = |from: &[gantry_core::policy::Cidr]| {
+        !from.is_empty() && !client_ip.is_some_and(|ip| from.iter().any(|c| c.contains(ip)))
+    };
+    let where_from =
+        client_ip.map_or_else(|| "an unknown address".to_string(), |ip| ip.to_string());
+    if blocked(&person.options.from) {
+        let mut refusal = Refusal::new(
+            StatusCode::FORBIDDEN,
+            "ip_not_allowed",
+            format!(
+                "Refused: the key {} of \"{}\" may be used only from its listed address ranges, and this request came from {where_from}. Send it from an allowed network, or ask a Gantry admin to change the key's from list.",
+                person.key, person.name
+            ),
+        );
+        refusal.record = Some(Box::new(serde_json::json!({ "ip_not_allowed": "key" })));
+        return Err(refusal);
+    }
+    if let Some(rule) = policy.rule_for(person)
+        && blocked(&rule.limits.from)
+    {
+        seen.rule = Some(rule);
+        let mut refusal = Refusal::new(
+            StatusCode::FORBIDDEN,
+            "ip_not_allowed",
+            format!(
+                "Refused: rule \"{}\" allows requests only from its listed address ranges, and this request came from {where_from}. Send it from an allowed network, or ask a Gantry admin to change the rule's from list.",
+                rule.name
+            ),
+        );
+        refusal.record = Some(Box::new(serde_json::json!({ "ip_not_allowed": "rule" })));
+        return Err(refusal);
+    }
+    if !person.options.reaches(parts.uri.path()) {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "route_not_allowed",
+            format!(
+                "Refused: the key {} of \"{}\" may call only {}, and this request is for {}. Ask a Gantry admin to change the key's routes if it needs this one.",
+                person.key,
+                person.name,
+                person.options.routes.join(", "),
+                parts.uri.path()
+            ),
+        ));
+    }
+    if let Some(next) = &person.options.replaced_by {
+        // Every use of a key in its rotation's grace period is recorded as such, so the stragglers can be found.
+        seen.rotated = Some(serde_json::json!({ "replaced_by": next, "expires": person.expires }));
+    }
     // The key must not travel on in any other header either, under whatever name the caller chose for it.
     let (key, mut parts) = (key.to_string(), parts);
     // Taken out at once: nothing after this (guardrail webhooks, traces, the provider) can see it in the headers.
@@ -1234,7 +1454,20 @@ async fn check<'a>(
     match decision {
         Decision::Allow(rule) => {
             seen.rule = Some(rule);
-            let (chain, translate) = targets(state, version, route, parts.uri.path(), model)?;
+            let tags = request_tags(&parts.headers, person, rule)?;
+            // Gantry's own: the provider has no use for them.
+            parts.headers.remove(TAGS);
+            parts.headers.remove("x-gantry-session");
+            let want = Want {
+                team: &person.team,
+                tags: &tags,
+                regions: rule.limits.regions.as_deref(),
+                session: session_of(&parts.headers, person),
+            };
+            let (chain, translate, routing) =
+                targets(state, version, route, parts.uri.path(), model, &want)?;
+            seen.routing = routing;
+            seen.tags = tags.clone();
             let chosen = chain.first().map_or(0, |c| c.0);
             let alias = version.aliases.iter().find(|a| a.name == *model);
             // A named fallback takes the same body, so it must take the same translation. QA14-2: a fallback a kill
@@ -1243,9 +1476,11 @@ async fn check<'a>(
             let fallback = |target: Option<&String>| {
                 target
                     .filter(|t| !stopped(t))
-                    .and_then(|t| targets(state, version, route, parts.uri.path(), t).ok())
-                    .filter(|(chain, t)| *t == translate && !chain.iter().any(|(_, m)| stopped(m)))
-                    .map(|(chain, _)| chain)
+                    .and_then(|t| targets(state, version, route, parts.uri.path(), t, &want).ok())
+                    .filter(|(chain, t, _)| {
+                        *t == translate && !chain.iter().any(|(_, m)| stopped(m))
+                    })
+                    .map(|(chain, _, _)| chain)
                     .unwrap_or_default()
             };
             let (context, content) = alias.map_or_else(Default::default, |a| {
@@ -1428,6 +1663,18 @@ async fn passthrough<'a>(
         ));
     };
     seen.rule = Some(rule);
+    if let Some(regions) = &rule.limits.regions {
+        // A provider's own API has no region label: residency cannot be shown, so it is refused.
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "region_not_allowed",
+            format!(
+                "Refused: rule \"{}\" keeps requests in {}, and a passthrough call goes to the provider as is, with no region Gantry can show. Use a model route with an alias whose deployments are in those regions.",
+                rule.name,
+                regions.join(", ")
+            ),
+        ));
+    }
     // A dot segment could climb out of the listed prefix at the provider, whatever the prefix match says here.
     let climbs = native
         .split('/')
@@ -1498,9 +1745,13 @@ fn unknown_route() -> Refusal {
     Refusal::new(
         StatusCode::NOT_FOUND,
         "unknown_route",
-        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models and GET /healthz. Check the method and the path.",
+        "Refused: this version of Gantry serves POST /v1/chat/completions, POST /v1/responses, POST /v1/embeddings, POST /v1/images/generations, POST /v1/audio/transcriptions, POST /v1/audio/speech, POST /v1/moderations, POST /v1/rerank, POST /v1/messages, POST /v1/messages/count_tokens, GET /v1/models, GET /healthz and GET /readyz. Check the method and the path.",
     )
 }
+
+/// A key's place among its requests in flight, carried from the check to the answer. Extensions must be `Clone`.
+#[derive(Clone)]
+struct Parallel(Arc<std::sync::Mutex<Option<alias::Busy>>>);
 
 /// How a checked request is forwarded, carried from the check to the send.
 #[derive(Clone)]
@@ -1551,18 +1802,45 @@ fn form_model(headers: &HeaderMap, bytes: &[u8]) -> Result<Peek, Refusal> {
     })
 }
 
-/// The deployments that can take this request, in the order to try them, and whether it is translated. A model
-/// that is not an alias has one: the provider that lists it.
+/// What the caller brings to the choice of deployment: their team and tags for kept deployments, their rule's
+/// residency, and their session.
+#[derive(Default)]
+struct Want<'a> {
+    team: &'a str,
+    tags: &'a [String],
+    /// The regions a deployment must be labelled with. `None` sets no residency.
+    regions: Option<&'a [String]>,
+    /// Person and session, for an alias with session affinity.
+    session: Option<String>,
+}
+
+/// Where a request may go, in the order to try it: each a provider by position and the model sent there.
+type Chain = Vec<(usize, String)>;
+
+/// The deployments that can take this request, in the order to try them, whether it is translated, and how the
+/// first was chosen (for the record). A model that is not an alias has one: the provider that lists it.
 fn targets(
     state: &AppState,
     version: &Snapshot,
     route: Kind,
     path: &str,
     model: &str,
-) -> Result<(Vec<(usize, String)>, bool), Refusal> {
+    want: &Want<'_>,
+) -> Result<(Chain, bool, Option<serde_json::Value>), Refusal> {
     let Some(alias) = version.aliases.iter().find(|a| a.name == model) else {
+        if let Some(regions) = want.regions {
+            // A model sent to its provider directly has no region label: residency cannot be shown, so it is refused.
+            return Err(Refusal::new(
+                StatusCode::FORBIDDEN,
+                "region_not_allowed",
+                format!(
+                    "Refused: your rule keeps requests in {}, and model \"{model}\" is not an alias whose deployments are labelled with a region, so where it runs cannot be shown. Use an alias with a deployment in one of those regions, or ask a Gantry admin to add region: to its deployments.",
+                    regions.join(", ")
+                ),
+            ));
+        }
         let (index, translate) = provider_for(version, route, path, model)?;
-        return Ok((vec![(index, model.to_string())], translate));
+        return Ok((vec![(index, model.to_string())], translate, None));
     };
     let mut first_refusal = None;
     let mut eligible = Vec::new();
@@ -1593,8 +1871,82 @@ fn targets(
             )
         }));
     }
+    let mut routing = serde_json::json!({ "balance": alias.balance.word() });
+    // Residency is a filter, never a preference: a deployment outside the allowed regions is not tried at all.
+    if let Some(regions) = want.regions {
+        eligible.retain(|(at, _)| {
+            alias.deployments[*at]
+                .region
+                .as_ref()
+                .is_some_and(|r| regions.contains(r))
+        });
+        if eligible.is_empty() {
+            return Err(Refusal::new(
+                StatusCode::FORBIDDEN,
+                "region_not_allowed",
+                format!(
+                    "Refused: your rule keeps requests in {}, and alias \"{model}\" has no deployment labelled with one of those regions, so the request was not sent anywhere. Ask a Gantry admin to add a deployment in one of them.",
+                    regions.join(", ")
+                ),
+            ));
+        }
+        routing["regions"] = regions.into();
+    }
+    // Deployments kept for a team or tag: a request that matches some goes only to those; one that matches none
+    // goes to the deployments kept for nobody.
+    let matches = |f: &gantry_core::config::For| match f {
+        gantry_core::config::For::Team(team) => team == want.team,
+        gantry_core::config::For::Tag(tag) => want.tags.contains(tag),
+    };
+    let kept: Vec<(usize, usize)> = eligible
+        .iter()
+        .copied()
+        .filter(|(at, _)| alias.deployments[*at].for_.as_ref().is_some_and(matches))
+        .collect();
+    if kept.is_empty() {
+        eligible.retain(|(at, _)| alias.deployments[*at].for_.is_none());
+        if eligible.is_empty() {
+            return Err(Refusal::new(
+                StatusCode::FORBIDDEN,
+                "no_deployment",
+                format!(
+                    "Refused: every deployment of alias \"{model}\" that is allowed here is kept for another team or tag. Send a tag the alias keeps a deployment for, or ask a Gantry admin to add a deployment for everyone."
+                ),
+            ));
+        }
+    } else {
+        let label = kept
+            .iter()
+            .filter_map(|(at, _)| alias.deployments[*at].for_.as_ref())
+            .map(|f| match f {
+                gantry_core::config::For::Team(t) => format!("team:{t}"),
+                gantry_core::config::For::Tag(t) => format!("tag:{t}"),
+            })
+            .next()
+            .unwrap_or_default();
+        routing["for"] = label.into();
+        eligible = kept;
+    }
     let positions: Vec<usize> = eligible.iter().map(|(at, _)| *at).collect();
-    let order = state.pool.order(alias, &positions, Instant::now());
+    let none = gantry_core::usage::PriceOverrides::new();
+    let prices = version.policy.as_ref().map_or(&none, Policy::prices);
+    let cost: Vec<Option<f64>> = alias
+        .deployments
+        .iter()
+        .map(|d| gantry_core::usage::price_for(&d.model, prices).map(|p| p.input + p.output))
+        .collect();
+    let ask = alias::Ask {
+        session: want.session.clone(),
+        cost: &cost,
+    };
+    let (order, reason) = state.pool.order(alias, &positions, Instant::now(), &ask);
+    routing["reason"] = reason.into();
+    if let Some(first) = order.first().and_then(|at| alias.deployments.get(*at)) {
+        routing["deployment"] = alias::label(&first.provider, &first.model).into();
+        if let Some(region) = &first.region {
+            routing["region"] = region.as_str().into();
+        }
+    }
     let chain = order
         .into_iter()
         .filter_map(|at| {
@@ -1602,7 +1954,7 @@ fn targets(
             Some((index, alias.deployments.get(at)?.model.clone()))
         })
         .collect();
-    Ok((chain, translate.unwrap_or(false)))
+    Ok((chain, translate.unwrap_or(false), Some(routing)))
 }
 
 /// A chat completions request as a messages request, and whether its client asked for usage in the stream.
@@ -1936,10 +2288,24 @@ async fn handle(State(state): State<AppState>, mut request: Request) -> Response
     };
     let mut response = match outcome {
         Ok(Next::Answer(response)) => response,
-        Ok(Next::Forward(parts, bytes, _memory)) => {
-            match send(&state, &version, parts, bytes, arrived, &decision).await {
+        Ok(Next::Forward(mut parts, bytes, _memory)) => {
+            let place = parts
+                .extensions
+                .remove::<Parallel>()
+                .and_then(|p| p.0.lock().ok()?.take());
+            let response = match send(&state, &version, parts, bytes, arrived, &decision).await {
                 Ok(response) => response,
                 Err(failure) => failure.respond(&decision, anthropic),
+            };
+            // The key's place is held until the answer has been read to its end, or dropped.
+            match place {
+                Some(place) => response.map(|inner| {
+                    Body::new(Holding {
+                        inner,
+                        _busy: place,
+                    })
+                }),
+                None => response,
             }
         }
         Err(refusal) => refusal.respond(&decision, anthropic),
@@ -1982,14 +2348,26 @@ async fn decide(
     request: Request,
     decision: &str,
 ) -> Result<Next, Refusal> {
-    let client = request
-        .extensions()
-        .get::<ClientAddr>()
-        .map(|addr| addr.0.ip().to_string());
+    // The client's own address: from a trusted proxy, the one it names in X-Forwarded-For.
+    let client_ip = request.extensions().get::<ClientAddr>().map(|addr| {
+        let forwarded: Vec<&str> = request
+            .headers()
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        policy.client_ip(addr.0.ip(), &forwarded)
+    });
+    let client = client_ip.map(|ip| ip.to_string());
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
+    // Holds the person a JWT names, for as long as the record of this request needs it.
+    let minted = std::sync::OnceLock::new();
     let mut seen = Seen::default();
-    let mut outcome = check(state, version, policy, request, &mut seen).await;
+    let mut outcome = check(
+        state, version, policy, request, &mut seen, &minted, client_ip,
+    )
+    .await;
     // What the guardrails found, when the rule has any: an empty list says they ran and found nothing.
     let mut found = None;
     let guards = seen.rule.map_or(&[][..], |rule| rule.guardrails.as_slice());
@@ -2014,6 +2392,33 @@ async fn decide(
         }
         other => other,
     };
+    // A key's parallel limit is taken before its budget and rate, so a request refused here costs it nothing else.
+    if let (Ok(Next::Forward(parts, _, _)), Some(person)) = (&mut outcome, seen.person)
+        && let Some(limit) = person.options.parallel
+    {
+        match state.pool.claim(&format!("key:{}", person.key), limit) {
+            Some(place) => {
+                parts
+                    .extensions
+                    .insert(Parallel(Arc::new(std::sync::Mutex::new(Some(place)))));
+            }
+            None => {
+                let mut refusal = Refusal::new(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "parallel_limit",
+                    format!(
+                        "Refused: the key {} of \"{}\" already has {limit} requests in flight, the most it may have at once. Send this one again when one finishes.",
+                        person.key, person.name
+                    ),
+                );
+                refusal.retry = true;
+                refusal.record = Some(Box::new(
+                    serde_json::json!({ "limit": { "kind": "parallel", "of": "key", "value": limit } }),
+                ));
+                outcome = Err(refusal);
+            }
+        }
+    }
     // Limits come after the guardrails: the cache key and the budget's estimate are of the body that is sent, masked
     // if a guardrail masked it, and a request a guardrail blocks is never served from the cache or counted.
     outcome = match outcome {
@@ -2107,6 +2512,20 @@ async fn decide(
             // That the caller's own key was sent, and which: never the key.
             record.insert("caller_provider_key".into(), true.into());
             record.insert("caller_provider_key_sha256".into(), prefix.as_str().into());
+        }
+        if let Some(routing) = &seen.routing {
+            record.insert("routing".into(), routing.clone());
+        }
+        if !seen.tags.is_empty() {
+            record.insert("tags".into(), seen.tags.clone().into());
+        }
+        if let Some(rotated) = &seen.rotated {
+            record.insert("key_rotated".into(), rotated.clone());
+        }
+        if let Some(jwt) = seen.person.and_then(|p| p.jwt.as_ref()) {
+            record.insert("auth".into(), "jwt".into());
+            record.insert("jwt_issuer".into(), jwt.issuer.as_str().into());
+            record.insert("jwt_subject".into(), jwt.subject.as_str().into());
         }
         if let Some(deployment) = &seen.deployment {
             // The model on the record is the alias the caller sent and the rule decided on; this is where it went first.
@@ -3306,6 +3725,7 @@ impl Tries<'_> {
                         self.state.pool.failed(&label, cooldown);
                     } else {
                         self.state.pool.answered(&label);
+                        self.state.pool.observed(&label, started.elapsed());
                     }
                 }
                 if !again {
@@ -4085,6 +4505,7 @@ async fn accept_loop(
         .timer(TokioTimer::new())
         .header_read_timeout(timeouts.read_headers);
     let graceful = GracefulShutdown::new();
+    let draining = Draining(Arc::default());
     tokio::pin!(stop);
     loop {
         tokio::select! {
@@ -4095,8 +4516,10 @@ async fn accept_loop(
                     continue;
                 };
                 let over_tls = tls.is_some();
+                let draining = draining.clone();
                 let service = app.clone().map_request(move |mut request: axum::http::Request<_>| {
                     request.extensions_mut().insert(ClientAddr(peer));
+                    request.extensions_mut().insert(draining.clone());
                     // The console marks its cookies Secure on a connection Gantry terminated TLS for (QA14-6).
                     if over_tls {
                         request.extensions_mut().insert(axum::http::uri::Scheme::HTTPS);
@@ -4142,6 +4565,9 @@ async fn accept_loop(
             () = &mut stop => break,
         }
     }
+    // Draining: no new connection is taken, `/readyz` says 503 to any that asks on a connection still open, and the
+    // requests in flight finish below.
+    draining.0.store(true, std::sync::atomic::Ordering::Relaxed);
     drop(listener);
     tokio::select! {
         () = graceful.shutdown() => {}
@@ -4406,4 +4832,39 @@ pub async fn serve_from_env(name: &str, unchecked: bool) -> Result<(), Box<dyn s
         "warning: running unchecked. Every request is forwarded without identity, policy or audit. Loopback only."
     );
     serve(addr, config).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn a_draining_gateway_is_not_ready_and_still_alive()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let app = app(Config::default())?;
+        let flag = Draining(Arc::default());
+        let ask = |path: &str| -> Result<Request, axum::http::Error> {
+            let mut request = Request::get(path).body(Body::empty())?;
+            request.extensions_mut().insert(flag.clone());
+            Ok(request)
+        };
+        assert_eq!(
+            app.clone().oneshot(ask("/readyz")?).await?.status(),
+            StatusCode::OK
+        );
+        flag.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        let response = app.clone().oneshot(ask("/readyz")?).await?;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await?
+            .to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body)?;
+        assert_eq!(body["checks"]["draining"]["ready"], false);
+        assert_eq!(
+            app.oneshot(ask("/healthz")?).await?.status(),
+            StatusCode::OK
+        );
+        Ok(())
+    }
 }
