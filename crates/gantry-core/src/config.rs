@@ -70,6 +70,8 @@ const KNOWN: &[&str] = &[
     "buffer_stream",
     "check_stream_every",
     "file_retention_days",
+    "containers",
+    "sizes",
     "passthrough",
     "provider",
     "paths",
@@ -83,6 +85,8 @@ const KNOWN: &[&str] = &[
     "max_output",
     "max_context",
     "per_image",
+    "per_second",
+    "per_call",
     "above_prompt_tokens",
     "price",
     "console",
@@ -604,8 +608,19 @@ struct RuleFile {
     #[serde(default)]
     file_retention_days: Option<i64>,
     #[serde(default)]
+    containers: Option<ContainersFile>,
+    #[serde(default)]
     shadow_until: Option<String>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContainersFile {
+    sizes: Vec<String>,
+}
+
+/// The memory sizes OpenAI offers for a code interpreter container.
+pub const CONTAINER_SIZES: [&str; 4] = ["1g", "4g", "16g", "64g"];
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1271,6 +1286,12 @@ pub enum Kind {
     /// Model Garden models on Vertex AI behind its OpenAI-compatible endpoint (`.../endpoints/openapi`), with an
     /// OAuth access token as a Bearer token.
     VertexOpenAi,
+    /// An Amazon SageMaker real-time endpoint whose container takes the chat completions body (LMI, TGI's Messages
+    /// API), reached at InvokeEndpoint and signed with AWS Signature Version 4. Each model maps to an endpoint name.
+    Sagemaker,
+    /// Replicate's predictions API, keyed by a Bearer token. Chat is translated to a model's `input` and the
+    /// prediction is waited for.
+    Replicate,
 }
 
 impl Kind {
@@ -1287,6 +1308,8 @@ impl Kind {
             Kind::Cohere => "cohere",
             Kind::Watsonx => "watsonx",
             Kind::VertexOpenAi => "vertex_openai",
+            Kind::Sagemaker => "sagemaker",
+            Kind::Replicate => "replicate",
         }
     }
 
@@ -1304,6 +1327,8 @@ impl Kind {
             Kind::Cohere,
             Kind::Watsonx,
             Kind::VertexOpenAi,
+            Kind::Sagemaker,
+            Kind::Replicate,
         ]
         .into_iter()
         .find(|kind| kind.word() == word)
@@ -1324,7 +1349,9 @@ impl Kind {
             | Kind::BedrockConverse
             | Kind::Cohere
             | Kind::Watsonx
-            | Kind::VertexOpenAi => Kind::OpenAi,
+            | Kind::VertexOpenAi
+            | Kind::Sagemaker
+            | Kind::Replicate => Kind::OpenAi,
             Kind::Anthropic | Kind::Bedrock | Kind::VertexAnthropic => Kind::Anthropic,
         }
     }
@@ -1333,12 +1360,25 @@ impl Kind {
     pub fn translates_chat(self) -> bool {
         matches!(
             self,
-            Kind::Gemini | Kind::Vertex | Kind::BedrockConverse | Kind::Cohere | Kind::Watsonx
+            Kind::Gemini
+                | Kind::Vertex
+                | Kind::BedrockConverse
+                | Kind::Cohere
+                | Kind::Watsonx
+                | Kind::Replicate
         )
     }
 
     /// Signed with AWS Signature Version 4, from the provider's region and model IDs.
     pub fn aws(self) -> bool {
+        matches!(
+            self,
+            Kind::Bedrock | Kind::BedrockConverse | Kind::Sagemaker
+        )
+    }
+
+    /// Amazon Bedrock, either API: what `/bedrock/` passes through to.
+    pub fn bedrock(self) -> bool {
         matches!(self, Kind::Bedrock | Kind::BedrockConverse)
     }
 
@@ -2759,6 +2799,21 @@ fn limits(
             )),
         }
     }
+    if let Some(containers) = &rule.containers {
+        let sizes: Vec<String> = containers
+            .sizes
+            .iter()
+            .map(|s| s.trim().to_string())
+            .collect();
+        if sizes.is_empty() || sizes.iter().any(|s| !CONTAINER_SIZES.contains(&s.as_str())) {
+            errors.push(format!(
+                "{}: containers lists the memory sizes of code interpreter containers this rule's callers may create, each one of 1g, 4g, 16g or 64g, for example containers: {{ sizes: [1g, 4g] }}. To allow no containers, remove the line.",
+                at("containers")
+            ));
+        } else {
+            limits.containers = sizes;
+        }
+    }
     if let Some(every) = rule.check_stream_every {
         match u32::try_from(every) {
             Ok(every @ 50..=100_000) => limits.check_stream_every = Some(every),
@@ -2983,7 +3038,7 @@ fn provider_lines(text: &str) -> Vec<usize> {
 fn map_key(kind: Kind) -> Option<&'static str> {
     match kind {
         Kind::Azure => Some("deployments"),
-        Kind::Bedrock | Kind::BedrockConverse => Some("model_ids"),
+        Kind::Bedrock | Kind::BedrockConverse | Kind::Sagemaker => Some("model_ids"),
         Kind::OpenAi
         | Kind::Anthropic
         | Kind::Gemini
@@ -2991,7 +3046,8 @@ fn map_key(kind: Kind) -> Option<&'static str> {
         | Kind::VertexAnthropic
         | Kind::Cohere
         | Kind::Watsonx
-        | Kind::VertexOpenAi => None,
+        | Kind::VertexOpenAi
+        | Kind::Replicate => None,
     }
 }
 
@@ -3017,13 +3073,17 @@ fn provider_options(
         only("api_version", "azure or watsonx", errors);
     }
     if entry.model_ids.is_some() && !aws {
-        only("model_ids", "bedrock or bedrock_converse", errors);
+        only(
+            "model_ids",
+            "bedrock, bedrock_converse or sagemaker",
+            errors,
+        );
     }
     if entry.region.is_some() && !aws {
-        only("region", "bedrock or bedrock_converse", errors);
+        only("region", "bedrock, bedrock_converse or sagemaker", errors);
     }
     if entry.role_arn.is_some() && !aws {
-        only("role_arn", "bedrock or bedrock_converse", errors);
+        only("role_arn", "bedrock, bedrock_converse or sagemaker", errors);
     }
     if entry.project_id.is_some() && kind != Some(Kind::Watsonx) {
         only("project_id", "watsonx", errors);
@@ -3058,7 +3118,7 @@ fn provider_options(
     }
     if entry.accept_messages.is_some() && kind.is_some_and(|k| k.api() != Kind::OpenAi) {
         errors.push(format!(
-            "{}: accept_messages translates messages requests (Claude Code) to the chat completions API, so it is for a provider of a kind that takes chat completions (openai, azure, gemini, vertex, vertex_openai, bedrock_converse, cohere or watsonx). Remove the line.",
+            "{}: accept_messages translates messages requests (Claude Code) to the chat completions API, so it is for a provider of a kind that takes chat completions (openai, azure, gemini, vertex, vertex_openai, bedrock_converse, cohere, watsonx, sagemaker or replicate). Remove the line.",
             at("accept_messages")
         ));
     }
@@ -3093,9 +3153,19 @@ fn provider_options(
             }
         }
         Some(Kind::Azure) => {
+            // The v1 API (a url ending in /openai/v1) takes no api_version.
+            let v1 = entry
+                .url
+                .as_deref()
+                .is_some_and(|u| u.trim_end_matches('/').ends_with("/openai/v1"));
             match entry.api_version.as_deref() {
+                None if v1 => {}
+                Some(_) if v1 => errors.push(format!(
+                    "{}: a url ending in /openai/v1 is Azure's v1 API, which takes no api_version. Remove the line, or use the resource's url without /openai/v1 to keep a dated version.",
+                    at("api_version")
+                )),
                 None => errors.push(format!(
-                    "{}: an azure provider needs api_version, the Azure OpenAI REST API version, for example `api_version: 2024-10-21`.",
+                    "{}: an azure provider needs api_version, the Azure OpenAI REST API version, for example `api_version: 2024-10-21`, or a url ending in /openai/v1 for the v1 API.",
                     at("kind")
                 )),
                 Some(version) => {
@@ -3120,6 +3190,20 @@ fn provider_options(
             if entry.deployments.is_none() {
                 errors.push(format!(
                     "{}: an azure provider needs deployments, the deployment that serves each model, for example `deployments: {{ gpt-4o: my-gpt-4o }}`.",
+                    at("kind")
+                ));
+            }
+        }
+        Some(Kind::Sagemaker) => {
+            if entry.region.is_none() {
+                errors.push(format!(
+                    "{}: a sagemaker provider needs region, the AWS region its endpoints run in, for example `region: us-east-1`.",
+                    at("kind")
+                ));
+            }
+            if entry.model_ids.is_none() {
+                errors.push(format!(
+                    "{}: a sagemaker provider needs model_ids, the SageMaker endpoint that serves each model, for example `model_ids: {{ llama-3-70b: my-llama-endpoint }}`.",
                     at("kind")
                 ));
             }
@@ -3254,7 +3338,10 @@ fn presets(file: &Path, text: &str, entries: &mut [ProviderFile], errors: &mut V
                 preset.url
             ));
         }
-        entry.url.get_or_insert_with(|| preset.url.to_string());
+        // An AWS preset's URL follows from the provider's region, as a hand-written one's does.
+        if !(preset.kind.aws() && entry.region.is_some()) {
+            entry.url.get_or_insert_with(|| preset.url.to_string());
+        }
         entry
             .kind
             .get_or_insert_with(|| preset.kind.word().to_string());
@@ -3294,7 +3381,7 @@ fn providers(
                 let kind = Kind::from_word(word);
                 if kind.is_none() {
                     errors.push(format!(
-                        "{}: kind is \"{word}\". It must be openai (the chat completions API), anthropic (the messages API), azure (Azure OpenAI), bedrock (Amazon Bedrock InvokeModel, Anthropic models), bedrock_converse (Amazon Bedrock Converse, every model family), gemini (Google's Gemini API), vertex (Gemini on Google Cloud Vertex AI), vertex_anthropic (Claude on Google Cloud Vertex AI), vertex_openai (Model Garden on Vertex AI), cohere (Cohere's own API) or watsonx (IBM watsonx.ai).",
+                        "{}: kind is \"{word}\". It must be openai (the chat completions API), anthropic (the messages API), azure (Azure OpenAI), bedrock (Amazon Bedrock InvokeModel, Anthropic models), bedrock_converse (Amazon Bedrock Converse, every model family), gemini (Google's Gemini API), vertex (Gemini on Google Cloud Vertex AI), vertex_anthropic (Claude on Google Cloud Vertex AI), vertex_openai (Model Garden on Vertex AI), cohere (Cohere's own API), watsonx (IBM watsonx.ai), sagemaker (an Amazon SageMaker endpoint) or replicate (Replicate's predictions API).",
                         at("kind")
                     ));
                 }
@@ -3319,6 +3406,9 @@ fn providers(
         // Bedrock's URL follows from its region. A url may still be given, for a private endpoint or a test.
         let url = match (&entry.url, bedrock, region) {
             (Some(url), _, _) => Some(url.clone()),
+            (None, true, Some(region)) if kind == Some(Kind::Sagemaker) => Some(format!(
+                "https://runtime.sagemaker.{region}.amazonaws.com/endpoints"
+            )),
             (None, true, Some(region)) => {
                 Some(format!("https://bedrock-runtime.{region}.amazonaws.com"))
             }
@@ -5131,6 +5221,41 @@ guardrails:
     }
 
     #[test]
+    fn containers_load_and_a_size_openai_does_not_offer_is_named() -> TestResult {
+        let with = |extra: &str| {
+            GOOD.replace(
+                "    models: [gpt-4o-mini]\n",
+                &format!("    models: [gpt-4o-mini]\n{extra}"),
+            )
+        };
+        let loaded = check(
+            "containers",
+            &with("    containers: { sizes: [1g, 4g] }\n"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        assert_eq!(
+            loaded.policy.rule_list()[0].limits.containers,
+            vec!["1g".to_string(), "4g".to_string()]
+        );
+        for bad in ["{ sizes: [] }", "{ sizes: [2g] }", "{ allow: true }"] {
+            let refused = check(
+                "containers-bad",
+                &with(&format!("    containers: {bad}\n")),
+                None,
+            )?
+            .err()
+            .ok_or("a bad containers line loaded")?
+            .join("\n");
+            assert!(
+                refused.contains("containers") || refused.contains("allow"),
+                "{bad}: {refused}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn file_retention_days_loads_and_a_bad_one_names_the_range() -> TestResult {
         let with = |extra: &str| {
             GOOD.replace(
@@ -5442,6 +5567,55 @@ rules:
     principals: { any: true }
     models: [\"*\"]
 ";
+
+    #[test]
+    fn a_sagemaker_preset_takes_its_url_from_the_region_and_needs_endpoints() -> TestResult {
+        let policy = "version: 1\nproviders:\n  - name: sm\n    preset: sagemaker\n    region: eu-west-1\n    models: [llama]\n    model_ids: { llama: my-endpoint }\n  - name: rep\n    preset: replicate\n    key_env: REPLICATE_API_TOKEN\n    models: [meta/llama]\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n";
+        let loaded = check("sagemaker", policy, None)?.map_err(|e| e.join("\n"))?;
+        let [sm, rep] = &loaded.providers[..] else {
+            return Err("two providers".into());
+        };
+        assert_eq!(sm.kind, Kind::Sagemaker);
+        assert_eq!(
+            sm.url,
+            "https://runtime.sagemaker.eu-west-1.amazonaws.com/endpoints"
+        );
+        assert_eq!(sm.upstream_models["llama"], "my-endpoint");
+        assert_eq!(
+            (rep.kind, rep.url.as_str()),
+            (Kind::Replicate, "https://api.replicate.com/v1")
+        );
+        let refused = check(
+            "sagemaker-bad",
+            &policy.replace("    model_ids: { llama: my-endpoint }\n", ""),
+            None,
+        )?
+        .err()
+        .ok_or("a sagemaker provider without endpoints loaded")?
+        .join("\n");
+        assert!(refused.contains("SageMaker endpoint"), "{refused}");
+        Ok(())
+    }
+
+    #[test]
+    fn an_azure_v1_url_takes_no_api_version() -> TestResult {
+        let v1 = MORE.replace(
+            "    url: https://acme.openai.azure.com\n    key_env: AZURE_OPENAI_KEY\n    api_version: 2024-10-21\n",
+            "    url: https://acme.openai.azure.com/openai/v1\n    key_env: AZURE_OPENAI_KEY\n",
+        );
+        let loaded = check("azure-v1", &v1, None)?.map_err(|e| e.join("\n"))?;
+        assert_eq!(loaded.providers[0].api_version, None);
+        let both = v1.replace(
+            "/openai/v1\n    key_env: AZURE_OPENAI_KEY\n",
+            "/openai/v1\n    key_env: AZURE_OPENAI_KEY\n    api_version: 2024-10-21\n",
+        );
+        let refused = check("azure-v1-dated", &both, None)?
+            .err()
+            .ok_or("a v1 url with api_version loaded")?
+            .join("\n");
+        assert!(refused.contains("takes no api_version"), "{refused}");
+        Ok(())
+    }
 
     #[test]
     fn azure_bedrock_fallbacks_and_paths_load() -> TestResult {

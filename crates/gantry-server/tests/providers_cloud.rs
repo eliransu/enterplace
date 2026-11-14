@@ -212,7 +212,8 @@ async fn send(
 ) -> Result<(StatusCode, HeaderMap, String), Box<dyn std::error::Error>> {
     let response = gw.app.clone().oneshot(request).await?;
     let (status, headers) = (response.status(), response.headers().clone());
-    let text = String::from_utf8(response.into_body().collect().await?.to_bytes().to_vec())?;
+    let text =
+        String::from_utf8_lossy(&response.into_body().collect().await?.to_bytes()).into_owned();
     Ok((status, headers, text))
 }
 
@@ -648,6 +649,142 @@ fn azure(url: String) -> ProviderRoute {
     }
 }
 
+const BOUNDARY: &str = "gantryboundary";
+
+fn audio_form(model: &str) -> Vec<u8> {
+    format!(
+        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\nRIFF\r\n--{BOUNDARY}--\r\n"
+    )
+    .into_bytes()
+}
+
+async fn post_form(
+    gw: &Gateway,
+    path: &str,
+    body: Vec<u8>,
+) -> Result<(StatusCode, HeaderMap, String), Box<dyn std::error::Error>> {
+    let request = Request::post(path)
+        .header(header::AUTHORIZATION, format!("Bearer {MAYA}"))
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={BOUNDARY}"),
+        )
+        .body(Body::from(body))?;
+    send(gw, request).await
+}
+
+fn azure_media(url: String) -> ProviderRoute {
+    let mut azure = azure(url);
+    for (model, deployment) in [
+        ("gpt-image-1", "prod-image"),
+        ("whisper-1", "prod-whisper"),
+        ("tts-1", "prod-tts"),
+    ] {
+        azure.models.push(model.into());
+        azure
+            .upstream_models
+            .insert(model.into(), deployment.into());
+    }
+    azure
+}
+
+#[tokio::test]
+async fn azure_serves_images_transcription_and_speech_on_deployment_paths() -> TestResult {
+    let mock_azure = mock(vec![
+        Reply::Json(json!({"created": 1, "data": [{"b64_json": "AA=="}], "usage": {"input_tokens": 10, "output_tokens": 100}})),
+        Reply::Json(json!({"text": "hello"})),
+        Reply::Bytes("audio/mpeg", vec![1, 2, 3]),
+    ])
+    .await?;
+    let gw = gateway(
+        "azure-media",
+        vec![azure_media(mock_azure.url(""))],
+        everyone(),
+    )?;
+    let (status, _, text) = post(
+        &gw,
+        "/v1/images/generations",
+        &json!({"model": "gpt-image-1", "prompt": "a lighthouse"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(
+        mock_azure.nth(0)?.0,
+        "/openai/deployments/prod-image/images/generations?api-version=2025-04-01-preview"
+    );
+    let (status, headers, text) =
+        post_form(&gw, "/v1/audio/transcriptions", audio_form("whisper-1")).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, sent, _) = mock_azure.nth(1)?;
+    assert_eq!(
+        target,
+        "/openai/deployments/prod-whisper/audio/transcriptions?api-version=2025-04-01-preview"
+    );
+    assert_eq!(sent[header::AUTHORIZATION], "Bearer entra-token");
+    assert_eq!(decision_of(&gw, &headers)?["model"], "whisper-1");
+    let (status, _, _) = post(
+        &gw,
+        "/v1/audio/speech",
+        &json!({"model": "tts-1", "input": "hi", "voice": "alloy"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        mock_azure.nth(2)?.0,
+        "/openai/deployments/prod-tts/audio/speech?api-version=2025-04-01-preview"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn azure_v1_api_takes_openai_paths_with_the_deployment_as_model() -> TestResult {
+    let mock_azure = mock(vec![
+        Reply::Json(json!({"id": "c1", "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 4, "completion_tokens": 1}})),
+        Reply::Json(json!({"created": 1, "data": [{"b64_json": "AA=="}]})),
+        Reply::Json(json!({"text": "hello"})),
+    ])
+    .await?;
+    let mut v1 = azure_media(mock_azure.url("/openai/v1"));
+    v1.api_version = None;
+    let gw = gateway("azure-v1", vec![v1], everyone())?;
+    let (status, headers, text) = post(
+        &gw,
+        "/v1/chat/completions",
+        &json!({"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, _, body) = mock_azure.nth(0)?;
+    assert_eq!(target, "/openai/v1/chat/completions");
+    assert_eq!(serde_json::from_slice::<Value>(&body)?["model"], "prod-4o");
+    let (_, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(tokens(&usage), (Some("reported"), Some(4), Some(1)));
+    let (status, _, text) = post(
+        &gw,
+        "/v1/images/generations",
+        &json!({"model": "gpt-image-1", "prompt": "a lighthouse"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, _, body) = mock_azure.nth(1)?;
+    // Images and audio are in the v1 preview only.
+    assert_eq!(target, "/openai/v1/images/generations?api-version=preview");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body)?["model"],
+        "prod-image"
+    );
+    let (status, _, text) =
+        post_form(&gw, "/v1/audio/transcriptions", audio_form("whisper-1")).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, _, body) = mock_azure.nth(2)?;
+    assert_eq!(
+        target,
+        "/openai/v1/audio/transcriptions?api-version=preview"
+    );
+    assert!(String::from_utf8_lossy(&body).contains("\r\n\r\nprod-whisper\r\n"));
+    Ok(())
+}
+
 #[tokio::test]
 async fn azure_takes_entra_tokens_responses_and_embeddings_on_its_paths() -> TestResult {
     let openai_azure = mock(vec![
@@ -670,6 +807,13 @@ async fn azure_takes_entra_tokens_responses_and_embeddings_on_its_paths() -> Tes
     assert_eq!(serde_json::from_slice::<Value>(&body)?["model"], "prod-4o");
     let (_, usage) = records_of(&gw, &headers).await?;
     assert_eq!(tokens(&usage), (Some("reported"), Some(5), Some(1)));
+    // The stored response is read back at Azure's own path, by its creator.
+    let (status, _, text) = eventually(&gw, "/v1/responses/resp_1").await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(
+        openai_azure.nth(1)?.0,
+        "/openai/responses/resp_1?api-version=2025-04-01-preview"
+    );
     let (status, _, text) = post(
         &gw,
         "/v1/embeddings",
@@ -678,7 +822,7 @@ async fn azure_takes_entra_tokens_responses_and_embeddings_on_its_paths() -> Tes
     .await?;
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_eq!(
-        openai_azure.nth(1)?.0,
+        openai_azure.nth(2)?.0,
         "/openai/deployments/prod-embed/embeddings?api-version=2025-04-01-preview"
     );
     Ok(())
@@ -743,6 +887,61 @@ async fn entra_id_tokens_come_from_client_credentials_workload_identity_and_mana
 
 fn vertex_base(mock: &Mock) -> String {
     mock.url("/v1/projects/acme/locations/us-central1/publishers/google")
+}
+
+#[tokio::test]
+async fn vertex_counts_a_gemini_models_tokens_for_a_messages_request() -> TestResult {
+    let vertex = mock(vec![Reply::Json(
+        json!({"totalTokens": 31, "totalBillableCharacters": 96}),
+    )])
+    .await?;
+    let gw = gateway(
+        "vertex-count",
+        vec![route(
+            "vertex",
+            Kind::Vertex,
+            vertex_base(&vertex),
+            &["gemini-2.5-flash"],
+        )],
+        everyone(),
+    )?;
+    let (status, headers, text) = post(
+        &gw,
+        "/v1/messages/count_tokens",
+        &json!({"model": "gemini-2.5-flash", "system": "Be brief.",
+            "messages": [{"role": "user", "content": "How many tokens is this?"}]}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)?,
+        json!({"input_tokens": 31})
+    );
+    let (target, sent, body) = vertex.first()?;
+    assert!(
+        target.ends_with("/models/gemini-2.5-flash:countTokens"),
+        "{target}"
+    );
+    assert_eq!(sent[header::AUTHORIZATION], "Bearer vertex-provider-key");
+    let body: Value = serde_json::from_slice(&body)?;
+    assert_eq!(
+        body["contents"][0]["parts"][0]["text"],
+        "How many tokens is this?"
+    );
+    assert_eq!(body["systemInstruction"]["parts"][0]["text"], "Be brief.");
+    assert!(body.get("generationConfig").is_none(), "{body}");
+    assert_eq!(decision_of(&gw, &headers)?["model"], "gemini-2.5-flash");
+    // Tools would be counted short, so they are refused by name.
+    let (status, _, text) = post(
+        &gw,
+        "/v1/messages/count_tokens",
+        &json!({"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"name": "t", "input_schema": {"type": "object"}}]}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(text.contains("tools"), "{text}");
+    Ok(())
 }
 
 #[tokio::test]
@@ -1286,6 +1485,68 @@ async fn bedrock_and_vertex_passthrough_are_signed_and_governed() -> TestResult 
     Ok(())
 }
 
+#[tokio::test]
+async fn a_bedrock_stream_through_signed_passthrough_is_charged_what_its_events_report()
+-> TestResult {
+    let mut converse_stream =
+        eventstream::converse_event("messageStart", &json!({"role": "assistant"}));
+    converse_stream.extend(eventstream::converse_event(
+        "contentBlockDelta",
+        &json!({"contentBlockIndex": 0, "delta": {"text": "Hi"}}),
+    ));
+    converse_stream.extend(eventstream::converse_event(
+        "metadata",
+        &json!({"usage": {"inputTokens": 1000, "outputTokens": 500, "totalTokens": 1500}, "metrics": {"latencyMs": 9}}),
+    ));
+    let mut invoke_stream = eventstream::chunk(
+        &json!({"type": "message_start", "message": {"usage": {"input_tokens": 40, "output_tokens": 1}}}),
+    );
+    invoke_stream.extend(eventstream::chunk(&json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 7}})));
+    invoke_stream.extend(eventstream::chunk(&json!({"type": "message_stop"})));
+    let bedrock = mock(vec![
+        Reply::Bytes("application/vnd.amazon.eventstream", converse_stream),
+        Reply::Bytes("application/vnd.amazon.eventstream", invoke_stream),
+    ])
+    .await?;
+    let policy = everyone().with_rule_change(|rule| {
+        rule.passthrough = vec![gantry_core::policy::Passthrough {
+            provider: "bedrock".into(),
+            paths: vec!["/model".into()],
+        }];
+    });
+    let gw = gateway(
+        "signed-passthrough-stream",
+        vec![converse(
+            bedrock.url(""),
+            &[
+                ("nova-pro", "amazon.nova-pro-v1:0"),
+                ("claude", "anthropic.claude-v9"),
+            ],
+        )],
+        policy,
+    )?;
+    let native = json!({"messages": [{"role": "user", "content": [{"text": "hi"}]}]});
+    let (status, headers, text) = post(
+        &gw,
+        "/bedrock/model/amazon.nova-pro-v1:0/converse-stream",
+        &native,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (_, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(tokens(&usage), (Some("reported"), Some(1000), Some(500)));
+    let (status, headers, text) = post(
+        &gw,
+        "/bedrock/model/anthropic.claude-v9/invoke-with-response-stream",
+        &json!({"anthropic_version": "bedrock-2023-05-31", "max_tokens": 10, "messages": []}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (_, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(tokens(&usage), (Some("reported"), Some(40), Some(7)));
+    Ok(())
+}
+
 // 8. Videos and containers.
 
 const OMER: &str = "gantry_fedcba9876543210fedcba9876543210fedcba9876543210fedcba98765432";
@@ -1406,23 +1667,22 @@ async fn a_veo_video_goes_through_the_videos_route_and_comes_back_whole() -> Tes
 }
 
 #[tokio::test]
-async fn a_container_is_decided_by_its_size_charged_once_and_reached_only_by_its_owner()
+async fn a_container_is_allowed_by_its_size_charged_by_the_minute_and_reached_only_by_its_owner()
 -> TestResult {
     let openai = mock(vec![
         Reply::Json(
-            json!({"id": "cntr_1", "object": "container", "name": "work", "status": "running"}),
+            json!({"id": "cntr_1", "object": "container", "name": "work", "status": "running", "created_at": 1000}),
         ),
         Reply::Json(json!({"object": "list", "data": []})),
+        Reply::Json(json!({"id": "cntr_1", "object": "container", "status": "expired", "created_at": 1000,
+            "last_active_at": 1600, "expires_after": {"anchor": "last_active_at", "minutes": 20}})),
     ])
     .await?;
     let policy = Policy::new()
         .with_key(MAYA, "maya.cohen", "payments")
         .with_key(OMER, "omer.levi", "payments")
-        .with_rule(
-            "payments",
-            Who::Team("payments".into()),
-            Models::Only(vec!["container-1g".into()]),
-        );
+        .with_rule("payments", Who::Team("payments".into()), Models::Any)
+        .with_rule_change(|r| r.limits.containers = vec!["1g".into(), "4g".into()]);
     let gw = gateway(
         "containers",
         vec![route("openai", Kind::OpenAi, openai.url(""), &["gpt-4o"])],
@@ -1435,15 +1695,573 @@ async fn a_container_is_decided_by_its_size_charged_once_and_reached_only_by_its
     )
     .await?;
     assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
-    assert!(text.contains("container-64g"), "{text}");
+    assert!(
+        text.contains("container_not_allowed") && text.contains("64g") && text.contains("1g, 4g"),
+        "{text}"
+    );
+    assert_eq!(openai.hits.load(Ordering::SeqCst), 0);
     let (status, created, text) = post(&gw, "/v1/containers", &json!({"name": "work"})).await?;
     assert_eq!(status, StatusCode::OK, "{text}");
-    let usage = usage_of(&gw, &created).await?;
-    assert!(close(cost(&usage), 0.03), "{usage}");
     let (status, _, _) = get(&gw, "/v1/containers/cntr_1/files", OMER).await?;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _, text) = get(&gw, "/v1/containers/cntr_1/files", MAYA).await?;
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_eq!(openai.nth(1)?.0, "/v1/containers/cntr_1/files");
+    // Read when it expired: alive from 1000 to 20 minutes after its last use at 1600, 30 minutes at $0.03 per 20.
+    let (status, _, text) = get(&gw, "/v1/containers/cntr_1", MAYA).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let usage = usage_of(&gw, &created).await?;
+    assert!(close(cost(&usage), 0.045), "{usage}");
+    assert_eq!(usage["model"], "container");
+    assert_eq!(usage["container_size"], "1g");
+    assert_eq!(usage["price"], "per_minute");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_rule_without_containers_allows_none_and_a_deleted_one_pays_the_minimum() -> TestResult {
+    let openai = mock(vec![Reply::Json(
+        json!({"id": "cntr_2", "object": "container", "status": "running"}),
+    )])
+    .await?;
+    let gw = gateway(
+        "containers-none",
+        vec![route("openai", Kind::OpenAi, openai.url(""), &["gpt-4o"])],
+        everyone(),
+    )?;
+    let (status, _, text) = post(&gw, "/v1/containers", &json!({"name": "work"})).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    assert!(text.contains("containers: { sizes: [1g] }"), "{text}");
+    let gw = gateway(
+        "containers-delete",
+        vec![route("openai", Kind::OpenAi, openai.url(""), &["gpt-4o"])],
+        everyone().with_rule_change(|r| r.limits.containers = vec!["16g".into()]),
+    )?;
+    let (status, created, text) = post(
+        &gw,
+        "/v1/containers",
+        &json!({"name": "work", "memory_limit": "16g"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let request = Request::delete("/v1/containers/cntr_2")
+        .header(header::AUTHORIZATION, format!("Bearer {MAYA}"))
+        .body(Body::empty())?;
+    let (status, _, text) = send(&gw, request).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    // Deleted at once: the 5-minute minimum of a $0.48 20-minute session.
+    let usage = usage_of(&gw, &created).await?;
+    assert!(close(cost(&usage), 0.12), "{usage}");
+    Ok(())
+}
+
+// 9. Stored responses and async jobs.
+
+async fn request(
+    gw: &Gateway,
+    method: &str,
+    path: &str,
+    key: &str,
+) -> Result<(StatusCode, HeaderMap, String), Box<dyn std::error::Error>> {
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::AUTHORIZATION, format!("Bearer {key}"))
+        .body(Body::empty())?;
+    send(gw, request).await
+}
+
+/// Asks until the answer is not a 404: a response is recorded as its creator's when its answer ends.
+async fn eventually(
+    gw: &Gateway,
+    path: &str,
+) -> Result<(StatusCode, HeaderMap, String), Box<dyn std::error::Error>> {
+    for _ in 0..100 {
+        let answer = get(gw, path, MAYA).await?;
+        if answer.0 != StatusCode::NOT_FOUND {
+            return Ok(answer);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    Err(format!("{path} stayed 404").into())
+}
+
+#[tokio::test]
+async fn a_stored_response_is_read_cancelled_and_deleted_by_its_creator_alone() -> TestResult {
+    let response = json!({"id": "resp_9", "object": "response", "status": "completed", "model": "gpt-4o", "output": [], "usage": {"input_tokens": 5, "output_tokens": 1}});
+    let openai = mock(vec![
+        Reply::Json(response.clone()),
+        Reply::Json(response.clone()),
+        Reply::Json(json!({"object": "list", "data": []})),
+        Reply::Json(response.clone()),
+        Reply::Json(json!({"id": "resp_9", "object": "response.deleted", "deleted": true})),
+    ])
+    .await?;
+    let gw = gateway(
+        "responses-stored",
+        vec![route("openai", Kind::OpenAi, openai.url(""), &["gpt-4o"])],
+        everyone().with_key(OMER, "omer.levi", "payments"),
+    )?;
+    let (status, _, text) = post(
+        &gw,
+        "/v1/responses",
+        &json!({"model": "gpt-4o", "input": "hi"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (status, _, text) = eventually(&gw, "/v1/responses/resp_9").await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(openai.nth(1)?.0, "/v1/responses/resp_9");
+    // Someone else is told it does not exist, and the provider is not asked.
+    for (method, path) in [
+        ("GET", "/v1/responses/resp_9"),
+        ("DELETE", "/v1/responses/resp_9"),
+        ("POST", "/v1/responses/resp_9/cancel"),
+    ] {
+        let (status, _, _) = request(&gw, method, path, OMER).await?;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+    }
+    assert_eq!(openai.hits.load(Ordering::SeqCst), 2);
+    let (status, _, _) = get(&gw, "/v1/responses/resp_9/input_items?limit=5", MAYA).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(openai.nth(2)?.0, "/v1/responses/resp_9/input_items?limit=5");
+    let (status, _, _) = request(&gw, "POST", "/v1/responses/resp_9/cancel", MAYA).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(openai.nth(3)?.0, "/v1/responses/resp_9/cancel");
+    let (status, headers, _) = request(&gw, "DELETE", "/v1/responses/resp_9", MAYA).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(decision_of(&gw, &headers)?["code"].is_null());
+    let (status, _, _) = get(&gw, "/v1/responses/resp_9", MAYA).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_translated_response_is_kept_by_gantry_when_the_request_stores_it() -> TestResult {
+    let anthropic = mock(vec![Reply::Json(anthropic_message())]).await?;
+    let gw = gateway(
+        "responses-kept",
+        vec![route(
+            "anthropic",
+            Kind::Anthropic,
+            anthropic.url(""),
+            &["claude-sonnet-5-5"],
+        )],
+        everyone().with_key(OMER, "omer.levi", "payments"),
+    )?;
+    let (status, _, text) = post(
+        &gw,
+        "/v1/responses",
+        &json!({"model": "claude-sonnet-5-5", "input": "List files", "store": true}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let made: Value = serde_json::from_str(&text)?;
+    let id = made["id"].as_str().ok_or("no id")?.to_string();
+    let path = format!("/v1/responses/{id}");
+    let (status, _, text) = eventually(&gw, &path).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(serde_json::from_str::<Value>(&text)?, made);
+    // Kept for its creator alone, never asked of the provider.
+    let (status, _, _) = get(&gw, &path, OMER).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(anthropic.hits.load(Ordering::SeqCst), 1);
+    let (status, _, text) = request(&gw, "POST", &format!("{path}/cancel"), MAYA).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(text.contains("not_background"), "{text}");
+    let (status, _, text) = request(&gw, "DELETE", &path, MAYA).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)?,
+        json!({"id": id, "object": "response.deleted", "deleted": true})
+    );
+    let (status, _, _) = get(&gw, &path, MAYA).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Not asked to store: the creator is told why there is nothing to read.
+    let (_, _, text) = post(
+        &gw,
+        "/v1/responses",
+        &json!({"model": "claude-sonnet-5-5", "input": "again"}),
+    )
+    .await?;
+    let id = serde_json::from_str::<Value>(&text)?["id"]
+        .as_str()
+        .ok_or("no id")?
+        .to_string();
+    let mut answer = (StatusCode::OK, String::new());
+    for _ in 0..100 {
+        let (status, _, text) = get(&gw, &format!("/v1/responses/{id}"), MAYA).await?;
+        answer = (status, text);
+        if answer.1.contains("not_kept") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(answer.1.contains("not_kept"), "{answer:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_async_job_runs_governed_and_its_answer_waits_for_its_submitter() -> TestResult {
+    let openai = mock(vec![Reply::Json(json!({"id": "c1", "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 1}}))])
+    .await?;
+    let gw = gateway(
+        "async",
+        vec![route("openai", Kind::OpenAi, openai.url(""), &["gpt-4o"])],
+        everyone().with_key(OMER, "omer.levi", "payments"),
+    )?;
+    let chat = json!({"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]});
+    let (status, _, text) = post(&gw, "/v1/async/chat/completions", &chat).await?;
+    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+    let job: Value = serde_json::from_str(&text)?;
+    assert_eq!(job["status"], "pending");
+    let path = format!(
+        "/v1/async/chat/completions/{}",
+        job["id"].as_str().ok_or("no id")?
+    );
+    let mut done = Value::Null;
+    for _ in 0..100 {
+        let (status, _, text) = get(&gw, &path, MAYA).await?;
+        if status == StatusCode::OK {
+            done = serde_json::from_str(&text)?;
+            break;
+        }
+        assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(done["status"], "completed", "{done}");
+    assert_eq!(done["result"]["choices"][0]["message"]["content"], "Hi");
+    // The job was a request like any other: decided, recorded and metered under its own decision.
+    let inner = all_records(&gw)?
+        .into_iter()
+        .find(|r| r["id"] == done["decision"] && r["event"] == "usage")
+        .ok_or("no usage record for the job")?;
+    assert_eq!(tokens(&inner), (Some("reported"), Some(4), Some(1)));
+    let (status, _, _) = get(&gw, &path, OMER).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, text) = post(
+        &gw,
+        "/v1/async/chat/completions",
+        &json!({"model": "gpt-4o", "stream": true, "messages": []}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(text.contains("stream_not_async"), "{text}");
+    // A model the rule does not allow fails inside the job, with the refusal held as its error.
+    let gw = gateway(
+        "async-refused",
+        vec![route(
+            "openai",
+            Kind::OpenAi,
+            openai.url(""),
+            &["gpt-4o", "o3"],
+        )],
+        Policy::new()
+            .with_key(MAYA, "maya.cohen", "payments")
+            .with_rule("only-4o", Who::Any, Models::Only(vec!["gpt-4o".into()])),
+    )?;
+    let (_, _, text) = post(
+        &gw,
+        "/v1/async/chat/completions",
+        &json!({"model": "o3", "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await?;
+    let path = format!(
+        "/v1/async/chat/completions/{}",
+        serde_json::from_str::<Value>(&text)?["id"]
+            .as_str()
+            .ok_or("no id")?
+    );
+    for _ in 0..100 {
+        let (status, _, text) = get(&gw, &path, MAYA).await?;
+        if status == StatusCode::OK {
+            done = serde_json::from_str(&text)?;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(done["status"], "failed", "{done}");
+    assert_eq!(done["status_code"], 403);
+    assert!(
+        done["error"].to_string().contains("model_not_allowed"),
+        "{done}"
+    );
+    Ok(())
+}
+
+// 10. SageMaker and Replicate.
+
+fn sagemaker(url: String) -> ProviderRoute {
+    ProviderRoute {
+        key: None,
+        region: Some("us-east-1".into()),
+        aws: Some(aws().into()),
+        upstream_models: [("llama".to_string(), "my-llama-ep".to_string())].into(),
+        ..route("sagemaker", Kind::Sagemaker, url, &["llama"])
+    }
+}
+
+#[tokio::test]
+async fn a_sagemaker_endpoint_is_signed_and_its_stream_comes_back_as_chat_events() -> TestResult {
+    let chunk = |text: &str| {
+        json!({"id": "c1", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": null}]})
+            .to_string()
+    };
+    let lines = format!("{}\n{}\n", chunk("Hel"), chunk("lo"));
+    // The container's output, cut in the middle of a line, as SageMaker may send it.
+    let (first, second) = lines.split_at(30);
+    let mut stream = eventstream::payload_part(first.as_bytes());
+    stream.extend(eventstream::payload_part(second.as_bytes()));
+    let endpoint = mock(vec![
+        Reply::Json(json!({"id": "c1", "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}})),
+        Reply::Bytes("application/vnd.amazon.eventstream", stream),
+    ])
+    .await?;
+    let gw = gateway(
+        "sagemaker",
+        vec![sagemaker(endpoint.url("/endpoints"))],
+        everyone(),
+    )?;
+    let chat = json!({"model": "llama", "messages": [{"role": "user", "content": "hi"}]});
+    let (status, headers, text) = post(&gw, "/v1/chat/completions", &chat).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, sent, body) = endpoint.first()?;
+    assert_eq!(target, "/endpoints/my-llama-ep/invocations");
+    let auth = sent[header::AUTHORIZATION].to_str()?;
+    assert!(auth.contains("/us-east-1/sagemaker/aws4_request"), "{auth}");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body)?["messages"][0]["content"],
+        "hi"
+    );
+    let (_, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(tokens(&usage), (Some("reported"), Some(12), Some(3)));
+    let mut streamed = chat.clone();
+    streamed["stream"] = true.into();
+    let (status, _, text) = post(&gw, "/v1/chat/completions", &streamed).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(
+        endpoint.nth(1)?.0,
+        "/endpoints/my-llama-ep/invocations-response-stream"
+    );
+    assert!(
+        text.contains("\"content\":\"Hel\"") && text.contains("\"content\":\"lo\""),
+        "{text}"
+    );
+    assert!(text.trim_end().ends_with("data: [DONE]"), "{text}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_replicate_prediction_is_waited_for_and_answers_as_chat() -> TestResult {
+    let model = "meta/meta-llama-3-70b-instruct";
+    let done = json!({"id": "p1", "status": "succeeded", "output": ["Hel", "lo"],
+        "metrics": {"input_token_count": 7, "output_token_count": 2, "predict_time": 0.4}});
+    let replicate = mock(vec![
+        Reply::Json(done.clone()),
+        Reply::Json(done),
+        Reply::Json(json!({"id": "p3", "status": "processing", "output": null})),
+    ])
+    .await?;
+    let gw = gateway(
+        "replicate",
+        vec![route(
+            "replicate",
+            Kind::Replicate,
+            replicate.url("/v1"),
+            &[model],
+        )],
+        everyone(),
+    )?;
+    let chat = json!({"model": model, "max_tokens": 64, "messages": [
+        {"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}]});
+    let (status, headers, text) = post(&gw, "/v1/chat/completions", &chat).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let answer: Value = serde_json::from_str(&text)?;
+    assert_eq!(answer["choices"][0]["message"]["content"], "Hello");
+    let (target, sent, body) = replicate.first()?;
+    assert_eq!(target, format!("/v1/models/{model}/predictions"));
+    assert_eq!(sent["prefer"], "wait=60");
+    assert_eq!(sent["cancel-after"], "60s");
+    assert_eq!(sent[header::AUTHORIZATION], "Bearer replicate-provider-key");
+    let body: Value = serde_json::from_slice(&body)?;
+    assert_eq!(
+        body,
+        json!({"input": {"prompt": "User: hi\nAssistant:", "system_prompt": "Be brief.", "max_tokens": 64}})
+    );
+    let (_, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(tokens(&usage), (Some("reported"), Some(7), Some(2)));
+    let mut streamed = chat.clone();
+    streamed["stream"] = true.into();
+    streamed["stream_options"] = json!({"include_usage": true});
+    let (status, headers, text) = post(&gw, "/v1/chat/completions", &streamed).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert!(
+        text.contains("\"content\":\"Hello\"") && text.ends_with("data: [DONE]\n\n"),
+        "{text}"
+    );
+    let (_, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(tokens(&usage), (Some("reported"), Some(7), Some(2)));
+    // Not done after the wait: Replicate cancels it, and the caller is told why.
+    let (status, _, text) = post(&gw, "/v1/chat/completions", &chat).await?;
+    assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{text}");
+    assert!(text.contains("60 seconds"), "{text}");
+    // A field a prediction has no place for is refused by name, never sent.
+    let (status, _, text) = post(
+        &gw,
+        "/v1/chat/completions",
+        &json!({"model": model, "messages": [{"role": "user", "content": "hi"}], "tools": []}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(text.contains("tools"), "{text}");
+    assert_eq!(replicate.hits.load(Ordering::SeqCst), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn files_written_into_a_container_are_read_by_the_guardrails_both_ways() -> TestResult {
+    let openai = mock(vec![
+        Reply::Json(json!({"id": "cntr_7", "object": "container", "status": "running"})),
+        Reply::Json(json!({"id": "cfile_1", "object": "container.file"})),
+        Reply::Bytes(
+            "text/plain",
+            b"report: key AKIAIOSFODNN7EXAMPLE leaked".to_vec(),
+        ),
+        Reply::Bytes("application/octet-stream", vec![0, 159, 146, 150]),
+    ])
+    .await?;
+    let policy = everyone()
+        .with_rule_change(|r| r.limits.containers = vec!["1g".into()])
+        .with_guardrails(&[Guardrail {
+            name: "no-secrets".into(),
+            action: Action::Block,
+            check: Check::Secrets,
+            on: gantry_core::guard::On {
+                request: true,
+                answer: true,
+            },
+            shadow_until: None,
+        }]);
+    let gw = gateway(
+        "container-files",
+        vec![route("openai", Kind::OpenAi, openai.url(""), &["gpt-4o"])],
+        policy,
+    )?;
+    let (status, _, text) = post(&gw, "/v1/containers", &json!({"name": "work"})).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let file = |content: &str| {
+        format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"notes.txt\"\r\nContent-Type: text/plain\r\n\r\n{content}\r\n--{BOUNDARY}--\r\n"
+        )
+        .into_bytes()
+    };
+    let (status, _, text) = post_form(
+        &gw,
+        "/v1/containers/cntr_7/files",
+        file("aws key AKIAIOSFODNN7EXAMPLE"),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    assert_eq!(openai.hits.load(Ordering::SeqCst), 1);
+    let (status, _, text) =
+        post_form(&gw, "/v1/containers/cntr_7/files", file("plain notes")).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(openai.nth(1)?.0, "/v1/containers/cntr_7/files");
+    // A file the code wrote, read back: the answer guardrails see it before the caller does.
+    let (status, _, text) = get(&gw, "/v1/containers/cntr_7/files/cfile_1/content", MAYA).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    assert!(!text.contains("AKIA"), "{text}");
+    // Bytes that are not text cannot be read, and pass as they are.
+    let (status, headers, _) =
+        get(&gw, "/v1/containers/cntr_7/files/cfile_2/content", MAYA).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "application/octet-stream");
+    Ok(())
+}
+
+fn video_form(model: &str, prompt: &str) -> Vec<u8> {
+    let mut form = format!(
+        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n{prompt}\r\n--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"seconds\"\r\n\r\n4\r\n--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"ref.png\"\r\nContent-Type: image/png\r\n\r\n"
+    )
+    .into_bytes();
+    form.extend_from_slice(b"\x89PNG\r\n\x1a\nIMG");
+    form.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
+    form
+}
+
+#[tokio::test]
+async fn a_video_takes_an_input_reference_image_with_its_prompt_guarded() -> TestResult {
+    let openai = mock(vec![Reply::Json(json!({"id": "video_2", "object": "video", "model": "sora-2", "status": "queued", "seconds": "4"}))]).await?;
+    let operation = "projects/acme/locations/us-central1/publishers/google/models/veo-3.0-generate-001/operations/op-9";
+    let vertex = mock(vec![Reply::Json(json!({"name": operation}))]).await?;
+    let policy = everyone().with_guardrails(&[Guardrail {
+        name: "no-secrets".into(),
+        action: Action::Block,
+        check: Check::Secrets,
+        on: gantry_core::guard::On::REQUEST,
+        shadow_until: None,
+    }]);
+    let gw = gateway(
+        "video-reference",
+        vec![
+            route("openai", Kind::OpenAi, openai.url(""), &["sora-2"]),
+            route(
+                "vertex",
+                Kind::Vertex,
+                vertex_base(&vertex),
+                &["veo-3.0-generate-001"],
+            ),
+        ],
+        policy,
+    )?;
+    let (status, _, text) = post_form(
+        &gw,
+        "/v1/videos",
+        video_form("sora-2", "a sign reading AKIAIOSFODNN7EXAMPLE"),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    assert_eq!(openai.hits.load(Ordering::SeqCst), 0);
+    let (status, _, text) =
+        post_form(&gw, "/v1/videos", video_form("sora-2", "a calm sea")).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, sent, body) = openai.first()?;
+    assert_eq!(target, "/v1/videos");
+    assert!(
+        sent[header::CONTENT_TYPE]
+            .to_str()?
+            .starts_with("multipart/form-data; boundary=")
+    );
+    let body = String::from_utf8_lossy(&body);
+    assert!(
+        body.contains("name=\"prompt\"\r\n\r\na calm sea\r\n"),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            "name=\"input_reference\"; filename=\"input_reference\"\r\nContent-Type: image/png"
+        ),
+        "{body}"
+    );
+    assert!(body.contains("IMG"), "{body}");
+    // Veo takes the image in its instance, base64.
+    let (status, _, text) = post_form(
+        &gw,
+        "/v1/videos",
+        video_form("veo-3.0-generate-001", "a calm sea"),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let body: Value = serde_json::from_slice(&vertex.first()?.2)?;
+    assert_eq!(body["instances"][0]["prompt"], "a calm sea");
+    assert_eq!(body["instances"][0]["image"]["mimeType"], "image/png");
+    assert_eq!(
+        body["instances"][0]["image"]["bytesBase64Encoded"],
+        eventstream::base64_encode(b"\x89PNG\r\n\x1a\nIMG")
+    );
     Ok(())
 }

@@ -69,6 +69,9 @@ pub const DEFAULT_ADDR: &str = "127.0.0.1:8080";
 const KIB: usize = 1024;
 const MIB: usize = 1024 * KIB;
 
+/// The longest an async job may run before its answer is no longer held: what its held entry outlives at most.
+pub(crate) const MAX_JOB_SECONDS: u64 = 3600;
+
 /// Largest request body the gateway reads. Large enough for prompts that carry images.
 pub const MAX_BODY_BYTES: usize = 32 * MIB;
 
@@ -512,10 +515,16 @@ fn key_header(kind: Kind, key: &Secret) -> Result<(HeaderName, HeaderValue), Con
         | Kind::VertexAnthropic
         | Kind::VertexOpenAi
         | Kind::Cohere
-        | Kind::Watsonx => (header::AUTHORIZATION, format!("Bearer {}", key.0)),
+        | Kind::Watsonx
+        | Kind::Replicate => (header::AUTHORIZATION, format!("Bearer {}", key.0)),
         Kind::Gemini => (HeaderName::from_static("x-goog-api-key"), key.0.clone()),
         Kind::Anthropic => (HeaderName::from_static("x-api-key"), key.0.clone()),
         Kind::Azure => (HeaderName::from_static("api-key"), key.0.clone()),
+        Kind::Sagemaker => {
+            return Err(ConfigError(
+                "a sagemaker provider takes no provider key: its requests are signed with AWS credentials. Remove the key, and run Gantry with an AWS role or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.".into(),
+            ));
+        }
         Kind::Bedrock | Kind::BedrockConverse => {
             return Err(ConfigError(
                 "a bedrock provider takes no provider key: its requests are signed with AWS credentials. Remove the key, and run Gantry with an AWS role or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.".into(),
@@ -1777,6 +1786,12 @@ async fn check<'a>(
             let from_messages = shape == Shape::Chat && route == Kind::Anthropic;
             let from_responses = path == RESPONSES && shape != Shape::Sent;
             seen.translated = shape != Shape::Sent;
+            if path == RESPONSES {
+                // The response it gets is the caller's: theirs alone to read back, delete or cancel.
+                let store = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .is_ok_and(|b| b["store"] == true);
+                parts.extensions.insert(batch::creator(person, seen, store));
+            }
             let mut bytes = bytes;
             if from_responses {
                 bytes = to_chat_from_responses(&bytes)?;
@@ -2202,7 +2217,7 @@ async fn passthrough<'a>(
         },
         None => {
             let (cloud, rest, of) = match path.strip_prefix(BEDROCK_PASSTHROUGH) {
-                Some(rest) => ("Amazon Bedrock", rest, Kind::aws as fn(Kind) -> bool),
+                Some(rest) => ("Amazon Bedrock", rest, Kind::bedrock as fn(Kind) -> bool),
                 None => (
                     "Vertex AI",
                     path.strip_prefix(VERTEX_PASSTHROUGH).unwrap_or_default(),
@@ -2308,7 +2323,9 @@ async fn passthrough<'a>(
     // Bedrock and Vertex AI name the model in the path (/model/<id>/..., .../models/<model>:<method>): it is decided on
     // by the name the policy knows it by.
     let in_path = version.providers.get(index).and_then(|p| {
-        let id = if p.kind.aws() {
+        let id = if p.kind == Kind::Sagemaker {
+            native.strip_prefix("/endpoints/")?.split('/').next()?
+        } else if p.kind.aws() {
             native.strip_prefix("/model/")?.split('/').next()?
         } else if p.kind.google_auth() {
             native.split("/models/").nth(1)?.split([':', '/']).next()?
@@ -2673,6 +2690,11 @@ fn to_responses_request(bytes: &[u8]) -> Result<(Bytes, bool), Refusal> {
     ))
 }
 
+/// Whether an Azure OpenAI provider's URL is the v1 API (`https://<resource>.openai.azure.com/openai/v1`).
+pub(crate) fn azure_v1(url: &str) -> bool {
+    url.trim_end_matches('/').ends_with("/openai/v1")
+}
+
 /// The project of a Vertex AI provider URL (`.../projects/<project>/locations/...`).
 fn vertex_project(url: &str) -> Option<&str> {
     url.split("/projects/").nth(1)?.split('/').next()
@@ -2693,6 +2715,23 @@ fn native_body(
         .map_or(model, String::as_str);
     let project = provider.project_id.as_deref();
     let body = match (route, provider.kind) {
+        (COUNT_TOKENS, Kind::Gemini | Kind::Vertex) => {
+            // A messages request (Claude Code counts before it sends) as Gemini's countTokens body: its contents and
+            // system instruction. countTokens takes no tools, so a request with tools is refused, not under-counted.
+            if request.get("tools").is_some_and(|t| !t.is_null()) {
+                return Err(untranslatable(
+                    "The parameter \"tools\" has no equivalent in Gemini's countTokens. Count the request without tools, or send it to /v1/messages without counting first.",
+                ));
+            }
+            let chat: serde_json::Value = serde_json::from_slice(&to_chat_request(bytes)?)
+                .map_err(|_| untranslatable("the request could not be read as chat"))?;
+            let (gemini, _) = gemini::openai_to_gemini_request(&chat).map_err(untranslatable)?;
+            let mut out = serde_json::json!({"contents": gemini["contents"]});
+            if !gemini["systemInstruction"].is_null() {
+                out["systemInstruction"] = gemini["systemInstruction"].clone();
+            }
+            (out, false)
+        }
         (CHAT, Kind::Gemini | Kind::Vertex) => {
             gemini::openai_to_gemini_request(&request).map_err(untranslatable)?
         }
@@ -2707,6 +2746,10 @@ fn native_body(
                 stream,
             )
         }
+        (CHAT, Kind::Replicate) => (
+            gantry_core::replicate::openai_to_prediction(&request, id).map_err(untranslatable)?,
+            false,
+        ),
         (CHAT, Kind::Watsonx) => {
             gantry_core::cohere::openai_to_watsonx_request(&request, project.unwrap_or_default())
                 .map_err(untranslatable)?
@@ -2814,10 +2857,14 @@ fn fits(provider: &Upstream, path: &str, model: &str) -> Result<Shape, Refusal> 
             ),
         ))
     };
-    let chat_as_sent = matches!(kind, Kind::OpenAi | Kind::Azure | Kind::VertexOpenAi);
+    let chat_as_sent = matches!(
+        kind,
+        Kind::OpenAi | Kind::Azure | Kind::VertexOpenAi | Kind::Sagemaker
+    );
     match path {
         COUNT_TOKENS => match kind {
             Kind::Anthropic | Kind::Bedrock | Kind::VertexAnthropic => Ok(Shape::Sent),
+            Kind::Gemini | Kind::Vertex => Ok(Shape::Native),
             _ if provider.accept_messages => wrong(format!(
                 "which takes messages requests translated to chat completions, and Gantry does not count tokens for it. Send the request to {MESSAGES} without counting first."
             )),
@@ -2843,7 +2890,7 @@ fn fits(provider: &Upstream, path: &str, model: &str) -> Result<Shape, Refusal> 
         },
         RESPONSES => match kind {
             Kind::OpenAi | Kind::Azure => Ok(Shape::Sent),
-            Kind::VertexOpenAi => Ok(Shape::Chat),
+            Kind::VertexOpenAi | Kind::Sagemaker => Ok(Shape::Chat),
             _ if kind.translates_chat() => Ok(Shape::Native),
             _ => Ok(Shape::Messages),
         },
@@ -2874,6 +2921,7 @@ fn fits(provider: &Upstream, path: &str, model: &str) -> Result<Shape, Refusal> 
             )),
         },
         _ if openai_only(path) && kind == Kind::OpenAi => Ok(Shape::Sent),
+        IMAGES | TRANSCRIPTIONS | SPEECH | COMPLETIONS if kind == Kind::Azure => Ok(Shape::Sent),
         _ => wrong(format!(
             "and Gantry forwards {path} to providers of kind openai only. Use a model on a provider of kind openai, or send this request to the route that provider speaks ({}).",
             if kind.api() == Kind::Anthropic {
@@ -3019,7 +3067,7 @@ fn check_query(uri: &Uri) -> Result<(), Refusal> {
 }
 
 /// Every request except the health check: gives it a decision ID, checks it, records it, and only then forwards it.
-async fn handle(State(state): State<AppState>, mut request: Request) -> Response {
+pub(crate) async fn handle(State(state): State<AppState>, mut request: Request) -> Response {
     let arrived = Instant::now();
     let decision = id::decision_id();
     const TRACEPARENT: HeaderName = HeaderName::from_static("traceparent");
@@ -3055,11 +3103,16 @@ async fn handle(State(state): State<AppState>, mut request: Request) -> Response
         }
         Err(refusal) => refusal.respond(&decision, anthropic),
     };
+    let creator = response.extensions_mut().remove::<batch::Creator>();
     if let Some(check) = response.extensions_mut().remove::<AnswerCheck>() {
         response = match answer_guarded(&state, check, &decision, response).await {
             Ok(response) => response,
             Err(refusal) => refusal.respond(&decision, anthropic),
         };
+    }
+    // After the answer guardrails: what is recorded or kept is what the caller got.
+    if let Some(creator) = creator {
+        response = batch::watch(&state, &decision, creator, response);
     }
     if let Ok(value) = HeaderValue::from_str(&decision) {
         response.headers_mut().insert(DECISION, value);
@@ -4385,6 +4438,7 @@ async fn send(
 ) -> Result<Response, Refusal> {
     let plan = parts.extensions.remove::<Plan>();
     let answer_check = parts.extensions.remove::<AnswerCheck>();
+    let creator = parts.extensions.remove::<batch::Creator>();
     // Gantry's, not the provider's. Dropped unused, it gives back its reservation.
     let mut admitted = parts
         .extensions
@@ -4588,6 +4642,13 @@ async fn send(
     }
     if let Some(check) = answer_check {
         response.extensions_mut().insert(check);
+    }
+    if let Some(mut creator) = creator {
+        creator.served_by(
+            &version.providers[served].name,
+            plan.as_ref().is_some_and(|p| p.from_responses),
+        );
+        response.extensions_mut().insert(creator);
     }
     Ok(response)
 }
@@ -4809,30 +4870,78 @@ fn outbound(
             gantry_core::config::join(&provider.url, route),
             bytes.clone(),
         ),
+        // The container takes the chat body as sent; the endpoint stands for the model.
+        Kind::Sagemaker => {
+            let stream = serde_json::from_slice::<serde_json::Value>(bytes)
+                .is_ok_and(|b| b["stream"] == true);
+            let action = if stream {
+                "invocations-response-stream"
+            } else {
+                "invocations"
+            };
+            (
+                format!("{}/{}/{action}", provider.url, encoded(mapped()?)),
+                bytes.clone(),
+            )
+        }
+        Kind::Replicate => {
+            let id = provider
+                .upstream_models
+                .get(model)
+                .map_or(model, String::as_str);
+            let (body, _) = native_body(provider, model, bytes, op)?;
+            // Waited for, and cancelled by Replicate if it runs longer, so nothing keeps billing after the answer.
+            headers.insert("prefer", HeaderValue::from_static("wait=60"));
+            headers.insert("cancel-after", HeaderValue::from_static("60s"));
+            let url = match id.split_once(':') {
+                Some(_) => format!("{}/predictions", provider.url),
+                None => {
+                    let path: Vec<String> = id.split('/').map(&encoded).collect();
+                    format!("{}/models/{}/predictions", provider.url, path.join("/"))
+                }
+            };
+            (url, body)
+        }
+        Kind::Azure if azure_v1(&provider.url) => {
+            // The v1 API takes OpenAI's paths and the deployment as the model; images and audio are in its preview.
+            let deployment = mapped()?;
+            let path = route.split('?').next().unwrap_or(route);
+            let tail = path.strip_prefix("/v1").unwrap_or(path);
+            let preview = if matches!(path, IMAGES | TRANSCRIPTIONS | SPEECH) {
+                "?api-version=preview"
+            } else {
+                ""
+            };
+            let content_type = parts
+                .headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok());
+            (
+                format!("{}{tail}{preview}", provider.url.trim_end_matches('/')),
+                alias::with_model(content_type, bytes, deployment),
+            )
+        }
         Kind::Azure => {
             let deployment = mapped()?;
-            match op {
-                EMBEDDINGS => (
-                    format!(
-                        "{}/openai/deployments/{}/embeddings?api-version={version}",
-                        provider.url,
-                        encoded(deployment)
-                    ),
-                    bytes.clone(),
-                ),
+            let on_deployment = |what: &str| {
+                format!(
+                    "{}/openai/deployments/{}/{what}?api-version={version}",
+                    provider.url,
+                    encoded(deployment)
+                )
+            };
+            match (route.split('?').next().unwrap_or(route), op) {
                 // The Responses API names the deployment in the body's model.
-                RESPONSES => (
+                (_, RESPONSES) => (
                     format!("{}/openai/responses?api-version={version}", provider.url),
                     alias::with_model(Some("application/json"), bytes, deployment),
                 ),
-                _ => (
-                    format!(
-                        "{}/openai/deployments/{}/chat/completions?api-version={version}",
-                        provider.url,
-                        encoded(deployment)
-                    ),
-                    bytes.clone(),
-                ),
+                (_, EMBEDDINGS) => (on_deployment("embeddings"), bytes.clone()),
+                (IMAGES, _) => (on_deployment("images/generations"), bytes.clone()),
+                (TRANSCRIPTIONS, _) => (on_deployment("audio/transcriptions"), bytes.clone()),
+                (SPEECH, _) => (on_deployment("audio/speech"), bytes.clone()),
+                (COMPLETIONS, _) => (on_deployment("completions"), bytes.clone()),
+                _ => (on_deployment("chat/completions"), bytes.clone()),
             }
         }
         Kind::Gemini | Kind::Vertex => {
@@ -4848,6 +4957,7 @@ fn outbound(
                 format!("{}/v1beta", provider.url)
             };
             let url = match (op, provider.kind) {
+                (COUNT_TOKENS, _) => format!("{base}/models/{}:countTokens", encoded(model)),
                 (EMBEDDINGS, Kind::Gemini) => {
                     format!("{base}/models/{}:batchEmbedContents", encoded(model))
                 }
@@ -5117,7 +5227,11 @@ fn sign_for_bedrock(
     let signed = sigv4::sign(
         &credentials,
         region,
-        "bedrock",
+        if provider.kind == Kind::Sagemaker {
+            "sagemaker"
+        } else {
+            "bedrock"
+        },
         &sigv4::Request {
             method: method.as_str(),
             path: uri.path(),
@@ -5256,6 +5370,61 @@ async fn native(
     if plan.is_some_and(|p| p.passthrough.is_some()) {
         return Ok(response);
     }
+    if provider.kind == Kind::Sagemaker {
+        if response.status().is_success()
+            && is_type(&response, "application/vnd.amazon.eventstream")
+        {
+            let mut sse = eventstream::PayloadToSse::default();
+            return Ok(map_body(
+                response,
+                "text/event-stream",
+                move |input| match input {
+                    Some(bytes) => sse.feed(bytes),
+                    None => sse.finish(),
+                },
+            ));
+        }
+        return Ok(response);
+    }
+    if provider.kind == Kind::Replicate && response.status().is_success() {
+        // A prediction becomes the chat answer here, before usage is read: whole, or as the stream asked for.
+        let body = whole(std::mem::take(response.body_mut())).await?;
+        let prediction: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+        let created = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let finished = matches!(
+            prediction["status"].as_str(),
+            Some("starting" | "processing")
+        );
+        let completion = gantry_core::replicate::prediction_to_openai(&prediction, model, created)
+            .map_err(|err| {
+                Refusal::new(
+                    if finished {
+                        StatusCode::GATEWAY_TIMEOUT
+                    } else {
+                        StatusCode::BAD_GATEWAY
+                    },
+                    "upstream_failed",
+                    err.to_string(),
+                )
+            })?;
+        let asked: serde_json::Value = serde_json::from_slice(request).unwrap_or_default();
+        if asked["stream"] == true {
+            let stream = gantry_core::replicate::completion_to_stream(
+                &completion,
+                translate::include_usage(&asked),
+            );
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/event-stream"),
+            );
+            response.headers_mut().remove(header::CONTENT_LENGTH);
+            *response.body_mut() = Body::from(stream);
+            return Ok(response);
+        }
+        return Ok(json_body(response, completion.to_string().into_bytes()));
+    }
     if provider.kind.aws() {
         if !response.status().is_success() {
             let error_type = response
@@ -5347,6 +5516,11 @@ async fn native(
                 .collect();
             serde_json::json!({"object": "list", "model": model, "results": results})
         }
+        (COUNT_TOKENS, Kind::Gemini | Kind::Vertex, _) => {
+            let body = whole(std::mem::take(response.body_mut())).await?;
+            let answer: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            serde_json::json!({"input_tokens": answer["totalTokens"]})
+        }
         (COUNT_TOKENS, Kind::Bedrock, _) => {
             let body = whole(std::mem::take(response.body_mut())).await?;
             let answer: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
@@ -5369,7 +5543,8 @@ async fn to_chat(
 ) -> Result<Response, Refusal> {
     // Gemini may send no responseId; a strict chat client refuses "id": null, and the decision ID is unique.
     let fallback_id = format!("chatcmpl-{decision}");
-    let Some(include_usage) = include_usage else {
+    // A Replicate prediction was made a chat answer already (`native`).
+    let Some(include_usage) = include_usage.filter(|_| kind != Kind::Replicate) else {
         return Ok(response);
     };
     let created = std::time::SystemTime::now()

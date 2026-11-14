@@ -15,8 +15,15 @@
 //! - A video (OpenAI's `/v1/videos`, Sora; or Veo on Vertex AI, reached through the same route) is decided by its
 //!   model, its prompt guarded, and the seconds it asks for reserved at the model's `per_second` price; it is charged
 //!   for its seconds when it is done, and nothing when it fails.
-//! - A container (OpenAI's `/v1/containers`) is decided by the model `container-<memory>` (container-1g by default)
-//!   and charged that model's `per_call` price when it is created. Its files are reached only through it.
+//! - A container (OpenAI's `/v1/containers`) is allowed by its memory size (`1g` by default) among the rule's
+//!   `containers: { sizes: [...] }`. A 20-minute session at its size's price is reserved when it is created, and it is
+//!   charged by the minute it lived (5 at least) when it expires or is deleted. Its files are reached only through it.
+//!
+//! - A response (OpenAI's `/v1/responses`) made through Gantry is its creator's: `GET`, `DELETE` and `cancel` on
+//!   `/v1/responses/<id>` reach it for them alone. A response a provider that does not speak Responses answered was
+//!   translated and kept nowhere; Gantry keeps it, in memory for an hour, when the request said `store: true`.
+//! - An async job (`POST /v1/async/<route>`) runs the request on the governed model route in the background and holds
+//!   its answer for its submitter, in memory, for an hour after it ends (`GET /v1/async/<route>/<id>`).
 //!
 //! Who owns what is written to the audit log (`owned`, `owned_settled`, `owned_deleted` records). With a store it is
 //! also kept in Postgres (namespace `batches`), so every replica answers for every object; without one it is read
@@ -49,6 +56,31 @@ use http_body_util::BodyExt;
 use serde_json::{Map, Value, json};
 
 use crate::{AppState, MIB, Refusal, Seen, Snapshot, Upstream, spend};
+
+/// Where a caller asks for an async job's answer to be held longer or shorter than an hour.
+const ASYNC_TTL: &str = "x-gantry-async-ttl";
+
+/// The path of a stored response at its provider: OpenAI's own, or Azure's (`/openai/responses` with its
+/// api-version, or the v1 API's paths).
+fn responses_target(provider: &Upstream, path: &str, query: &str) -> String {
+    if provider.kind != Kind::Azure {
+        return format!("{path}{query}");
+    }
+    let tail = path.strip_prefix("/v1").unwrap_or(path);
+    let base = provider.url.trim_end_matches('/');
+    if crate::azure_v1(base) {
+        return format!("{base}{tail}{query}");
+    }
+    let version = provider.api_version.as_deref().unwrap_or_default();
+    let more = query
+        .strip_prefix('?')
+        .map(|q| format!("&{q}"))
+        .unwrap_or_default();
+    format!("{base}/openai{tail}?api-version={version}{more}")
+}
+
+/// What a container's usage records name as their model: a container has none, and its size is recorded beside.
+const CONTAINER: &str = "container";
 
 /// The part of a model's price a batch line costs: OpenAI and Anthropic both bill batches at half price.
 const BATCH_SHARE: f64 = 0.5;
@@ -98,7 +130,10 @@ pub(crate) fn routes(keep: Arc<AppState>) -> Router<AppState> {
             .route(path, route())
             .route(&format!("{path}/{{*rest}}"), route());
     }
+    // POST /v1/responses itself is a model route, served by the gateway's own handler.
     router
+        .route("/v1/responses/{*rest}", route())
+        .route("/v1/async/{*rest}", route())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +144,7 @@ enum Item {
     FineTune,
     Video,
     Container,
+    Response,
 }
 
 impl Item {
@@ -120,6 +156,7 @@ impl Item {
             Self::FineTune => "fine_tuning_job",
             Self::Video => "video",
             Self::Container => "container",
+            Self::Response => "response",
         }
     }
 
@@ -131,6 +168,7 @@ impl Item {
             Self::FineTune,
             Self::Video,
             Self::Container,
+            Self::Response,
         ]
         .into_iter()
         .find(|i| i.word() == word)
@@ -166,6 +204,8 @@ struct Owned {
     retention_days: Option<u32>,
     decision: String,
     settled: bool,
+    /// Seconds since the epoch when it was created through Gantry.
+    created: u64,
 }
 
 impl Owned {
@@ -195,6 +235,7 @@ impl Owned {
             retention_days: None,
             decision: decision.to_string(),
             settled: false,
+            created: now_secs(),
         }
     }
 
@@ -235,6 +276,7 @@ impl Owned {
             "retention_days".into(),
             self.retention_days.map_or(Value::Null, Value::from),
         );
+        record.insert("created".into(), self.created.into());
         record
     }
 
@@ -261,6 +303,7 @@ impl Owned {
                 .and_then(|d| u32::try_from(d).ok()),
             decision: text("id"),
             settled: false,
+            created: record["created"].as_u64().unwrap_or_default(),
         };
         Some((record["object_id"].as_str()?.to_string(), owned))
     }
@@ -294,7 +337,24 @@ CREATE TABLE gantry_batches_owned (
 pub(crate) struct Registry {
     map: Mutex<HashMap<String, Owned>>,
     pg: Option<Arc<crate::store::PgStore>>,
+    /// Answers Gantry holds for their owner: async jobs and translated responses kept with `store: true`. In this
+    /// process's memory only, never written anywhere: they hold text.
+    // ponytail: one replica's memory, so another replica answers 404 for them; keep them in the store (encrypted, as
+    // captured bodies are) when async jobs run behind more than one replica.
+    held: Mutex<HashMap<String, Held>>,
 }
+
+/// An answer held for its owner until `expires` (seconds since the epoch).
+#[derive(Clone, Debug)]
+struct Held {
+    owner: String,
+    expires: u64,
+    status: StatusCode,
+    value: Value,
+}
+
+/// How long a held answer is kept: an hour, as long as Bifrost keeps an async result by default.
+const HOLD_SECONDS: u64 = 3600;
 
 impl Registry {
     /// Keeps ownership in the store's `batches` namespace, created here.
@@ -303,7 +363,35 @@ impl Registry {
         Ok(Self {
             map: Mutex::default(),
             pg: Some(pg),
+            held: Mutex::default(),
         })
+    }
+
+    fn held_map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Held>> {
+        match self.held.lock() {
+            Ok(map) => map,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    fn hold(&self, id: &str, held: Held) {
+        let now = now_secs();
+        let mut map = self.held_map();
+        map.retain(|_, h| h.expires > now);
+        map.insert(id.to_string(), held);
+    }
+
+    /// What is held under `id` for `person`, if it has not expired. Someone else is told nothing is.
+    fn held(&self, id: &str, person: &Principal) -> Option<Held> {
+        let now = now_secs();
+        self.held_map()
+            .get(id)
+            .filter(|h| h.expires > now && (h.owner == person.within(&person.name) || person.admin))
+            .cloned()
+    }
+
+    fn drop_held(&self, id: &str) {
+        self.held_map().remove(id);
     }
 
     fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Owned>> {
@@ -552,7 +640,28 @@ enum Op {
     ContainerList,
     /// A container, and the path below it: "" for the container, or files and what lies under them.
     Container(String, String),
+    /// A response, and what of it: "" for the object, or input_items.
+    Response(String, String),
+    ResponseDelete(String),
+    ResponseCancel(String),
+    /// An async job of a model route (`chat/completions`, ...), and one read back by its ID.
+    AsyncSubmit(String),
+    AsyncJob(String),
 }
+
+/// The model routes an async job may run, as Bifrost's async inference names them.
+const ASYNC_ROUTES: [&str; 10] = [
+    "chat/completions",
+    "completions",
+    "responses",
+    "embeddings",
+    "messages",
+    "moderations",
+    "rerank",
+    "images/generations",
+    "audio/speech",
+    "audio/transcriptions",
+];
 
 fn op(method: &Method, path: &str) -> Option<Op> {
     let id_ok = |id: &str| {
@@ -610,6 +719,12 @@ fn op(method: &Method, path: &str) -> Option<Op> {
         ["v1", "videos", v, "remix"] if post => Op::VideoRemix(id(v)?),
         ["v1", "containers"] if post => Op::ContainerCreate,
         ["v1", "containers"] if get => Op::ContainerList,
+        ["v1", "responses", r] if get => Op::Response(id(r)?, String::new()),
+        ["v1", "responses", r, "input_items"] if get => Op::Response(id(r)?, "input_items".into()),
+        ["v1", "responses", r] if delete => Op::ResponseDelete(id(r)?),
+        ["v1", "responses", r, "cancel"] if post => Op::ResponseCancel(id(r)?),
+        ["v1", "async", route @ ..] if post => Op::AsyncSubmit(route.join("/")),
+        ["v1", "async", .., job] if get => Op::AsyncJob(id(job)?),
         ["v1", "containers", c, rest @ ..] if get || post || delete => {
             for segment in rest {
                 id(segment)?;
@@ -624,7 +739,7 @@ fn unknown_batch_route() -> Refusal {
     Refusal::new(
         StatusCode::NOT_FOUND,
         "unknown_route",
-        "Refused: Gantry serves these file and batch routes: POST and GET /v1/files, GET and DELETE /v1/files/<id>, GET /v1/files/<id>/content, POST and GET /v1/batches, GET /v1/batches/<id>, POST /v1/batches/<id>/cancel, POST and GET /v1/messages/batches, GET and DELETE /v1/messages/batches/<id>, GET /v1/messages/batches/<id>/results, POST /v1/messages/batches/<id>/cancel, POST and GET /v1/fine_tuning/jobs, GET /v1/fine_tuning/jobs/<id> with /events and /checkpoints, POST /v1/fine_tuning/jobs/<id>/cancel, /pause and /resume, POST and GET /v1/videos, GET and DELETE /v1/videos/<id>, GET /v1/videos/<id>/content, POST /v1/videos/<id>/remix, POST and GET /v1/containers, and GET, POST and DELETE under /v1/containers/<id>. Check the method and the path.",
+        "Refused: Gantry serves these file and batch routes: POST and GET /v1/files, GET and DELETE /v1/files/<id>, GET /v1/files/<id>/content, POST and GET /v1/batches, GET /v1/batches/<id>, POST /v1/batches/<id>/cancel, POST and GET /v1/messages/batches, GET and DELETE /v1/messages/batches/<id>, GET /v1/messages/batches/<id>/results, POST /v1/messages/batches/<id>/cancel, POST and GET /v1/fine_tuning/jobs, GET /v1/fine_tuning/jobs/<id> with /events and /checkpoints, POST /v1/fine_tuning/jobs/<id>/cancel, /pause and /resume, POST and GET /v1/videos, GET and DELETE /v1/videos/<id>, GET /v1/videos/<id>/content, POST /v1/videos/<id>/remix, POST and GET /v1/containers, GET, POST and DELETE under /v1/containers/<id>, GET and DELETE /v1/responses/<id>, GET /v1/responses/<id>/input_items, POST /v1/responses/<id>/cancel, POST /v1/async/<route> and GET /v1/async/<route>/<id>. Check the method and the path.",
     )
 }
 
@@ -641,6 +756,21 @@ enum Then {
     Stream,
     /// A Veo operation on Vertex AI read for a video: its object, or with `true` its content.
     Veo(String, bool),
+    /// Answered by Gantry, with no provider asked: a held answer. With an ID, that object is deleted.
+    Local(StatusCode, Value, Option<String>),
+    /// An async job to start once its decision is recorded.
+    Async(Box<Job>),
+    /// Fetched and read already: passed on once its decision is recorded.
+    Bytes(StatusCode, Option<HeaderValue>, Bytes),
+}
+
+/// An async job: the request to run on the model route, and its ID and owner.
+struct Job {
+    id: String,
+    owner: String,
+    request: axum::http::Request<Body>,
+    created: u64,
+    ttl: u64,
 }
 
 struct Ready {
@@ -692,7 +822,12 @@ async fn serve(
         state, version, policy, request, decision, &minted, &mut seen, &mut extra,
     )
     .await;
-    if let Ok(ready) = &prepared {
+    if let Ok(ready) = &prepared
+        && !matches!(
+            ready.then,
+            Then::Local(..) | Then::Async(_) | Then::Bytes(..)
+        )
+    {
         seen.provider = Some(ready.provider);
     }
     let written = record_decision(
@@ -712,6 +847,31 @@ async fn serve(
         release(state, &ready.reserved);
         return Err(refusal);
     }
+    match ready.then {
+        Then::Local(status, value, deleted) => {
+            if let Some(id) = deleted {
+                forget(state, decision, &id, &ready.person).await;
+            }
+            Ok(json_answer(status, &value))
+        }
+        Then::Async(job) => Ok(start_job(state, *job)),
+        Then::Bytes(status, kind, content) => {
+            let mut response = (status, content).into_response();
+            if let Some(kind) = kind {
+                response.headers_mut().insert(header::CONTENT_TYPE, kind);
+            }
+            Ok(response)
+        }
+        then => after_fetch(state, version, decision, Ready { then, ..ready }).await,
+    }
+}
+
+async fn after_fetch(
+    state: &AppState,
+    version: &Snapshot,
+    decision: &str,
+    ready: Ready,
+) -> Result<Response, Refusal> {
     let provider = &version.providers[ready.provider];
     let answer = match fetch(
         state,
@@ -893,7 +1053,7 @@ fn checked_query(uri: &Uri, key: &str) -> Result<String, Refusal> {
     let Some(query) = uri.query() else {
         return Ok(String::new());
     };
-    const NAMES: [&str; 8] = [
+    const NAMES: [&str; 12] = [
         "after",
         "limit",
         "order",
@@ -902,6 +1062,11 @@ fn checked_query(uri: &Uri, key: &str) -> Result<String, Refusal> {
         "after_id",
         "metadata",
         "variant",
+        // A stored response read back.
+        "include",
+        "include[]",
+        "stream",
+        "starting_after",
     ];
     for pair in query.split('&') {
         let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
@@ -945,6 +1110,12 @@ async fn prepare<'a>(
     extra: &mut Map<String, Value>,
 ) -> Result<Ready, Refusal> {
     let (mut parts, body) = request.into_parts();
+    // An async job is sent on as the caller sent it, the headers Gantry takes out below included.
+    let sent = parts
+        .uri
+        .path()
+        .starts_with("/v1/async/")
+        .then(|| (parts.headers.clone(), parts.extensions.clone()));
     let key = crate::caller_key(&parts.headers)?.to_string();
     let client_ip = crate::client_ip(policy, parts.extensions.get(), &parts.headers);
     let (person, key_sha256) = crate::identify(
@@ -1348,12 +1519,33 @@ async fn prepare<'a>(
         Op::VideoCreate | Op::VideoRemix(_) => {
             let (bytes, _held) =
                 crate::read_body(Some(&person.name), state, &parts.headers, body).await?;
-            let mut body = object(&bytes).map_err(|_| {
-                bad(
+            let content_type = parts
+                .headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default();
+            // A form carries an input_reference image beside its text fields, which are checked as JSON would be.
+            let (mut body, image) = if content_type.starts_with("multipart/form-data") {
+                video_form(content_type, &bytes)?
+            } else {
+                let body = object(&bytes).map_err(|_| {
+                    bad(
+                        "unreadable_request",
+                        "Refused: Gantry takes a video request as a JSON object (model, prompt, seconds, size, input_reference), or as multipart/form-data with an input_reference image. Send one of those.".into(),
+                    )
+                })?;
+                (body, None)
+            };
+            if let Some(file) = body["input_reference"]["file_id"].as_str() {
+                // A reference by file ID must be a file the caller uploaded through Gantry.
+                owned(state, version, person, file, Item::File, seen).await?;
+            }
+            if image.is_some() && matches!(op, Op::VideoRemix(_)) {
+                return Err(bad(
                     "unreadable_request",
-                    "Refused: Gantry takes a video request as a JSON object with model, prompt, seconds and size; an input_reference image goes through the provider's own API with /passthrough/. Send JSON.".into(),
-                )
-            })?;
+                    "Refused: a remix takes a new prompt only, as JSON. Send the image with a new video instead.".into(),
+                ));
+            }
             // A remix is a new video from one of the caller's own, at the same provider and model.
             let remixed = match &op {
                 Op::VideoRemix(id) => {
@@ -1460,8 +1652,20 @@ async fn prepare<'a>(
                 }
                 (None, Kind::Vertex) => (
                     format!("/models/{}:predictLongRunning", crate::sigv4_encode(&model)),
-                    Bytes::from(veo_request(&body)?.to_string()),
+                    Bytes::from(veo_request(&body, image.as_ref())?.to_string()),
                 ),
+                (None, _) if image.is_some() => {
+                    let boundary = format!("gantry-{decision}");
+                    if let Ok(value) =
+                        HeaderValue::from_str(&format!("multipart/form-data; boundary={boundary}"))
+                    {
+                        headers.insert(header::CONTENT_TYPE, value);
+                    }
+                    (
+                        "/v1/videos".into(),
+                        Bytes::from(sora_form(&body, image.as_ref(), &boundary)),
+                    )
+                }
                 _ => ("/v1/videos".into(), Bytes::from(body.to_string())),
             };
             let mut ready = ready(
@@ -1550,17 +1754,30 @@ async fn prepare<'a>(
                     ),
                 ));
             }
-            // A container has no model: the rule allows it by the name of its size, and that is what it is priced as.
-            let model = format!("container-{memory}");
+            // A container has no model: the rule allows it by its size, and its size sets its price.
+            let model = CONTAINER.to_string();
             seen.model = Some(model.clone());
-            decide_model(
-                policy,
-                person,
-                rule,
-                &model,
-                "the container",
-                &mut seen.would_refuse,
-            )?;
+            if !rule.limits.containers.iter().any(|s| s == memory) {
+                let allowed = if rule.limits.containers.is_empty() {
+                    "It allows no containers".to_string()
+                } else {
+                    format!("It allows {}", rule.limits.containers.join(", "))
+                };
+                let refusal = Refusal::new(
+                    StatusCode::FORBIDDEN,
+                    "container_not_allowed",
+                    format!(
+                        "Refused: rule \"{}\" does not let \"{}\" create a {memory} container. {allowed}. Ask for another memory_limit, or ask a Gantry admin to list the size in the rule, for example containers: {{ sizes: [1g] }}.",
+                        rule.name, person.name
+                    ),
+                );
+                match policy.observing(rule.shadow_until.as_deref()) {
+                    Some(by) => seen
+                        .would_refuse
+                        .push(crate::would_refuse_entry(refusal, by)),
+                    None => return Err(refusal),
+                }
+            }
             crate::killed(state, person, &key_sha256, Some(&model))?;
             for file in body["file_ids"].as_array().map_or(&[][..], Vec::as_slice) {
                 let file = file.as_str().unwrap_or_default();
@@ -1575,9 +1792,13 @@ async fn prepare<'a>(
                 decision,
             );
             created.models = vec![model.clone()];
+            created.purpose = memory.to_string();
             created.lines = 1;
-            created.estimate = price_for(&model, policy.prices())
-                .and_then(|p| spend::per_unit_cost(&bytes, "/v1/containers", &p));
+            // One whole session is reserved: what a container that is made and left idle until it expires costs.
+            created.estimate = gantry_core::usage::container_cost(
+                memory,
+                gantry_core::usage::CONTAINER_SESSION_MINUTES * 60,
+            );
             let reserved = reserve(
                 state,
                 policy,
@@ -1606,12 +1827,88 @@ async fn prepare<'a>(
             let id = id.clone();
             let (_, provider) = owned(state, version, person, &id, Item::Container, seen).await?;
             extra.insert("object_id".into(), id.as_str().into());
-            // ponytail: files written into a container are forwarded as sent, not read by the guardrails; route
-            // them through /v1/files (guarded) and name them in file_ids when that matters.
-            let (bytes, _held) =
+            let (mut bytes, _held) =
                 crate::read_body(Some(&person.name), state, &parts.headers, body).await?;
             if let Some(content_type) = parts.headers.get(header::CONTENT_TYPE) {
                 headers.insert(header::CONTENT_TYPE, content_type.clone());
+            }
+            let content_type = parts
+                .headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            if parts.method == Method::POST && rest == "files" {
+                if content_type.starts_with("multipart/form-data") {
+                    // A file written into the container: its text is read by the rule's request guardrails.
+                    let form = crate::alias::form_parts(&content_type, &bytes).map_err(|why| {
+                        bad("unreadable_request", format!("Refused: {why}. Send the file as multipart/form-data with one file part."))
+                    })?;
+                    if let Some(file) = form.iter().find(|p| p.name == "file" && p.file) {
+                        if let Some(text) = readable(&bytes[file.value.clone()]) {
+                            let masked =
+                                guard_text(state, policy, rule, seen, decision, &text, true, extra)
+                                    .await?;
+                            if let (Some(masked), Some(boundary)) =
+                                (masked, crate::alias::boundary(&content_type))
+                            {
+                                bytes = Bytes::from(rewrite_form(
+                                    &bytes,
+                                    boundary,
+                                    file.value.clone(),
+                                    Some(masked.as_bytes()),
+                                    &[],
+                                ));
+                            }
+                        }
+                    }
+                } else if let Some(file) = object(&bytes)
+                    .ok()
+                    .and_then(|b| b["file_id"].as_str().map(String::from))
+                {
+                    // A file named by ID must be one the caller uploaded through Gantry, where it was read.
+                    owned(state, version, person, &file, Item::File, seen).await?;
+                }
+            }
+            if parts.method == Method::GET
+                && rest.starts_with("files/")
+                && rest.ends_with("/content")
+            {
+                // A file the container holds, read back: the answer guardrails see its text before the caller does.
+                let answer = fetch(
+                    state,
+                    &version.providers[provider],
+                    Method::GET,
+                    &format!("/v1/containers/{id}/{rest}"),
+                    HeaderMap::new(),
+                    Bytes::new(),
+                )
+                .await?;
+                let status = answer.status();
+                let kind = answer.headers().get(header::CONTENT_TYPE).cloned();
+                let mut content = collect(answer.into_body(), crate::MAX_BODY_BYTES)
+                    .await
+                    .map_err(|why| {
+                        Refusal::new(
+                            StatusCode::BAD_GATEWAY,
+                            "upstream_failed",
+                            format!("{why}. Try again."),
+                        )
+                    })?;
+                if status.is_success()
+                    && let Some(text) = readable(&content)
+                    && let Some(masked) =
+                        guard_text(state, policy, rule, seen, decision, &text, false, extra).await?
+                {
+                    content = Bytes::from(masked);
+                }
+                return Ok(ready(
+                    provider,
+                    Method::GET,
+                    String::new(),
+                    Bytes::new(),
+                    Then::Bytes(status, kind, content),
+                ));
             }
             let target = if rest.is_empty() {
                 format!("/v1/containers/{id}{query}")
@@ -1620,9 +1917,151 @@ async fn prepare<'a>(
             };
             let then = match (&parts.method, rest.is_empty()) {
                 (&Method::DELETE, true) => Then::Delete(id),
+                // Read, so a container found expired is charged for the minutes it lived.
+                (&Method::GET, true) => Then::Read(id),
                 _ => Then::Stream,
             };
             Ok(ready(provider, parts.method.clone(), target, bytes, then))
+        }
+        Op::Response(id, _) | Op::ResponseDelete(id) | Op::ResponseCancel(id) => {
+            let id = id.clone();
+            let (response, provider) =
+                owned(state, version, person, &id, Item::Response, seen).await?;
+            extra.insert("object_id".into(), id.as_str().into());
+            if response.purpose == TRANSLATED {
+                // Translated: the provider holds nothing, Gantry holds it when the request said store: true.
+                let gone = || {
+                    Refusal::new(
+                        StatusCode::NOT_FOUND,
+                        "not_kept",
+                        format!(
+                            "Refused: response \"{id}\" was answered by a provider that does not speak Responses, so only Gantry could keep it, and it keeps one for an hour when the request says \"store\": true. This one was not kept or its hour has passed."
+                        ),
+                    )
+                };
+                let (status, value, deleted) = match &op {
+                    Op::Response(_, what) if what.is_empty() => {
+                        let held = state.owned.held(&id, person).ok_or_else(gone)?;
+                        (held.status, held.value, None)
+                    }
+                    Op::Response(..) => {
+                        return Err(bad(
+                            "untranslatable",
+                            format!(
+                                "Refused: Gantry keeps the answer of response \"{id}\", not its input items: it was translated for a provider that does not speak Responses. Read the response itself."
+                            ),
+                        ));
+                    }
+                    Op::ResponseDelete(_) => (
+                        StatusCode::OK,
+                        json!({"id": id, "object": "response.deleted", "deleted": true}),
+                        Some(id.clone()),
+                    ),
+                    _ => {
+                        return Err(bad(
+                            "not_background",
+                            format!(
+                                "Refused: response \"{id}\" was answered whole, not in the background, so there is nothing to cancel."
+                            ),
+                        ));
+                    }
+                };
+                return Ok(ready(
+                    provider,
+                    Method::GET,
+                    String::new(),
+                    Bytes::new(),
+                    Then::Local(status, value, deleted),
+                ));
+            }
+            let path = match &op {
+                Op::Response(_, what) if !what.is_empty() => format!("/v1/responses/{id}/{what}"),
+                Op::ResponseCancel(_) => format!("/v1/responses/{id}/cancel"),
+                _ => format!("/v1/responses/{id}"),
+            };
+            let target = responses_target(&version.providers[provider], &path, &query);
+            let (method, then) = match &op {
+                Op::ResponseDelete(_) => (Method::DELETE, Then::Delete(id)),
+                Op::ResponseCancel(_) => (Method::POST, Then::Stream),
+                _ => (Method::GET, Then::Stream),
+            };
+            Ok(ready(provider, method, target, Bytes::new(), then))
+        }
+        Op::AsyncSubmit(route) => {
+            if !ASYNC_ROUTES.contains(&route.as_str()) {
+                return Err(Refusal::new(
+                    StatusCode::NOT_FOUND,
+                    "unknown_route",
+                    format!(
+                        "Refused: /v1/async/{route} is not a route an async job runs. These are: {}.",
+                        ASYNC_ROUTES.join(", ")
+                    ),
+                ));
+            }
+            let (bytes, _held) =
+                crate::read_body(Some(&person.name), state, &parts.headers, body).await?;
+            if serde_json::from_slice::<Value>(&bytes).is_ok_and(|b| b["stream"] == true) {
+                return Err(bad(
+                    "stream_not_async",
+                    "Refused: an async job's answer is held whole until it is read, so it cannot stream. Remove \"stream\": true, or send the request to the route itself to stream it.".into(),
+                ));
+            }
+            let ttl = match parts
+                .headers
+                .get(ASYNC_TTL)
+                .map(|v| v.to_str().map(str::parse::<u64>))
+            {
+                None => HOLD_SECONDS,
+                Some(Ok(Ok(ttl @ 60..=86_400))) => ttl,
+                Some(_) => {
+                    return Err(bad(
+                        "bad_ttl",
+                        format!(
+                            "Refused: {ASYNC_TTL} is how many seconds the answer is held after the job ends, 60 to 86400. Send a whole number in that range, or leave it out for 3600."
+                        ),
+                    ));
+                }
+            };
+            let (mut headers, extensions) = sent.unwrap_or_default();
+            headers.remove(ASYNC_TTL);
+            let mut request = axum::http::Request::new(Body::from(bytes));
+            *request.method_mut() = Method::POST;
+            *request.uri_mut() = format!("/v1/{route}")
+                .parse::<Uri>()
+                .map_err(|_| unknown_batch_route())?;
+            *request.headers_mut() = headers;
+            *request.extensions_mut() = extensions;
+            let id = format!("job_{decision}");
+            extra.insert("object".into(), "async_job".into());
+            extra.insert("object_id".into(), id.as_str().into());
+            Ok(ready(
+                0,
+                Method::POST,
+                String::new(),
+                Bytes::new(),
+                Then::Async(Box::new(Job {
+                    id,
+                    owner: person.within(&person.name),
+                    request,
+                    created: now_secs(),
+                    ttl,
+                })),
+            ))
+        }
+        Op::AsyncJob(id) => {
+            let held = state
+                .owned
+                .held(id, person)
+                .filter(|_| id.starts_with("job_"))
+                .ok_or_else(|| not_yours("async job", id))?;
+            extra.insert("object_id".into(), id.as_str().into());
+            Ok(ready(
+                0,
+                Method::GET,
+                String::new(),
+                Bytes::new(),
+                Then::Local(held.status, held.value, None),
+            ))
         }
         Op::TuneCreate => {
             let (bytes, _held) =
@@ -1681,11 +2120,29 @@ async fn prepare<'a>(
 }
 
 /// An OpenAI video request as Veo's predictLongRunning body. A field Veo has no equivalent for is refused by name.
-fn veo_request(body: &Value) -> Result<Value, Refusal> {
+fn veo_request(body: &Value, image: Option<&(Bytes, String)>) -> Result<Value, Refusal> {
     let mut parameters = json!({"sampleCount": 1, "durationSeconds": spend::video_seconds(body)});
+    let mut instance = json!({"prompt": body["prompt"]});
+    if let Some((bytes, mime)) = image {
+        instance["image"] = json!({"bytesBase64Encoded": gantry_core::eventstream::base64_encode(bytes), "mimeType": mime});
+    }
     for (key, value) in body.as_object().into_iter().flatten() {
         match key.as_str() {
             "model" | "prompt" | "seconds" => {}
+            "input_reference" => {
+                // Veo takes the image itself: a data URL carries it; a URL or file ID would need fetching.
+                let (mime, data) = value["image_url"]
+                    .as_str()
+                    .and_then(|u| u.strip_prefix("data:"))
+                    .and_then(|u| u.split_once(";base64,"))
+                    .ok_or_else(|| {
+                        bad(
+                            "untranslatable",
+                            "Refused: Veo on Vertex AI takes an input_reference image as its bytes. Send it as a data: URL in image_url, or as a file in a multipart/form-data request.".into(),
+                        )
+                    })?;
+                instance["image"] = json!({"bytesBase64Encoded": data, "mimeType": mime});
+            }
             "size" => {
                 let (w, h) = value
                     .as_str()
@@ -1709,7 +2166,87 @@ fn veo_request(body: &Value) -> Result<Value, Refusal> {
             }
         }
     }
-    Ok(json!({"instances": [{"prompt": body["prompt"]}], "parameters": parameters}))
+    Ok(json!({"instances": [instance], "parameters": parameters}))
+}
+
+/// A video form's text fields as a JSON request, and its input_reference image with its type. Any other file is
+/// refused by name.
+fn video_form(
+    content_type: &str,
+    bytes: &[u8],
+) -> Result<(Value, Option<(Bytes, String)>), Refusal> {
+    let unreadable = |why: &str| {
+        bad(
+            "unreadable_request",
+            format!(
+                "Refused: {why}. Send model, prompt, seconds and size as form fields and the image as input_reference."
+            ),
+        )
+    };
+    let mut fields = Map::new();
+    let mut image = None;
+    for part in crate::alias::form_parts(content_type, bytes).map_err(unreadable)? {
+        let value = &bytes[part.value.clone()];
+        match (part.name.as_str(), part.file) {
+            ("input_reference", true) => {
+                let mime = image_type(value).ok_or_else(|| {
+                    unreadable("input_reference is not a PNG, JPEG or WebP image")
+                })?;
+                image = Some((Bytes::copy_from_slice(value), mime.to_string()));
+            }
+            (name, false) => {
+                let text = std::str::from_utf8(value)
+                    .map_err(|_| unreadable("a form field is not text"))?;
+                if fields.insert(name.to_string(), text.into()).is_some() {
+                    return Err(unreadable(&format!("the form names {name} twice")));
+                }
+            }
+            (name, true) => {
+                return Err(unreadable(&format!(
+                    "the form holds a file named {name}, which is not input_reference"
+                )));
+            }
+        }
+    }
+    Ok((Value::Object(fields), image))
+}
+
+/// The type of an image, from its first bytes.
+fn image_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// The (guarded, perhaps masked) video request as the form OpenAI takes, with its image.
+fn sora_form(body: &Value, image: Option<&(Bytes, String)>, boundary: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (name, value) in body.as_object().into_iter().flatten() {
+        let text = value
+            .as_str()
+            .map_or_else(|| value.to_string(), String::from);
+        out.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{text}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    if let Some((bytes, mime)) = image {
+        out.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"input_reference\"\r\nContent-Type: {mime}\r\n\r\n").as_bytes(),
+        );
+        out.extend_from_slice(bytes);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    out
 }
 
 /// A Veo operation as an OpenAI video object.
@@ -2354,7 +2891,10 @@ async fn fetch(
     mut headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, Refusal> {
-    if !matches!(provider.kind, Kind::OpenAi | Kind::Anthropic | Kind::Vertex) {
+    if !matches!(
+        provider.kind,
+        Kind::OpenAi | Kind::Anthropic | Kind::Vertex | Kind::Azure
+    ) {
         return Err(bad(
             "wrong_provider",
             format!(
@@ -2364,14 +2904,18 @@ async fn fetch(
             ),
         ));
     }
-    let uri = gantry_core::config::join(&provider.url, target)
-        .parse::<Uri>()
-        .map_err(|_| {
-            bad(
-                "bad_path",
-                "Refused: the request path is not a valid URL path. Check the ID.".into(),
-            )
-        })?;
+    // Azure's paths are built whole (responses_target).
+    let url = if target.starts_with("http") {
+        target.to_string()
+    } else {
+        gantry_core::config::join(&provider.url, target)
+    };
+    let uri = url.parse::<Uri>().map_err(|_| {
+        bad(
+            "bad_path",
+            "Refused: the request path is not a valid URL path. Check the ID.".into(),
+        )
+    })?;
     if provider.kind == Kind::Anthropic {
         headers
             .entry(HeaderName::from_static("anthropic-version"))
@@ -2510,12 +3054,7 @@ async fn after(
                     "gantry: decision {decision}: the owner of {id} could not be written to the audit log"
                 );
             }
-            let container = owned.item == Item::Container;
             state.owned.put(id, owned).await;
-            // A container is billed once, when it is made.
-            if container {
-                settle(state, version, id, &json!({"status": "created"})).await;
-            }
             Ok(respond(body))
         }
         Then::List => {
@@ -2540,17 +3079,346 @@ async fn after(
             Ok(respond(body))
         }
         Then::Delete(id) => {
-            let mut record = Map::new();
-            record.insert("event".into(), "owned_deleted".into());
-            record.insert("id".into(), decision.into());
-            record.insert("time".into(), audit::timestamp().into());
-            record.insert("object_id".into(), id.as_str().into());
-            record.insert("why".into(), format!("deleted by {}", ready.person).into());
-            write(state, record).await;
-            state.owned.remove(&id).await;
+            // A container deleted is charged for the minutes it lived until now.
+            if state
+                .owned
+                .get(&id)
+                .await
+                .is_some_and(|o| o.item == Item::Container)
+            {
+                settle(
+                    state,
+                    version,
+                    &id,
+                    &json!({"status": "deleted", "last_active_at": now_secs(), "expires_after": {"minutes": 0}}),
+                )
+                .await;
+            }
+            forget(state, decision, &id, &ready.person).await;
             Ok(respond(body))
         }
         Then::Stream => Ok(respond(body)),
+        // Answered before anything was fetched (serve).
+        Then::Local(..) | Then::Async(_) | Then::Bytes(..) => Ok(respond(body)),
+    }
+}
+
+/// Text the guardrails can read: UTF-8 without NUL bytes. Anything else (an image, an archive) passes as it is.
+fn readable(bytes: &[u8]) -> Option<String> {
+    std::str::from_utf8(bytes)
+        .ok()
+        .filter(|t| !t.contains('\0'))
+        .map(String::from)
+}
+
+/// Runs the rule's guardrails (request ones, or answer ones for what a provider gives back) on a file's text. A
+/// block refuses; a mask returns the masked text; what they found is added to the decision record.
+#[allow(clippy::too_many_arguments)]
+async fn guard_text(
+    state: &AppState,
+    policy: &Policy,
+    rule: &Rule,
+    seen: &mut Seen<'_>,
+    decision: &str,
+    text: &str,
+    request: bool,
+    extra: &mut Map<String, Value>,
+) -> Result<Option<String>, Refusal> {
+    let guards: Vec<_> = crate::observed_guards(policy, &rule.guardrails)
+        .unwrap_or_else(|| rule.guardrails.clone())
+        .into_iter()
+        .filter(|g| if request { g.on.request } else { g.on.answer })
+        .collect();
+    if guards.is_empty() {
+        return Ok(None);
+    }
+    // Shown to them as moderations input: one text field, written back where it came from when masked.
+    let body = Bytes::from(json!({ "input": text }).to_string());
+    let (parts, ()) = axum::http::Request::builder()
+        .method(Method::POST)
+        .uri("/v1/moderations")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(())
+        .map_err(|_| masked_unwritable())?
+        .into_parts();
+    let (result, entries) =
+        crate::guarded(state, &guards, seen, decision, parts, body.clone()).await;
+    if policy.mode() == gantry_core::policy::Mode::Observe {
+        seen.would_refuse.extend(crate::would_block(rule, &entries));
+    }
+    if !entries.is_empty() {
+        extra.insert(
+            "guardrails".into(),
+            serde_json::to_value(&entries).unwrap_or_default(),
+        );
+    }
+    let (_, after) = result.map_err(|mut refusal| {
+        refusal.message = refusal
+            .message
+            .replacen("Refused: ", "Refused: the container file: ", 1);
+        refusal
+    })?;
+    if after == body {
+        return Ok(None);
+    }
+    let masked: Value = serde_json::from_slice(&after).map_err(|_| masked_unwritable())?;
+    Ok(masked["input"].as_str().map(String::from))
+}
+
+/// Records that `id` was deleted by `person`, and forgets it.
+async fn forget(state: &AppState, decision: &str, id: &str, person: &str) {
+    let mut record = Map::new();
+    record.insert("event".into(), "owned_deleted".into());
+    record.insert("id".into(), decision.into());
+    record.insert("time".into(), audit::timestamp().into());
+    record.insert("object_id".into(), id.into());
+    record.insert("why".into(), format!("deleted by {person}").into());
+    write(state, record).await;
+    state.owned.remove(id).await;
+    state.owned.drop_held(id);
+}
+
+/// Starts an async job: the request runs on the governed model route (decided, guarded, budgeted and recorded as
+/// any other), and its answer is held for its owner for `ttl` seconds after it ends.
+fn start_job(state: &AppState, job: Job) -> Response {
+    let pending = json!({"id": job.id, "object": "async_job", "status": "pending", "created_at": job.created});
+    state.owned.hold(
+        &job.id,
+        Held {
+            owner: job.owner.clone(),
+            // Until it ends, then `ttl` past that.
+            expires: job.created + crate::MAX_JOB_SECONDS + job.ttl,
+            status: StatusCode::ACCEPTED,
+            value: pending.clone(),
+        },
+    );
+    let running = state.clone();
+    tokio::spawn(async move {
+        let response = crate::handle(State(running.clone()), job.request).await;
+        let status = response.status();
+        let decision = response
+            .headers()
+            .get(crate::DECISION)
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+        let body = collect(response.into_body(), crate::MAX_BODY_BYTES)
+            .await
+            .unwrap_or_default();
+        let answer: Value = serde_json::from_slice(&body)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&body).into_owned()));
+        let done = now_secs();
+        let mut value = json!({
+            "id": job.id,
+            "object": "async_job",
+            "status": if status.is_success() { "completed" } else { "failed" },
+            "status_code": status.as_u16(),
+            "created_at": job.created,
+            "completed_at": done,
+            "expires_at": done + job.ttl,
+            "decision": decision,
+        });
+        value[if status.is_success() {
+            "result"
+        } else {
+            "error"
+        }] = answer;
+        running.owned.hold(
+            &job.id,
+            Held {
+                owner: job.owner,
+                expires: done + job.ttl,
+                status: StatusCode::OK,
+                value,
+            },
+        );
+    });
+    json_answer(StatusCode::ACCEPTED, &pending)
+}
+
+fn json_answer(status: StatusCode, value: &Value) -> Response {
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/json")],
+        value.to_string(),
+    )
+        .into_response()
+}
+
+/// Who is creating a response on the model route, carried with the request so the response it gets is theirs.
+#[derive(Clone)]
+pub(crate) struct Creator {
+    owned: Owned,
+    /// The request said `store: true`: a translated answer is kept for the owner.
+    store: bool,
+}
+
+pub(crate) fn creator(person: &Principal, seen: &Seen<'_>, store: bool) -> Creator {
+    Creator {
+        owned: Owned::new(Item::Response, "", person, seen, ""),
+        store,
+    }
+}
+
+impl Creator {
+    /// The provider that answered, and whether it was translated (and so holds nothing to read back).
+    pub(crate) fn served_by(&mut self, provider: &str, translated: bool) {
+        self.owned.provider = provider.to_string();
+        self.owned.purpose = if translated { TRANSLATED } else { "" }.to_string();
+    }
+}
+
+/// What a response's `purpose` says when a provider that does not speak Responses answered it.
+const TRANSLATED: &str = "translated";
+
+/// How long a response stays its creator's: as long as OpenAI keeps a stored one.
+const RESPONSE_DAYS: u64 = 30;
+
+/// Watches a Responses answer on its way to the caller for the response's ID, and records the response as its
+/// creator's when the answer ends. A translated one is kept whole when the request asked to store it.
+pub(crate) fn watch(
+    state: &AppState,
+    decision: &str,
+    creator: Creator,
+    response: Response,
+) -> Response {
+    if !response.status().is_success() {
+        return response;
+    }
+    let stream = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/event-stream"));
+    let state = state.clone();
+    let decision = decision.to_string();
+    response.map(|inner| {
+        Body::new(Watch {
+            inner,
+            stream,
+            line: Vec::new(),
+            whole: Vec::new(),
+            id: None,
+            kept: None,
+            done: Some((state, decision, creator)),
+        })
+    })
+}
+
+struct Watch {
+    inner: Body,
+    stream: bool,
+    line: Vec<u8>,
+    whole: Vec<u8>,
+    id: Option<String>,
+    kept: Option<Value>,
+    done: Option<(AppState, String, Creator)>,
+}
+
+impl Watch {
+    fn on_line(&mut self, line: &[u8]) {
+        let Some(data) = line.strip_prefix(b"data:") else {
+            return;
+        };
+        if !data.windows(10).any(|w| w == b"\"response\"") {
+            return;
+        }
+        let Ok(event) = serde_json::from_slice::<Value>(data.trim_ascii()) else {
+            return;
+        };
+        if self.id.is_none() {
+            self.id = event["response"]["id"].as_str().map(String::from);
+        }
+        if event["type"] == "response.completed" {
+            self.kept = Some(event["response"].clone());
+        }
+    }
+
+    fn finish(&mut self) {
+        let Some((state, decision, creator)) = self.done.take() else {
+            return;
+        };
+        if !self.stream {
+            if let Ok(value) = serde_json::from_slice::<Value>(&self.whole) {
+                self.id = value["id"].as_str().map(String::from);
+                self.kept = Some(value);
+            }
+        }
+        let Some(id) = self.id.take() else {
+            return;
+        };
+        let kept = self
+            .kept
+            .take()
+            .filter(|_| creator.store && creator.owned.purpose == TRANSLATED);
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move {
+            let mut owned = creator.owned;
+            owned.decision = decision;
+            owned.expires_at = Some(now_secs() + RESPONSE_DAYS * 86_400);
+            if let Some(value) = kept {
+                state.owned.hold(
+                    &id,
+                    Held {
+                        owner: owned.owner(),
+                        expires: now_secs() + HOLD_SECONDS,
+                        status: StatusCode::OK,
+                        value,
+                    },
+                );
+            }
+            write(&state, owned.record(&id)).await;
+            state.owned.put(&id, owned).await;
+        });
+    }
+}
+
+impl http_body::Body for Watch {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+        let this = &mut *self;
+        let polled = std::pin::Pin::new(&mut this.inner).poll_frame(cx);
+        match &polled {
+            std::task::Poll::Ready(Some(Ok(frame))) => {
+                if let Some(data) = frame.data_ref() {
+                    if this.stream {
+                        let mut rest = &data[..];
+                        while let Some(end) = rest.iter().position(|&b| b == b'\n') {
+                            this.line.extend_from_slice(&rest[..end]);
+                            rest = &rest[end + 1..];
+                            let line = std::mem::take(&mut this.line);
+                            this.on_line(&line);
+                        }
+                        this.line.extend_from_slice(rest);
+                    } else if this.whole.len() < crate::MAX_BODY_BYTES {
+                        this.whole.extend_from_slice(data);
+                    }
+                }
+            }
+            std::task::Poll::Ready(None) => this.finish(),
+            _ => {}
+        }
+        polled
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.finish();
     }
 }
 
@@ -2567,8 +3435,8 @@ fn ended(item: Item, object: &Value) -> bool {
             Some("succeeded" | "failed" | "cancelled")
         ),
         Item::Video => matches!(object["status"].as_str(), Some("completed" | "failed")),
-        Item::Container => object["status"] == "created",
-        Item::File => false,
+        Item::Container => matches!(object["status"].as_str(), Some("expired" | "deleted")),
+        Item::File | Item::Response => false,
     }
 }
 
@@ -2597,7 +3465,7 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
     done.insert("time".into(), audit::timestamp().into());
     done.insert("object_id".into(), id.into());
     if matches!(item, Item::Video | Item::Container) {
-        // Priced by the unit: a video's seconds when it is done (nothing when it failed), a container once.
+        // Priced by the unit: a video's seconds when it is done (nothing when it failed), a container's minutes.
         let model = owned.models.first().cloned().unwrap_or_default();
         let price = version
             .policy
@@ -2605,6 +3473,16 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
             .and_then(|p| price_for(&model, p.prices()));
         let succeeded = object["status"] != "failed";
         let cost = match (item, &price) {
+            (Item::Container, _) => {
+                // Alive from its creation until it expired, which is `minutes` after its last use, or was deleted.
+                let created = object["created_at"].as_u64().unwrap_or(owned.created);
+                let last = object["last_active_at"].as_u64().unwrap_or(created);
+                let idle = object["expires_after"]["minutes"]
+                    .as_u64()
+                    .unwrap_or(gantry_core::usage::CONTAINER_SESSION_MINUTES);
+                let seconds = (last + idle * 60).saturating_sub(created);
+                gantry_core::usage::container_cost(&owned.purpose, seconds)
+            }
             (Item::Video, Some(price)) => {
                 let seconds = match &object["seconds"] {
                     Value::String(s) => s.parse().ok(),
@@ -2621,6 +3499,9 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
         extra.insert(item.word().into(), id.into());
         if item == Item::Video {
             extra.insert("seconds".into(), object["seconds"].clone());
+        }
+        if item == Item::Container {
+            extra.insert("container_size".into(), owned.purpose.as_str().into());
         }
         let counted = counted(version, &owned, &model);
         let (charged, record) = spend::charge(
@@ -2651,10 +3532,10 @@ async fn settle(state: &AppState, version: &Snapshot, id: &str, object: &Value) 
             record.insert("cost_usd".into(), charged.into());
             record.insert(
                 "price".into(),
-                if item == Item::Video {
-                    "per_second"
-                } else {
-                    "per_call"
+                match item {
+                    Item::Video => "per_second",
+                    Item::Container => "per_minute",
+                    _ => "per_call",
                 }
                 .into(),
             );
@@ -2853,6 +3734,13 @@ async fn poll(state: &AppState) {
     let version = state.version();
     let now = now_secs();
     for (id, owned) in state.owned.all().await {
+        if owned.item == Item::Response {
+            // Nothing to settle: a response's usage was its request's. It stays its creator's while it is kept.
+            if owned.expires_at.is_some_and(|at| at <= now) {
+                state.owned.remove(&id).await;
+            }
+            continue;
+        }
         let Some(provider) = version.providers.iter().find(|p| p.name == owned.provider) else {
             continue;
         };
@@ -2863,6 +3751,7 @@ async fn poll(state: &AppState) {
             Item::FineTune => format!("/v1/fine_tuning/jobs/{id}"),
             Item::Video => format!("/v1/videos/{id}"),
             Item::Container => format!("/v1/containers/{id}"),
+            Item::Response => continue,
         };
         // A Veo video is asked for through its operation.
         if owned.item == Item::Video && !owned.settled && provider.kind == Kind::Vertex {
@@ -2898,11 +3787,16 @@ async fn poll(state: &AppState) {
                 Bytes::new(),
             )
             .await
-                && answer.status().is_success()
-                && let Ok(body) = collect(answer.into_body(), crate::MAX_BODY_BYTES).await
-                && let Ok(object) = serde_json::from_slice::<Value>(&body)
             {
-                settle(state, &version, &id, &object).await;
+                if answer.status() == StatusCode::NOT_FOUND && owned.item == Item::Container {
+                    // Gone at the provider without Gantry seeing it expire: charged one idle session.
+                    settle(state, &version, &id, &json!({"status": "expired"})).await;
+                } else if answer.status().is_success()
+                    && let Ok(body) = collect(answer.into_body(), crate::MAX_BODY_BYTES).await
+                    && let Ok(object) = serde_json::from_slice::<Value>(&body)
+                {
+                    settle(state, &version, &id, &object).await;
+                }
             }
             continue;
         }

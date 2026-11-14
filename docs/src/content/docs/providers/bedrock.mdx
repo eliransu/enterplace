@@ -202,7 +202,7 @@ A model named for callers (`llama-3.1-70b`) is priced as the Bedrock model ID it
 
 ## Passthrough
 
-`/bedrock/<path>` reaches Bedrock's own API, signed with the provider's AWS credentials, on paths a rule lists under `passthrough:` for the provider, for example `/bedrock/model/amazon.nova-pro-v1:0/converse` or Bedrock batch inference. The model ID in a `/model/<id>/...` path is decided by the rule under the name the policy knows it by, and the call is recorded and metered like any other. With several Bedrock providers, name one in `x-gantry-provider`. A streamed answer is passed on as Bedrock's event stream, unread, and charged its reservation. See [Passthrough](/governance/policy/#passthrough).
+`/bedrock/<path>` reaches Bedrock's own API, signed with the provider's AWS credentials, on paths a rule lists under `passthrough:` for the provider, for example `/bedrock/model/amazon.nova-pro-v1:0/converse` or Bedrock batch inference. The model ID in a `/model/<id>/...` path is decided by the rule under the name the policy knows it by, and the call is recorded and metered like any other. With several Bedrock providers, name one in `x-gantry-provider`. A streamed answer (`invoke-with-response-stream`, `converse-stream`) is passed on as Bedrock's event stream, unchanged, and charged the usage its events report: the Anthropic `message_start` and `message_delta` counts inside InvokeModel's `chunk` events, or ConverseStream's `metadata` event. See [Passthrough](/governance/policy/#passthrough).
 
 ## Errors from gantry check
 

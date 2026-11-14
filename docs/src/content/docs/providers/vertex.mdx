@@ -166,6 +166,10 @@ A `vertex` provider can fall back to a `gemini` or another `vertex` provider. Wi
 
 `POST /v1/rerank` (Cohere's shape: `model`, `query`, `documents` as strings, `top_n`) for a Vertex AI ranking model (`semantic-ranker-default-004`, `semantic-ranker-fast-004`) goes to the Ranking API of Vertex AI Search, `https://discoveryengine.googleapis.com/v1/projects/<project>/locations/global/rankingConfigs/default_ranking_config:rank`, the project taken from `url`. The answer comes back as `{"results": [{"index": ..., "relevance_score": ...}]}`. The service account also needs the Discovery Engine User role (`roles/discoveryengine.user`).
 
+### Token counts
+
+`POST /v1/messages/count_tokens` (a messages request, as Claude Code counts before it sends) for a Gemini model goes to `<url>/models/<model>:countTokens` with the request's contents and system instruction, and Vertex AI's `totalTokens` comes back as `{"input_tokens": n}`. countTokens takes no tools, so a request with `tools` is refused by name rather than counted short. The `gemini` kind counts the same way.
+
 ### Veo
 
 `POST /v1/videos` for a Veo model goes to `predictLongRunning`. See [Videos and containers](/providers/videos-and-containers/).

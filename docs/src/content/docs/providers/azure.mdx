@@ -1,13 +1,13 @@
 ---
 title: Azure OpenAI
-description: Configure Azure OpenAI deployments as a provider, with an API key or Microsoft Entra ID, for chat completions, the Responses API and embeddings.
+description: Configure Azure OpenAI deployments as a provider, with an API key or Microsoft Entra ID, for chat completions, the Responses API, embeddings, images and audio, on deployment paths or the v1 API.
 sidebar:
   order: 4
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A provider of `kind: azure` serves Azure OpenAI chat completions, the Responses API and embeddings. Callers send the model name; Gantry maps it to your deployment and calls Azure with the `api-key` header, or with a Microsoft Entra ID token when the provider has no key.
+A provider of `kind: azure` serves Azure OpenAI chat completions, the Responses API, embeddings, images, transcription, speech and legacy completions. Callers send the model name; Gantry maps it to your deployment and calls Azure with the `api-key` header, or with a Microsoft Entra ID token when the provider has no key.
 
 ## Example
 
@@ -41,9 +41,33 @@ The other routes:
 ```text
 POST https://acme.openai.azure.com/openai/responses?api-version=2025-04-01-preview          (model: the deployment name)
 POST https://acme.openai.azure.com/openai/deployments/prod-embed/embeddings?api-version=2024-10-21
+POST https://acme.openai.azure.com/openai/deployments/prod-image/images/generations?api-version=2024-10-21
+POST https://acme.openai.azure.com/openai/deployments/prod-whisper/audio/transcriptions?api-version=2024-10-21
+POST https://acme.openai.azure.com/openai/deployments/prod-tts/audio/speech?api-version=2025-04-01-preview
+POST https://acme.openai.azure.com/openai/deployments/prod-instruct/completions?api-version=2024-10-21
+GET  https://acme.openai.azure.com/openai/responses/<id>?api-version=2025-04-01-preview   (read back by its creator)
 ```
 
-The Responses API needs an `api_version` of `2025-03-01-preview` or later. Its body goes as it came, with `model` set to the deployment.
+The Responses API needs an `api_version` of `2025-03-01-preview` or later. Its body goes as it came, with `model` set to the deployment. Speech needs a preview version (`2025-04-01-preview`); the 2024-10-21 version has no speech route. Images, transcription and speech are decided by the caller's model name and mapped to the deployment like chat.
+
+### The v1 API
+
+A `url` that ends in `/openai/v1` is Azure's v1 API: OpenAI's own paths, the deployment as the body's `model`, and no `api_version` (`gantry check` refuses one there). Images and audio are in the v1 preview only, so they are sent with `?api-version=preview`.
+
+```yaml
+  - name: azure
+    kind: azure
+    url: https://acme.openai.azure.com/openai/v1
+    key_env: AZURE_OPENAI_API_KEY
+    models: [gpt-4o, gpt-image-1, whisper-1]
+    deployments: { gpt-4o: prod-gpt-4o, gpt-image-1: prod-image, whisper-1: prod-whisper }
+```
+
+```text
+POST https://acme.openai.azure.com/openai/v1/chat/completions                         (model: prod-gpt-4o)
+POST https://acme.openai.azure.com/openai/v1/images/generations?api-version=preview   (model: prod-image)
+POST https://acme.openai.azure.com/openai/v1/audio/transcriptions?api-version=preview (the form's model: prod-whisper)
+```
 
 ## Microsoft Entra ID
 
@@ -74,7 +98,7 @@ Leave out `key_env`, `key_file` and `credential`, and Gantry signs in with Micro
 | `url` | string | required | `https://<resource>.openai.azure.com`. A `url` with a path is put in front of `/openai/deployments/...`. |
 | `key_env` | string | none | The variable that holds the Azure OpenAI key, sent as `api-key`. Without it, Gantry signs in with Microsoft Entra ID. |
 | `chat_as_responses` | bool | `false` | Send chat completions requests to the Responses API, for models served only there. |
-| `api_version` | string | required | A date, such as `2024-10-21`, or a date with `-preview`, such as `2025-04-01-preview`. Needs a restart to change. |
+| `api_version` | string | required | A date, such as `2024-10-21`, or a date with `-preview`, such as `2025-04-01-preview`. Needs a restart to change. Not taken by a `url` ending in `/openai/v1` (the v1 API). |
 | `deployments` | map | required | Model name to deployment name. Every model in `models` needs an entry. |
 
 ## Behavior

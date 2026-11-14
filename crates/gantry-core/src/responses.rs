@@ -30,7 +30,7 @@ const TO_RESPONSES: &str = "the Responses API this model is served through";
 pub const SAFE_TO_DROP: &[(&str, &str)] = &[
     (
         "store (Responses request)",
-        "Asks OpenAI to keep the response for later retrieval. The provider keeps nothing either way; the answer is the same.",
+        "Asks OpenAI to keep the response for later retrieval. The provider keeps nothing either way and the answer is the same; with store: true the gateway keeps the translated response for its creator to read back.",
     ),
     (
         "include: reasoning.encrypted_content (Responses request)",

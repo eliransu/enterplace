@@ -650,6 +650,9 @@ pub struct Limits {
     /// Days a file uploaded through Gantry (a batch input, a fine-tuning set) is kept before it is deleted at the
     /// provider. None keeps the provider's default.
     pub file_retention_days: Option<u32>,
+    /// The memory sizes (`1g`, `4g`, `16g`, `64g`) of the code interpreter containers the rule's callers may create.
+    /// Empty allows none.
+    pub containers: Vec<String>,
 }
 
 /// Whose requests share a rule's cached answers.

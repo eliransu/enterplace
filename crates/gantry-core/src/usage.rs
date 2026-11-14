@@ -178,6 +178,9 @@ pub struct UsageScanner {
     events: u64,
     /// OpenAI's `data: [DONE]` passed: the provider finished the stream.
     finished: bool,
+    /// For an AWS event stream (Bedrock's own streaming answers, passed through as sent): its messages are decoded
+    /// and each event read as a `data:` line would be.
+    aws: Option<crate::eventstream::Decoder>,
 }
 
 /// String fields of streamed events that hold generated text.
@@ -219,8 +222,38 @@ impl UsageScanner {
         Self::default()
     }
 
+    /// A scanner for an AWS event stream: Bedrock's InvokeModelWithResponseStream (`chunk` events holding the
+    /// model's own events, base64) or ConverseStream (its `metadata` event carries the usage).
+    pub fn aws_eventstream() -> Self {
+        Self {
+            aws: Some(crate::eventstream::Decoder::default()),
+            ..Self::default()
+        }
+    }
+
     /// Feeds the next bytes of the stream, split anywhere.
     pub fn feed(&mut self, mut bytes: &[u8]) {
+        if let Some(decoder) = &mut self.aws {
+            // A damaged stream is read no further: what it reported so far stands, and it is not done.
+            let messages = decoder.feed(bytes).unwrap_or_default();
+            for message in messages {
+                let Ok(payload) = serde_json::from_slice::<Value>(&message.payload) else {
+                    continue;
+                };
+                let event = match message.header(":event-type") {
+                    Some("chunk") => payload["bytes"]
+                        .as_str()
+                        .and_then(crate::eventstream::base64_decode)
+                        .and_then(|b| serde_json::from_slice::<Value>(&b).ok()),
+                    Some(name) => Some(serde_json::json!({ name: payload })),
+                    None => None,
+                };
+                if let Some(event) = event {
+                    self.on_line(format!("data: {event}").as_bytes());
+                }
+            }
+            return;
+        }
         while let Some(end) = bytes.iter().position(|&b| b == b'\n') {
             self.line.extend_from_slice(&bytes[..end]);
             bytes = &bytes[end + 1..];
@@ -361,8 +394,7 @@ pub struct Price {
     /// holds when it is done, and reserves it for each second it asks for.
     #[serde(default)]
     pub per_second: Option<f64>,
-    /// US dollars per object created, for what is billed per use rather than by the token, such as a code
-    /// interpreter container.
+    /// US dollars per object created, for what is billed per use rather than by the token.
     #[serde(default)]
     pub per_call: Option<f64>,
     /// Where the price came from, written in each usage record. Never read from a file: a price in one is the policy's.
@@ -481,11 +513,17 @@ pub struct BuiltinPrice {
 const ANTHROPIC_PRICES: &str = "https://platform.claude.com/docs/en/about-claude/pricing";
 const OPENAI_PRICES: &str = "https://developers.openai.com/api/docs/pricing";
 
-const VERTEX_PRICES: &str = "https://cloud.google.com/vertex-ai/generative-ai/pricing";
+/// Sora's prices are on each model's page. OpenAI shut both models down on 2026-09-24; the prices stay for records
+/// made before then and for a provider that still serves them.
+const SORA_2_PRICES: &str = "https://developers.openai.com/api/docs/models/sora-2";
+const SORA_2_PRO_PRICES: &str = "https://developers.openai.com/api/docs/models/sora-2-pro";
+/// Google's page lists Veo as US dollars "/ 1 count" and does not name the unit; LiteLLM's price map (MIT) gives the
+/// same figures as `output_cost_per_second`, which is the unit used here.
+const VEO_PRICES: &str = "https://cloud.google.com/model-garden/pricing (values), LiteLLM model_prices_and_context_window.json output_cost_per_second (unit)";
 
 impl Price {
-    /// A price per second of video or per object created, with no token price.
-    fn per_unit(per_second: Option<f64>, per_call: Option<f64>) -> Self {
+    /// A price per second of video, with no token price.
+    fn per_second(per_second: f64) -> Self {
         Self {
             input: 0.0,
             output: 0.0,
@@ -496,36 +534,56 @@ impl Price {
             max_output: None,
             max_context: None,
             per_image: None,
-            per_second,
-            per_call,
+            per_second: Some(per_second),
+            per_call: None,
             source: PriceSource::Builtin,
         }
     }
 }
 
+/// Code interpreter containers are billed per session of 20 minutes, by the minute with a 5-minute minimum.
+pub const CONTAINER_SESSION_MINUTES: u64 = 20;
+pub const CONTAINER_MINIMUM_MINUTES: u64 = 5;
+pub const CONTAINER_PRICES: &str = OPENAI_PRICES;
+pub const CONTAINER_PRICES_CHECKED: &str = "2026-11-14";
+
+/// US dollars per 20-minute session of a code interpreter container of this memory size (`1g`, `4g`, `16g`, `64g`).
+pub fn container_price(size: &str) -> Option<f64> {
+    match size {
+        "1g" => Some(0.03),
+        "4g" => Some(0.12),
+        "16g" => Some(0.48),
+        "64g" => Some(1.92),
+        _ => None,
+    }
+}
+
+/// What a container of this size costs for `seconds` of life: whole minutes, at least the minimum.
+pub fn container_cost(size: &str, seconds: u64) -> Option<f64> {
+    let minutes = seconds.div_ceil(60).max(CONTAINER_MINIMUM_MINUTES);
+    container_price(size).map(|session| session * minutes as f64 / CONTAINER_SESSION_MINUTES as f64)
+}
+
 /// Prices of the models named in the README and specs. Standard tier, global routing.
 pub fn builtin_prices() -> Vec<BuiltinPrice> {
     let checked = "2026-11-13";
-    let units = |model: &'static str, per_second: Option<f64>, per_call: Option<f64>, source| {
-        BuiltinPrice {
-            model,
-            price: Price::per_unit(per_second, per_call),
-            source,
-            checked: "2026-11-14",
-        }
+    let video = |model: &'static str, per_second: f64, source| BuiltinPrice {
+        model,
+        price: Price::per_second(per_second),
+        source,
+        checked: "2026-11-14",
     };
+    // Video, per second generated, at the size Gantry asks for: 720p (Sora's 1280x720 and Veo's default), with
+    // audio for Veo 3 and later, the dearer of Veo's two prices.
     let mut table = vec![
-        // Video, per second generated.
-        units("sora-2", Some(0.10), None, OPENAI_PRICES),
-        units("sora-2-pro", Some(0.30), None, OPENAI_PRICES),
-        units("veo-3.0-generate-001", Some(0.40), None, VERTEX_PRICES),
-        units("veo-3.0-fast-generate-001", Some(0.15), None, VERTEX_PRICES),
-        units("veo-2.0-generate-001", Some(0.50), None, VERTEX_PRICES),
-        // Code interpreter containers, per container by memory: what a rule allows as the model of /v1/containers.
-        units("container-1g", None, Some(0.03), OPENAI_PRICES),
-        units("container-4g", None, Some(0.12), OPENAI_PRICES),
-        units("container-16g", None, Some(0.48), OPENAI_PRICES),
-        units("container-64g", None, Some(1.92), OPENAI_PRICES),
+        video("sora-2", 0.10, SORA_2_PRICES),
+        video("sora-2-pro", 0.30, SORA_2_PRO_PRICES),
+        video("veo-3.1-generate-001", 0.40, VEO_PRICES),
+        video("veo-3.1-fast-generate-001", 0.10, VEO_PRICES),
+        video("veo-3.1-lite-generate-001", 0.05, VEO_PRICES),
+        video("veo-3.0-generate-001", 0.40, VEO_PRICES),
+        video("veo-3.0-fast-generate-001", 0.10, VEO_PRICES),
+        video("veo-2.0-generate-001", 0.50, VEO_PRICES),
     ];
     table.extend(token_prices(checked));
     table

@@ -18,6 +18,7 @@ pub mod litellm;
 pub mod mcp;
 pub mod metrics;
 pub mod policy;
+pub mod replicate;
 pub mod responses;
 pub mod sigv4;
 pub mod store;

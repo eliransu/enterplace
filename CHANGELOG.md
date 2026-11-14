@@ -29,10 +29,36 @@ one repository. How a release is made: RELEASING.md.
 - Signed passthrough: `/bedrock/<path>` and `/vertex/<path>` (and `/passthrough/<provider>/` for those kinds, which
   `gantry check` no longer refuses) are signed with SigV4 or the Google token, with the model in the path decided.
 - `/v1/videos` (Sora, and Veo through the same route) and `/v1/containers`, owned by their creator, guarded,
-  budgeted and priced with the new `per_second` and `per_call` price fields.
+  budgeted and priced with the new `per_second` and `per_call` price fields (containers: see below).
 - Native kinds `cohere` (v2 chat, embed, rerank) and `watsonx` (IBM watsonx.ai, IAM token traded for the API key).
   Presets `cohere-native`, `watsonx`, `deepseek`, `databricks` and `snowflake` (the last two need your own URL).
 - A model priced under no name of its own is priced as the Bedrock model ID or Azure deployment it is called by.
+- **Changed (migration):** code interpreter containers are allowed by a rule field, `containers: { sizes: [1g, 4g] }`,
+  instead of the model names `container-1g`, `container-4g`, `container-16g` and `container-64g`, which are no longer
+  models or prices. A rule without `containers:` allows none: move each `container-<size>` listed under a rule's
+  `models:` into its `containers: { sizes: [...] }`. A container is now priced from OpenAI's per-session price by size
+  (0.03, 0.12, 0.48, 1.92 US dollars per 20 minutes, by the minute, 5 at least): one session reserved at creation,
+  charged for the minutes it lived when it expires or is deleted. Usage records say `model: container`,
+  `container_size` and `price: per_minute`.
+- Video prices checked against the providers' pages on 2026-11-14 and cited in the price table and docs:
+  `veo-3.0-fast-generate-001` is 0.10 per second (it was 0.15, a wrong figure); `veo-3.1-generate-001`,
+  `veo-3.1-fast-generate-001` and `veo-3.1-lite-generate-001` added. Google lists Veo "per count"; the per-second unit
+  is LiteLLM's (MIT price map), and the docs say so. Sora 2 is shut down at OpenAI since 2026-09-24; its prices stay.
+- `GET`, `DELETE` and `cancel` on `/v1/responses/<id>`, and `GET /v1/responses/<id>/input_items`, for the response's
+  creator alone (others get 404), at OpenAI or Azure. A response translated for another provider is kept by Gantry,
+  for an hour in memory, when the request says `"store": true`.
+- Async jobs: `POST /v1/async/<route>` runs a model request in the background on the governed route and
+  `GET /v1/async/<route>/<id>` reads its answer, held for its submitter for an hour (`x-gantry-async-ttl`).
+- Azure: images, transcription, speech and legacy completions on deployment paths, and the v1 API (a `url` ending in
+  `/openai/v1`, no `api_version`), with images and audio sent to its preview.
+- Vertex AI and the Gemini API count a Gemini model's tokens (`countTokens`) for `POST /v1/messages/count_tokens`.
+- Native kinds `sagemaker` (SageMaker endpoints with an OpenAI-shaped container, signed with SigV4, streams included)
+  and `replicate` (predictions translated from chat, waited for and cancelled after 60 seconds). Presets `sagemaker`,
+  `replicate`, `oci` (OCI Generative AI, API key) and `triton` (Triton's OpenAI-compatible frontend).
+- A Bedrock stream through signed passthrough is charged the usage its events report, not its reservation.
+- Files written into a container are read by the request guardrails, and files read back from one by the answer
+  guardrails, when they are text. Video requests take an `input_reference` image, as multipart or JSON, with the
+  prompt guarded; Veo gets the image in its instance.
 
 ### Browser access
 

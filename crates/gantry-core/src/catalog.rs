@@ -33,7 +33,9 @@ impl Preset {
             | Kind::Bedrock
             | Kind::BedrockConverse
             | Kind::Cohere
-            | Kind::Watsonx => "Authorization: Bearer",
+            | Kind::Watsonx
+            | Kind::Replicate => "Authorization: Bearer",
+            Kind::Sagemaker => "AWS Signature Version 4",
         }
     }
 
@@ -567,6 +569,12 @@ pub const PRESETS: &[Preset] = &[
         "https://integrate.api.nvidia.com/v1",
         "https://docs.api.nvidia.com/nim/reference/meta-llama-3_1-8b-infer",
     ),
+    hosted(
+        "oci",
+        "Oracle OCI Generative AI (us-chicago-1, API key; write your region's URL for another)",
+        "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/v1",
+        "https://docs.oracle.com/iaas/Content/generative-ai/api-keys.htm",
+    ),
     local(
         "ollama",
         "Ollama",
@@ -663,11 +671,25 @@ pub const PRESETS: &[Preset] = &[
         "https://api.reka.ai/v1",
         "https://docs.reka.ai/chat/overview",
     ),
+    native(
+        "replicate",
+        "Replicate",
+        Kind::Replicate,
+        "https://api.replicate.com/v1",
+        "https://replicate.com/docs/reference/http",
+    ),
     hosted(
         "requesty",
         "Requesty",
         "https://router.requesty.ai/v1",
         "https://docs.requesty.ai/quickstart",
+    ),
+    native(
+        "sagemaker",
+        "Amazon SageMaker endpoints (us-east-1; set region: for another)",
+        Kind::Sagemaker,
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints",
+        "https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpoint.html",
     ),
     hosted(
         "sambanova",
@@ -764,6 +786,12 @@ pub const PRESETS: &[Preset] = &[
         "Together AI",
         "https://api.together.ai/v1",
         "https://docs.together.ai/reference/chat-completions-1",
+    ),
+    local(
+        "triton",
+        "NVIDIA Triton Inference Server (OpenAI-compatible frontend)",
+        "http://localhost:9000/v1",
+        "https://github.com/triton-inference-server/server/blob/main/python/openai/README.md",
     ),
     hosted(
         "upstage",

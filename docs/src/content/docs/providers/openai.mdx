@@ -174,7 +174,15 @@ A Responses request's `max_output_tokens` sizes its budget reservation.
 
 - A request with `previous_response_id` or `store: true` leaves the conversation stored at OpenAI under Gantry's provider key. The record shows the request; Gantry does not track what the provider stored.
 - Under a budget, a request that names stored context (`previous_response_id`, `conversation` or `prompt`) is refused with `stored_context`, unless the model's price sets `max_context`. See [Pricing](/routing/pricing/).
-- Other Responses routes (`GET` and `DELETE /v1/responses/{id}`, input items, cancel) are refused with `unknown_route`.
+- A response made through Gantry is its creator's: `GET /v1/responses/{id}` (with `include`, `stream` and `starting_after`), `GET /v1/responses/{id}/input_items`, `DELETE /v1/responses/{id}` and `POST /v1/responses/{id}/cancel` reach the provider that made it (OpenAI, or Azure at its own path) for them alone; anyone else is answered 404, as for files and batches, and an admin key reaches all. Each read is decided and recorded. A response translated for a provider that does not speak Responses is kept by Gantry instead, for an hour and in memory, when the request said `"store": true`; reading one that was not kept is refused with `not_kept`, and cancelling one with `not_background`.
+
+## Async jobs
+
+`POST /v1/async/<route>` runs a request in the background on one of `chat/completions`, `completions`, `responses`, `embeddings`, `messages`, `moderations`, `rerank`, `images/generations`, `audio/speech`, `audio/transcriptions`. The body is the route's own. Gantry answers `202` with `{"id": "job_...", "status": "pending"}` at once, then runs the request on the governed route: decided, guarded, budgeted and recorded under its own decision, as if sent there. `GET /v1/async/<route>/<id>` answers `202` while it runs and `200` when it ends, with `status` (`completed` or `failed`), `status_code`, `result` or `error`, `decision` (the inner request's record) and `expires_at`. Only the submitter (or an admin key) reads it; anyone else gets 404.
+
+- The answer is held for an hour after the job ends, or `x-gantry-async-ttl` seconds (60 to 86400).
+- A job cannot stream: `"stream": true` is refused with `stream_not_async`.
+- Jobs and their answers are held in the memory of the replica that took them, never written to the audit log or the store: behind several replicas, read a job back through the same one (session affinity) until jobs move to the store.
 
 ## Images, audio, moderations and rerank
 

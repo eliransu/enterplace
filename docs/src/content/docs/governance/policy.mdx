@@ -166,6 +166,7 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `buffer_stream` | boolean | `false` | Hold a streamed answer whole so `on: [answer]` guardrails check it first. Needs a guardrail with `on: [answer]`. |
 | `check_stream_every` | integer | none | Check a streamed answer every this many characters, sending only what was checked. See [guardrails](/governance/guardrails/#checking-a-stream-as-it-comes-check_stream_every). |
 | `passthrough` | list | `[]` | Native provider paths the rule may reach as sent. See [Passthrough](#passthrough). |
+| `containers` | map | none | `{ sizes: [1g, 4g] }`: the memory sizes of code interpreter containers the rule's callers may create, each of `1g`, `4g`, `16g`, `64g`. Without it none. See [Videos and containers](/providers/videos-and-containers/#containers). |
 | `from` | list | `[]` | Address ranges the rule's callers may send from. See [Source address ranges](/governance/access-control/#source-address-ranges). |
 | `regions` | list | none | Residency: the regions an alias deployment must be labelled with. Anything else is refused, never sent elsewhere. See [Residency](/routing/strategies/#residency-regions). |
 | `tags` | list | `[]` | Tags callers may send in `x-gantry-tags`. Any other is refused with `tag_not_allowed`. |

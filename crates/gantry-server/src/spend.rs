@@ -2560,10 +2560,9 @@ impl Metered {
     pub(crate) fn wrap(response: Response, admitted: Admitted) -> Response {
         let status = response.status();
         let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
-        let stream = content_type
-            .as_ref()
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.starts_with("text/event-stream"));
+        let kind = content_type.as_ref().and_then(|v| v.to_str().ok());
+        let aws = kind.is_some_and(|v| v.starts_with("application/vnd.amazon.eventstream"));
+        let stream = aws || kind.is_some_and(|v| v.starts_with("text/event-stream"));
         let keep = !stream || admitted.capture.is_some() || admitted.captured.is_some();
         response.map(|inner| {
             Body::new(Metered {
@@ -2573,7 +2572,11 @@ impl Metered {
                 content_type,
                 // A captured stream is kept too, for its body.
                 frames: keep.then(Vec::new),
-                scanner: stream.then(UsageScanner::new),
+                scanner: match (aws, stream) {
+                    (true, _) => Some(UsageScanner::aws_eventstream()),
+                    (_, true) => Some(UsageScanner::new()),
+                    _ => None,
+                },
                 kept: 0,
                 ended: false,
             })
