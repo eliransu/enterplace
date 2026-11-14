@@ -58,6 +58,7 @@ def main():
     parser.add_argument("--port", type=int, default=20660)
     parser.add_argument("--out", default=str(ROOT / "target" / "console-edit-screens"))
     args = parser.parse_args()
+    server = args.database if args.fresh else None
     if args.fresh:
         args.database = fresh(args.database)
     gantry = str(pathlib.Path(args.gantry).resolve())
@@ -164,6 +165,10 @@ audit: {{ path: gantry-audit.jsonl }}
         if chrome:
             chrome.close()
         stop(proc)
+        if server:
+            # The database --fresh made goes with the run, so a test Postgres does not grow by one a run.
+            subprocess.run(["psql", server, "-q", "-c", "DROP DATABASE IF EXISTS gantry_console_edit WITH (FORCE)"],
+                           capture_output=True, text=True)
 
 
 if __name__ == "__main__":

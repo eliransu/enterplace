@@ -615,34 +615,9 @@ async fn a_fine_tuning_job_needs_an_allowed_model_and_a_training_file_you_own() 
 }
 
 /// A fresh database for one test, as a connection string. `None` when GANTRY_TEST_DATABASE_URL is not set.
-async fn database(test: &str) -> Result<Option<String>, Error> {
-    let Ok(url) = std::env::var("GANTRY_TEST_DATABASE_URL") else {
-        eprintln!("skipped {test}: GANTRY_TEST_DATABASE_URL is not set.");
-        return Ok(None);
-    };
-    let config: tokio_postgres::Config = url.parse()?;
-    let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
-    tokio::spawn(connection);
-    let name = format!("gantry_{}_{test}", std::process::id());
-    client
-        .batch_execute(&format!("DROP DATABASE IF EXISTS {name}"))
-        .await?;
-    client
-        .batch_execute(&format!("CREATE DATABASE {name}"))
-        .await?;
-    let host = match config.get_hosts().first() {
-        Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
-        _ => "127.0.0.1".into(),
-    };
-    let password = config
-        .get_password()
-        .map(|p| String::from_utf8_lossy(p).to_string())
-        .unwrap_or_default();
-    Ok(Some(format!(
-        "host={host} port={} user={} password='{password}' dbname={name} sslmode=disable",
-        config.get_ports().first().copied().unwrap_or(5432),
-        config.get_user().unwrap_or("postgres"),
-    )))
+async fn database(test: &str) -> Result<Option<gantry_server::store::TestDatabase>, Error> {
+    gantry_server::store::TestDatabase::create(&format!("gantry_{}_{test}", std::process::id()))
+        .await
 }
 
 #[tokio::test]

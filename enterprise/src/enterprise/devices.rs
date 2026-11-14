@@ -143,11 +143,17 @@ const TIME: &str = r#"'YYYY-MM-DD"T"HH24:MI:SS"Z"'"#;
 struct Devices {
     db: Arc<Db>,
     keys: PathBuf,
+    policy: gantry_server::PolicyNow,
 }
 
 /// Adds the device routes the agent calls and the console's Devices page and API.
-pub fn register(extension: &mut gantry_server::Extension, db: Arc<Db>, keys: PathBuf) {
-    let devices = Devices { db, keys };
+pub fn register(
+    extension: &mut gantry_server::Extension,
+    db: Arc<Db>,
+    keys: PathBuf,
+    policy: gantry_server::PolicyNow,
+) {
+    let devices = Devices { db, keys, policy };
     let agent = Router::new()
         .route("/device/profile", get(profile))
         .route("/device/report", post(report))
@@ -362,14 +368,16 @@ impl Devices {
             .collect())
     }
 
-    /// Every device as last reported, as `gantry_core::coverage::Device` reads it.
-    async fn devices(&self) -> Result<Vec<Value>, String> {
+    /// The devices `admin` may see as last reported, as `gantry_core::coverage::Device` reads it: every one, or
+    /// those of their role's teams enrolled with a token of their role's organization.
+    async fn devices(&self, admin: &Admin) -> Result<Vec<Value>, String> {
         let client = self.db.client().await?;
         let rows = client
             .query(
                 &format!("SELECT d.device_id, d.hostname, d.os_user, d.person, d.team, d.agent_version, to_char(d.last_seen AT TIME ZONE 'UTC', {TIME}), \
-                 (d.last_seen < now() - interval '24 hours'), coalesce(t.tool, ''), coalesce(t.state, ''), coalesce(t.endpoints, '[]'), d.os \
-                 FROM enterprise_devices d LEFT JOIN enterprise_device_tools t ON t.device_id = d.device_id ORDER BY d.person, d.device_id, t.tool"),
+                 (d.last_seen < now() - interval '24 hours'), coalesce(t.tool, ''), coalesce(t.state, ''), coalesce(t.endpoints, '[]'), d.os, coalesce(k.org, '') \
+                 FROM enterprise_devices d LEFT JOIN enterprise_device_tools t ON t.device_id = d.device_id \
+                 LEFT JOIN enterprise_device_tokens k ON k.id = d.token_id ORDER BY d.person, d.device_id, t.tool"),
                 &[],
             )
             .await
@@ -378,9 +386,12 @@ impl Devices {
         for r in &rows {
             let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
             let id = get(0);
+            if !admin.covers(&get(12), &get(4), None) {
+                continue;
+            }
             if out.last().is_none_or(|d| d["device_id"] != id.as_str()) {
                 out.push(json!({
-                    "device_id": id, "hostname": get(1), "os_user": get(2), "person": get(3), "team": get(4),
+                    "device_id": id, "hostname": get(1), "os_user": get(2), "person": get(3), "team": get(4), "org": get(12),
                     "agent_version": get(5), "last_seen": get(6), "stale": r.try_get::<_, bool>(7).unwrap_or(false), "os": get(11),
                     "tools": [], "mcp": [],
                 }));
@@ -421,19 +432,32 @@ impl Devices {
 
     /// Every MCP server some device reported, once per transport and target: its names, the tools and devices that
     /// have it, whether it goes through Gantry, and the admin's decision. Decided servers no device lists any more
-    /// are kept, so a block outlives the configuration it was made for.
-    async fn mcp_servers(&self) -> Result<Vec<Value>, String> {
+    /// are kept, so a block outlives the configuration it was made for. An admin whose role keeps them to part of
+    /// the install is shown the servers of the devices they may see, counted over those devices alone.
+    async fn mcp_servers(&self, admin: &Admin) -> Result<Vec<Value>, String> {
+        let within: Option<Vec<String>> = if admin.confined() {
+            let devices = self.devices(admin).await?;
+            Some(
+                devices
+                    .iter()
+                    .filter_map(|d| d["device_id"].as_str().map(str::to_string))
+                    .collect(),
+            )
+        } else {
+            None
+        };
         let client = self.db.client().await?;
         let rows = client
             .query(
                 &format!("SELECT k.transport, k.target, coalesce(string_agg(DISTINCT m.server, ', '), ''), coalesce(string_agg(DISTINCT m.tool, ', '), ''), \
                  count(DISTINCT m.device_id), coalesce(bool_and(m.via_gantry), false), coalesce(x.decision, 'pending'), coalesce(x.decided_by, ''), \
                  coalesce(to_char(x.decided_at AT TIME ZONE 'UTC', {TIME}), '') \
-                 FROM (SELECT transport, target FROM enterprise_device_mcp UNION SELECT transport, target FROM enterprise_mcp_decisions) k \
-                 LEFT JOIN enterprise_device_mcp m ON m.transport = k.transport AND m.target = k.target \
+                 FROM (SELECT transport, target FROM enterprise_device_mcp WHERE $1::text[] IS NULL OR device_id = ANY($1) \
+                 UNION SELECT transport, target FROM enterprise_mcp_decisions WHERE $1::text[] IS NULL) k \
+                 LEFT JOIN enterprise_device_mcp m ON m.transport = k.transport AND m.target = k.target AND ($1::text[] IS NULL OR m.device_id = ANY($1)) \
                  LEFT JOIN enterprise_mcp_decisions x ON x.transport = k.transport AND x.target = k.target \
                  GROUP BY k.transport, k.target, x.decision, x.decided_by, x.decided_at ORDER BY k.target, k.transport"),
-                &[],
+                &[&within],
             )
             .await
             .map_err(db_error)?;
@@ -493,6 +517,25 @@ impl Devices {
             return Err((status, code, message));
         }
         let unavailable = |e: String| (StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", e);
+        // A decision holds for every device with the server, so a role kept to part of the install decides only on
+        // a server one of its own devices has.
+        if admin.confined()
+            && !self
+                .mcp_servers(admin)
+                .await
+                .map_err(unavailable)?
+                .iter()
+                .any(|s| s["transport"] == transport && s["target"] == target)
+        {
+            let _ = console
+                .audit(Some(admin), action, details, Some("outside_role"))
+                .await;
+            return Err((
+                StatusCode::FORBIDDEN,
+                "outside_role",
+                "No device within your role has this MCP server, so it is not yours to decide. List yours with GET /console/devices/mcp, or ask an admin of the whole install.".into(),
+            ));
+        }
         console
             .audit(Some(admin), action, details, None)
             .await
@@ -547,12 +590,11 @@ impl Devices {
         admin: &Admin,
         label: &str,
         team: &str,
+        org: &str,
         days: i32,
     ) -> Result<(String, String, String), (StatusCode, &'static str, String)> {
         let label = label.trim();
         let team = team.trim();
-        // The token belongs to its creator's organization: someone kept to one makes tokens for it alone.
-        let org = admin.org.clone().unwrap_or_default();
         let bad = |message: String| (StatusCode::BAD_REQUEST, "invalid_request", message);
         let problem = if label.is_empty() || label.chars().count() > 64 {
             Some("Enter a label of 1 to 64 characters, such as jamf-engineering.".to_string())
@@ -593,17 +635,27 @@ impl Devices {
                 "Your role is viewer. An owner or admin can create enrolment tokens.".into(),
             ));
         }
-        if let Some(message) = outside(admin, &org, team, "enrolment token") {
-            let _ = console
-                .audit(
-                    Some(admin),
-                    "device_token_created",
-                    json!({ "label": label, "team": team }),
-                    Some("outside_role"),
-                )
-                .await;
-            return Err((StatusCode::FORBIDDEN, "outside_role", message));
-        }
+        let orgs = self.policy.with(|p| p.orgs().to_vec()).unwrap_or_default();
+        let org = token_org(admin, org, &orgs).and_then(|org| {
+            match outside(admin, &org, team, "enrolment token") {
+                Some(message) => Err((StatusCode::FORBIDDEN, "outside_role", message)),
+                None => Ok(org),
+            }
+        });
+        let org = match org {
+            Ok(org) => org,
+            Err(refusal) => {
+                let _ = console
+                    .audit(
+                        Some(admin),
+                        "device_token_created",
+                        json!({ "label": label, "team": team }),
+                        Some(refusal.1),
+                    )
+                    .await;
+                return Err(refusal);
+            }
+        };
         let unavailable = |e: String| (StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", e);
         let token = format!("{PREFIX}{}", random_hex(32).map_err(unavailable)?);
         let id = format!("dt-{}", random_hex(4).map_err(unavailable)?);
@@ -973,6 +1025,45 @@ pub(super) async fn api_admin(
     console.admin_of_key(&key_holder(keys, key).filter(|e| e.admin)?)
 }
 
+/// The organization a new token is for: the one asked for, else its creator's (someone kept to one organization
+/// makes tokens for it alone). `Err` when their role is kept to another, or the policy lists no such organization.
+pub(super) fn token_org(
+    admin: &Admin,
+    asked: &str,
+    orgs: &[String],
+) -> Result<String, (StatusCode, &'static str, String)> {
+    let asked = asked.trim();
+    let org = if asked.is_empty() {
+        admin.org.clone().unwrap_or_default()
+    } else {
+        asked.to_string()
+    };
+    if let Some(own) = admin.org.as_ref().filter(|own| **own != org) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "other_org",
+            format!(
+                "Your role is kept to organization {own}. Leave org out, or ask an owner for a token of {org:?}."
+            ),
+        ));
+    }
+    if !org.is_empty() && !orgs.contains(&org) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            format!(
+                "{org:?} is not an organization of this gateway. Leave org out, or use one the policy lists under orgs: {}.",
+                if orgs.is_empty() {
+                    "none".to_string()
+                } else {
+                    orgs.join(", ")
+                }
+            ),
+        ));
+    }
+    Ok(org)
+}
+
 /// Why `admin` may not make or touch a token of this organization and team, when their role keeps them from it.
 /// A token for every team is outside a role kept to some teams, and no token is within a role kept to customers:
 /// a token names no customer.
@@ -1041,7 +1132,7 @@ async fn create_token_api(
         .as_i64()
         .map_or(DEFAULT_DAYS, |n| i32::try_from(n).unwrap_or(i32::MAX));
     match d
-        .create(&console, &admin, body["label"].as_str().unwrap_or(""), body["team"].as_str().unwrap_or(""), days)
+        .create(&console, &admin, body["label"].as_str().unwrap_or(""), body["team"].as_str().unwrap_or(""), body["org"].as_str().unwrap_or(""), days)
         .await
     {
         Ok((id, token, expires)) => (
@@ -1108,7 +1199,15 @@ async fn remove_device_api(
     if let Err(e) = recorded {
         return fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", e);
     }
+    // A device outside the role's reach is, to its holder, not there.
+    let within = match d.devices(&admin).await {
+        Ok(devices) => devices
+            .iter()
+            .any(|device| device["device_id"] == id.as_str()),
+        Err(e) => return fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
+    };
     let removed = match d.db.client().await {
+        Ok(_) if !within => Ok(0),
         Ok(client) => client
             .execute(
                 "DELETE FROM enterprise_devices WHERE device_id = $1",
@@ -1134,10 +1233,10 @@ async fn list_mcp_api(
     Ext(d): Ext<Devices>,
     headers: HeaderMap,
 ) -> Response {
-    if api_admin(&console, &d.keys, &headers).await.is_none() {
+    let Some(admin) = api_admin(&console, &d.keys, &headers).await else {
         return not_admin();
-    }
-    match d.mcp_servers().await {
+    };
+    match d.mcp_servers(&admin).await {
         Ok(servers) => Json(json!({ "servers": servers })).into_response(),
         Err(e) => fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     }
@@ -1175,10 +1274,10 @@ async fn devices_json(
     Ext(d): Ext<Devices>,
     headers: HeaderMap,
 ) -> Response {
-    if api_admin(&console, &d.keys, &headers).await.is_none() {
+    let Some(admin) = api_admin(&console, &d.keys, &headers).await else {
         return not_admin();
-    }
-    match d.devices().await {
+    };
+    match d.devices(&admin).await {
         Ok(devices) => (
             [(
                 header::CONTENT_DISPOSITION,
@@ -1364,7 +1463,7 @@ fn mcp_list(servers: &[Value], can_edit: bool) -> String {
 async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<String, String> {
     let can_edit = role_of(admin) != Role::Viewer;
     let tokens = d.tokens(admin).await?;
-    let devices = d.devices().await?;
+    let devices = d.devices(admin).await?;
     let (traffic, profiles, drift, refusals) = {
         let client = d.db.client().await?;
         // Every replica's requests, summed in the store's request index (the insights namespace every gateway
@@ -1407,11 +1506,36 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
             .map_err(db_error)?;
         let drift = client
             .query(
-                &format!("SELECT to_char(at AT TIME ZONE 'UTC', {TIME}), person, tool FROM enterprise_device_drift ORDER BY id DESC LIMIT 20"),
+                &format!("SELECT to_char(at AT TIME ZONE 'UTC', {TIME}), person, tool, device_id FROM enterprise_device_drift ORDER BY id DESC LIMIT 20"),
                 &[],
             )
             .await
             .map_err(db_error)?;
+        (traffic, profiles, drift, refusals)
+    };
+    // Someone whose role keeps them to part of the install is shown what belongs to the devices they may see.
+    // ponytail: their people's traffic is cut to those with such a device, and the recent refusals and drift to
+    // those among the install's last 20. Filter in the queries if a kept role needs the rest.
+    let (traffic, profiles, drift, refusals) = if admin.confined() {
+        let mine = |row: &gantry_server::store::tokio_postgres::Row, i: usize| {
+            let id = row.try_get::<_, String>(i).unwrap_or_default();
+            devices.iter().any(|d| d["device_id"] == id.as_str())
+        };
+        let team = |row: &gantry_server::store::tokio_postgres::Row| {
+            admin
+                .teams
+                .contains(&row.try_get::<_, String>(0).unwrap_or_default())
+        };
+        (
+            traffic
+                .into_iter()
+                .filter(|((person, _), _)| devices.iter().any(|d| d["person"] == person.as_str()))
+                .collect(),
+            profiles.into_iter().filter(team).collect(),
+            drift.into_iter().filter(|r| mine(r, 3)).collect(),
+            refusals.into_iter().filter(|r| mine(r, 1)).collect(),
+        )
+    } else {
         (traffic, profiles, drift, refusals)
     };
     let mut out = html::head(
@@ -1430,7 +1554,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     out += &section("Coverage", &people(&traffic, &devices));
     out += &section(
         "MCP servers: approve or block what devices are configured with",
-        &mcp_list(&d.mcp_servers().await?, can_edit),
+        &mcp_list(&d.mcp_servers(admin).await?, can_edit),
     );
 
     let mut list = String::from(r#"<section class="g-list">"#);
@@ -1596,7 +1720,14 @@ async fn act(
         "token_create" => {
             let days = form.get("days").trim().parse().unwrap_or(0);
             match d
-                .create(&console, &admin, form.get("label"), form.get("team"), days)
+                .create(
+                    &console,
+                    &admin,
+                    form.get("label"),
+                    form.get("team"),
+                    "",
+                    days,
+                )
                 .await
             {
                 Ok((_, token, expires)) => {

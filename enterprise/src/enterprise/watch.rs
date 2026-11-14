@@ -30,7 +30,7 @@ use serde_json::{Map, Value, json};
 
 use self::otlp::{Attrs, Event, Point};
 use super::Db;
-use super::devices::{Json, api_admin, bearer, fail, not_admin, outside};
+use super::devices::{Json, api_admin, bearer, fail, not_admin, outside, token_org};
 use super::siem::{Role, db_error, random_hex, role_of};
 use crate::license::Status;
 use gantry_server::store::tokio_postgres::Client;
@@ -74,6 +74,12 @@ CREATE TABLE enterprise_watch_daily (
 /// The organization a token's records belong to, for installs with `orgs:`. Empty for none.
 pub const MIGRATION_2: &str = "
 ALTER TABLE enterprise_watch_tokens ADD COLUMN org text NOT NULL DEFAULT '';
+";
+
+/// The organization of the token a day's sums came in with, so an admin kept to one organization is shown its
+/// sums alone. Sums from before this are the install's (no organization).
+pub const MIGRATION_3: &str = "
+ALTER TABLE enterprise_watch_daily ADD COLUMN org text NOT NULL DEFAULT '';
 ";
 
 pub const PREFIX: &str = "gantry_watch_";
@@ -681,9 +687,11 @@ impl Watch {
 
         for ((day, person, team, metric, label), value) in &added.daily {
             tx.execute(
-                "INSERT INTO enterprise_watch_daily (day, person, team, metric, label, value) VALUES (CAST($1 AS text)::date, $2, $3, $4, $5, $6) \
-                 ON CONFLICT (day, person, metric, label) DO UPDATE SET value = enterprise_watch_daily.value + excluded.value, team = excluded.team",
-                &[day, person, team, metric, label, value],
+                // ponytail: a row is one person's day, so someone watched through two organizations' tokens on one day is
+                // counted under the later one. Put org in the primary key if that happens.
+                "INSERT INTO enterprise_watch_daily (day, person, team, metric, label, value, org) VALUES (CAST($1 AS text)::date, $2, $3, $4, $5, $6, $7) \
+                 ON CONFLICT (day, person, metric, label) DO UPDATE SET value = enterprise_watch_daily.value + excluded.value, team = excluded.team, org = excluded.org",
+                &[day, person, team, metric, label, value, &token.org],
             )
             .await
             .map_err(failed)?;
@@ -949,12 +957,11 @@ impl Watch {
         let action = "watch_token_created";
         let field = |name: &str| body[name].as_str().unwrap_or("").trim().to_string();
         let (label, team, person) = (field("label"), field("team"), field("person"));
-        // Someone kept to one organization creates tokens for it alone.
-        let org = Some(field("org"))
-            .filter(|o| !o.is_empty())
-            .or_else(|| admin.org.clone())
-            .unwrap_or_default();
         let orgs = self.policy.with(|p| p.orgs().to_vec()).unwrap_or_default();
+        let (org, other) = match token_org(admin, &field("org"), &orgs) {
+            Ok(org) => (org, None),
+            Err(refusal) => (String::new(), Some(refusal)),
+        };
         let days = body["days"]
             .as_i64()
             .map_or(DEFAULT_DAYS, |n| i32::try_from(n).unwrap_or(i32::MAX));
@@ -980,30 +987,10 @@ impl Watch {
             ))
         } else if person.chars().count() > 200 || person.contains(char::is_whitespace) {
             Some((StatusCode::BAD_REQUEST, "invalid_request", "A person is a name or an email address of at most 200 characters without spaces, as their Gantry key names them.".to_string()))
-        } else if admin.org.as_ref().is_some_and(|o| *o != org) {
-            Some((
-                StatusCode::FORBIDDEN,
-                "other_org",
-                format!(
-                    "Your role is kept to organization {}. Leave org out, or ask an owner for a token of {org:?}.",
-                    admin.org.as_deref().unwrap_or_default()
-                ),
-            ))
+        } else if let Some(refusal) = other {
+            Some(refusal)
         } else if let Some(message) = outside(admin, &org, &team, "watch token") {
             Some((StatusCode::FORBIDDEN, "outside_role", message))
-        } else if !org.is_empty() && !orgs.contains(&org) {
-            Some((
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                format!(
-                    "{org:?} is not an organization of this gateway. Leave org out, or use one the policy lists under orgs: {}.",
-                    if orgs.is_empty() {
-                        "none".to_string()
-                    } else {
-                        orgs.join(", ")
-                    }
-                ),
-            ))
         } else if !(1..=MAX_DAYS).contains(&days) {
             Some((
                 StatusCode::BAD_REQUEST,
@@ -1088,15 +1075,15 @@ impl Watch {
         Ok(changed > 0)
     }
 
-    /// What was watched in the last `days` days: sums for the install, per person, per model and per tool, and
-    /// where the five steps stand for watched people.
-    async fn summary(&self, days: i32) -> Result<Value, String> {
+    /// What was watched in the last `days` days within `admin`'s reach (the install, or their role's organization
+    /// and teams): sums in all, per person, per model and per tool, and where the five steps stand for watched people.
+    async fn summary(&self, admin: &Admin, days: i32) -> Result<Value, String> {
         let client = self.db.client().await?;
         let known = self.people(&client).await?;
         let rows = client
             .query(
-                "SELECT person, max(team), metric, label, sum(value)::float8, to_char(max(day), 'YYYY-MM-DD') FROM enterprise_watch_daily \
-                 WHERE day > current_date - $1::int GROUP BY person, metric, label ORDER BY person, metric, label",
+                "SELECT person, team, metric, label, sum(value)::float8, to_char(max(day), 'YYYY-MM-DD'), org FROM enterprise_watch_daily \
+                 WHERE day > current_date - $1::int GROUP BY person, team, org, metric, label ORDER BY person, metric, label",
                 &[&days],
             )
             .await
@@ -1108,11 +1095,14 @@ impl Watch {
             Default::default();
         for r in &rows {
             let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
-            let (person, metric, label) = (get(0), get(2), get(3));
+            let (person, team, metric, label) = (get(0), get(1), get(2), get(3));
+            if !admin.covers(&get(6), &team, None) {
+                continue;
+            }
             let value: f64 = r.try_get(4).unwrap_or(0.0);
             *totals.entry(metric.clone()).or_default() += value;
             let entry = people.entry(person).or_default();
-            entry.0 = get(1);
+            entry.0 = entry.0.clone().max(team);
             entry.1 = entry.1.clone().max(get(5));
             *entry.2.entry(metric.clone()).or_default() += value;
             if !label.is_empty() {
@@ -1228,9 +1218,9 @@ async fn summary(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    if api_admin(&console, &w.keys, &headers).await.is_none() {
+    let Some(admin) = api_admin(&console, &w.keys, &headers).await else {
         return not_admin();
-    }
+    };
     let days = uri
         .query()
         .into_iter()
@@ -1239,7 +1229,7 @@ async fn summary(
         .and_then(|d| d.parse::<i32>().ok())
         .unwrap_or(30)
         .clamp(1, MAX_DAYS);
-    match w.summary(days).await {
+    match w.summary(&admin, days).await {
         Ok(summary) => Json(summary).into_response(),
         Err(e) => fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     }

@@ -152,6 +152,8 @@ In an install with organizations (`orgs:` in the policy), `"org": "acme"` (`gant
 
 A [role](/governance/access-control/) kept to teams (`teams:`) reaches the watch tokens of those teams only, with an admin key as with a console session. Such a role cannot create a token without a team, since that token would cover every team: the answer is `403` with `outside_role`. A token outside the role is not listed, and revoking it answers `404`. A role kept to `customers:` reaches no watch token.
 
+`summary.json` follows the same reach: a role kept to an organization or to teams is given the people, models, tools and sums that came in with tokens of that organization and those teams, and nothing else. Sums watched before this release belong to no organization, so only an admin of the whole install (or a role kept to teams alone) reads them.
+
 ```sh
 # List: label, team or person, expiry, last export, status
 curl -H "Authorization: Bearer $GANTRY_ADMIN_KEY" https://gantry.example.com/console/watch/tokens

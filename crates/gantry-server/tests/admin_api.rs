@@ -510,40 +510,9 @@ async fn a_policy_kept_in_the_file_is_read_but_not_changed_through_the_api() -> 
     Ok(())
 }
 
-async fn database(test: &str) -> Result<Option<String>, Error> {
-    let Ok(url) = std::env::var("GANTRY_TEST_DATABASE_URL") else {
-        eprintln!(
-            "skipped {test}: GANTRY_TEST_DATABASE_URL is not set. Set it to a Postgres connection string to run the store tests."
-        );
-        return Ok(None);
-    };
-    let config: tokio_postgres::Config = url.parse()?;
-    let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
-    tokio::spawn(connection);
-    let name = format!("gantry_{}_{test}", std::process::id());
-    client
-        .batch_execute(&format!("DROP DATABASE IF EXISTS {name}"))
-        .await?;
-    client
-        .batch_execute(&format!("CREATE DATABASE {name}"))
-        .await?;
-    let quote = |s: &str| format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"));
-    let host = match config.get_hosts().first() {
-        Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
-        _ => "127.0.0.1".into(),
-    };
-    let password = config
-        .get_password()
-        .map(|p| String::from_utf8_lossy(p).to_string())
-        .unwrap_or_default();
-    Ok(Some(format!(
-        "host={} port={} user={} password={} dbname={} sslmode=disable",
-        quote(&host),
-        config.get_ports().first().copied().unwrap_or(5432),
-        quote(config.get_user().unwrap_or("postgres")),
-        quote(&password),
-        quote(&name)
-    )))
+async fn database(test: &str) -> Result<Option<gantry_server::store::TestDatabase>, Error> {
+    gantry_server::store::TestDatabase::create(&format!("gantry_{}_{test}", std::process::id()))
+        .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -559,7 +528,7 @@ async fn each_part_of_the_policy_is_managed_as_new_versions_with_records() -> Te
             port,
             "store: { postgres_url_env: GANTRY_STORE_URL, policy_from: store }\n",
         ),
-        Some(url),
+        Some(url.to_string()),
     )?;
     let audit = dir.join("gantry-audit.jsonl");
     for (name, team, key, admin) in [

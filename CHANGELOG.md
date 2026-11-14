@@ -97,8 +97,17 @@ one repository. How a release is made: RELEASING.md.
   own tokens, by key and by console session: a token outside it is not listed, revoking it answers `404`, and
   creating one answers `403` with `outside_role` (`other_org` for another organization). A role kept to teams
   cannot create a token without a team.
-- Enrolment tokens belong to the organization of the admin who created them (`org` in the list). Tables:
-  `enterprise_device_tokens.org` (namespace `enterprise.devices`, migration 4).
+- Enrolment tokens belong to the organization of the admin who created them (`org` in the list), or to the one an
+  admin of the whole install names with `"org"` in the body, which must be one the policy lists under `orgs:`.
+  Tables: `enterprise_device_tokens.org` (namespace `enterprise.devices`, migration 4).
+- What an admin kept to part of the install reads follows the role too (Gantry Enterprise). An admin whose role is
+  kept to an organization or to teams read every person in `GET /console/watch/summary.json`, every device in
+  `GET /console/devices/devices.json` and on the Devices page, and every MCP server in `GET /console/devices/mcp`,
+  and could approve or block any server and remove any device. Now the summary holds the sums of tokens within the
+  role, the device list holds the role's teams' devices enrolled with a token of the role's organization (each
+  device now carries `org`), and the MCP list holds those devices' servers. Deciding on a server none of them has
+  answers `403` with `outside_role`, and removing a device outside the role answers `404`. Sums watched before
+  this belong to no organization. Tables: `enterprise_watch_daily.org` (namespace `enterprise.watch`, migration 3).
 
 ### Releasing
 
@@ -109,6 +118,9 @@ one repository. How a release is made: RELEASING.md.
 - `PgStore::close` stops a store's thread and closes its connections, for a program that embeds the gateway and is
   done with its store before it exits. The enterprise tests call it: a finished test used to leave its connections
   open, and a run on 16 cores peaked near 100 of them. It now peaks under 50.
+- Each store test drops its database when it ends (`gantry_server::store::TestDatabase`, in the open source and
+  the enterprise tests), and `scripts/console_edit_check.py --fresh` drops the one it made. A run of
+  `scripts/ci.sh` used to leave about 1 GB of test databases in the Postgres it ran against.
 
 ### Fixed: a parallel place comes back with the answer
 

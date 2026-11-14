@@ -38,25 +38,9 @@ const PAT: &str = "gantry_pat_0123456789abcdef01234567890";
 const LEE: &str = "gantry_lee_0123456789abcdef01234567890";
 
 /// A fresh database for one test, on the server GANTRY_TEST_DATABASE_URL names. `None` when it is not set.
-async fn database(test: &str) -> Result<Option<String>, Error> {
-    let Ok(url) = std::env::var("GANTRY_TEST_DATABASE_URL") else {
-        eprintln!(
-            "skipped {test}: GANTRY_TEST_DATABASE_URL is not set. Set it to a Postgres connection string to run the store tests."
-        );
-        return Ok(None);
-    };
-    let config: tokio_postgres::Config = url.parse()?;
-    let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
-    tokio::spawn(connection);
-    let name = format!("gantry_{}_{test}", std::process::id());
-    // One statement each: several in one string run as a transaction, where these are refused.
-    client
-        .batch_execute(&format!("DROP DATABASE IF EXISTS {name}"))
-        .await?;
-    client
-        .batch_execute(&format!("CREATE DATABASE {name}"))
-        .await?;
-    Ok(Some(key_value(&config, None, &name)))
+async fn database(test: &str) -> Result<Option<gantry_server::store::TestDatabase>, Error> {
+    gantry_server::store::TestDatabase::create(&format!("gantry_{}_{test}", std::process::id()))
+        .await
 }
 
 /// A connection string in key=value form, so a password needs no URL encoding. `port` replaces the server's.
@@ -1803,5 +1787,32 @@ rules:
         (StatusCode::FORBIDDEN, "session_ended"),
         "{body}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_test_database_is_dropped_with_its_guard() -> TestResult {
+    let Some(url) = database("guard").await? else {
+        return Ok(());
+    };
+    let name = format!("gantry_{}_guard", std::process::id());
+    let server = std::env::var("GANTRY_TEST_DATABASE_URL")?;
+    let (client, connection) = tokio_postgres::connect(&server, tokio_postgres::NoTls).await?;
+    tokio::spawn(connection);
+    let exists = async || -> Result<i64, Error> {
+        let row = client
+            .query_one(
+                "SELECT count(*) FROM pg_database WHERE datname = $1",
+                &[&name],
+            )
+            .await?;
+        Ok(row.try_get(0)?)
+    };
+    assert_eq!(exists().await?, 1);
+    // A connection a store left open does not keep the database.
+    let (_held, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
+    tokio::spawn(connection);
+    drop(url);
+    assert_eq!(exists().await?, 0);
     Ok(())
 }

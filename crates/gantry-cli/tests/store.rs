@@ -31,45 +31,14 @@ rules:
 ";
 
 /// A fresh database for one test, as a connection string. `None` when GANTRY_TEST_DATABASE_URL is not set.
-fn database(test: &str) -> Result<Option<String>, Error> {
-    let Ok(url) = std::env::var("GANTRY_TEST_DATABASE_URL") else {
-        eprintln!(
-            "skipped {test}: GANTRY_TEST_DATABASE_URL is not set. Set it to a Postgres connection string to run the store tests."
-        );
-        return Ok(None);
-    };
-    let config: tokio_postgres::Config = url.parse()?;
-    let name = format!("gantry_cli_{}_{test}", std::process::id());
-    let runtime = tokio::runtime::Builder::new_current_thread()
+fn database(test: &str) -> Result<Option<gantry_server::store::TestDatabase>, Error> {
+    tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()?;
-    runtime.block_on(async {
-        let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
-        tokio::spawn(connection);
-        client
-            .batch_execute(&format!("DROP DATABASE IF EXISTS {name}"))
-            .await?;
-        client
-            .batch_execute(&format!("CREATE DATABASE {name}"))
-            .await
-    })?;
-    let quote = |s: &str| format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"));
-    let host = match config.get_hosts().first() {
-        Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
-        _ => "127.0.0.1".into(),
-    };
-    let password = config
-        .get_password()
-        .map(|p| String::from_utf8_lossy(p).to_string())
-        .unwrap_or_default();
-    Ok(Some(format!(
-        "host={} port={} user={} password={} dbname={} sslmode=disable",
-        quote(&host),
-        config.get_ports().first().copied().unwrap_or(5432),
-        quote(config.get_user().unwrap_or("postgres")),
-        quote(&password),
-        quote(&name)
-    )))
+        .build()?
+        .block_on(gantry_server::store::TestDatabase::create(&format!(
+            "gantry_cli_{}_{test}",
+            std::process::id()
+        )))
 }
 
 fn workdir(name: &str) -> std::io::Result<PathBuf> {

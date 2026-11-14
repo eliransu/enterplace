@@ -2045,3 +2045,76 @@ async fn an_admin_kept_to_an_organization_or_to_teams_reaches_only_its_own_watch
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn an_admin_kept_to_an_organization_or_to_teams_sees_only_its_own_people_in_the_summary()
+-> Result<(), Error> {
+    let Some(url) = database("watch_confined_summary").await? else {
+        return Ok(());
+    };
+    let policy = format!("{POLICY}{CONFINED}");
+    let gw = gateway_policy(
+        "watch_confined_summary",
+        &url,
+        &licensed(&["watch"]),
+        &[],
+        &policy,
+    )?;
+    confined_admins(&gw)?;
+    let app = &gw.app;
+    for (body, email, cost) in [
+        (
+            json!({ "label": "a", "team": "payments", "org": "acme" }),
+            "dana@acme.co",
+            1.0,
+        ),
+        (
+            json!({ "label": "b", "team": "payments", "org": "globex" }),
+            "gil@globex.co",
+            2.0,
+        ),
+        (json!({ "label": "c", "team": "web" }), "omer@ops.co", 4.0),
+    ] {
+        let (_, token) = new_token(app, body).await?;
+        let (start, now) = (now_ns() - 1_000_000_000, now_ns());
+        let cost = sum(
+            "claude_code.cost.usage",
+            1,
+            start,
+            now,
+            &[(cost, json!([]))],
+        );
+        let metrics = metrics_body(email, "s-1", vec![cost]);
+        let sent = send(app, "POST", "/otlp/v1/metrics", &token, JSON, metrics).await?;
+        assert_eq!(sent.status, StatusCode::OK, "{}", sent.text);
+    }
+    let seen = async |key: &str| -> Result<(Vec<String>, f64, String), Error> {
+        let reply = as_key(app, "GET", "/console/watch/summary.json", key, Value::Null).await?;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+        let people = reply.body["people"]
+            .as_array()
+            .map(|people| {
+                people
+                    .iter()
+                    .filter_map(|p| p["person"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let cost = reply.body["totals"]["cost_usd"].as_f64().unwrap_or(0.0);
+        Ok((people, cost, reply.text))
+    };
+    let (people, cost, _) = seen(ADMIN_KEY).await?;
+    assert_eq!(people, ["dana@acme.co", "gil@globex.co", "omer@ops.co"]);
+    assert_eq!(cost, 7.0);
+    // Kept to organization acme: its people and their sums alone, in every list of the summary.
+    let (people, cost, text) = seen(ACME_KEY).await?;
+    assert_eq!(people, ["dana@acme.co"], "{text}");
+    assert_eq!(cost, 1.0, "{text}");
+    assert!(!text.contains("gil@") && !text.contains("omer@"), "{text}");
+    // Kept to team payments: that team in any organization.
+    let (people, cost, text) = seen(PAYMENTS_KEY).await?;
+    assert_eq!(people, ["dana@acme.co", "gil@globex.co"], "{text}");
+    assert_eq!(cost, 3.0, "{text}");
+    assert!(!text.contains("omer@"), "{text}");
+    Ok(())
+}

@@ -896,3 +896,177 @@ async fn an_admin_kept_to_an_organization_or_to_teams_reaches_only_its_own_enrol
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn an_admin_of_the_whole_install_makes_an_enrolment_token_for_one_organization()
+-> Result<(), Error> {
+    let Some(url) = database("devices_token_org").await? else {
+        return Ok(());
+    };
+    let policy = format!("{POLICY}{CONFINED}");
+    let gw = gateway_policy(
+        "devices_token_org",
+        &url,
+        &licensed(&["devices"]),
+        &[],
+        &policy,
+    )?;
+    confined_admins(&gw)?;
+    let app = &gw.app;
+    let tokens = "/console/devices/tokens";
+    let body = json!({ "label": "g", "team": "payments", "org": "globex" });
+    let made = call(app, "POST", tokens, ADMIN_KEY, Some(body.clone())).await?;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.text);
+    let listed = call(app, "GET", tokens, ADMIN_KEY, None).await?;
+    assert_eq!(listed.body["tokens"][0]["org"], "globex", "{}", listed.text);
+    // Not acme's to see; an organization the policy does not list is refused by name, as is another's.
+    assert!(listed_ids(app, ACME_KEY).await?.is_empty());
+    let unknown = json!({ "label": "x", "org": "initech" });
+    let refused = call(app, "POST", tokens, ADMIN_KEY, Some(unknown)).await?;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{}", refused.text);
+    assert!(refused.text.contains("acme, globex"), "{}", refused.text);
+    let refused = call(app, "POST", tokens, ACME_KEY, Some(body)).await?;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text);
+    assert_eq!(refused.body["error"]["code"], "other_org");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_admin_kept_to_an_organization_or_to_teams_reaches_only_its_own_devices_and_their_mcp_servers()
+-> Result<(), Error> {
+    let Some(url) = database("devices_confined_reach").await? else {
+        return Ok(());
+    };
+    let policy = format!("{POLICY}{CONFINED}");
+    let gw = gateway_policy(
+        "devices_confined_reach",
+        &url,
+        &licensed(&["devices"]),
+        &[],
+        &policy,
+    )?;
+    confined_admins(&gw)?;
+    let app = &gw.app;
+    // One device each: acme's payments team, the install's web team, and the install's payments team.
+    for (maker, team, person_key, host) in [
+        (ACME_KEY, "payments", ACME_KEY, "acme-pay"),
+        (ADMIN_KEY, "web", ADMIN_KEY, "plain-web"),
+        (ADMIN_KEY, "payments", PAYMENTS_KEY, "plain-pay"),
+    ] {
+        let body = json!({ "label": host, "team": team });
+        let made = call(app, "POST", "/console/devices/tokens", maker, Some(body)).await?;
+        assert_eq!(made.status, StatusCode::CREATED, "{}", made.text);
+        let token = made.body["token"].as_str().ok_or("no token")?.to_string();
+        let mut sent = report("x", host, json!([]));
+        sent["mcp"] = json!([{"tool": "cursor", "file": "/mcp.json", "server": host, "transport": "http",
+            "target": format!("https://{host}.example.com/mcp"), "via_gantry": false}]);
+        let stored = agent(
+            app,
+            "POST",
+            "/device/report",
+            &token,
+            person_key,
+            Some(sent),
+        )
+        .await?;
+        assert_eq!(stored.status, StatusCode::OK, "{}", stored.text);
+    }
+    let hosts = async |key: &str| -> Result<Vec<String>, Error> {
+        let listed = call(app, "GET", "/console/devices/devices.json", key, None).await?;
+        assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
+        let mut hosts: Vec<String> = listed
+            .body
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| d["hostname"].as_str().map(str::to_string))
+            .collect();
+        hosts.sort();
+        Ok(hosts)
+    };
+    let servers = async |key: &str| -> Result<Vec<String>, Error> {
+        let listed = call(app, "GET", "/console/devices/mcp", key, None).await?;
+        assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
+        Ok(listed.body["servers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["servers"].as_str().map(str::to_string))
+            .collect())
+    };
+    let decide = async |key: &str, host: &str| -> Result<Reply, Error> {
+        let body = json!({"transport": "http", "target": format!("https://{host}.example.com/mcp"), "decision": "blocked"});
+        call(app, "POST", "/console/devices/mcp", key, Some(body)).await
+    };
+    assert_eq!(
+        hosts(ADMIN_KEY).await?,
+        ["acme-pay", "plain-pay", "plain-web"]
+    );
+    assert_eq!(
+        servers(ADMIN_KEY).await?,
+        ["acme-pay", "plain-pay", "plain-web"]
+    );
+
+    // Kept to organization acme: its device and that device's server alone, to see, decide and remove.
+    assert_eq!(hosts(ACME_KEY).await?, ["acme-pay"]);
+    assert_eq!(servers(ACME_KEY).await?, ["acme-pay"]);
+    let refused = decide(ACME_KEY, "plain-web").await?;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text);
+    assert_eq!(refused.body["error"]["code"], "outside_role");
+    let gone = call(
+        app,
+        "DELETE",
+        "/console/devices/devices/plain-web:x",
+        ACME_KEY,
+        None,
+    )
+    .await?;
+    assert_eq!(gone.status, StatusCode::NOT_FOUND, "{}", gone.text);
+    assert_eq!(
+        decide(ACME_KEY, "acme-pay").await?.status,
+        StatusCode::OK,
+        "its own"
+    );
+
+    // Kept to team payments: that team's devices in any organization.
+    assert_eq!(hosts(PAYMENTS_KEY).await?, ["acme-pay", "plain-pay"]);
+    assert_eq!(servers(PAYMENTS_KEY).await?, ["acme-pay", "plain-pay"]);
+    assert_eq!(
+        decide(PAYMENTS_KEY, "plain-web").await?.status,
+        StatusCode::FORBIDDEN
+    );
+    // Signed in to the console with the same key, the page shows the same reach.
+    let mut browser = Browser::default();
+    browser
+        .go(app, "POST", "/console/sign-in", &[("key", PAYMENTS_KEY)])
+        .await?;
+    let page = browser.go(app, "GET", "/console/devices", &[]).await?;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.text);
+    assert!(
+        page.text.contains("plain-pay") && !page.text.contains("plain-web"),
+        "{}",
+        page.text
+    );
+
+    // Nothing outside either reach changed, and the refused decision is on record.
+    assert_eq!(hosts(ADMIN_KEY).await?.len(), 3);
+    let listed = call(app, "GET", "/console/devices/mcp", ADMIN_KEY, None).await?;
+    let decisions: Vec<&str> = listed.body["servers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s["decision"].as_str())
+        .collect();
+    assert_eq!(
+        decisions,
+        ["blocked", "pending", "pending"],
+        "{}",
+        listed.text
+    );
+    assert!(
+        admin_records(&gw)?
+            .iter()
+            .any(|r| r["action"] == "device_mcp_decided" && r["code"] == "outside_role")
+    );
+    Ok(())
+}

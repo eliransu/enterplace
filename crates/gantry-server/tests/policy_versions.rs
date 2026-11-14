@@ -29,40 +29,9 @@ const SECOND: &str = "gantry_second_0123456789abcdef01234567";
 const MAYA: &str = "gantry_maya_0123456789abcdef0123456789";
 const HOST: &str = "gantry.test";
 
-async fn database(test: &str) -> Result<Option<String>, Error> {
-    let Ok(url) = std::env::var("GANTRY_TEST_DATABASE_URL") else {
-        eprintln!(
-            "skipped {test}: GANTRY_TEST_DATABASE_URL is not set. Set it to a Postgres connection string to run the store tests."
-        );
-        return Ok(None);
-    };
-    let config: tokio_postgres::Config = url.parse()?;
-    let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
-    tokio::spawn(connection);
-    let name = format!("gantry_{}_{test}", std::process::id());
-    client
-        .batch_execute(&format!("DROP DATABASE IF EXISTS {name}"))
-        .await?;
-    client
-        .batch_execute(&format!("CREATE DATABASE {name}"))
-        .await?;
-    let quote = |s: &str| format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"));
-    let host = match config.get_hosts().first() {
-        Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
-        _ => "127.0.0.1".into(),
-    };
-    let password = config
-        .get_password()
-        .map(|p| String::from_utf8_lossy(p).to_string())
-        .unwrap_or_default();
-    Ok(Some(format!(
-        "host={} port={} user={} password={} dbname={} sslmode=disable",
-        quote(&host),
-        config.get_ports().first().copied().unwrap_or(5432),
-        quote(config.get_user().unwrap_or("postgres")),
-        quote(&password),
-        quote(&name)
-    )))
+async fn database(test: &str) -> Result<Option<gantry_server::store::TestDatabase>, Error> {
+    gantry_server::store::TestDatabase::create(&format!("gantry_{}_{test}", std::process::id()))
+        .await
 }
 
 /// A model server that answers every chat request.

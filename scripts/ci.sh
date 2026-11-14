@@ -33,7 +33,7 @@ elif [ -n "${CI:-}" ]; then
   exit 1
 else
   echo "store tests skipped: set GANTRY_TEST_DATABASE_URL, for example after"
-  # Every test database stays in the container (about 1 GB a run): remove the container when done.
+  # Each test drops its database when it ends, so the container stays the size it started.
   echo "  docker run -d --name gantry-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:16"
   echo "  export GANTRY_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/postgres"
 fi

@@ -2710,6 +2710,114 @@ impl<S: AsyncRead + AsyncWrite + Unpin> TlsStream for Tls<S> {
     }
 }
 
+/// A database of its own for one test, on the server GANTRY_TEST_DATABASE_URL names, dropped when the test drops
+/// this (a run left about 1 GB of them behind before). Reads as its connection string. A test that starts several
+/// gateways on one database keeps the one guard for all of them, declared before them so it is dropped last. For
+/// the store tests of this crate and of those built on it.
+#[doc(hidden)]
+pub struct TestDatabase {
+    url: String,
+    server: tokio_postgres::Config,
+    name: String,
+}
+
+impl TestDatabase {
+    /// A fresh database `name`. `None` (and a line saying so) when GANTRY_TEST_DATABASE_URL is not set, so a
+    /// machine without Postgres skips the test; CI sets it.
+    pub async fn create(name: &str) -> Result<Option<Self>, Box<dyn std::error::Error>> {
+        let Ok(url) = std::env::var("GANTRY_TEST_DATABASE_URL") else {
+            eprintln!(
+                "skipped {name}: GANTRY_TEST_DATABASE_URL is not set. Set it to a Postgres connection string to run the store tests."
+            );
+            return Ok(None);
+        };
+        let server: tokio_postgres::Config = url.parse()?;
+        let (client, connection) = server.connect(tokio_postgres::NoTls).await?;
+        tokio::spawn(connection);
+        // One statement each: several in one string run as a transaction, where these are refused.
+        client
+            .batch_execute(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+            .await?;
+        client
+            .batch_execute(&format!("CREATE DATABASE {name}"))
+            .await?;
+        // In key=value form, so a password needs no URL encoding.
+        let quote = |s: &str| format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"));
+        let host = match server.get_hosts().first() {
+            Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
+            _ => "127.0.0.1".into(),
+        };
+        let password = server
+            .get_password()
+            .map(|p| String::from_utf8_lossy(p).to_string())
+            .unwrap_or_default();
+        let url = format!(
+            "host={} port={} user={} password={} dbname={} sslmode=disable",
+            quote(&host),
+            server.get_ports().first().copied().unwrap_or(5432),
+            quote(server.get_user().unwrap_or("postgres")),
+            quote(&password),
+            quote(name)
+        );
+        Ok(Some(Self {
+            url,
+            server,
+            name: name.to_string(),
+        }))
+    }
+}
+
+impl std::ops::Deref for TestDatabase {
+    type Target = String;
+
+    fn deref(&self) -> &String {
+        &self.url
+    }
+}
+
+impl std::fmt::Display for TestDatabase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.url)
+    }
+}
+
+impl Drop for TestDatabase {
+    fn drop(&mut self) {
+        let (server, name) = (self.server.clone(), self.name.clone());
+        // On a thread and runtime of its own: a test drops this inside its runtime, where waiting on another is
+        // refused. FORCE closes what a store that was not closed still holds open.
+        let dropped = std::thread::spawn(move || -> Result<(), String> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?;
+            runtime.block_on(async {
+                let (client, connection) = server
+                    .connect(tokio_postgres::NoTls)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                tokio::spawn(connection);
+                client
+                    .batch_execute(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+        })
+        .join();
+        match dropped {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!(
+                "the test database {} was not dropped: {e}. Drop it by hand, or remove the test Postgres with its volume.",
+                self.name
+            ),
+            Err(_) => eprintln!(
+                "the test database {} was not dropped: the thread that drops it stopped. Drop it by hand, or remove the test Postgres with its volume.",
+                self.name
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

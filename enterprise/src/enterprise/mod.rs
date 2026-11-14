@@ -42,7 +42,7 @@ const DEVICES: &[&str] = &[
     devices::MIGRATION_4,
 ];
 /// Watch tokens, what tells a repeated export apart, and the daily sums of what Claude Code reported.
-const WATCH: &[&str] = &[watch::MIGRATION, watch::MIGRATION_2];
+const WATCH: &[&str] = &[watch::MIGRATION, watch::MIGRATION_2, watch::MIGRATION_3];
 /// Alert channels, rules and what fired. Runs after `SIEM`: alerting reads the records it ingests.
 const ALERTS: &[&str] = &[alerts::MIGRATION, alerts::DAILY];
 
@@ -230,7 +230,12 @@ pub fn extend_with(
         );
     }
     if devices_on {
-        devices::register(&mut extension, db.clone(), host.keys.to_path_buf());
+        devices::register(
+            &mut extension,
+            db.clone(),
+            host.keys.to_path_buf(),
+            host.policy_now.clone(),
+        );
     }
     if members_on {
         members::register(&mut extension, db.clone(), host.keys.to_path_buf());
@@ -532,38 +537,12 @@ pub(crate) mod testing {
 
     /// A fresh database, as a connection string. `None` (and a line saying so) when GANTRY_TEST_DATABASE_URL is not
     /// set, so a machine without Postgres skips these tests; CI sets it.
-    pub async fn database(test: &str) -> Result<Option<String>, Error> {
-        let Ok(url) = std::env::var("GANTRY_TEST_DATABASE_URL") else {
-            eprintln!(
-                "skipped {test}: GANTRY_TEST_DATABASE_URL is not set. Set it to a Postgres connection string to run the enterprise tests."
-            );
-            return Ok(None);
-        };
-        use gantry_server::store::tokio_postgres;
-        let config: tokio_postgres::Config = url.parse()?;
-        let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
-        tokio::spawn(connection);
-        let name = format!("gantry_ent_{}_{test}", std::process::id());
-        client
-            .batch_execute(&format!("DROP DATABASE IF EXISTS {name}"))
-            .await?;
-        client
-            .batch_execute(&format!("CREATE DATABASE {name}"))
-            .await?;
-        let host = match config.get_hosts().first() {
-            Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
-            _ => "127.0.0.1".into(),
-        };
-        let password = config
-            .get_password()
-            .map(|p| String::from_utf8_lossy(p).to_string())
-            .unwrap_or_default();
-        Ok(Some(format!(
-            "host={host} port={} user={} password='{}' dbname={name} sslmode=disable",
-            config.get_ports().first().copied().unwrap_or(5432),
-            config.get_user().unwrap_or("postgres"),
-            password.replace('\\', "\\\\").replace('\'', "\\'"),
-        )))
+    pub async fn database(test: &str) -> Result<Option<gantry_server::store::TestDatabase>, Error> {
+        gantry_server::store::TestDatabase::create(&format!(
+            "gantry_ent_{}_{test}",
+            std::process::id()
+        ))
+        .await
     }
 
     pub struct Gateway {

@@ -44,10 +44,12 @@ Tokens can be managed without the console, with an admin key (`admin: true` in t
 | Call | Does |
 |---|---|
 | `GET /console/devices/tokens` | Lists tokens: `id`, `label`, `team`, `org`, `created_by`, `created_at`, `expires_at`, `status` (`active`, `expired`, `revoked`). Never the token |
-| `POST /console/devices/tokens` | Creates one from `{"label": "...", "team": "...", "days": 90}` (`team` and `days` optional). Answers `201` with `id`, `token` and `expires_at`, the only time the token is shown |
+| `POST /console/devices/tokens` | Creates one from `{"label": "...", "team": "...", "org": "...", "days": 90}` (`team`, `org` and `days` optional). Answers `201` with `id`, `token` and `expires_at`, the only time the token is shown |
 | `DELETE /console/devices/tokens/<id>` | Revokes it |
 
-An admin whose role is kept to an organization or to teams reaches only its own enrolment tokens, with an admin key as with a console session. A token belongs to the organization of the admin who created it (`org`, empty for an admin of the whole install). A role kept to teams creates tokens for those teams only, and not a token without a team (`403`, `outside_role`). A token outside the role is not listed, and revoking it answers `404`.
+An admin whose role is kept to an organization or to teams reaches only its own enrolment tokens, with an admin key as with a console session. A token belongs to the organization of the admin who created it (`org`, empty for an admin of the whole install). An admin of the whole install makes a token for one organization with `"org": "acme"` in the body of `POST /console/devices/tokens`; the organization must be one the policy lists under `orgs:`. A role kept to teams creates tokens for those teams only, and not a token without a team (`403`, `outside_role`). A token outside the role is not listed, and revoking it answers `404`.
+
+The same reach holds for what the role reads. `GET /console/devices/devices.json` and the Devices page hold the devices of the role's teams that enrolled with a token of the role's organization (each device carries `org`, its token's), and `GET /console/devices/mcp` holds the MCP servers of those devices, counted over them. Removing a device outside the role answers `404`. A decision on an MCP server holds for every device that has it, so such a role decides only on a server one of its own devices has: any other answers `403` with `outside_role`.
 
 | `GET /console/devices/devices.json` | Every device as last reported, the file `gantry audit coverage --devices` reads |
 | `DELETE /console/devices/devices/<device_id>` | Removes a device and its binding, so its next report binds it again. An admin record `device_removed` |
