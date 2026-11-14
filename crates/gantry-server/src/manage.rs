@@ -1217,7 +1217,7 @@ async fn usage(
         "" => "day",
         g => g,
     };
-    let names: Vec<&str> = insights::DIMENSIONS.iter().map(|d| d.name).collect();
+    let names: Vec<&str> = insights::dimensions().map(|d| d.name).collect();
     let time = matches!(group, "day" | "hour");
     if !time && !names.contains(&group) {
         return Err(bad(format!(

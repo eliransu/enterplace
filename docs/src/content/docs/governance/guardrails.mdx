@@ -51,6 +51,7 @@ Guardrails are defined once at the top level and named by rules. A change applie
 | Custom | `regex`, `keywords` | Your patterns and word lists, inside Gantry, no network call. |
 | Vendor | `openai_moderation`, `presidio`, `lakera`, `bedrock_guardrail`, `azure_content_safety`, `azure_prompt_shield`, `llama_guard`, `model_armor` | Gantry calls the vendor's own API. No adapter needed. |
 | Webhook | `webhook` | Your service, speaking [Gantry's contract](/governance/guardrail-webhooks/). |
+| Events | `events` | Your service, sent the whole conversation as [typed events](/governance/plugin-events/) with a session and a turn: tool calls, tool results, reasoning, MCP calls. |
 
 ## Actions
 
@@ -631,6 +632,7 @@ A transcript is of speech already heard, so a `mask` there is recorded and not a
 
 <CardGrid>
 	<LinkCard title="Guardrail webhooks" href="/governance/guardrail-webhooks/" description="Connect your own guardrail service." />
+	<LinkCard title="Plugin events" href="/governance/plugin-events/" description="Follow agents: typed events with session and turn ids." />
 	<LinkCard title="Policy file" href="/governance/policy/" description="Where guardrails sit in the order of checks." />
 	<LinkCard title="Security model" href="/operations/security/" description="What guardrails do not catch." />
 </CardGrid>

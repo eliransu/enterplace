@@ -1,0 +1,504 @@
+---
+title: Plugin events
+description: Follow a whole agent conversation from your own service. Contract v2 sends typed events (prompts, answers, reasoning, tool calls, tool results, MCP calls) linked by session and turn, and obeys allow, block, mask and end-session verdicts.
+sidebar:
+  order: 7
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+An `events` guardrail sends your service the conversation as typed events: the system prompt, each user message, the model's answers and reasoning, the tools it was given, every tool call and tool result, MCP tool calls through the gateway, and realtime text. Each event carries a session id, a turn id and its place in the turn, so a security service can follow an agent from its first message to its last tool call and judge what it is trying to do.
+
+It is contract v2 of the [guardrail webhook](/governance/guardrail-webhooks/). Contract v1 (`type: webhook`) sends the text of one request and is unchanged. Use v1 to check text, v2 to follow agents.
+
+| | `webhook` (v1) | `events` (v2) |
+|---|---|---|
+| Sent | The text parts of one request or answer | Typed events, only the new ones of each call |
+| Linked by | `decision_id` | `session_id`, `turn_id`, `event_index`, `decision_id` |
+| Tool calls and results | Text only | `tool_call` with name and arguments, `tool_result` with name and call id |
+| Streaming | The whole text so far, per window | The window's new text, tokens held or not, then the whole answer as events |
+| Verdict | allow, block, mask | allow, block, mask per event, end the session |
+| Without waiting | No | `mode: observe`: queued, batched, retried, never on the request path |
+| Signed | No | Standard Webhooks |
+
+The same events reach every API Gantry serves, in one shape: OpenAI chat completions, the Responses API, Anthropic messages, Gemini's `generateContent`, and Bedrock Converse bodies.
+
+## Policy
+
+```yaml title="gantry.policy.yaml"
+guardrails:
+  - name: watcher
+    type: events
+    url: https://plugin.example.com/v2/events
+    mode: enforce
+    on_failure: fail_closed
+    timeout_ms: 800
+    stream: { chunk_chars: 400, hold: true }
+    session_end_seconds: 3600
+    secret_env: PLUGIN_SIGNING_SECRET
+    headers_env:
+      Authorization: PLUGIN_TOKEN
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+    guardrails: [watcher]
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `url` | string | required | `https://`, or `http://` on `localhost`, `127.0.0.1` or `[::1]` only (a sidecar on the same machine). |
+| `mode` | string | `enforce` | `enforce` waits for the verdict and obeys it. `observe` queues the events and never delays or changes a request. |
+| `on_failure` | string | required with `enforce` | `fail_closed` or `fail_open`: what happens when the service gives no usable verdict in time. No default, because it is a security choice. |
+| `timeout_ms` | integer | `1000` | 1 to 30000. One call's whole round trip. |
+| `history` | boolean | `false` | Send the events before the new ones with every call, as `history`. |
+| `stream` | map | none | `{ chunk_chars: <n>, hold: true or false }`. See [Streamed answers](#streamed-answers). |
+| `session_end_seconds` | integer | `3600` | How long a session the plugin ended is refused. 1 to 604800. |
+| `secret_env` | string | none | The environment variable holding the secret each delivery is signed with. |
+| `headers_env` | map | none | Header name to the environment variable holding its value, as on a webhook guardrail. |
+| `shadow_until` | date | none | Until then verdicts are recorded as `shadow` and nothing is blocked, masked or ended. |
+| `batch_url` | string | none | `observe` only. Where batches go. Without it each envelope is its own POST to `url`. |
+| `queue` | integer | `1024` | `observe` only. The most envelopes waiting. One more is dropped and counted. |
+| `batch_size` | integer | `50` | `observe` only. The most envelopes in one batch. |
+| `retries` | integer | `2` | `observe` only. How many times a failed delivery is sent again, 0 to 10. |
+
+An events guardrail takes no `action` and no `on`: it reads requests and answers, and `mode` says whether it is obeyed. It runs after the rule's transforms, tool check and other guardrails, so it sees the request as it will be sent and the answer as the caller will get it.
+
+A rule with no events guardrail does none of this work: no body is parsed and no id is computed.
+
+## Session, turn and event ids
+
+No table of sessions is kept. Every id is computed from the request itself, so every replica gives one conversation the same ids, and a restart forgets nothing.
+
+### session_id
+
+The first of these that the request has names the session:
+
+| Order | Source | Recorded as |
+|---|---|---|
+| 1 | The `x-gantry-session` header | `x-gantry-session` |
+| 2 | The `x-session-id` header | `x-session-id` |
+| 3 | Claude Code: the `x-claude-code-session-id` header, or the session inside `metadata.user_id` (`..._session_<id>`, or JSON with `session_id`) | `claude_code` |
+| 4 | Codex: the `session_id` header, or `conversation_id` | `codex` |
+| 5 | OpenAI's `prompt_cache_key` in the body | `prompt_cache_key` |
+| 6 | Anthropic's `metadata.user_id`, with the first user message | `metadata.user_id` |
+| 7 | OpenAI's `user`, with the first user message | `user` |
+| 8 | The caller's key and the first user message | `first_message` |
+
+The value is hashed together with the person, and the id is `ses_` and 24 hex characters. A session id a client treats as a secret is never passed on, and two people who send the same value are two sessions. Sources 6 and 7 name an end user, not a conversation, so the first user message is hashed in: each conversation of that user is its own session.
+
+<Aside type="tip">
+An agent you write should send `x-gantry-session` with an id of its own for the run. Source 8 works with no change to the client, and gives one session to two conversations of the same key that open with the same words. A Responses API client that chains calls with `previous_response_id` sends no history, so it needs `x-gantry-session` (or `prompt_cache_key`) to stay in one session.
+</Aside>
+
+`x-gantry-session`, `x-gantry-turn`, `x-gantry-application` and `x-gantry-application-intent` are Gantry's own and are not sent to the provider.
+
+### turn_id
+
+A turn starts at each user message that carries no tool result, and holds everything up to the next one: the model's answers, its tool calls, the tool results the client sends back. An agent loop of five model calls after one question is one turn.
+
+`turn_id` is `turn_` and 16 hex characters, from the session, the number of the turn in the request's history (`turn_index`, from 1) and the text of the user message that opened it. Every call of the turn computes the same id. Send `x-gantry-turn: <your id>` to name the turn yourself: needed with `previous_response_id`, and to put an MCP tool call in the turn of the model call that asked for it.
+
+### event_index and event_id
+
+`event_index` is the event's place in its turn, from 0. The system prompt and the tool definitions lead every turn (indexes 0 and 1 when both exist), then the user message, then each answer event and tool result in order. An answer's events continue where its request's stopped.
+
+`event_id` is `evt_` and 24 hex characters, from the turn, the index, the kind and the content. The same event sent twice has the same id, so a service can drop repeats. An index is as Gantry saw the turn in that call: a client that leaves reasoning out of the history it sends back shifts later indexes by one, so join on `event_id` or `call_id`, and order by arrival.
+
+### Only what is new
+
+Each call's `events` are the ones since the model last answered:
+
+| Call | Request `events` | Answer `events` |
+|---|---|---|
+| The user asks | `system_prompt`, `tool_definitions`, `user_message` | `tool_call` |
+| The client sends the tool's result | `tool_result` | `assistant_message`, `last_in_turn: true` |
+| The user asks again | `system_prompt`, `tool_definitions`, `user_message` (a new `turn_id`) | ... |
+
+With `history: true`, each call also carries every event before the new ones, oldest first, in `history`, each with the `turn_id` and `event_id` it had when it was new.
+
+## The envelope
+
+Gantry sends `POST <url>` with `Content-Type: application/json`. It sends only the headers `headers_env` names, the signature headers, and none of the caller's.
+
+```json
+{
+  "contract": 2,
+  "guardrail": "watcher",
+  "mode": "enforce",
+  "phase": "request",
+  "session_id": "ses_5c1f0e9a7b3d4f6a8c2e1b0d",
+  "turn_id": "turn_9a4c2e7f1b3d5a60",
+  "turn_index": 1,
+  "decision_id": "01JD3X6Q8M2T4V9W0Y1Z3A5B7C",
+  "person": "maya.cohen",
+  "team": "payments",
+  "org": "acme",
+  "customer": "globex",
+  "tags": ["support"],
+  "model": "gpt-4o-mini",
+  "provider": "openai",
+  "route": "/v1/chat/completions",
+  "user_agent": "claude-cli/2.1.0",
+  "application": { "name": "support-bot", "intent": "Answers billing questions. Never moves money." },
+  "events": [],
+  "history": []
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `contract` | integer | `2`. |
+| `guardrail` | string | The guardrail's name in the policy, so one service can serve several. |
+| `mode` | string | `enforce` or `observe`. In `observe` the answer's body is not read. |
+| `phase` | string | `request`, `answer`, `stream` (a window of a streamed answer), `mcp` or `realtime`. |
+| `session_id`, `turn_id`, `turn_index` | | See above. `turn_index` is 0 for MCP calls and requests with no user message. |
+| `decision_id` | string | The request's id in Gantry's audit log. A request and its answer share it. |
+| `person`, `team` | string | Who sent the request. |
+| `org`, `customer`, `tags` | | Present when the caller has them. |
+| `model`, `provider`, `route` | string | The model the caller asked for, the provider it goes to, and the route it came in on. |
+| `user_agent` | string | The caller's `User-Agent`, when it sent one. |
+| `application` | object | Present when the request has one. See [Applications](#applications). |
+| `events` | list | The new events. |
+| `history` | list | With `history: true`: the events before them. |
+
+### Event kinds
+
+Every event has these fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `event_id` | string | See above. |
+| `event_index` | integer | Its place in the turn. |
+| `turn_id` | string | Its turn. In `history`, the turn it belonged to. |
+| `kind` | string | One of the kinds below. |
+| `last_in_turn` | boolean | `true` on the model's last message of a turn: it called no tool, so the turn is over. |
+
+`system_prompt`: the system prompt or instructions, whichever field the API holds them in (`system`, `instructions`, `systemInstruction`, or `system` and `developer` messages). Several parts are joined with a line break.
+
+```json
+{ "event_id": "evt_1f0e9a7b3d4f6a8c2e1b0d5c", "event_index": 0, "turn_id": "turn_9a4c2e7f1b3d5a60", "kind": "system_prompt", "last_in_turn": false,
+  "content": "You are a support assistant." }
+```
+
+`tool_definitions`: the tools the request declares, each as `name`, `description` and `parameters` (its JSON schema), whichever API declared them.
+
+```json
+{ "event_id": "evt_...", "event_index": 1, "turn_id": "turn_...", "kind": "tool_definitions", "last_in_turn": false,
+  "tools": [ { "name": "get_weather", "description": "The weather in a city", "parameters": { "type": "object", "properties": { "city": { "type": "string" } } } } ] }
+```
+
+`user_message`: a user message's text. Images and files are not sent.
+
+```json
+{ "event_id": "evt_...", "event_index": 2, "turn_id": "turn_...", "kind": "user_message", "last_in_turn": false,
+  "content": "What is the weather in Paris?" }
+```
+
+`assistant_message`: the model's text.
+
+```json
+{ "event_id": "evt_...", "event_index": 5, "turn_id": "turn_...", "kind": "assistant_message", "last_in_turn": true,
+  "content": "It is 18C in Paris." }
+```
+
+`reasoning`: the model's reasoning, where the provider returns it: Anthropic `thinking` blocks, Gemini thought parts, Responses reasoning summaries, `reasoning_content`.
+
+```json
+{ "event_id": "evt_...", "event_index": 3, "turn_id": "turn_...", "kind": "reasoning", "last_in_turn": false,
+  "content": "The user wants the weather, so I should call the tool." }
+```
+
+`tool_call`: a tool the model asks for. `arguments` is JSON: providers that send a string of JSON are parsed, and a string that is not JSON is kept as a string.
+
+```json
+{ "event_id": "evt_...", "event_index": 3, "turn_id": "turn_...", "kind": "tool_call", "last_in_turn": false,
+  "name": "get_weather", "call_id": "call_1", "arguments": { "city": "Paris" } }
+```
+
+`tool_result`: what the client's tool returned, as the client sends it back. `name` is the tool of the call with the same `call_id`. A result the API holds as JSON (Gemini's `functionResponse`) is sent as its JSON text.
+
+```json
+{ "event_id": "evt_...", "event_index": 4, "turn_id": "turn_...", "kind": "tool_result", "last_in_turn": false,
+  "name": "get_weather", "call_id": "call_1", "content": "{\"temp\":\"18C\"}" }
+```
+
+`mcp_tool_call`: a tool call through the [MCP gateway](/governance/mcp-gateway/), before it is made. `phase` is `mcp`.
+
+```json
+{ "event_id": "evt_...", "event_index": 0, "turn_id": "turn_...", "kind": "mcp_tool_call", "last_in_turn": false,
+  "server": "github", "name": "create_issue", "arguments": { "title": "Rotate the staging key" } }
+```
+
+`mcp_tool_result`: that tool's result, before the caller gets it. Its text parts joined with a line break.
+
+```json
+{ "event_id": "evt_...", "event_index": 1, "turn_id": "turn_...", "kind": "mcp_tool_result", "last_in_turn": false,
+  "server": "github", "name": "create_issue", "content": "Created issue 412." }
+```
+
+`realtime_user_message` and `realtime_assistant_message`: a text of a [realtime session](/governance/guardrails/#realtime-sessions): the caller's text events and the transcripts. `phase` is `realtime`. The connection is the session, and each text of the caller's starts a turn.
+
+```json
+{ "event_id": "evt_...", "event_index": 0, "turn_id": "turn_...", "kind": "realtime_user_message", "last_in_turn": false,
+  "content": "Book me a table for two." }
+```
+
+A window of a streamed answer is an `assistant_message` with `partial: true`:
+
+```json
+{ "event_id": "evt_...", "event_index": 3, "turn_id": "turn_...", "kind": "assistant_message", "last_in_turn": false,
+  "content": "the text since the window before", "partial": true, "window": 2 }
+```
+
+## The verdict
+
+Answer with status 200 and this JSON, within `timeout_ms`:
+
+```json
+{
+  "action": "mask",
+  "reason": "a card number in a tool result",
+  "findings": [ { "kind": "credit_card", "event": 4, "severity": "high" } ],
+  "masked": [ { "event": 4, "content": "card [CARD], declined for insufficient funds" } ],
+  "session_action": "end"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `action` | string | yes | `allow`, `block` or `mask`. |
+| `reason` | string | no | One line, at most 500 characters. Checked, then neither shown to the caller nor recorded, because it may quote the conversation. Keep it for your own logs. |
+| `findings` | list | no | `kind` is 1 to 64 letters, digits, `.`, `-` or `_`, and is written to the audit record, so it must never hold matched text. `event` is the `event_index` of the event it is about. `severity` is `low`, `medium`, `high` or `critical`. |
+| `masked` | list | with `mask` | One entry per event to change: `event` (its `event_index`) and `content` (the new text), or `arguments` (the new arguments as JSON) for a `tool_call` or `mcp_tool_call`. Refused with any other action. |
+| `session_action` | string | no | `end`: refuse the session's next requests for `session_end_seconds`. |
+
+Unknown fields are refused, so a misspelled field fails loudly.
+
+### What Gantry does
+
+| Verdict | On a request | On an answer | Recorded action |
+|---|---|---|---|
+| `allow` | Forwards it. | Returns it. | `warn`, for any findings |
+| `block` | Refuses it with `guardrail_blocked` (403). The provider is not called. | Withholds it and answers `guardrail_blocked` (403). A tool call in it never reaches the caller. | `block` |
+| `mask` | Forwards the request with each masked event rewritten in place. | Returns the answer with the masked text or arguments. | `mask` |
+
+The refusal names the guardrail and the finding kinds, never the `reason`: `Guardrail "watcher" refused this request: the plugin found blocked_tool (1). ...`.
+
+What can be masked: `system_prompt`, `user_message`, `tool_result` and realtime text in a request; `assistant_message`, `reasoning` and a `tool_call`'s `arguments` in a whole answer; an MCP call's `arguments` and an MCP result's `content`. Tool definitions and windows of a streamed answer cannot. Where an event's text came from several text blocks, the masked text is written to the first and the others become `[masked]`. Where the provider holds JSON (a Gemini function response), the masked content must be JSON of the same type. A mask that cannot be written refuses the request (502): the unmasked text is never what goes on.
+
+`session_action: end` takes effect with any action, in `enforce` mode. The session's next requests, on the model routes and through the MCP gateway, are refused with `session_ended` (403) and the provider is not called, until `session_end_seconds` have passed. With a [store](/operations/store/), every replica refuses it.
+
+When a rule has several events guardrails they are asked in order, the first block ends the asking, and each sees the events as they were sent, not as an earlier plugin masked them.
+
+### Failures
+
+These count as a failure of the service, and `on_failure` applies: a status other than 2xx, no whole answer within `timeout_ms`, a service that cannot be reached, a verdict that does not fit the contract. `fail_closed` refuses with `guardrail_blocked` and a message saying the guardrail could not check it. `fail_open` goes on, recorded with kind `unavailable` and action `skipped`. Gantry logs the cause for the operator, for example:
+
+```text
+unknown variant 'deny', expected one of 'allow', 'block', 'mask'
+the answer says mask and has no masked
+a finding points at event 9, and the events sent had the indexes 0, 1, 2
+masked for event 3 (tool_call): a tool call is masked with "arguments" (its new arguments as JSON) and no "content"
+masked for event 1 (tool_definitions): tool definitions cannot be masked; block the request, or allow it
+```
+
+## Modes
+
+### enforce
+
+Gantry waits for the verdict at each point: before the request is sent, before a whole answer is returned, at each window of a streamed answer and at its end, before an MCP tool call is made and before its result is returned, and at each realtime text.
+
+### observe
+
+Nothing waits. Each envelope goes to a bounded queue per guardrail, and a background task sends them: `batch_size` at a time to `batch_url` as one POST, or one POST each to `url` when there is no `batch_url`. A failed delivery is sent again up to `retries` times, 200 ms apart and doubling. When the queue holds `queue` envelopes, the next is dropped.
+
+The batch body:
+
+```json
+{ "contract": 2, "batch": [ { "contract": 2, "guardrail": "watcher", "mode": "observe", "phase": "request", "...": "..." } ] }
+```
+
+Any 2xx answer is a delivery; its body is not read. Order within a session is the order of arrival, and a retry can deliver late, so order by `turn_index` and `event_index`.
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `gantry_events_dropped_total` | `guardrail` | Envelopes dropped because the queue was full. Alert on any increase. |
+| `gantry_events_delivered_total` | `guardrail`, `outcome` | Envelopes `sent`, or `failed` after the last retry. |
+
+```yaml title="gantry.policy.yaml"
+guardrails:
+  - name: recorder
+    type: events
+    url: https://plugin.example.com/v2/events
+    mode: observe
+    batch_url: https://plugin.example.com/v2/batch
+    batch_size: 100
+    queue: 5000
+    retries: 3
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+    guardrails: [recorder]
+```
+
+### shadow_until, and the policy's observe mode
+
+`shadow_until` on an `enforce` guardrail, and `mode: observe` on the whole policy, still wait for each verdict and record it, with action `shadow`, and block, mask and end nothing. Use them to see what a plugin would do before it does it; use the guardrail's own `mode: observe` when the plugin must never be on the request path.
+
+## Streamed answers
+
+Without `stream`, a streamed answer goes to the caller as it comes, and its events are sent when it ends. A block then can only end the stream with an error event after the text.
+
+With `stream: { chunk_chars: <n> }`, every `n` characters of the model's text are sent as a `partial` `assistant_message` in an envelope with `phase: stream`, holding the text since the window before. When the stream ends, the whole answer follows as events in an envelope with `phase: answer`: the full `assistant_message` (with `last_in_turn`), its `reasoning`, its `tool_call`s.
+
+| `hold` | The caller's tokens | A block |
+|---|---|---|
+| `false` (default) | Go on at once. Windows are judged beside the stream. | Ends the stream where the verdict lands. Text before it was sent. |
+| `true` | Each window waits for its verdict. The end of the stream, tool calls included, waits for the last one. | Ends the stream before the blocked window. Blocked text and blocked tool calls never reach the caller. |
+
+A block ends the stream with an error event in the caller's API (`code: guardrail_blocked` on chat completions, `permission_error` on messages, a Google error on Gemini), and the provider's stream is dropped. A `mask` verdict ends a stream like a block, since text already sent cannot be rewritten. With `hold: true` the caller's first token waits for the first window, so choose `chunk_chars` for the delay you accept: 200 to 500 is a sentence or two.
+
+## Applications
+
+An application is a name and what it is for, in its owner's words. A plugin judges what a conversation does against that purpose.
+
+```yaml title="gantry.policy.yaml"
+applications:
+  - name: support-bot
+    intent: Answers billing questions for customers. Never moves money.
+guardrails:
+  - name: watcher
+    type: events
+    url: https://plugin.example.com/v2/events
+    on_failure: fail_closed
+rules:
+  - name: support
+    principals: { team: support }
+    models: ["*"]
+    guardrails: [watcher]
+    applications: [support-bot]
+```
+
+| A rule's `applications` | A request with no header | A request with `x-gantry-application: <name>` |
+|---|---|---|
+| absent | No `application`. | Refused with `application_not_allowed` (403). |
+| one name | That application, with the policy's `intent`. | That name: the same. Another: refused. |
+| several names | No `application`. | A listed name, with the policy's `intent`. Another: refused. |
+| includes `"*"` | No `application`. | Any name. A listed one has the policy's `intent`; another has the caller's `x-gantry-application-intent`. |
+
+The policy's `intent` always wins over the caller's for a listed application, so a caller cannot restate what a governed application is for. An `intent` is one line of at most 500 characters.
+
+## Signed deliveries
+
+With `secret_env`, each POST is signed the [Standard Webhooks](https://www.standardwebhooks.com/) way, as [alert webhooks](/operations/alerting/) are:
+
+| Header | Value |
+|---|---|
+| `webhook-id` | `env_` and 24 hex characters, the same for the same events of the same decision; `bat_...` for a batch. Sent with or without a secret. |
+| `webhook-timestamp` | Seconds since 1970. |
+| `webhook-signature` | `v1,` and the base64 HMAC-SHA256 of `<webhook-id>.<webhook-timestamp>.<raw body>` under the secret: the base64-decoded part after `whsec_`, or the secret's own bytes when it has no such prefix. |
+
+Any Standard Webhooks library verifies it. Reject a timestamp more than five minutes old, and answer a bad signature with a non-2xx status so `on_failure` applies. `gantry serve` does not start while a variable `secret_env` or `headers_env` names is unset.
+
+## What is recorded
+
+Findings are recorded by kind, per event, and never with content.
+
+- The request record and its `usage` record gain `session` and `turn`.
+- The request record gains `events`, one entry per events guardrail: `guardrail`, `mode`, `events` (how many were sent), `action` (`allow`, `block`, `mask`; `queued` or `dropped` in observe mode; `session_ended` for a refused session), `findings` (each with `kind`, `event_index`, `event_kind`, `event_id`, `severity`), `session_action`, `obeyed: false` in a shadow period, `unavailable: true` when the service failed.
+- Its `guardrails` list gains one entry per kind found, with detector `events`, as every guardrail writes them, so the request log, `gantry_guardrail_findings_total` and alert rules count them.
+- An answer's verdict is an `answer_guardrails` record with the same `events`, `session` and `turn`.
+- MCP calls carry `session`, `turn` and `events` on their decision record and their `mcp_result` record.
+- With `audit: { per_org: true }`, each record goes to its organization's chain.
+
+The request log filters and groups by both ids. The requests of one session, and its turns with their cost and count:
+
+```sh
+curl -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+  "http://127.0.0.1:8080/admin/usage?session=ses_5c1f0e9a7b3d4f6a8c2e1b0d&group_by=turn"
+```
+
+## In five minutes
+
+The reference plugin in `examples/plugins/event-printer` is one Python file with no dependencies. It prints each event and blocks any tool call whose tool you name.
+
+<Steps>
+
+1. Start the plugin, blocking a tool called `delete_file`:
+
+   ```sh
+   python3 examples/plugins/event-printer/plugin.py --port 9200 --block delete_file
+   ```
+
+2. Point an events guardrail at it:
+
+   ```yaml title="gantry.policy.yaml"
+   version: 1
+   providers:
+     - name: openai
+       kind: openai
+       url: https://api.openai.com/v1
+       key_env: OPENAI_API_KEY
+       models: [gpt-4o-mini]
+   guardrails:
+     - name: watcher
+       type: events
+       url: http://127.0.0.1:9200/events
+       on_failure: fail_closed
+   rules:
+     - name: everyone
+       principals: { any: true }
+       models: [gpt-4o-mini]
+       guardrails: [watcher]
+   ```
+
+3. Send a request that offers the model the tool and asks for it:
+
+   ```sh
+   curl http://127.0.0.1:8080/v1/chat/completions \
+     -H "Authorization: Bearer $GANTRY_KEY" -H "x-gantry-session: demo-1" \
+     -d '{"model": "gpt-4o-mini",
+          "messages": [{"role": "user", "content": "Delete notes.txt"}],
+          "tools": [{"type": "function", "function": {"name": "delete_file",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}}]}'
+   ```
+
+4. The plugin prints the turn: the session, the turn, each event's index, the phase and the kind.
+
+   ```text
+   ses_9d2a41c07be35f18a6c4d0e2 turn_4b1e0c9a7d2f3a58 #0 request  tool_definitions   'delete_file'
+   ses_9d2a41c07be35f18a6c4d0e2 turn_4b1e0c9a7d2f3a58 #1 request  user_message       'Delete notes.txt'
+   ses_9d2a41c07be35f18a6c4d0e2 turn_4b1e0c9a7d2f3a58 #2 answer   tool_call          'delete_file({"path": "notes.txt"})'
+   ```
+
+5. The caller gets a refusal instead of the tool call, and the audit log holds the finding by kind:
+
+   ```json
+   { "error": { "message": "Refused (guardrail_blocked): Guardrail \"watcher\" refused the model's answer: the plugin found blocked_tool (1). Ask in another way, or ask a Gantry admin about the guardrail. The answer was produced and is counted in usage. Decision 01JD3X6Q8M2T4V9W0Y1Z3A5B7C.", "type": "gantry_error", "code": "guardrail_blocked", "decision": "01JD3X6Q8M2T4V9W0Y1Z3A5B7C" } }
+   ```
+
+6. Set `PLUGIN_SECRET` for the plugin and `secret_env` on the guardrail to the same secret, and the plugin refuses any delivery that is not signed by your gateway.
+
+</Steps>
+
+## A plugin inside the binary
+
+A binary that embeds Gantry sets `Extension::events` to an `EventsPlugin`: the same envelope (`gantry_core::events::Envelope`) and the same verdict, in process, with no HTTP between. It is asked for every request a rule allows, with the guardrail name `extension`, after the rule's own events guardrails. Its `mode`, `stream`, `history`, `timeout` and `session_end` are methods with the defaults above; a plugin that does not answer within its `timeout` fails closed. This is how a vendor adapter or a licensed feature is built in.
+
+## Limits
+
+- Images, audio and files are not events. Their text parts are.
+- Routes other than chat completions, messages, Responses and `generateContent` (embeddings, images, audio, batches, passthrough) send no events. Use a [webhook guardrail](/governance/guardrail-webhooks/) for their text.
+- A realtime session sends events for its text and transcripts when its rule has at least one guardrail; the binary's own plugin alone does not see realtime text.
+- With a store, a rule with an enforcing events guardrail reads the store once per request, to learn whether another replica ended the session.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Guardrail webhooks" href="/governance/guardrail-webhooks/" description="Contract v1: the text of one request." />
+	<LinkCard title="Guardrails" href="/governance/guardrails/" description="Built-in detectors, vendors, actions and answer checks." />
+	<LinkCard title="MCP gateway" href="/governance/mcp-gateway/" description="Where MCP tool call events come from." />
+	<LinkCard title="Audit records" href="/reference/audit-records/" description="The records the ids and findings are written to." />
+</CardGrid>

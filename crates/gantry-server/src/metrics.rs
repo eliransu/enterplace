@@ -51,6 +51,9 @@ pub(crate) struct Metrics {
     findings: Mutex<BTreeMap<String, u64>>,
     /// (outcome): answer cache lookups, `hit` or `miss`.
     cache: Mutex<BTreeMap<&'static str, u64>>,
+    /// (guardrail, outcome): envelopes of events guardrails, `sent`, `failed` or `dropped` (observe mode's queue
+    /// was full).
+    events: Mutex<BTreeMap<(String, &'static str), u64>>,
 }
 
 /// Which budget scopes `gantry_budget_remaining_usd` shows, from `GANTRY_METRICS_BUDGET_SCOPES` (comma-separated
@@ -116,6 +119,13 @@ impl Metrics {
         *locked(&self.key_switches)
             .entry((provider.to_string(), status.to_string()))
             .or_default() += 1;
+    }
+
+    /// Counts `n` envelopes of an events guardrail: `sent`, `failed` or `dropped`.
+    pub(crate) fn events(&self, guardrail: &str, outcome: &'static str, n: u64) {
+        *locked(&self.events)
+            .entry((guardrail.to_string(), outcome))
+            .or_default() += n;
     }
 
     pub(crate) fn overhead(&self, took: Duration) {
@@ -286,6 +296,26 @@ impl Metrics {
                 label(status)
             );
         }
+        let events = locked(&self.events);
+        if !events.is_empty() {
+            out.push_str("# HELP gantry_events_delivered_total Envelopes of events guardrails delivered to their plugin, by guardrail and outcome: sent or failed.\n# TYPE gantry_events_delivered_total counter\n");
+            for ((guardrail, outcome), n) in events.iter().filter(|((_, o), _)| *o != "dropped") {
+                let _ = writeln!(
+                    out,
+                    "gantry_events_delivered_total{{guardrail=\"{}\",outcome=\"{outcome}\"}} {n}",
+                    label(guardrail)
+                );
+            }
+            out.push_str("# HELP gantry_events_dropped_total Envelopes an observing events guardrail dropped because its queue was full, by guardrail.\n# TYPE gantry_events_dropped_total counter\n");
+            for ((guardrail, _), n) in events.iter().filter(|((_, o), _)| *o == "dropped") {
+                let _ = writeln!(
+                    out,
+                    "gantry_events_dropped_total{{guardrail=\"{}\"}} {n}",
+                    label(guardrail)
+                );
+            }
+        }
+        drop(events);
         let secrets = gantry_core::secrets::counts();
         if !secrets.is_empty() {
             out.push_str("# HELP gantry_secret_rotations_total Secrets read from a secret manager that changed on a refresh, by manager.\n# TYPE gantry_secret_rotations_total counter\n");

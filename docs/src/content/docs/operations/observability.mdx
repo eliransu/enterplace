@@ -45,6 +45,8 @@ Metrics: http://127.0.0.1:9464/metrics
 | `gantry_tokens_total` | counter | `team`, `model`, `kind` | Tokens providers reported: `input`, `output`, `cached` (read from a prompt cache) or `cache_write`. Answers from Gantry's cache add none |
 | `gantry_request_seconds` | histogram | `model` | Time from a request reaching Gantry to the end of its answer, streamed or not |
 | `gantry_first_byte_seconds` | histogram | `provider` | Time from a request reaching Gantry to its answer's headers leaving for the caller |
+| `gantry_events_delivered_total` | counter | `guardrail`, `outcome` | Envelopes of [events guardrails](/governance/plugin-events/) delivered to their plugin: `sent` or `failed` |
+| `gantry_events_dropped_total` | counter | `guardrail` | Envelopes an observing events guardrail dropped because its queue was full |
 | `gantry_guardrail_findings_total` | counter | `kind` | What guardrails found on requests, by detector kind, such as `email_address`; `unavailable` when a guardrail service could not be reached |
 | `gantry_cache_lookups_total` | counter | `outcome` | Answer cache lookups of rules with `cache:`: `hit` or `miss` |
 | `gantry_deployment_up` | gauge | `deployment` | `1` while a deployment of an alias (`provider/model`) takes requests and its last [health probe](/routing/health-probes/), if it has one, got an answer; `0` while it cools down after failures or its probe fails |

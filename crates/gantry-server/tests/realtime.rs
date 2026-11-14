@@ -457,6 +457,76 @@ async fn guardrails_drop_a_blocked_text_event_and_end_the_session_on_a_blocked_t
     Ok(())
 }
 
+/// An events plugin (contract v2) gets each text of a realtime session as an event of one session, a turn per text
+/// of the caller's, and a text it blocks is dropped like one a guardrail blocks.
+#[tokio::test]
+async fn an_events_plugin_sees_realtime_text_as_events_of_one_session() -> Result<(), Error> {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let keep = seen.clone();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let plugin = listener.local_addr()?.port();
+    let app = Router::new().route(
+        "/events",
+        axum::routing::post(move |body: axum::body::Bytes| {
+            let keep = keep.clone();
+            async move {
+                let sent: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                let block = sent["events"][0]["content"]
+                    .as_str()
+                    .is_some_and(|c| c.contains("forbidden"));
+                if let Ok(mut all) = keep.lock() {
+                    all.push(sent);
+                }
+                let verdict = if block {
+                    r#"{"action":"block","findings":[{"kind":"off_purpose","event":0}]}"#
+                } else {
+                    r#"{"action":"allow"}"#
+                };
+                ([(header::CONTENT_TYPE, "application/json")], verdict)
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let top = format!(
+        "guardrails:\n  - name: watcher\n    type: events\n    url: http://127.0.0.1:{plugin}/events\n    on_failure: fail_closed\n"
+    );
+    let gw = gateway_with("events", &top, "    guardrails: [watcher]\n").await?;
+    let mut socket = connect(gw.port, "/v1/realtime?model=rt-model", DANA).await?;
+    socket.send(item("hello")).await?;
+    let said = next_text(&mut socket).await?.ok_or("no transcript")?;
+    assert!(said.contains("hello"), "{said}");
+    socket.send(item("a forbidden thing")).await?;
+    let error = next_text(&mut socket).await?.ok_or("no error event")?;
+    assert!(
+        error.contains("guardrail_blocked") && !error.contains("forbidden"),
+        "{error}"
+    );
+    let seen = seen.lock().map(|s| s.clone()).unwrap_or_default();
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    let kinds: Vec<&Value> = seen.iter().map(|e| &e["events"][0]["kind"]).collect();
+    assert_eq!(
+        kinds,
+        [
+            "realtime_user_message",
+            "realtime_assistant_message",
+            "realtime_user_message"
+        ]
+    );
+    assert!(seen.iter().all(|e| e["phase"] == "realtime"));
+    assert!(
+        seen.iter()
+            .all(|e| e["session_id"] == seen[0]["session_id"])
+    );
+    // The transcript is in the turn the caller's text opened; the caller's next text opens another.
+    assert_eq!(seen[0]["turn_id"], seen[1]["turn_id"]);
+    assert_eq!(seen[1]["events"][0]["event_index"], 1);
+    assert_ne!(seen[2]["turn_id"], seen[0]["turn_id"]);
+    assert_eq!(seen[2]["turn_index"], 2);
+    Ok(())
+}
+
 /// A forward proxy that takes HTTP CONNECT and records each request head, then joins the two ends.
 async fn connect_proxy() -> Result<(u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>), Error> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

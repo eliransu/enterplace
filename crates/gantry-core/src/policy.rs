@@ -832,6 +832,9 @@ pub struct Rule {
     pub tags: Vec<String>,
     /// End customers a caller may name in `x-gantry-customer`. `*` allows any. Empty allows none.
     pub customers: Vec<String>,
+    /// The applications its callers run as. One alone is every request's; of several, or with `*`, the caller names
+    /// its own in `x-gantry-application`. Sent to events plugins with its stated purpose.
+    pub applications: Vec<crate::events::Application>,
     /// What the rule set over a profile it includes, for the explanation: `rate.tpm 100000 of profile "standard"`.
     pub overrides: Vec<String>,
     /// Until this UTC date or time what the rule would refuse (its models, rate, tpm, parallel, regions and budgets)
@@ -909,6 +912,36 @@ impl Rule {
     /// Whether a caller under this rule may send `tag` in `x-gantry-tags`.
     pub fn accepts_tag(&self, tag: &str) -> bool {
         self.tags.iter().any(|t| t == "*" || t == tag)
+    }
+
+    /// The application of a request under this rule, from what the caller names in `x-gantry-application` and
+    /// states in `x-gantry-application-intent`. A name the rule lists takes the policy's intent over the caller's;
+    /// `*` takes any name with the caller's intent; one listed application needs no header. `Err` names an
+    /// application the rule does not list.
+    pub fn application(
+        &self,
+        named: Option<&str>,
+        intent: Option<&str>,
+    ) -> Result<Option<crate::events::Application>, String> {
+        let Some(named) = named else {
+            return Ok(match self.applications.as_slice() {
+                [only] if only.name != "*" => Some(only.clone()),
+                _ => None,
+            });
+        };
+        if let Some(listed) = self.applications.iter().find(|a| a.name == named) {
+            return Ok(Some(crate::events::Application {
+                name: listed.name.clone(),
+                intent: listed.intent.clone().or_else(|| intent.map(str::to_string)),
+            }));
+        }
+        if self.applications.iter().any(|a| a.name == "*") {
+            return Ok(Some(crate::events::Application {
+                name: named.to_string(),
+                intent: intent.map(str::to_string),
+            }));
+        }
+        Err(named.to_string())
     }
 
     /// Whether a caller under this rule may name `customer` in `x-gantry-customer`.
@@ -1275,6 +1308,7 @@ pub static OBSERVED: std::sync::LazyLock<Rule> = std::sync::LazyLock::new(|| Rul
     profiles: Vec::new(),
     tags: Vec::new(),
     customers: Vec::new(),
+    applications: Vec::new(),
     overrides: Vec::new(),
     shadow_until: None,
 });
@@ -1469,6 +1503,7 @@ impl Policy {
             profiles: Vec::new(),
             tags: Vec::new(),
             customers: Vec::new(),
+            applications: Vec::new(),
             overrides: Vec::new(),
             shadow_until: None,
         });

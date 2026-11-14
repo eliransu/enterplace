@@ -8,6 +8,7 @@ pub mod config;
 pub mod converse;
 pub mod coverage;
 pub mod embed;
+pub mod events;
 pub mod eventstream;
 pub mod fntools;
 pub mod gemini;

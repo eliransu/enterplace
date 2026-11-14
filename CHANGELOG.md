@@ -7,6 +7,33 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Plugin events: guardrail contract v2
+
+- A new guardrail type, `events`, sends an outside service the whole conversation as typed events: `system_prompt`,
+  `user_message`, `assistant_message`, `reasoning`, `tool_definitions`, `tool_call`, `tool_result`, `mcp_tool_call`,
+  `mcp_tool_result` and realtime text, the same on chat completions, the Responses API, Anthropic messages, Gemini
+  and Bedrock Converse bodies. Each event carries a `session_id`, a `turn_id`, an `event_index` and a deterministic
+  `event_id`, computed from the request alone, so every replica agrees. Only the new events of a call are sent;
+  `history: true` adds the earlier ones. Contract v1 (`type: webhook`) is unchanged.
+- `mode: enforce` waits for the verdict on requests, answers, streamed windows, MCP tool calls and results, and
+  realtime text: `allow`, `block`, `mask` (per event: text, or a tool call's arguments) and `session_action: end`,
+  which refuses the session with `session_ended` for `session_end_seconds`, on every replica with a store.
+  `mode: observe` queues envelopes and sends them in the background, batched (`batch_url`) and retried, and never
+  delays a request; a full queue drops and counts in `gantry_events_dropped_total`.
+- `stream: { chunk_chars, hold }` sends a streamed answer's text in windows; with `hold: true` the caller's tokens
+  wait for each window's verdict, and a block ends the stream with the caller's API's error event.
+- Deliveries are signed the Standard Webhooks way with `secret_env`. `on_failure`, `timeout_ms`, `headers_env` and
+  `shadow_until` work as on other guardrails.
+- `applications:` in the policy and on a rule (or `x-gantry-application` and `x-gantry-application-intent`, where
+  the rule allows) give each envelope the application's name and stated purpose. New refusal code:
+  `application_not_allowed`.
+- Decision and usage records carry `session` and `turn`, and an `events` entry per plugin with findings by kind,
+  event kind, index and severity, never content. `GET /admin/usage` and the request log filter by `session` and
+  group by `turn`.
+- A binary that embeds Gantry sets `Extension::events` to judge the same envelopes in process.
+- `examples/plugins/event-printer`: a reference plugin in one Python file that prints the event stream and blocks
+  a tool call by name. Docs: governance/plugin-events.
+
 ### Fixed: a parallel place comes back with the answer
 
 - A request's place under a `parallel` limit (key or `limits:`) is given back as soon as its answer has ended, not

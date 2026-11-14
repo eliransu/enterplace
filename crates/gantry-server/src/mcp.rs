@@ -308,6 +308,8 @@ struct Asked {
     connect: Option<String>,
     /// What observe mode or the rule's shadow period let through.
     would_refuse: Vec<Value>,
+    /// The events plugins of the caller's rule and the call's session and turn, kept for the tool's result.
+    plugins: Option<Arc<(Vec<Guardrail>, gantry_core::events::Context)>>,
 }
 
 async fn post(mcp: &Shared, bundle: Option<String>, request: Request, decision: &str) -> Response {
@@ -817,6 +819,77 @@ async fn answer(
             }
         }
     }
+    // Events plugins see the call as it will be sent: the tool, and its arguments after the guardrails.
+    if crate::events::active(&mcp.app, &guards) {
+        use gantry_core::events as core;
+        let plugins = crate::events::guards_for(&mcp.app, &guards);
+        let context =
+            crate::events::context_of(&person, &parts.headers, "mcp", decision, "/mcp", "");
+        asked
+            .extra
+            .insert("session".into(), context.session_id.as_str().into());
+        asked
+            .extra
+            .insert("turn".into(), context.turn_id.as_str().into());
+        if let Some(refusal) = crate::events::refused_session(&mcp.app, &plugins, &context).await {
+            return Err(refusal);
+        }
+        let mut call = core::Event::mcp_call(
+            &server.name,
+            &own,
+            forwarded.get("arguments").cloned().unwrap_or(json!({})),
+        );
+        call.at = vec!["/arguments".into()];
+        let call = [call.placed(&context.turn_id, 0)];
+        let judged = crate::events::judge(
+            &mcp.app,
+            &plugins,
+            &context,
+            "mcp",
+            &call,
+            None,
+            "this tool call",
+        )
+        .await;
+        if observe {
+            asked
+                .would_refuse
+                .extend(crate::would_block(rule, &judged.audit));
+        }
+        if !judged.audit.is_empty() {
+            let mut found: Vec<Value> = asked
+                .extra
+                .get("guardrails")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            found.extend(judged.audit.iter().map(|entry| json!(entry)));
+            asked.extra.insert("guardrails".into(), found.into());
+        }
+        asked.extra.insert("events".into(), judged.entries.into());
+        if let Some(blocked) = judged.blocked {
+            return Err(Refusal::new(
+                StatusCode::FORBIDDEN,
+                guard::BLOCKED_CODE,
+                format!("Refused: {}", blocked.message),
+            ));
+        }
+        if !judged.masks.is_empty() {
+            if let Some(params) = forwarded.as_object_mut() {
+                params.entry("arguments").or_insert_with(|| json!({}));
+            }
+            // Never forward the unmasked arguments because the masked ones could not be written.
+            core::apply_masks(&mut forwarded, &call, &judged.masks).map_err(|cause| {
+                eprintln!("gantry: decision {decision}: an events plugin's mask of an MCP tool call could not be written: {cause}");
+                Refusal::new(
+                    StatusCode::BAD_GATEWAY,
+                    guard::BLOCKED_CODE,
+                    "Refused: an events plugin masked this tool call's arguments, and its mask could not be written, so the call was not made. Tell your Gantry admin.",
+                )
+            })?;
+        }
+        asked.plugins = Some(Arc::new((plugins, context)));
+    }
     if tool_allowed(&rule.mcp.approve, &name) {
         let by = mcp
             .wait_for_approval(decision, asked, &forwarded, rule)
@@ -1203,6 +1276,63 @@ impl Mcp {
                         }
                     }
                 }
+            }
+        }
+        // Events plugins see the tool's result as the caller is about to get it.
+        if answer.get("error").is_none()
+            && let Some(kept) = &asked.plugins
+        {
+            use gantry_core::events as core;
+            let (plugins, context) = &**kept;
+            let mut text = Vec::new();
+            let mut at = Vec::new();
+            for (i, part) in answer["result"]["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                if let Some(piece) = part.get("text").and_then(Value::as_str) {
+                    text.push(piece.to_string());
+                    at.push(format!("/result/content/{i}/text"));
+                }
+            }
+            let tool = asked.item.as_ref().map_or("", |(_, name)| name.as_str());
+            let mut event = core::Event::mcp_result(&server, tool, text.join("\n"));
+            event.at = at;
+            let event = [event.placed(&context.turn_id, 1)];
+            let judged = crate::events::judge(
+                &self.app,
+                plugins,
+                context,
+                "mcp",
+                &event,
+                None,
+                "this tool's result",
+            )
+            .await;
+            if !judged.audit.is_empty() {
+                let mut found: Vec<Value> = outcome
+                    .get("guardrails")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                found.extend(judged.audit.iter().map(|entry| json!(entry)));
+                outcome.insert("guardrails".into(), found.into());
+            }
+            outcome.insert("events".into(), judged.entries.into());
+            let unwritten = judged.blocked.is_none()
+                && core::apply_masks(&mut answer, &event, &judged.masks).is_err();
+            if let Some(message) = judged
+                .blocked
+                .map(|b| b.message)
+                .or_else(|| unwritten.then(|| "An events plugin masked this tool's result, and its mask could not be written.".to_string()))
+            {
+                outcome.insert("outcome".into(), "guardrail_blocked".into());
+                return (
+                    json!({"jsonrpc": "2.0", "id": call_id, "error": {"code": REFUSED, "message": format!("Refused ({}): {message} The tool's result was not passed on. Decision {decision}.", guard::BLOCKED_CODE), "data": {"gantry_code": guard::BLOCKED_CODE, "decision": decision}}}),
+                    outcome,
+                );
             }
         }
         if let Some(answer) = answer.as_object_mut() {

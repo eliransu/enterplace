@@ -64,6 +64,8 @@ pub enum GuardType {
     /// Not a check: a service that rewrites the whole request or answer (docs/transform-webhook). Runs before every
     /// other guardrail of the rule, so the checks read what is really sent.
     Transform,
+    /// Contract v2 (events.rs): a plugin sent the conversation as typed events, with the session and the turn.
+    Events,
 }
 
 /// Which text a guardrail reads, as written in `on:`.
@@ -189,6 +191,30 @@ pub struct GuardrailFile {
     /// secrets: `gitleaks` reads with Gitleaks' default rule set in place of Gantry's own secrets detector.
     #[serde(default)]
     pub pack: Option<String>,
+    /// events: `enforce` (the default) or `observe`.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// events: send the events before the new ones with every call.
+    #[serde(default)]
+    pub history: Option<bool>,
+    /// events: a streamed answer's text is sent in windows.
+    #[serde(default)]
+    pub stream: Option<crate::events::Stream>,
+    /// events: how long a session the plugin ended is refused.
+    #[serde(default)]
+    pub session_end_seconds: Option<u64>,
+    /// events: the environment variable holding the secret deliveries are signed with.
+    #[serde(default)]
+    pub secret_env: Option<String>,
+    /// events, observe mode: where batches are sent, the queue's size, a batch's size and the retries.
+    #[serde(default)]
+    pub batch_url: Option<String>,
+    #[serde(default)]
+    pub queue: Option<u64>,
+    #[serde(default)]
+    pub batch_size: Option<u64>,
+    #[serde(default)]
+    pub retries: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -224,7 +250,20 @@ const RESERVED_HEADERS: &[&str] = &[
 pub fn unset_webhook_env(rules: &[crate::policy::Rule], set: &dyn Fn(&str) -> bool) -> Vec<String> {
     let mut missing = std::collections::BTreeSet::new();
     for guardrail in rules.iter().flat_map(|rule| &rule.guardrails) {
-        if let Check::Webhook(hook) | Check::Transform(hook) = &guardrail.check {
+        let hook = match &guardrail.check {
+            Check::Webhook(hook) | Check::Transform(hook) => Some(hook),
+            Check::Events(events) => {
+                if let Some(variable) = events.secret_env.as_ref().filter(|v| !set(v)) {
+                    missing.insert(format!(
+                        "guardrail \"{}\" signs its deliveries with the secret in the environment variable {variable}, which is not set. Set it (`export {variable}=...`) or remove secret_env.",
+                        guardrail.name
+                    ));
+                }
+                Some(&events.hook)
+            }
+            _ => None,
+        };
+        if let Some(hook) = hook {
             for (header, variable) in &hook.headers_env {
                 if !set(variable) {
                     missing.insert(format!(
@@ -259,6 +298,9 @@ pub enum Check {
     Webhook(Webhook),
     /// A `transform`: called with the whole body, answers with the body to use. The server runs these.
     Transform(Webhook),
+    /// An `events` plugin (contract v2). The server runs these, on its own path: it reads requests and answers
+    /// whatever `on` says.
+    Events(crate::events::Events),
 }
 
 /// A checked guardrail definition.
@@ -277,7 +319,10 @@ pub struct Guardrail {
 impl Guardrail {
     /// Whether it runs inside Gantry, with no call out.
     fn local(&self) -> bool {
-        !matches!(self.check, Check::Webhook(_) | Check::Transform(_))
+        !matches!(
+            self.check,
+            Check::Webhook(_) | Check::Transform(_) | Check::Events(_)
+        )
     }
 
     /// Whether it is still in its shadow period, read from the clock at each check.
@@ -300,7 +345,7 @@ impl Guardrail {
             Check::Gitleaks => gitleaks_findings(parts),
             Check::Pii => of(PII),
             Check::Custom(custom) => custom.scan(parts),
-            Check::Webhook(_) | Check::Transform(_) => Vec::new(),
+            Check::Webhook(_) | Check::Transform(_) | Check::Events(_) => Vec::new(),
         }
     }
 }
@@ -483,6 +528,14 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
     let mut out: Vec<Guardrail> = Vec::new();
     for def in defs {
         let name = &def.name;
+        if def.kind != GuardType::Events
+            && let Some(field) = crate::events::field_given(def)
+        {
+            errors.push(format!(
+                "guardrail \"{name}\": {field} belongs to an events guardrail. Remove it, or set type: events."
+            ));
+            continue;
+        }
         if !crate::config::valid_name(name) {
             errors.push(format!(
                 "guardrail \"{name}\": a guardrail name uses letters, digits, dots, dashes, underscores and @ only, at most 100 characters."
@@ -527,6 +580,47 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
                         }
                     },
                 }
+            }
+            GuardType::Events => {
+                // An observing plugin is never waited for, so it has nothing to fail open or closed.
+                let mut def = def.clone();
+                if def.on_failure.is_none()
+                    && matches!(
+                        crate::events::mode_of(&def),
+                        Ok(crate::events::Mode::Observe)
+                    )
+                {
+                    def.on_failure = Some(OnFailure::FailOpen);
+                }
+                match webhook(&def)
+                    .and_then(|hook| crate::events::checked(&def, hook, &checked_url))
+                {
+                    Ok(events) => {
+                        let shadow_ok = def
+                            .shadow_until
+                            .as_deref()
+                            .is_none_or(crate::config::valid_expiry);
+                        if !shadow_ok {
+                            errors.push(format!(
+                                "guardrail \"{name}\": shadow_until is not a UTC date or time. Write one, for example 2026-12-31 or 2026-12-31T18:00:00Z."
+                            ));
+                            continue;
+                        }
+                        out.push(Guardrail {
+                            name: name.clone(),
+                            action: crate::events::guard_action(events.mode),
+                            check: Check::Events(events),
+                            // Not on the text guardrails' path: the server gives events their own.
+                            on: On {
+                                request: false,
+                                answer: false,
+                            },
+                            shadow_until: def.shadow_until.clone(),
+                        });
+                    }
+                    Err(err) => errors.push(err),
+                }
+                continue;
             }
             GuardType::Transform => match webhook(def) {
                 Ok(hook) => Check::Transform(hook),
@@ -648,6 +742,7 @@ fn type_name(kind: GuardType) -> &'static str {
         GuardType::GuardrailsAi => "guardrails_ai",
         GuardType::Aporia => "aporia",
         GuardType::Transform => "transform",
+        GuardType::Events => "events",
     }
 }
 
@@ -2110,6 +2205,12 @@ pub fn backtest(guard: &Guardrail, samples: &[Sample]) -> Result<Backtest, Strin
                 guard.name
             ));
         }
+        Check::Events(_) => {
+            return Err(format!(
+                "guardrail \"{}\" is an events guardrail. A backtest runs Gantry's own detectors (secrets, pii, regex, keywords) and would send every example to the plugin; try it with mode: observe or shadow_until instead.",
+                guard.name
+            ));
+        }
         Check::Webhook(hook) => {
             return Err(format!(
                 "guardrail \"{}\" is a {} guardrail. A backtest runs Gantry's own detectors (secrets, pii, regex, keywords) and would send every example to the service; try it with action: warn or shadow_until instead.",
@@ -3132,6 +3233,7 @@ rules:
             profiles: Vec::new(),
             tags: Vec::new(),
             customers: Vec::new(),
+            applications: Vec::new(),
             overrides: Vec::new(),
             shadow_until: None,
         };
@@ -3283,6 +3385,7 @@ rules:
                 profiles: Vec::new(),
                 tags: Vec::new(),
                 customers: Vec::new(),
+                applications: Vec::new(),
                 overrides: Vec::new(),
                 shadow_until: None,
             })
