@@ -1,0 +1,91 @@
+---
+title: SIEM export
+description: Send every replica's audit records to a SIEM or object storage as they are written, each batch carrying the hash range it holds, plus a pull API, backfill and an NDJSON archive. An enterprise feature, unlocked by the license feature siem.
+sidebar:
+  order: 9
+---
+
+With a license that includes `siem` (see [License key](/operations/license/)), `gantry-enterprise` adds an **Audit export** page to the console. Every replica reads its own [audit log](/governance/audit-log/) as it is written and sends the records on. Nothing about it is on the request path: a destination that is down never slows or refuses a request.
+
+The audit log holds no prompt or answer text, no keys and no text a guardrail matched, so none of that is ever exported.
+
+## Before you start
+
+- The policy needs a `store:` section: export state lives in the same Postgres as the [store](/operations/store/).
+- Set `GANTRY_EXPORT_KEY` on every replica to the same 64 hex characters (`openssl rand -hex 32`). Destination secrets (tokens, API keys, the webhook signing secret) are kept encrypted with it in the database. A destination that signs in with the replica's cloud identity needs no secret.
+
+## Destinations
+
+| Kind | URL | Secret | Sent as |
+|---|---|---|---|
+| Webhook | Your HTTPS endpoint | Made by Gantry, shown once | One JSON POST per batch, signed `x-gantry-signature: sha256=<HMAC-SHA256 of the raw body>` |
+| Splunk HTTP Event Collector | `https://splunk:8088/services/collector/event` | HEC token | One event per record, `sourcetype` `gantry:audit`, the range in indexed `fields` |
+| Datadog logs | `https://http-intake.logs.datadoghq.com/api/v2/logs` (your site's) | API key | One log per record, the record line as `message`, the range in `ddtags` |
+| Elasticsearch | The index, `https://es:9200/gantry-audit` | API key | The bulk API, `create` with ID `<replica>-<n>`, so a batch sent twice is stored once |
+| OpenTelemetry logs | `https://collector:4318/v1/logs` | Optional; sent as `Authorization: Bearer`, or in the header you name | OTLP/HTTP JSON, one log record per audit record, the range as resource attributes |
+| Microsoft Sentinel | The data collection rule's stream URL, `https://<dce>.ingest.monitor.azure.com/dataCollectionRules/<dcr-id>/streams/Custom-GantryAudit_CL?api-version=2023-01-01` | Client secret, or none for managed or workload identity | Logs Ingestion API rows |
+| Amazon S3 or S3-compatible (MinIO, Cloudflare R2, Google Cloud Storage's interoperability API) | `https://s3.<region>.amazonaws.com/<bucket>/<prefix>`, path style | Secret access key with an access key ID, or none | One NDJSON object per batch |
+| Google Cloud Storage | `https://storage.googleapis.com/<bucket>/<prefix>` | A service account's JSON key, or none | One NDJSON object per batch |
+| Azure Blob Storage | `https://<account>.blob.core.windows.net/<container>/<prefix>` | A SAS token, or none | One NDJSON block blob per batch |
+
+URLs must be `https://`; plain `http://` is taken only for this machine (a collector on localhost). Redirects are not followed: save the final URL.
+
+### Cloud identity, without static keys
+
+When a cloud destination has no secret, the replica signs in as whatever identity it runs with:
+
+- **AWS** (S3): the default credential chain. `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, then a web identity token (`AWS_WEB_IDENTITY_TOKEN_FILE` and `AWS_ROLE_ARN`, as IRSA sets them), then the container endpoint (ECS task roles, EKS Pod Identity), then the EC2 instance role through IMDSv2. Give the role `s3:PutObject` on the prefix.
+- **Google Cloud** (GCS): the metadata server, which GKE workload identity, Cloud Run and Compute Engine provide. Give the service account `roles/storage.objectCreator` on the bucket.
+- **Azure** (Blob, Sentinel): workload identity on AKS (`AZURE_FEDERATED_TOKEN_FILE`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`), else managed identity (`IDENTITY_ENDPOINT` on Container Apps and App Service, the instance metadata service elsewhere). For a user-assigned identity, put its client ID on the destination. Give it **Storage Blob Data Contributor** on the container, or **Monitoring Metrics Publisher** on the data collection rule.
+
+### Sentinel table
+
+Create a custom table and a data collection rule whose stream has these columns: `TimeGenerated` (datetime), `Replica` (string), `N` (long), `Hash`, `Prev`, `Event`, `BatchFirstHash`, `BatchLastHash` (string) and `Record` (dynamic). Put the tenant ID and the app's client ID on the destination.
+
+## Batches carry their place in the chain
+
+Each replica sends its own records, in chain order, up to 500 per batch. Every batch says which part of the chain it holds:
+
+```json
+{"replica":"gantry-0-84347ac2b1f0","count":3,"first_n":1201,"last_n":1203,"prev":"6d07...","first_hash":"91ab...","last_hash":"1ae3...","records":[{"n":1201,...},...]}
+```
+
+That is the webhook body; the other formats carry the same fields as attributes, tags or fields, and object names hold them: `<replica>/<first n>-<last n>-<first hash>-<last hash>.ndjson`. Each record is sent exactly as the log wrote it, so a SIEM can check its copy without trusting Gantry:
+
+1. Each record's `hash` is the SHA-256 of its line up to and including `prev`, closed with `}`.
+2. Each record's `prev` is the `hash` of the one before; across batches of one replica, a batch's `prev` is the last batch's `last_hash`. A gap or a change shows at once.
+3. Any `last_hash` can be checked against the replica's log with `gantry audit verify --expect-last <hash>`.
+
+A replica is named by its host name and the start of its chain's first hash, kept beside the log in `gantry-audit.jsonl.replica`.
+
+## Delivery
+
+- **At least once.** A destination's cursor for a replica, kept in Postgres, moves only after the destination accepted the batch. After a restart, or on a new pod with the same volume, export goes on from the cursor. A batch can arrive twice after a failure: deduplicate on the replica and `n` (Elasticsearch does this itself).
+- **Retries.** A failed delivery waits 2 seconds, then 4, 8 and so on up to 5 minutes, per destination. Other destinations are not held up.
+- **New destinations** get the records written after they were added. Send older ones with backfill.
+- **Status.** The page shows, per destination, records delivered, records waiting, the last success and the last error, and per replica how far it has read its log and how far each destination has taken it. **Send a test record** sends one record with `"event":"test"` at once.
+
+The records are also kept in the `enterprise_audit` table for the pull API, backfill and the archive, for as long as the [retention](/operations/retention/) period (365 days unless set). A million requests take about 1.5 GB there.
+
+## Pull API
+
+For a SIEM that cannot receive a POST. An owner creates the token on the page; it is shown once and kept only as its SHA-256. Creating another revokes the first.
+
+```bash
+curl -H "Authorization: Bearer gpull_..." "https://gantry.example.com/export/records?after=0&limit=500"
+```
+
+```json
+{"records":[{"replica":"gantry-0-84347ac2b1f0","received_at":"2026-11-13T09:14:03.002Z","line":"{\"n\":1,...}","record":{"n":1,...}}],"next":1}
+```
+
+Pass `next` as the next call's `after`. An empty `records` means you are up to date. `limit` is 1 to 1000. Any replica answers for all of them. A missing or wrong token is a 401 `invalid_token`.
+
+## Backfill and archive
+
+- **Backfill** sends the newest records of the last 1 to 90 days to one destination, up to 5000, each replica's in runs of consecutive records so every batch is a whole piece of its chain. It does not move cursors.
+- **Archive** downloads every replica's records of a date range (UTC, inclusive) as NDJSON, ordered by replica and number, each line as the log wrote it.
+
+Owners and admins add, test and remove destinations, backfill and download. Viewers see the page. Every change and every download is an admin record in the audit log, written before it happens; a refused one is recorded with its code.
+
+Without the feature, the page and `/export/records` answer `license_required`.

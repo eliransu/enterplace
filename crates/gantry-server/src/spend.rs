@@ -7,7 +7,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    io::{BufRead, BufReader},
+    io::BufRead,
     path::Path,
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard},
@@ -345,7 +345,8 @@ impl Spend {
     /// Sums the usage records of the current month from the audit log, so a restart does not forget spend.
     // ponytail: reads the whole log at start, as the chain check before it does. A checkpoint comes with that one.
     pub(crate) fn replay(&self, path: &Path) -> Result<(), String> {
-        let file = match std::fs::File::open(path) {
+        // Sealed segments too: the month may have begun before the last seal.
+        let file = match audit::chain_reader(path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(err) => {
@@ -357,7 +358,7 @@ impl Spend {
         };
         let now = audit::timestamp();
         let month = period_of(&now, Period::Month);
-        for line in BufReader::new(file).lines() {
+        for line in file.lines() {
             let line = line.map_err(|err| {
                 format!(
                     "the audit log at {} cannot be read to count this month's spend: {err}.",

@@ -19,6 +19,7 @@ The audit log is a file of JSON lines, one record per line, in one hash chain. E
 | `config_rejected` | [Configuration rejected](#config_rejected) | When a change fails the check |
 | `admin` | [Admin](#admin) | For each admin API call and console action |
 | `audit_repaired` | [Repair](#audit_repaired) | When `gantry audit repair --yes` removes a cut last line |
+| `audit_retired` | [Retirement](#audit_retired) | Before sealed segments at the start of the chain are deleted |
 
 Not recorded: `GET /healthz`, `HEAD /api/hello`, `GET /metrics`, and a request so malformed that the HTTP library rejects it before Gantry sees it.
 
@@ -235,3 +236,21 @@ Appended by `gantry audit repair --yes` after it removes a cut last line, so the
 <Aside type="note">
 The examples shorten hashes with `...`. Real records carry 64 hex characters in `prev`, `hash`, `policy_sha256` and `keys_sha256`.
 </Aside>
+
+## audit_retired
+
+Appended before the oldest sealed segments of a log are deleted (Gantry Enterprise retention, or any program that calls `gantry_core::audit::retire`). It names what goes, so `gantry audit verify` accepts a chain that starts after them and says so. See [Sealed segments and retirement](/governance/audit-log/#sealed-segments-and-retirement).
+
+```json
+{"n":91234,"event":"audit_retired","time":"2026-11-13T03:00:00.512Z","from_n":1,"from_prev":"0000...0000","through_n":40211,"through_hash":"9c1f...","records":40211,"segments":[{"file":"00000000000000000001-00000000000000040211.jsonl","first_n":1,"last_n":40211,"bytes":27014233,"sha256":"5b2e..."}],"prev":"...","hash":"..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event` | string | `audit_retired` |
+| `time` | string | When the segments were retired |
+| `from_n`, `through_n` | integer | The first and last record removed |
+| `from_prev` | string | The hash the first removed record chained from |
+| `through_hash` | string | The hash of the last removed record: the `prev` of the first record kept |
+| `records` | integer | How many records were removed |
+| `segments` | array | Each removed file: its name, first and last record, size and SHA-256, to match an archived copy |

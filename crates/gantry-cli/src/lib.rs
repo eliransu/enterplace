@@ -929,10 +929,12 @@ fn audit_verify(path: &Path, expect: Option<&str>) -> ExitCode {
         }
         Ok(summary) => {
             let records = summary.records;
+            let kept = records + 1 - summary.first;
             println!(
-                "{}: {records} {} in an unbroken chain from record 1 to record {records}.\n{}, {}, {}, {}{}.\nLast hash: {}",
+                "{}: {kept} {} in an unbroken chain from record {} to record {records}.\n{}, {}, {}, {}{}.\nLast hash: {}",
                 path.display(),
-                if records == 1 { "record" } else { "records" },
+                if kept == 1 { "record" } else { "records" },
+                summary.first,
                 count(summary.requests, "request"),
                 count(summary.configuration, "configuration record"),
                 count(summary.admin, "admin record"),
@@ -943,6 +945,16 @@ fn audit_verify(path: &Path, expect: Option<&str>) -> ExitCode {
                 },
                 summary.last_hash
             );
+            if let Some(retired) = &summary.retired {
+                println!(
+                    "Records 1 to {} were retired on purpose: record {} (audit_retired, {}) names them, and record {} follows their last hash {}.",
+                    retired.through,
+                    retired.by,
+                    retired.time,
+                    retired.through + 1,
+                    retired.through_hash
+                );
+            }
             match summary.found {
                 Some(n) => println!(
                     "The kept hash is record {n}, and nothing up to it was changed or removed."
