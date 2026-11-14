@@ -1,7 +1,8 @@
-//! The MCP servers a policy names, and which of their tools a rule allows.
+//! The MCP servers a policy names, and which of their tools, prompts and resources a rule allows.
 //!
 //! Gantry shows every tool to a caller as `<server>.<tool>`. A server name holds no dot, so the first dot of a name
-//! always splits it the same way, whatever the tool's own name holds.
+//! always splits it the same way, whatever the tool's own name holds. Prompts are named the same way, and a
+//! resource is allowed as `<server>.<uri>`.
 
 use std::{collections::BTreeMap, path::Path};
 
@@ -18,6 +19,43 @@ pub(crate) struct ServerFile {
     headers_env: Option<BTreeMap<String, String>>,
     #[serde(default)]
     allow_private: bool,
+    #[serde(default)]
+    user_auth: Option<String>,
+    #[serde(default)]
+    user_headers: Option<Vec<String>>,
+    #[serde(default)]
+    oauth_client_id: Option<String>,
+    #[serde(default)]
+    oauth_client_secret_env: Option<String>,
+    #[serde(default)]
+    oauth_scopes: Vec<String>,
+    #[serde(default)]
+    tool_changes: Option<String>,
+}
+
+/// How each person signs in to an upstream server themselves, so a call runs with their own credential.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UserAuth {
+    /// Each person gives their own value for these headers, for example their own `Authorization` token.
+    Headers(Vec<String>),
+    /// Each person signs in at the server's OAuth authorization server once; Gantry keeps and refreshes the token.
+    OAuth {
+        /// Registered with the authorization server by hand. `None` registers Gantry dynamically (RFC 7591).
+        client_id: Option<String>,
+        /// The environment variable that holds the client secret of a confidential client.
+        client_secret_env: Option<String>,
+        scopes: Vec<String>,
+    },
+}
+
+/// What Gantry does when a server changes a tool's description or schema after it was first seen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToolChanges {
+    /// Record the change and serve the new tool.
+    #[default]
+    Record,
+    /// Record the change and hide the tool, refusing calls to it, until an admin approves it.
+    Block,
 }
 
 /// An upstream MCP server, as checked.
@@ -29,6 +67,54 @@ pub struct Server {
     /// (header name, environment variable). Only the variable's name is in the policy; its value is read at start.
     pub headers_env: Vec<(String, String)>,
     pub allow_private: bool,
+    /// `None`: every call uses the server's shared credential from `headers_env`.
+    pub user_auth: Option<UserAuth>,
+    pub tool_changes: ToolChanges,
+}
+
+/// What a rule allows of the MCP gateway besides tools.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpRule {
+    /// Prompts, as `<server>.<prompt>`, `<server>.*` or `*`. Empty allows none.
+    pub prompts: Vec<String>,
+    /// Resources, as `<server>.<uri>`, `<server>.*` or `*`. Empty allows none.
+    pub resources: Vec<String>,
+    /// Tools whose calls wait for an admin's approval in the console, in the patterns of `tools`.
+    pub approve: Vec<String>,
+    /// How long a call waits for that approval before it is refused.
+    pub approval_timeout_seconds: u64,
+}
+
+pub const DEFAULT_APPROVAL_TIMEOUT: u64 = 300;
+
+impl Default for McpRule {
+    fn default() -> Self {
+        Self {
+            prompts: Vec::new(),
+            resources: Vec::new(),
+            approve: Vec::new(),
+            approval_timeout_seconds: DEFAULT_APPROVAL_TIMEOUT,
+        }
+    }
+}
+
+/// A virtual MCP server: chosen tools of several servers, served at `/mcp/<name>`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BundleFile {
+    name: String,
+    tools: Vec<String>,
+    #[serde(default)]
+    teams: Vec<String>,
+}
+
+/// A virtual MCP server, as checked. A caller still sees only what their rule allows of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Bundle {
+    pub name: String,
+    pub tools: Vec<String>,
+    /// The teams that may connect to it. Empty lets every team.
+    pub teams: Vec<String>,
 }
 
 /// Headers a credential may not use: Gantry sets these itself, or they belong to the connection or the session.
@@ -139,14 +225,115 @@ pub(crate) fn servers(
             }
             headers_env.push((header.clone(), variable.clone()));
         }
+        let user_auth = user_auth(entry, &headers_env, &at("user_auth"), errors);
+        let tool_changes = match entry.tool_changes.as_deref() {
+            None | Some("record") => ToolChanges::Record,
+            Some("block") => ToolChanges::Block,
+            Some(other) => {
+                errors.push(format!(
+                    "{}: tool_changes is \"{other}\". Write record (record a changed tool and serve it) or block (hide it until an admin approves it).",
+                    at("tool_changes")
+                ));
+                ToolChanges::Record
+            }
+        };
         out.push(Server {
             name: entry.name.clone(),
             url,
             headers_env,
             allow_private: entry.allow_private,
+            user_auth,
+            tool_changes,
         });
     }
     out
+}
+
+/// A server's `user_auth`, checked against its other fields.
+fn user_auth(
+    entry: &ServerFile,
+    shared: &[(String, String)],
+    at: &str,
+    errors: &mut Vec<String>,
+) -> Option<UserAuth> {
+    let oauth_fields = entry.oauth_client_id.is_some()
+        || entry.oauth_client_secret_env.is_some()
+        || !entry.oauth_scopes.is_empty();
+    let auth = match entry.user_auth.as_deref() {
+        None => None,
+        Some("headers") => {
+            let headers = entry
+                .user_headers
+                .clone()
+                .unwrap_or_else(|| vec!["Authorization".to_string()]);
+            for header in &headers {
+                let token = !header.is_empty()
+                    && header
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+                if !token || RESERVED.contains(&header.to_ascii_lowercase().as_str()) {
+                    errors.push(format!(
+                        "{at}: user_headers names header \"{header}\", which a credential cannot use. Name a header such as Authorization or X-Api-Key."
+                    ));
+                }
+            }
+            Some(UserAuth::Headers(headers))
+        }
+        Some("oauth") => {
+            if let Some(variable) = &entry.oauth_client_secret_env
+                && (variable.is_empty()
+                    || !variable
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+            {
+                errors.push(format!(
+                    "{at}: oauth_client_secret_env is \"{variable}\", which is not the name of an environment variable. Write the variable's name and keep the secret itself out of this file."
+                ));
+            }
+            if entry.oauth_client_secret_env.is_some() && entry.oauth_client_id.is_none() {
+                errors.push(format!(
+                    "{at}: oauth_client_secret_env is set without oauth_client_id. Add the client ID the secret belongs to, or remove both to let Gantry register itself."
+                ));
+            }
+            Some(UserAuth::OAuth {
+                client_id: entry.oauth_client_id.clone(),
+                client_secret_env: entry.oauth_client_secret_env.clone(),
+                scopes: entry.oauth_scopes.clone(),
+            })
+        }
+        Some(other) => {
+            errors.push(format!(
+                "{at}: user_auth is \"{other}\". Write headers (each person gives their own header values) or oauth (each person signs in at the server once)."
+            ));
+            None
+        }
+    };
+    if entry.user_headers.is_some() && !matches!(auth, Some(UserAuth::Headers(_))) {
+        errors.push(format!(
+            "{at}: user_headers is set and user_auth is not headers. Add `user_auth: headers`, or remove user_headers."
+        ));
+    }
+    if oauth_fields && !matches!(auth, Some(UserAuth::OAuth { .. })) {
+        errors.push(format!(
+            "{at}: oauth_client_id, oauth_client_secret_env or oauth_scopes is set and user_auth is not oauth. Add `user_auth: oauth`, or remove them."
+        ));
+    }
+    // A header sent from both places would carry the shared credential and the person's at once.
+    let personal: Vec<String> = match &auth {
+        Some(UserAuth::Headers(headers)) => {
+            headers.iter().map(|h| h.to_ascii_lowercase()).collect()
+        }
+        Some(UserAuth::OAuth { .. }) => vec!["authorization".to_string()],
+        None => Vec::new(),
+    };
+    for (header, _) in shared {
+        if personal.contains(&header.to_ascii_lowercase()) {
+            errors.push(format!(
+                "{at}: header {header} is in headers_env and is also each person's own under user_auth. Remove it from headers_env: with user_auth every call carries the caller's own."
+            ));
+        }
+    }
+    auth
 }
 
 /// Checks one rule's `tools:` list against the servers. `at` is where the list is written.
@@ -156,16 +343,27 @@ pub(crate) fn check_tools(
     list: &[ServerFile],
     errors: &mut Vec<String>,
 ) {
+    check_names(at, "tool", tools, list, errors);
+}
+
+/// Checks a list of `<server>.<name>` patterns (tools, prompts or resources) against the servers.
+fn check_names(
+    at: &str,
+    noun: &str,
+    tools: &[String],
+    list: &[ServerFile],
+    errors: &mut Vec<String>,
+) {
     if tools.iter().any(|t| t == "*") && tools.len() > 1 {
         errors.push(format!(
-            "{at}: \"*\" already allows every MCP tool. List it alone, or list the tools by name."
+            "{at}: \"*\" already allows every MCP {noun}. List it alone, or list them by name."
         ));
     }
     let names: Vec<&str> = list.iter().map(|s| s.name.as_str()).collect();
     for tool in tools.iter().filter(|t| *t != "*") {
         let Some((server, name)) = tool.split_once('.').filter(|(_, n)| !n.is_empty()) else {
             errors.push(format!(
-                "{at}: tool \"{tool}\" names no server. Write <server>.<tool>, for example github.create_issue, or <server>.* for every tool of one server."
+                "{at}: {noun} \"{tool}\" names no server. Write <server>.<{noun}>, for example github.create_issue, or <server>.* for every {noun} of one server."
             ));
             continue;
         };
@@ -176,19 +374,106 @@ pub(crate) fn check_tools(
                 format!("The MCP servers are: {}.", names.join(", "))
             };
             errors.push(format!(
-                "{at}: tool \"{tool}\" is on MCP server \"{server}\", which is not defined under mcp. {defined}"
+                "{at}: {noun} \"{tool}\" is on MCP server \"{server}\", which is not defined under mcp. {defined}"
             ));
         } else if name.contains('*') && name != "*" {
             errors.push(format!(
-                "{at}: tool \"{tool}\" holds a \"*\" inside its name. Name one tool exactly, or write {server}.* for every tool of the server."
+                "{at}: {noun} \"{tool}\" holds a \"*\" inside its name. Name one exactly, or write {server}.* for every {noun} of the server."
             ));
         }
     }
 }
 
+/// What a rule file says of MCP besides `tools`, as `config` reads it.
+pub(crate) struct RuleFields<'a> {
+    pub prompts: &'a [String],
+    pub resources: &'a [String],
+    pub approve_tools: &'a [String],
+    pub approval_timeout_seconds: Option<i64>,
+}
+
+/// Checks a rule's prompts, resources and approvals. `at` gives where each key is written.
+pub(crate) fn rule(
+    at: &dyn Fn(&str) -> String,
+    fields: &RuleFields<'_>,
+    list: &[ServerFile],
+    errors: &mut Vec<String>,
+) -> McpRule {
+    check_names(&at("prompts"), "prompt", fields.prompts, list, errors);
+    check_names(&at("resources"), "resource", fields.resources, list, errors);
+    check_names(
+        &at("approve_tools"),
+        "tool",
+        fields.approve_tools,
+        list,
+        errors,
+    );
+    let approval_timeout_seconds = match fields.approval_timeout_seconds {
+        None => DEFAULT_APPROVAL_TIMEOUT,
+        Some(seconds) if (10..=3600).contains(&seconds) => seconds.unsigned_abs(),
+        Some(seconds) => {
+            errors.push(format!(
+                "{}: approval_timeout_seconds is {seconds}. Write a number of seconds from 10 to 3600; a call waits that long for an admin before it is refused.",
+                at("approval_timeout_seconds")
+            ));
+            DEFAULT_APPROVAL_TIMEOUT
+        }
+    };
+    McpRule {
+        prompts: fields.prompts.to_vec(),
+        resources: fields.resources.to_vec(),
+        approve: fields.approve_tools.to_vec(),
+        approval_timeout_seconds,
+    }
+}
+
+/// Checks the `mcp_bundles:` list, each problem with its line.
+pub(crate) fn bundles(
+    file: &Path,
+    text: &str,
+    list: &[BundleFile],
+    servers: &[ServerFile],
+    errors: &mut Vec<String>,
+) -> Vec<Bundle> {
+    let lines = list_lines(text, "mcp_bundles");
+    let mut out = Vec::new();
+    for (i, entry) in list.iter().enumerate() {
+        let line = lines.get(i).copied().unwrap_or(0);
+        let until = lines.get(i + 1).copied().unwrap_or(usize::MAX);
+        let at = |key: &str| format!("{}:{}", file.display(), line_of_key(text, key, line, until));
+        if !server_name(&entry.name) {
+            errors.push(format!(
+                "{}: an MCP bundle name uses letters, digits, dashes and underscores only, at most 64 characters: it is served at /mcp/<name>.",
+                at("name")
+            ));
+        }
+        if list[..i].iter().any(|other| other.name == entry.name) {
+            errors.push(format!(
+                "{}: two MCP bundles are named \"{}\". Each needs its own name, because each is served at /mcp/<name>.",
+                at("name"),
+                entry.name
+            ));
+        }
+        if entry.tools.is_empty() {
+            errors.push(format!(
+                "{}: MCP bundle \"{}\" lists no tools. List the tools it serves, as <server>.<tool> or <server>.*.",
+                at("tools"),
+                entry.name
+            ));
+        }
+        check_names(&at("tools"), "tool", &entry.tools, servers, errors);
+        out.push(Bundle {
+            name: entry.name.clone(),
+            tools: entry.tools.clone(),
+            teams: entry.teams.clone(),
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::tool_allowed;
+    use super::*;
 
     #[test]
     fn a_pattern_allows_one_tool_a_server_or_everything() {
@@ -201,5 +486,63 @@ mod tests {
         assert!(!tool_allowed(&rule, "docsx.search"));
         assert!(!tool_allowed(&[], "docs.search"));
         assert!(tool_allowed(&["*".to_string()], "any.thing"));
+    }
+}
+
+#[cfg(test)]
+mod checks {
+    use super::*;
+
+    fn server(fields: &str) -> Result<(Vec<Server>, Vec<String>), String> {
+        let text = format!("mcp:\n  - name: gh\n    url: https://mcp.example.com/mcp\n{fields}");
+        #[derive(Deserialize)]
+        struct File {
+            mcp: Vec<ServerFile>,
+        }
+        let file: File = serde_saphyr::from_str(&text).map_err(|e| e.to_string())?;
+        let mut errors = Vec::new();
+        let servers = servers(Path::new("p.yaml"), &text, &file.mcp, &mut errors);
+        Ok((servers, errors))
+    }
+
+    #[test]
+    fn user_auth_and_tool_changes_load_and_their_mistakes_are_named() -> Result<(), String> {
+        let (servers, errors) =
+            server("    user_auth: oauth\n    oauth_scopes: [repo]\n    tool_changes: block\n")?;
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(servers[0].tool_changes, ToolChanges::Block);
+        assert!(
+            matches!(&servers[0].user_auth, Some(UserAuth::OAuth { scopes, client_id: None, .. }) if scopes == &["repo"])
+        );
+        let (servers, _) = server("    user_auth: headers\n")?;
+        assert_eq!(
+            servers[0].user_auth,
+            Some(UserAuth::Headers(vec!["Authorization".into()]))
+        );
+        let (_, errors) =
+            server("    user_auth: headers\n    headers_env: { Authorization: GH }\n")?;
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Remove it from headers_env")),
+            "{errors:?}"
+        );
+        let (_, errors) = server("    user_auth: magic\n    tool_changes: maybe\n")?;
+        assert!(
+            errors.iter().any(|e| e.contains("user_auth is \"magic\"")),
+            "{errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("tool_changes is \"maybe\"")),
+            "{errors:?}"
+        );
+        let (_, errors) = server("    oauth_scopes: [repo]\n")?;
+        assert!(
+            errors.iter().any(|e| e.contains("user_auth is not oauth")),
+            "{errors:?}"
+        );
+        Ok(())
     }
 }

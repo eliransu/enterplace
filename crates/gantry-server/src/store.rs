@@ -1122,7 +1122,7 @@ impl PgStore {
         Ok(())
     }
 
-    fn master(&self) -> Result<&MasterKey, String> {
+    pub(crate) fn master(&self) -> Result<&MasterKey, String> {
         self.inner.master.get().ok_or_else(|| NO_MASTER.to_string())
     }
 

@@ -1,13 +1,13 @@
 ---
 title: MCP gateway
-description: Put your MCP servers behind Gantry, so each person sees only the tools their rule allows and every tool call is recorded.
+description: Put your MCP servers behind Gantry, so each person sees only the tools, prompts and resources their rule allows, signs in as themselves, and every call is checked and recorded.
 sidebar:
   order: 9
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry serves the tools of your upstream MCP servers at one endpoint, `/mcp`. A caller connects with their Gantry key, sees only the tools their rule allows, and every `tools/call` is checked against the rule and written to the audit log before it reaches a server.
+Gantry serves the tools, prompts and resources of your upstream MCP servers at one endpoint, `/mcp`, and chosen tools of several servers at `/mcp/<bundle>`. A caller connects with their Gantry key or signs in with OAuth, sees only what their rule allows, and every `tools/call`, `prompts/get` and `resources/read` is checked against the rule and written to the audit log before it reaches a server. Tool calls also pass the rule's guardrails, can wait for an admin's approval, and are refused while a tool's description has changed and not been approved.
 
 ## Policy
 
@@ -46,10 +46,15 @@ rules:
 | `url` | yes | The server's MCP endpoint (Streamable HTTP), for example `https://mcp.example.com/mcp`. |
 | `headers_env` | no | Headers sent with every request to the server, each taken from an environment variable: `{ Authorization: GITHUB_MCP_AUTHORIZATION }`. The variable holds the whole header value, `Bearer ...` included. The value never goes in the file. |
 | `allow_private` | no | Allow a url on this machine or a private network, as for providers. |
+| `user_auth` | no | `headers` or `oauth`: every call runs with the caller's own credential instead of a shared one. See [Each person's own credential](#each-persons-own-credential). |
+| `user_headers` | no | With `user_auth: headers`, the headers each person gives. Default `[Authorization]`. |
+| `oauth_scopes` | no | With `user_auth: oauth`, the scopes Gantry asks the server's authorization server for. |
+| `oauth_client_id`, `oauth_client_secret_env` | no | With `user_auth: oauth`, a client registered by hand. Without them Gantry registers itself (dynamic client registration). The secret is read from the variable. |
+| `tool_changes` | no | `record` (the default) records a tool whose description or schema changed and serves it; `block` records it and holds it until an admin approves it. See [Tool pins](#tool-pins-and-changed-tools). |
 
 The variables are read when Gantry starts, and Gantry does not start when one is unset. Adding, removing or changing a server needs a restart; a rule's `tools:` changes within 2 seconds, like the rest of the policy.
 
-### Tools in a rule
+### Tools, prompts and resources in a rule
 
 | Entry | Allows |
 |---|---|
@@ -57,13 +62,71 @@ The variables are read when Gantry starts, and Gantry does not start when one is
 | `docs.*` | Every tool of server `docs`, including tools it adds later |
 | `*` | Every tool of every server. List it alone |
 
-A rule with no `tools:` allows no MCP tool. As for models, the first rule that names the caller decides: in the example `everyone-else` can use the model and no tool.
+`prompts:` and `resources:` take the same entries. A prompt is named `<server>.<prompt>`; a resource is allowed as `<server>.<uri>` with the server's own URI, for example `docs.file:///handbook.md`. A resource template is listed only under `<server>.*` or `*`, since one URI named exactly does not open every path a template reaches.
 
-`gantry check` names every mistake with its file and line: a tool on a server that is not defined, a tool without a server, a server name with a dot, a private url without `allow_private`, a `headers_env` value that is not a variable name.
+| Rule field | Meaning |
+|---|---|
+| `tools` | Tools the rule allows |
+| `prompts` | Prompts the rule allows |
+| `resources` | Resources the rule allows |
+| `approve_tools` | Tools, in the same entries, whose calls wait for an admin to approve them. See [Approvals](#approvals) |
+| `approval_timeout_seconds` | How long such a call waits before it is refused, from 10 to 3600. Default 300 |
+
+A rule with no `tools:` allows no MCP tool, and the same for prompts and resources. As for models, the first rule that names the caller decides: in the example `everyone-else` can use the model and no tool.
+
+`gantry check` names every mistake with its file and line: a tool, prompt or resource on a server that is not defined, one without a server, a server name with a dot, a private url without `allow_private`, a `headers_env` value that is not a variable name, a header sent both from `headers_env` and as each person's own, an approval timeout out of range.
+
+### Bundles: virtual MCP servers
+
+A bundle serves chosen tools of several servers under one name, at `/mcp/<name>`, for the teams it lists. A caller still sees only the tools their rule allows of it.
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_PROVIDER_KEY
+    models: [claude-sonnet-5-5]
+mcp:
+  - name: github
+    url: https://api.githubcopilot.com/mcp
+    user_auth: oauth
+  - name: docs
+    url: https://docs-mcp.example.com/mcp
+mcp_bundles:
+  - name: payments-tools
+    tools: [github.create_issue, docs.search]
+    teams: [payments]
+rules:
+  - name: payments-team
+    principals: { team: payments }
+    models: [claude-sonnet-5-5]
+    tools: [github.*, docs.*]
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | yes | Letters, digits, `-` and `_`. Served at `/mcp/<name>`; its `initialize` names itself so. |
+| `tools` | yes | The tools it serves, as in a rule. |
+| `teams` | no | The teams that may connect. Empty lets every team. |
+
+A bundle serves tools only. Calling a tool outside it is refused with `not_in_bundle`, and a caller of another team with `bundle_not_allowed`. Bundles change on reload, like rules.
 
 ## Connect a client
 
-The endpoint is `<gantry url>/mcp`. Send your Gantry key as `Authorization: Bearer <key>`, as on the model routes.
+The endpoint is `<gantry url>/mcp` (or `/mcp/<bundle>`). A client either sends a Gantry key as `Authorization: Bearer <key>`, as on the model routes, or signs in with OAuth.
+
+### Sign in with OAuth
+
+Clients that follow MCP's authorization specification (Claude Desktop, Claude Code, Cursor and others) need no key in their configuration: add the URL and the client opens a browser to sign in.
+
+1. Gantry answers a call without a credential with `401` and `WWW-Authenticate: Bearer resource_metadata="<gantry url>/.well-known/oauth-protected-resource/mcp"`.
+2. The client reads that and `/.well-known/oauth-authorization-server`, registers itself at `/oauth/register` (dynamic client registration), and opens `/oauth/authorize` with PKCE (S256 only).
+3. The person says who they are on Gantry's page: with their Gantry key, or with **Sign in with single sign-on**, which goes through the console's identity provider (`console.sso`). Single sign-on is offered when `console.sso.self_issue` is set; it decides who may have personal access and which team they are in, as for `gantry login`.
+4. The client trades the code at `/oauth/token` for an access token (one hour) and a refresh token (30 days, replaced on each use). The token is bound to the address the client asked for (`resource`), so a token for `/mcp` does not work at a bundle's address.
+
+Every call made with a token is the person's: checked against their rule and recorded under their name with `via: "oauth"`. A token from a Gantry key stops working when that key is revoked, expires or is killed; a token from single sign-on names the person and team the identity provider gave. Tokens and clients are kept in the store (`store:`), or without one in `gantry.mcp.json` beside the policy, as hashes only.
 
 <Tabs>
 <TabItem label="Claude Code">
@@ -108,14 +171,17 @@ Any client that speaks MCP's Streamable HTTP transport and can send a header wor
 
 | Method | Answer |
 |---|---|
-| `initialize` | Gantry's own: the `tools` capability, server name `gantry`. Protocol versions `2025-11-25`, `2025-06-18` and `2025-03-26`. |
+| `initialize` | Gantry's own: the `tools`, `prompts` and `resources` capabilities, server name `gantry` (or the bundle's name), and an `Mcp-Session-Id` under which Gantry remembers what the client said it supports. Protocol versions `2025-11-25`, `2025-06-18` and `2025-03-26`. |
 | `ping` | An empty result |
 | `tools/list` | The tools of every server that the caller's rule allows, named `<server>.<tool>`, all in one page. A server that does not answer is left out, with a line on Gantry's standard error. |
-| `tools/call` | Checked against the rule, then forwarded to the server with the tool's own name. The server's result or error comes back with the caller's id. |
+| `tools/call` | Checked against the rule, the guardrails, approvals and pins, then forwarded with the tool's own name. The server's result or error comes back with the caller's id, streamed when the client accepts an event stream. |
+| `prompts/list`, `prompts/get` | The prompts the rule allows, named `<server>.<prompt>`; a `prompts/get` is checked and recorded like a call |
+| `resources/list`, `resources/templates/list`, `resources/read` | The resources the rule allows, each URI shown as `gantry://<server>/<the server's URI>`; a `resources/read` is checked and recorded like a call |
 | Notifications | `202 Accepted` |
+| A client's answer to a server's request | Passed to the server it came from. See [Requests from servers](#requests-from-servers-and-streaming) |
 | Any other method | JSON-RPC error `-32601` |
 
-`GET` and `DELETE` on `/mcp` answer `405`: Gantry opens no stream of its own and keeps no session per caller.
+`DELETE` on `/mcp` ends the client's session. `GET` answers `405`: requests from servers come inside the stream that answers a call, not on a stream of Gantry's own. Resource subscriptions are not offered.
 
 A refusal is a JSON-RPC error with code `-32001`, a message that names the cause and the fix, and `data.gantry_code` and `data.decision`:
 
@@ -125,8 +191,14 @@ A refusal is a JSON-RPC error with code `-32001`, a message that names the cause
 
 A missing or unknown key is refused with HTTP 401 before the message is read. Every other refusal comes with HTTP 200, so the client shows its message as the answer to that call. The codes are those of the model routes (`no_key`, `unknown_key`, `key_expired`, `killed`, `no_rule`, `audit_unavailable`), plus:
 
-- `tool_not_allowed`: the caller's rule does not list the tool.
+- `tool_not_allowed`, `prompt_not_allowed`, `resource_not_allowed`: the caller's rule does not list it.
 - `unknown_tool`: the name is not `<server>.<tool>` of a configured server. Run `tools/list` for the names.
+- `unknown_bundle`, `not_in_bundle`, `bundle_not_allowed`: a bundle's address that does not exist, a tool the bundle does not serve, a team the bundle is not for.
+- `guardrail_blocked`: a guardrail found something in the tool's arguments.
+- `approval_denied`, `approval_timeout`: the tool needs an admin's approval, and it was denied or did not come in time.
+- `tool_changed`: the server changed the tool since it was approved, and holds changed tools.
+- `credential_needed`: the server runs calls with each person's own account, and the caller has not connected one. This one has JSON-RPC code `-32042` (MCP's URL elicitation) and carries the link in `data.elicitations[0].url`.
+- `wrong_resource`: an OAuth token used at another address than the one it was issued for.
 
 When a server gives no answer, the error has code `-32603` and `data.gantry_code` `upstream_` followed by the outcome its `mcp_result` record names, for example `upstream_timeout`. The tool may or may not have run.
 
@@ -138,13 +210,69 @@ A switch on a person, a team, a key or everyone stops their tool calls and tool 
 gantry kill --model github.delete_repo --reason "deleting repositories is paused"
 ```
 
-### Upstream servers
+The console's **MCP tools** page sets and clears the same switch with **Stop tool** and **Start tool**.
+
+## Each person's own credential
+
+With `user_auth`, a server runs every call with the caller's own credential, so the call happens as the person at the server too, and Gantry records which credential went (`upstream_auth: "user_headers"` or `"user_oauth"`). Each person gets their own session with the server.
+
+The first time a person calls such a server, Gantry refuses with `credential_needed` and a one-use link, good for ten minutes. In `tools/list` the server shows one tool, `<server>.connect`, until the person has connected; calling it returns the link.
+
+- `user_auth: headers`: the link opens a form for the person's header values, for example their own `Authorization: Bearer ...` token.
+- `user_auth: oauth`: the link sends the person to the server's own OAuth authorization server. Gantry finds it from the server's protected resource metadata (RFC 9728) and the authorization server's metadata, registers itself there unless `oauth_client_id` is set, signs in with PKCE, and keeps the token. It refreshes the token when it runs out; when the server stops taking it, the next call returns a new link.
+
+Credentials are sealed with AES-256-GCM under the master key, as provider credentials are: with a store, the store's `GANTRY_MASTER_KEY`; without one, `GANTRY_MASTER_KEY` (or `GANTRY_MASTER_KEY_FILE`) of the gateway, sealing into `gantry.mcp.json`. Gantry does not start with a `user_auth` server and no master key.
+
+## Guardrails on tool calls
+
+The rule's guardrails run on tool calls as on model requests, with the same `action` and, for webhooks, the same `on_failure`:
+
+- Guardrails that run on requests (the default, `on: [request]`) read every string in the call's `arguments`. `block` refuses the call with `guardrail_blocked` before it is recorded as allowed and before it reaches the server; `mask` sends the masked arguments.
+- Guardrails with `on: [answer]` read the text of the result (`content` text and every string of `structuredContent`). `block` replaces the result with an error and records `outcome: "guardrail_blocked"`; `mask` masks it.
+
+What they found is on the decision record (`guardrails`) for the arguments and on the `mcp_result` record for the result, counts only.
+
+## Approvals
+
+A rule's `approve_tools` names tools whose calls wait for an admin. The call is held, open, until an admin approves or denies it on the console's **MCP approvals** page (which shows who asked, the rule and the arguments), or until `approval_timeout_seconds` pass. Approved, it runs and its decision record says `approved_by`; denied or timed out, it is refused with `approval_denied` or `approval_timeout`. Each approval and denial is an admin record in the audit log. With a store, any gateway's console can approve a call held on another.
+
+```yaml
+rules:
+  - name: platform
+    principals: { team: platform }
+    models: [claude-sonnet-5-5]
+    tools: [github.*]
+    approve_tools: [github.delete_repo, github.merge_pull_request]
+    approval_timeout_seconds: 120
+```
+
+## Tool pins and changed tools
+
+A tool's description and schema are instructions to the model, so a server that changes them can change what an agent does. Gantry pins each tool the first time it lists a server: a hash of its title, description, input and output schema and annotations. On every later list:
+
+- a new tool, or a tool whose hash changed, is recorded as an `mcp_tool_changed` record with the old and new hash;
+- with `tool_changes: record` the new version is served and pinned;
+- with `tool_changes: block` the tool is left out of `tools/list` and its calls are refused with `tool_changed` until an admin approves it on the console's **MCP tools** page.
+
+The **MCP tools** page lists every tool seen, from which server, its pinned description, when it was first seen, who has called it (from the audit log), a held change with its new description, and the tool's kill switch.
+
+## Upstream servers
 
 Gantry is one MCP client to each server. It opens a session with `initialize` the first time a server is needed, shares that session among all callers, and opens a new one when the server ends it (HTTP 404). Each request to a server gets an id of Gantry's own, and the answer goes back with the caller's id.
 
-A server may answer with JSON or with an event stream (`text/event-stream`). Gantry reads the stream until the answer to its request arrives and returns that answer as JSON. Progress notifications in the stream are not passed on, and requests a server sends inside a stream (sampling, elicitation) are not relayed to the caller.
+A server with `user_auth` has one session per person instead.
 
-A call waits for the server as long as a model request waits for its first byte, 120 seconds.
+### Requests from servers and streaming
+
+A server may answer with JSON or with an event stream (`text/event-stream`). When the client accepts event streams, a `tools/call` is answered as a stream too, passed through as the server sends it:
+
+- progress and other notifications go to the client as they come;
+- requests the server sends inside the stream (`sampling/createMessage`, `elicitation/create`, `roots/list`) go to the client under an id of Gantry's, if the client said at `initialize` that it supports them. The client's answer, posted to `/mcp`, goes back to the server under the server's own id. Only the client the request went to can answer it. A client that did not say it supports one gets nothing, and the server gets JSON-RPC error `-32601`;
+- the answer comes last, checked by the answer guardrails and recorded, with the client's id.
+
+Gantry tells every server it supports sampling, elicitation and roots, and answers a server's `ping` itself. A client that does not accept event streams gets the answer as JSON, and requests from the server meanwhile are refused.
+
+A server must start answering within the provider first-byte timeout, 120 seconds, and in a stream each event must follow the last within it.
 
 ## What is recorded
 
@@ -152,9 +280,14 @@ Every `tools/call` writes a decision record before it is forwarded, in the shape
 
 | Field | Value |
 |---|---|
-| `mcp_method` | `tools/call` |
+| `mcp_method` | `tools/call`, `prompts/get` or `resources/read` |
 | `server` | The server, for example `github` |
-| `tool` | The tool's own name on that server, for example `create_issue` |
+| `tool`, `prompt` or `resource` | Its own name (or URI) on that server, for example `create_issue` |
+| `bundle` | The bundle, when the call came to `/mcp/<bundle>` |
+| `via` | `oauth` when the caller signed in with an OAuth token |
+| `upstream_auth` | `user_headers` or `user_oauth` when the person's own credential went to the server |
+| `approved_by` | The admin who approved the call, for a tool in `approve_tools` |
+| `guardrails` | What the guardrails found in the arguments, counts only |
 
 ```json
 {"n":42,"id":"01J...","time":"2026-11-13T09:14:02.120Z","person":"maya.cohen","team":"payments","client":"10.0.0.7","key":"3f9a1c2e","method":"POST","path":"/mcp","model":null,"verdict":"allow","code":null,"rule":"payments-team","rule_line":18,"provider":null,"policy_sha256":"...","keys_sha256":"...","mcp_method":"tools/call","server":"github","tool":"create_issue","prev":"...","hash":"..."}
@@ -169,11 +302,23 @@ When the server has answered, an `mcp_result` record follows with the same `id`:
 | `event` | `mcp_result` |
 | `id`, `time`, `person`, `team`, `key`, `server`, `tool` | As on the decision |
 | `duration_ms` | From forwarding the call to its answer |
-| `outcome` | `ok`, `tool_error` (the tool ran and reported `isError`), `rpc_error` (the server answered with a JSON-RPC error, its code in `upstream_code`), `unreachable`, `timeout`, `http_error`, `unreadable_answer`, `session_ended` or `initialize_refused` |
+| `outcome` | `ok`, `tool_error` (the tool ran and reported `isError`), `rpc_error` (the server answered with a JSON-RPC error, its code in `upstream_code`), `guardrail_blocked`, `unreachable`, `timeout`, `http_error`, `unauthorized` (the server refused the credential), `unreadable_answer`, `session_ended`, `initialize_refused` or `caller_left` (the client closed the stream before the answer) |
+| `guardrails` | What the answer guardrails found in the result, counts only |
 
-Refused calls, and refusals of any other `/mcp` message (an unknown key, a killed person asking for `tools/list`), get a decision record with `verdict: "refused"` and the code. `initialize`, `ping` and allowed `tools/list` are not recorded.
+Refused calls, and refusals of any other `/mcp` message (an unknown key, a killed person asking for `tools/list`), get a decision record with `verdict: "refused"` and the code. `initialize`, `ping` and allowed lists are not recorded.
 
-The arguments of a call and its result are never recorded. `gantry audit verify` counts `mcp_result` records with the usage records.
+The gateway also records, each as its own `event`:
+
+| Event | When |
+|---|---|
+| `mcp_tools_pinned` | The first list of a server pinned its tools (`server`, `tools`: how many) |
+| `mcp_tool_changed` | A tool was added or changed after that (`server`, `tool`, `change`, `old_sha256`, `new_sha256`, `held`) |
+| `mcp_oauth` | A person let an MCP client sign in as them (`person`, `team`, `via`, `client_id`, `client_name`) |
+| `mcp_credential` | A person connected their own account to a server (`person`, `team`, `server`, `kind`); never the value |
+
+Approving a call or a changed tool, and stopping or starting a tool, are admin records (`mcp_approve_call`, `mcp_deny_call`, `mcp_approve_tool`, `mcp_stop_tool`, `mcp_start_tool`).
+
+The arguments of a call and its result are never recorded. While a call waits for approval its arguments are kept for the admin to read, and removed once it is decided. `gantry audit verify` counts `mcp_result` records with the usage records.
 
 ## Related
 

@@ -133,6 +133,8 @@ pub struct Rule {
     pub passthrough: Vec<Passthrough>,
     /// MCP tools the rule allows, as `<server>.<tool>`, `<server>.*` or `*`. Empty allows none.
     pub tools: Vec<String>,
+    /// MCP prompts, resources and tools that need an admin's approval.
+    pub mcp: crate::mcp::McpRule,
 }
 
 /// One provider and the path prefixes of its own API a rule may reach as sent.
@@ -194,6 +196,8 @@ pub struct Policy {
     rules: Vec<Rule>,
     /// Prices the policy file sets, over the built-in ones.
     prices: PriceOverrides,
+    /// Virtual MCP servers, served at `/mcp/<name>`.
+    bundles: Vec<crate::mcp::Bundle>,
 }
 
 impl Policy {
@@ -206,7 +210,18 @@ impl Policy {
             keys,
             rules,
             prices: PriceOverrides::new(),
+            bundles: Vec::new(),
         }
+    }
+
+    pub fn with_mcp_bundles(mut self, bundles: Vec<crate::mcp::Bundle>) -> Self {
+        self.bundles = bundles;
+        self
+    }
+
+    /// The virtual MCP server served at `/mcp/<name>`, if the policy names one.
+    pub fn mcp_bundle(&self, name: &str) -> Option<&crate::mcp::Bundle> {
+        self.bundles.iter().find(|b| b.name == name)
     }
 
     pub fn with_prices(mut self, prices: PriceOverrides) -> Self {
@@ -250,6 +265,7 @@ impl Policy {
             limits: Limits::default(),
             passthrough: Vec::new(),
             tools: Vec::new(),
+            mcp: crate::mcp::McpRule::default(),
         });
         self
     }

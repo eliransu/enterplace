@@ -387,12 +387,48 @@ pub fn governed_with(
             })?;
             headers.push((header.clone(), Secret::new(value.trim())));
         }
+        let oauth_client_secret = match &server.user_auth {
+            Some(gantry_core::mcp::UserAuth::OAuth {
+                client_secret_env: Some(variable),
+                ..
+            }) => Some(Secret::new(
+                provider_key(variable)
+                    .filter(|v| !v.trim().is_empty())
+                    .ok_or_else(|| {
+                        format!(
+                            "MCP server \"{}\" takes its OAuth client secret from the environment variable {variable}, which is not set. Set it (`export {variable}=...`) and start again.",
+                            server.name
+                        )
+                    })?
+                    .trim(),
+            )),
+            _ => None,
+        };
         mcp.push(crate::McpRoute {
             name: server.name.clone(),
             url: server.url.clone(),
             headers,
+            user_auth: server.user_auth.clone(),
+            tool_changes: server.tool_changes,
+            oauth_client_secret,
         });
     }
+    // Each person's MCP credentials are sealed with the store's master key, or without a store with the gateway's.
+    let mcp_master = if postgres.is_none() && loaded.mcp.iter().any(|s| s.user_auth.is_some()) {
+        crate::MasterKey::from_env(provider_key)?.map(Arc::new)
+    } else {
+        None
+    };
+    let mcp_setup = crate::McpSetup {
+        postgres: postgres.clone(),
+        file: Some(policy_path.with_file_name("gantry.mcp.json")),
+        master: mcp_master,
+        sso: loaded
+            .sso
+            .as_ref()
+            .is_some_and(|sso| sso.self_issue.is_some()),
+        audit_path: Some(loaded.audit_path.clone()),
+    };
     let log = Arc::new(AuditLog::open(&loaded.audit_path)?);
     // The whole chain is checked before serving: Gantry does not add records to a log it cannot vouch for.
     // ponytail: this reads the whole file at every start. When logs grow past a few gigabytes, checkpoint the verified prefix.
@@ -455,6 +491,7 @@ pub fn governed_with(
         traces: crate::TraceExport::from_env(|name| std::env::var(name).ok())?,
         setup: setup.clone(),
         mcp,
+        mcp_setup,
         store: shared.clone(),
         extension,
         ..Config::default()

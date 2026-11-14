@@ -783,6 +783,14 @@ impl Console {
 
 /// What an [`Extension`]'s handlers use: the console's sessions, look and audit records.
 impl Console {
+    /// Who finished a single sign-on started at `/console/sso/cli/login?cli_port=0`, as (email, team), in exchange
+    /// for its one-use code and the PKCE verifier it started with. The MCP gateway's OAuth authorization uses it.
+    pub fn take_sign_in(&self, code: &str, verifier: &str) -> Option<(String, String)> {
+        let pending = self.codes().remove(code)?;
+        let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
+        (sso::b64url(digest.as_ref()) == pending.challenge).then_some((pending.email, pending.team))
+    }
+
     /// Who the request is signed in as, checked again now. `None` when no one is: send them to /console/sign-in.
     pub async fn signed_in(&self, headers: &HeaderMap) -> Option<Admin> {
         self.admin(headers).await
@@ -1206,7 +1214,8 @@ fn cli_start(query: &Form) -> Result<Option<CliStart>, &'static str> {
     if port.is_empty() && state.is_empty() && challenge.is_empty() {
         return Ok(None);
     }
-    let port = port.parse::<u16>().ok().filter(|p| *p > 0);
+    // Port 0 is no CLI: it is Gantry's own MCP authorization, which takes the code back at /console/mcp/sso-return.
+    let port = port.parse::<u16>().ok();
     match port {
         Some(port)
             if (16..=128).contains(&state.len())
@@ -1302,7 +1311,11 @@ type SsoResult = Result<(Value, config::Sso), (Option<String>, sso::Refusal)>;
 /// Ends a sign-in `gantry login` started: the browser goes back to the CLI on 127.0.0.1 with a one-use code, or with
 /// why it was refused. The key itself is only ever handed to the CLI, in exchange for the code and its PKCE verifier.
 async fn cli_finish(console: &Console, cli: &CliStart, finished: SsoResult) -> Response {
-    let back = format!("http://127.0.0.1:{}/callback?state={}", cli.port, cli.state);
+    let back = if cli.port == 0 {
+        format!("/console/mcp/sso-return?state={}", cli.state)
+    } else {
+        format!("http://127.0.0.1:{}/callback?state={}", cli.port, cli.state)
+    };
     let to = match finished.and_then(|(claims, sso)| sso::admit_self(&claims, &sso)) {
         Ok((email, team, days)) => {
             let Some(code) = random_hex() else {

@@ -108,6 +108,18 @@ const KNOWN: &[&str] = &[
     "tpm",
     "mcp",
     "tools",
+    "prompts",
+    "resources",
+    "approve_tools",
+    "approval_timeout_seconds",
+    "user_auth",
+    "user_headers",
+    "oauth_client_id",
+    "oauth_client_secret_env",
+    "oauth_scopes",
+    "tool_changes",
+    "mcp_bundles",
+    "teams",
     "store",
     "postgres_url_env",
     "credential",
@@ -137,6 +149,8 @@ struct PolicyFile {
     aliases: Vec<AliasFile>,
     #[serde(default)]
     mcp: Vec<crate::mcp::ServerFile>,
+    #[serde(default)]
+    mcp_bundles: Vec<crate::mcp::BundleFile>,
     #[serde(default)]
     store: Option<StoreFile>,
 }
@@ -282,6 +296,14 @@ struct RuleFile {
     passthrough: Vec<PassthroughFile>,
     #[serde(default)]
     tools: Vec<String>,
+    #[serde(default)]
+    prompts: Vec<String>,
+    #[serde(default)]
+    resources: Vec<String>,
+    #[serde(default)]
+    approve_tools: Vec<String>,
+    #[serde(default)]
+    approval_timeout_seconds: Option<i64>,
     #[serde(default)]
     caller_provider_key: Option<String>,
 }
@@ -1377,6 +1399,17 @@ fn policy_rules(
         };
         let limits = limits(rule, &at, errors);
         crate::mcp::check_tools(&at("tools"), &rule.tools, &parsed.mcp, errors);
+        let mcp = crate::mcp::rule(
+            &at,
+            &crate::mcp::RuleFields {
+                prompts: &rule.prompts,
+                resources: &rule.resources,
+                approve_tools: &rule.approve_tools,
+                approval_timeout_seconds: rule.approval_timeout_seconds,
+            },
+            &parsed.mcp,
+            errors,
+        );
         rules.push(Rule {
             name: rule.name.clone(),
             line,
@@ -1393,6 +1426,7 @@ fn policy_rules(
                 })
                 .collect(),
             tools: rule.tools.clone(),
+            mcp,
         });
     }
     rules
@@ -2602,6 +2636,13 @@ pub fn load_texts(
     let sso = console_sso(policy_path, policy_text, &parsed, &mut errors);
     let aliases = aliases(policy_path, policy_text, &parsed, &providers, &mut errors);
     let mcp = crate::mcp::servers(policy_path, policy_text, &parsed.mcp, &mut errors);
+    let bundles = crate::mcp::bundles(
+        policy_path,
+        policy_text,
+        &parsed.mcp_bundles,
+        &parsed.mcp,
+        &mut errors,
+    );
     let store = store_setting(policy_path, policy_text, &parsed, &mut errors);
     let audit_path = match &parsed.audit {
         Some(audit) => audit.path.clone(),
@@ -2609,7 +2650,9 @@ pub fn load_texts(
     };
     match providers {
         providers if errors.is_empty() => Ok(Loaded {
-            policy: Policy::from_parts(principals(keys), rules).with_prices(parsed.prices),
+            policy: Policy::from_parts(principals(keys), rules)
+                .with_prices(parsed.prices)
+                .with_mcp_bundles(bundles),
             providers,
             audit_path,
             keys_path: keys_file.to_path_buf(),
@@ -2976,6 +3019,53 @@ rules:
             "gantry.policy.yaml:20: headers_env gives header Authorization the value \"Bearer abc\"",
         ] {
             assert!(text.contains(expected), "missing {expected}:\n{text}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_prompts_resources_approvals_and_bundles_load_and_are_checked() -> TestResult {
+        let text = format!(
+            "{}{}",
+            GOOD.replace(
+                "    models: [gpt-4o-mini]\n",
+                "    models: [gpt-4o-mini]\n    tools: [docs.*]\n    prompts: [docs.*]\n    resources: [docs.file:///readme]\n    approve_tools: [docs.delete]\n    approval_timeout_seconds: 60\n",
+            ),
+            "mcp:
+  - name: docs
+    url: https://mcp.example.com/docs
+mcp_bundles:
+  - name: payments-tools
+    tools: [docs.search]
+    teams: [payments]
+"
+        );
+        let loaded = check("mcp-more", &text, None)?.map_err(|e| e.join("\n"))?;
+        let rule = &loaded.policy.rule_list()[0];
+        assert_eq!(rule.mcp.prompts, ["docs.*"]);
+        assert_eq!(rule.mcp.resources, ["docs.file:///readme"]);
+        assert_eq!(rule.mcp.approve, ["docs.delete"]);
+        assert_eq!(rule.mcp.approval_timeout_seconds, 60);
+        let bundle = loaded
+            .policy
+            .mcp_bundle("payments-tools")
+            .ok_or("no bundle")?;
+        assert_eq!(bundle.tools, ["docs.search"]);
+        assert_eq!(bundle.teams, ["payments"]);
+        let bad = text
+            .replace(
+                "approval_timeout_seconds: 60",
+                "approval_timeout_seconds: 5",
+            )
+            .replace("prompts: [docs.*]", "prompts: [wiki.*]")
+            .replace("tools: [docs.search]", "tools: [nowhere.search]");
+        let errors = errors(check("mcp-more-bad", &bad, None)?)?;
+        for expected in [
+            "approval_timeout_seconds is 5",
+            "prompt \"wiki.*\" is on MCP server \"wiki\"",
+            "tool \"nowhere.search\" is on MCP server \"nowhere\"",
+        ] {
+            assert!(errors.contains(expected), "missing {expected}:\n{errors}");
         }
         Ok(())
     }

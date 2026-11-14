@@ -40,7 +40,7 @@ mod reload;
 mod spend;
 pub mod store;
 mod traces;
-pub use mcp::McpRoute;
+pub use mcp::{McpRoute, McpSetup};
 pub use traces::TraceExport;
 
 pub use credentials::{MasterKey, credential_problems};
@@ -246,6 +246,8 @@ pub struct Config {
     pub setup: Option<String>,
     /// Upstream MCP servers whose tools are served at `/mcp`. Empty serves no `/mcp`.
     pub mcp: Vec<McpRoute>,
+    /// Where the MCP gateway keeps OAuth tokens, people's credentials, tool pins and calls waiting for approval.
+    pub mcp_setup: McpSetup,
     /// What several gateways share (`store:` in the policy). `None` keeps keys, switches and spend to this process.
     pub store: Option<Arc<dyn gantry_core::store::Store>>,
     /// What a binary that embeds the gateway adds to it.
@@ -567,17 +569,22 @@ fn build(
             .route("/admin/credentials", any(admin::handle))
             .route("/admin/credentials/{name}", any(admin::handle));
     }
-    let mcp = mcp::router(&state, config.mcp)?;
+    let mcp = mcp::router(&state, config.mcp, config.mcp_setup)?;
     let router = router.fallback(handle).with_state(state);
+    let mut console_extension = config.extension.console;
     let router = match mcp {
-        Some(mcp) => router.merge(mcp),
+        Some(mcp) => {
+            console_extension.nav.extend(mcp.console.nav);
+            console_extension.routes = console_extension.routes.merge(mcp.console.routes);
+            router.merge(mcp.router)
+        }
         None => router,
     };
     let router = router.merge(config.extension.routes);
     let router = match console {
         Some(console) => router.nest(
             "/console",
-            gantry_console::router_with(console, config.setup.clone(), config.extension.console),
+            gantry_console::router_with(console, config.setup.clone(), console_extension),
         ),
         None => router,
     };
