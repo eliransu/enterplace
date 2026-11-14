@@ -13,8 +13,6 @@ A list of the AI tools and models in use and what each one costs, per key, from 
 
 ## The one change
 
-Run Gantry and point your tools at it.
-
 <Steps>
 
 1. On the machine that will run Gantry, set the provider keys you already have and start it:
@@ -25,23 +23,15 @@ Run Gantry and point your tools at it.
     gantry start
     ```
 
-    `gantry start` asks which providers you use and writes `gantry.policy.yaml` with observe mode on and one rule that allows everyone. It prints an admin key once, prints the settings for the coding tools it finds on the machine (Claude Code, Codex, Cursor, VS Code), and starts the gateway.
+    It writes `gantry.policy.yaml` in observe mode with one rule that allows everyone, prints an admin key once and the settings for the coding tools it finds on the machine, and starts the gateway.
 
-2. Make one key for the people who try it first:
-
-    ```bash
-    gantry key new pilot --team pilot
-    ```
-
-    The command prints the key once, with the lines Claude Code and the OpenAI SDKs read.
-
-3. Each person puts those lines in their tool. The [coding tool guides](/integrations/coding-tools/) cover Claude Code, Codex, Cursor and the rest.
+2. Give the people who try it first one key: `gantry key new pilot --team pilot` prints it once, with the lines their tool reads. The [coding tool guides](/integrations/coding-tools/) cover Claude Code, Codex, Cursor and the rest.
 
 </Steps>
 
-In observe mode Gantry forwards every request from a key it knows. A request with a missing, wrong, expired or revoked key, or for a model your providers do not list, is still refused.
-
 ## Check it worked
+
+In observe mode Gantry forwards every request from a key it knows. A request with a missing, wrong, expired or revoked key, or for a model your providers do not list, is still refused.
 
 Open `http://127.0.0.1:8080/console` and sign in with the admin key. The banner says **Observe mode: nothing is blocked**.
 
