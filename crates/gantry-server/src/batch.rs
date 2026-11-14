@@ -1121,7 +1121,9 @@ async fn prepare<'a>(
                 _ => None,
             };
             // A rule with regions reaches only what Gantry keeps; so does a gateway with no OpenAI provider.
-            if let Some(item) = kept.filter(|_| rule.limits.regions.is_some() || !openai) {
+            if let Some(item) =
+                kept.filter(|_| (rule.limits.regions.is_some() && kept_lists) || !openai)
+            {
                 return Ok(ready(
                     0,
                     Method::GET,
