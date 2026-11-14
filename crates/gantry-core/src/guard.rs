@@ -2870,6 +2870,7 @@ rules:
             limits: crate::policy::Limits::default(),
             passthrough: Vec::new(),
             tools: Vec::new(),
+            mcp: crate::mcp::McpRule::default(),
         };
         let missing = unset_webhook_env(std::slice::from_ref(&rule), &|_| false).join("\n");
         assert!(
@@ -3013,6 +3014,7 @@ rules:
                 limits: crate::policy::Limits::default(),
                 passthrough: Vec::new(),
                 tools: Vec::new(),
+                mcp: crate::mcp::McpRule::default(),
             })
         };
         let missing = unset_webhook_env(&[rule(ok[0].0)?, rule(ok[2].0)?], &|_| false).join("\n");
