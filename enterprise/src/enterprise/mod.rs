@@ -13,8 +13,8 @@ mod segments;
 mod siem;
 
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, OnceLock};
 
 use gantry_server::{
     Extension, Host,
@@ -107,7 +107,8 @@ pub fn extend_with(
         .collect();
     // Not behind the license: it is what keeps the audit chain whole where the disk does not last, a property the
     // gateway promises without one.
-    if let Some(store) = segments::Store::from_env(&env)? {
+    let segment_store = segments::Store::from_env(&env)?.map(Arc::new);
+    if let Some(store) = &segment_store {
         let mut shippers = Vec::new();
         let shipper = Arc::new(segments::Shipper::new(
             store.within(""),
@@ -137,8 +138,25 @@ pub fn extend_with(
                 runtime.spawn(shipper.clone().run());
             }
         }
-        let _ = SHIPPERS.set(shippers);
+        SHIPPERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(shippers);
     }
+    // An organization a reload adds is shipped from then on, as those open at start are.
+    let org_hook = |siem: Option<OrgSiem>| -> Arc<dyn Fn(gantry_server::OrgChain) + Send + Sync> {
+        let (segment_store, env) = (segment_store.clone(), env.clone());
+        Arc::new(move |chain| {
+            new_org(
+                &chain,
+                segment_store.as_deref(),
+                &env,
+                export_reads,
+                siem.as_ref(),
+            );
+        })
+    };
+    extension.on_org = Some(org_hook(None));
     if !(members_on || siem_on || retention_on || alerts_on || devices_on) {
         return Ok(extension);
     }
@@ -202,6 +220,16 @@ pub fn extend_with(
             Ok(_) => {}
             Err(err) => eprintln!("warning: audit export, retention and alerts are off: {err}"),
         }
+        // From here an added organization is exported, retained and alerted on too.
+        extension.on_org = Some(org_hook(Some(OrgSiem {
+            db: db.clone(),
+            env: env.clone(),
+            siem: siem_on,
+            retention: retention_on,
+            alerts: alerts_on,
+            captures: captures.clone(),
+            policy_now: host.policy_now.clone(),
+        })));
         for (chain, read_through) in &orgs {
             match siem::chain(setup(&chain.log, &chain.path, read_through)) {
                 Ok(exporter) if alerts_on => {
@@ -218,8 +246,73 @@ pub fn extend_with(
     Ok(extension)
 }
 
-/// The shippers `extend` started, the install's chain's first, for the last pass when the gateway stops.
-static SHIPPERS: OnceLock<Vec<Arc<segments::Shipper>>> = OnceLock::new();
+/// The shippers started, the install's chain's first, for the last pass when the gateway stops: those `extend`
+/// started and those of organizations a reload added.
+static SHIPPERS: std::sync::Mutex<Vec<Arc<segments::Shipper>>> = std::sync::Mutex::new(Vec::new());
+
+/// What exports, retains and alerts on an organization's chain, when the license and the store allow it.
+struct OrgSiem {
+    db: Arc<Db>,
+    env: siem::sinks::Env,
+    siem: bool,
+    retention: bool,
+    alerts: bool,
+    captures: Option<Arc<capture::Captures>>,
+    policy_now: gantry_server::PolicyNow,
+}
+
+/// The chain of an organization a policy reload added: shipped, exported, retained and alerted on as the chains
+/// open at start are. Runs on the gateway's runtime, which the gateway entered.
+fn new_org(
+    chain: &gantry_server::OrgChain,
+    segment_store: Option<&segments::Store>,
+    env: &siem::sinks::Env,
+    export_reads: bool,
+    siem: Option<&OrgSiem>,
+) {
+    let read_through = Arc::new(AtomicU64::new(if export_reads { 0 } else { u64::MAX }));
+    if let Some(store) = segment_store {
+        let shipper = Arc::new(segments::Shipper::new(
+            store.within(&org_prefix(&chain.org)),
+            chain.log.clone(),
+            chain.path.clone(),
+            env,
+            read_through.clone(),
+            chain.request_index.clone(),
+        ));
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(shipper.clone().run());
+        }
+        SHIPPERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(shipper);
+    }
+    let Some(o) = siem else {
+        return;
+    };
+    let setup = siem::Setup {
+        db: o.db.clone(),
+        log: chain.log.clone(),
+        audit_path: chain.path.clone(),
+        env: o.env.clone(),
+        siem: o.siem,
+        retention: o.retention,
+        alerts: o.alerts,
+        captures: o.captures.clone(),
+        read_through,
+    };
+    match siem::chain(setup) {
+        Ok(exporter) if o.alerts => {
+            alerts::engine(&exporter, &o.env, o.policy_now.clone(), true);
+        }
+        Ok(_) => {}
+        Err(err) => eprintln!(
+            "warning: audit export, retention and alerts are off for the chain of organization \"{}\": {err}",
+            chain.org
+        ),
+    }
+}
 
 /// Where an organization's segments go in the bucket, beside the install's: `orgs/<org>`, the name as its chain's
 /// file has it.
@@ -264,7 +357,11 @@ pub fn restore_audit(policy: &Path, keys: Option<&Path>) -> Result<(), String> {
 /// After the gateway stopped serving: seals the log and writes the rest to the store, so a graceful stop loses
 /// no record.
 pub fn finish_audit() {
-    for shipper in SHIPPERS.get().into_iter().flatten() {
+    let shippers = SHIPPERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    for shipper in shippers {
         match shipper.pass(true) {
             Ok(wrote) => eprintln!("audit segments: wrote {wrote} on stop."),
             Err(err) => eprintln!("warning: audit segments: the last pass failed: {err}"),
@@ -405,7 +502,7 @@ pub(crate) mod testing {
         /// The gateway's audit log, and its path.
         pub log: std::sync::Arc<gantry_core::audit::AuditLog>,
         pub audit: PathBuf,
-        _gw: gantry_server::Governed,
+        pub governed: gantry_server::Governed,
     }
 
     /// The gateway `serve` runs, with the enterprise features `status` unlocks, and one admin key, noa's.
@@ -464,7 +561,7 @@ pub(crate) mod testing {
             dir,
             log: gw.log.clone(),
             audit: gw.loaded.audit_path.clone(),
-            _gw: gw,
+            governed: gw,
         })
     }
 

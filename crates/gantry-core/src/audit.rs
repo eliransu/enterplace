@@ -1333,6 +1333,21 @@ impl AuditLog {
         Ok(self)
     }
 
+    /// Opens the chain of an organization added after start (a policy reload), checked whole first as at start.
+    /// `None` without `audit: { per_org: true }`.
+    pub fn open_org(&self, org: &str) -> Result<Option<Arc<AuditLog>>, String> {
+        let Some(orgs) = &self.orgs else {
+            return Ok(None);
+        };
+        let at = org_path(&orgs.path, org);
+        if has_records(&at) {
+            verify_full(&at, None).map_err(|err| {
+                format!("{err} This is the audit chain of organization \"{org}\". Gantry does not add records to an audit chain that does not hold. Move the file aside to keep it, and save the policy again to begin a new chain for it.")
+            })?;
+        }
+        orgs.log(org).map(Some)
+    }
+
     /// Each organization's open chain, with `audit: { per_org: true }`: for what reads, seals or ships them.
     pub fn org_logs(&self) -> Vec<(String, Arc<AuditLog>)> {
         let Some(orgs) = &self.orgs else {

@@ -358,6 +358,10 @@ pub struct Extension {
     /// Takes the prompt and answer of requests the binary was told to keep. `None` keeps no text, as the open
     /// source gateway never does.
     pub capture: Option<Arc<dyn Capture>>,
+    /// Called with the chain of each organization a policy reload adds (`audit: { per_org: true }`), once it is open
+    /// and before any request can be recorded in it: the binary exports, retains and ships it as it does those of
+    /// [`Host::org_chains`].
+    pub on_org: Option<Arc<dyn Fn(OrgChain) + Send + Sync>>,
 }
 
 /// Prompt and answer text handed to a binary that embeds the gateway, for an operator who opted in to sending it

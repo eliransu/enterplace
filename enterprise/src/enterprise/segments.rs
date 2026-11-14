@@ -410,6 +410,12 @@ impl Shipper {
         }
     }
 
+    /// The chain it ships.
+    #[cfg(test)]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// One pass. Seals when the open file holds new records and the interval has passed, it is large enough, or
     /// `now` is set (a graceful stop). Then writes every segment not yet in the store, and retires the written ones.
     /// Blocking. Returns how many segments it wrote.
@@ -547,7 +553,7 @@ pub fn routes(shipper: Arc<Shipper>, token: String) -> Router {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeMap;
 
     use axum::{
@@ -560,7 +566,7 @@ mod tests {
     use super::*;
 
     type Error = Box<dyn std::error::Error>;
-    type Bucket = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
+    pub(crate) type Bucket = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
 
     /// PUT, GET and ListObjectsV2 (two keys a page, so paging is exercised), path style, as R2 and the Worker's
     /// handler answer them.
@@ -618,7 +624,8 @@ mod tests {
         }
     }
 
-    async fn bucket() -> Result<(Bucket, String), Error> {
+    /// A fake S3 bucket on 127.0.0.1, and the segments URL that names it.
+    pub(crate) async fn bucket() -> Result<(Bucket, String), Error> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("http://{}/segments/gw/one", listener.local_addr()?);
         let bucket = Bucket::default();

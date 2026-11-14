@@ -193,7 +193,7 @@ With `per_org`, each organization's records go to a hash chain of its own, besid
 | [Retention](/operations/retention/), [legal hold](/operations/retention/#legal-hold), [audit export](/operations/siem-export/), [alerts](/operations/alerting/) | A replica | A replica of its own (`<host>-<first hash>`): sealed, retired, held, exported and alerted on as the install's is; an organization's alerts are recorded in its chain |
 | [Segments in object storage](/deploy/cloudflare/) | Under `GANTRY_AUDIT_SEGMENTS_URL` | Under `<that prefix>/orgs/acme`, fetched back on an empty disk |
 
-Spend replay at start and the console's request log and spend page read every chain. A chain is opened at start for each organization listed under `orgs:` and each one already on disk; one that first appears while Gantry runs (an organization added by a reload) gets its chain at its first record, and its export, retention and shipping start at the next restart. Turning `per_org` on or off needs a restart: records already written stay in the chain they are in.
+Spend replay at start and the console's request log and spend page read every chain. A chain is opened at start for each organization listed under `orgs:` and each one already on disk; an organization a reload adds gets its chain when the reload is used, before any of its requests, and its request log copy, export, retention, legal hold and segment shipping start at once. Turning `per_org` on or off needs a restart: records already written stay in the chain they are in.
 
 ## Size
 

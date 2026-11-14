@@ -7,6 +7,13 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### An organization added by a reload is covered at once
+
+- With `audit: { per_org: true }`, an organization a policy reload adds gets its chain opened when the reload is used,
+  copied into the request index, exported, retained, held and shipped to the segments bucket from then on, with no
+  restart. The chains of organizations open at start are now copied into the request index for the life of the
+  gateway (their copier stopped after its first wait).
+
 ### Devices: verified people and bound devices
 
 - The device agent sends the person's Gantry key from `gantry login` in `x-gantry-key`, and the gateway takes the

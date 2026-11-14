@@ -87,6 +87,23 @@ pub struct Reloader {
     wake: Mutex<Option<mpsc::Sender<Trigger>>>,
     /// Where the keys come from when the policy has `store:`, in place of the keys file.
     store: Option<Arc<dyn Store>>,
+    /// The organizations whose chains are open, and what a reload that adds one opens and tells.
+    orgs: Mutex<BTreeSet<String>>,
+    new_org: NewOrg,
+}
+
+type Seal = Arc<dyn gantry_core::insights::Seal>;
+
+/// What an organization added by a reload needs: a request index copier on the store, and the embedding binary told.
+#[derive(Clone, Default)]
+struct NewOrg {
+    index: Option<(Arc<crate::store::PgStore>, Option<Seal>)>,
+    tell: Option<Arc<dyn Fn(OrgChain) + Send + Sync>>,
+    /// The runtime the gateway started on: reloads run on a thread of their own, and the copier and what the
+    /// binary starts for the chain run there.
+    runtime: Option<tokio::runtime::Handle>,
+    /// The organizations' copiers, held for the life of the gateway: each stops once nothing holds it.
+    copiers: Arc<Mutex<Vec<Arc<crate::insights::PgIndex>>>>,
 }
 
 impl std::fmt::Debug for Reloader {
@@ -616,6 +633,12 @@ pub fn governed_with(
             request_index: None,
         })
         .collect();
+    let known_orgs: BTreeSet<String> = org_chains.iter().map(|c| c.org.clone()).collect();
+    let mut new_org = NewOrg {
+        index: postgres.clone().map(|pg| (pg, seal.clone())),
+        runtime: tokio::runtime::Handle::try_current().ok(),
+        ..NewOrg::default()
+    };
     let (index, bodies): Served = match &postgres {
         Some(pg) => {
             let index =
@@ -626,6 +649,11 @@ pub fn governed_with(
                 let copier =
                     crate::insights::PgIndex::open(pg.clone(), &chain.path, seal.clone(), true)?;
                 chain.request_index = Some(copier.copied());
+                new_org
+                    .copiers
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(copier);
             }
             let bodies = seal
                 .is_some()
@@ -657,6 +685,7 @@ pub fn governed_with(
         policy_now: policy_now.clone(),
         org_chains,
     })?;
+    new_org.tell = extension.on_org.clone();
     let config = Config {
         providers,
         audit: Some(Audit {
@@ -706,6 +735,8 @@ pub fn governed_with(
             shown: Mutex::new(None),
             wake: Mutex::new(None),
             store: shared.clone(),
+            orgs: Mutex::new(known_orgs.clone()),
+            new_org: new_org.clone(),
         }))
     })
     .map_err(|err| err.to_string())?;
@@ -947,6 +978,9 @@ impl Reloader {
             };
             providers.push(upstream);
         }
+        if let Err(err) = self.open_orgs(&new) {
+            return self.reject(current, trigger, prints, vec![err]);
+        }
         let old = &current.loaded;
         let record = loaded_record(
             &self.policy_path,
@@ -989,6 +1023,53 @@ impl Reloader {
         current.rejected.clear();
         self.show(None);
         Reload::Loaded
+    }
+
+    /// Opens the chain of each organization the new version adds (`audit: { per_org: true }`), before any request
+    /// can be recorded in it, copies it into the request index as those open at start are, and tells the embedding
+    /// binary, which exports, retains and ships it.
+    fn open_orgs(&self, new: &Loaded) -> Result<(), String> {
+        if !new.audit_per_org {
+            return Ok(());
+        }
+        let mut known = self
+            .orgs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for org in new.policy.orgs() {
+            if known.contains(org) {
+                continue;
+            }
+            let Some(log) = self.log.open_org(org)? else {
+                return Ok(());
+            };
+            let path = audit::org_path(&new.audit_path, org);
+            let _runtime = self.new_org.runtime.as_ref().map(|r| r.enter());
+            let request_index = match &self.new_org.index {
+                Some((pg, seal)) => {
+                    let copier =
+                        crate::insights::PgIndex::open(pg.clone(), &path, seal.clone(), true)?;
+                    let copied = copier.copied();
+                    self.new_org
+                        .copiers
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(copier);
+                    Some(copied)
+                }
+                None => None,
+            };
+            known.insert(org.clone());
+            if let Some(tell) = &self.new_org.tell {
+                tell(OrgChain {
+                    org: org.clone(),
+                    log,
+                    path,
+                    request_index,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// The providers of the version in use that name a credential, with its name.

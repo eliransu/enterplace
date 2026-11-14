@@ -2092,3 +2092,103 @@ async fn per_org_each_chain_is_exported_retained_held_and_alerted_on_its_own() -
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn an_org_added_by_a_reload_is_exported_retained_held_and_shipped_at_once()
+-> Result<(), Error> {
+    let Some(url) = database("siem_org_reload").await? else {
+        return Ok(());
+    };
+    let (bucket, segments) = crate::enterprise::segments::tests::bucket().await?;
+    let policy = format!("{POLICY}orgs: [acme]\naudit: {{ per_org: true }}\n");
+    let gw = gateway_policy(
+        "siem_org_reload",
+        &url,
+        &licensed(&["siem", "retention", "alerts"]),
+        &[
+            (KEY_ENV, KEY),
+            ("GANTRY_EXPORT_TICK_MS", "3600000"),
+            ("HOSTNAME", "pod-0"),
+            ("GANTRY_AUDIT_SEGMENTS_URL", &segments),
+        ],
+        &policy,
+    )?;
+    let globex = audit::org_path(&gw.audit, "globex");
+    let exporter = |path: &PathBuf| registry().lock().ok().and_then(|r| r.get(path).cloned());
+    assert!(
+        exporter(&globex).is_none(),
+        "globex is not in the policy yet"
+    );
+
+    // The policy now names globex: the reload opens its chain and starts everything on it, with no restart.
+    std::fs::write(
+        gw.dir.join("gantry.policy.yaml"),
+        format!("{POLICY}orgs: [acme, globex]\naudit: {{ per_org: true }}\n"),
+    )?;
+    let reloader = gw.governed.reloader.clone();
+    let reload =
+        tokio::task::spawn_blocking(move || reloader.check(gantry_server::Trigger::Signal)).await?;
+    assert!(
+        matches!(reload, gantry_server::Reload::Loaded),
+        "{reload:?}"
+    );
+    let org = exporter(&globex).ok_or("no exporter for globex's chain after the reload")?;
+
+    // Export: globex's records are read from its own chain.
+    let mut record = audit::record(&audit::Entry {
+        id: "globex-0",
+        person: Some("alice"),
+        method: "POST",
+        path: "/v1/chat/completions",
+        model: Some("m"),
+        allowed: true,
+        ..Default::default()
+    });
+    record.insert("org".into(), "globex".into());
+    gw.log.append_record(&record)?;
+    org.log.flush();
+    assert!(std::fs::read_to_string(&globex)?.contains("globex-0"));
+    while org.ingest().await? > 0 {}
+    let rows = crate::enterprise::alerts::tests::rows(
+        &url,
+        &format!(
+            "SELECT count(*) FROM enterprise_audit WHERE replica = '{}' AND line LIKE '%globex-0%'",
+            org.replica
+        ),
+    )
+    .await?;
+    assert_eq!(
+        rows.first().and_then(|r| r.try_get::<_, i64>(0).ok()),
+        Some(1)
+    );
+
+    // Retention and legal hold run on it.
+    let mut owner = Browser::admin(&gw.app).await?;
+    owner
+        .go(
+            &gw.app,
+            "POST",
+            "/console/siem",
+            &[("action", "hold_on"), ("reason", "Case 10")],
+        )
+        .await?;
+    assert!(org.retain().await?.contains("Legal hold is on"));
+
+    // Segments: its shipper writes under orgs/globex in the bucket.
+    let shipper = crate::enterprise::SHIPPERS
+        .lock()
+        .map_err(|_| "shippers")?
+        .iter()
+        .find(|s| s.path() == globex.as_path())
+        .cloned()
+        .ok_or("no segment shipper for globex's chain")?;
+    tokio::task::spawn_blocking(move || shipper.pass(true)).await??;
+    let keys: Vec<String> = bucket
+        .lock()
+        .map_err(|_| "bucket")?
+        .keys()
+        .cloned()
+        .collect();
+    assert!(keys.iter().any(|k| k.contains("orgs/globex/")), "{keys:?}");
+    Ok(())
+}
