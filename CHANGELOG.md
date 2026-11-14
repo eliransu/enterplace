@@ -7,6 +7,19 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Google's Gemini API
+
+- Gantry serves Google's own Gemini API, so Gemini CLI (`GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_KEY`) and Google's
+  SDKs go through it: `POST /v1beta/models/<model>:generateContent`, `:streamGenerateContent` (with `alt=sse`, or
+  as one JSON array without it), `:countTokens`, `:embedContent`, `:batchEmbedContents` (and the `/v1/` forms), and
+  `GET /v1beta/models` and `/v1beta/models/<model>`, which list only what the caller's rule allows. Requests go as
+  sent to `gemini` and `vertex` providers, with the rule, aliases, kill switches, observe mode, regions, guardrails
+  on request and answer text (streamed too), budgets and limits from `usageMetadata` and
+  `generationConfig.maxOutputTokens`, the cache and the audit record, user agent included.
+- On those routes the Gantry key may come in `x-goog-api-key` or `?key=`. A query key is taken out before the
+  request is checked: it is never forwarded, traced or recorded. Refusals there use Google's error shape. A body
+  naming another model than the path is refused with `ambiguous_model`.
+
 ### Browser access
 
 - `cors:` in the policy: `allowed_origins` lists the browser origins (or `"*"`) that may call Gantry's routes. Off by

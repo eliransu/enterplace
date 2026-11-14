@@ -56,6 +56,7 @@ pub(crate) fn route_label(path: &str) -> &'static str {
         crate::RESPONSES => "responses",
         crate::EMBEDDINGS => "embeddings",
         crate::MODELS => "models",
+        _ if crate::gemini_path(path) => "gemini",
         _ => "other",
     }
 }

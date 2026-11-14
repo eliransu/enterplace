@@ -1017,6 +1017,8 @@ const ONCE: &[&str] = &[
     "previous_response_id",
     "conversation",
     "prompt",
+    "generationConfig",
+    "generation_config",
 ];
 
 /// Reads the fields limits need, refusing a duplicate or a value of the wrong type: either would let the provider
@@ -1070,6 +1072,42 @@ fn hints(body: &[u8]) -> Result<Hints, String> {
                         }
                         hints.n = value;
                     }
+                    // Google's Gemini API names the output limit and the number of answers inside its config.
+                    "generationConfig" | "generation_config" => {
+                        let config: Option<serde_json::Map<String, Value>> =
+                            map.next_value().map_err(|_| {
+                                A::Error::custom(format!("\"{key}\" must be an object"))
+                            })?;
+                        let config = config.unwrap_or_default();
+                        let number = |names: [&str; 2]| -> Result<Option<u64>, A::Error> {
+                            let mut found = None;
+                            for name in names {
+                                match config.get(name) {
+                                    None | Some(Value::Null) => {}
+                                    Some(value) => {
+                                        let n = value.as_u64().ok_or_else(|| {
+                                            A::Error::custom(format!(
+                                                "\"{key}.{name}\" must be a whole number, 0 or more, written as a number"
+                                            ))
+                                        })?;
+                                        found = found.max(Some(n));
+                                    }
+                                }
+                            }
+                            Ok(found)
+                        };
+                        hints.max_output = hints
+                            .max_output
+                            .max(number(["maxOutputTokens", "max_output_tokens"])?);
+                        if let Some(n) = number(["candidateCount", "candidate_count"])? {
+                            if n == 0 || n > MAX_N {
+                                return Err(A::Error::custom(format!(
+                                    "\"candidateCount\" must be a whole number from 1 to {MAX_N}: each answer costs its output limit again"
+                                )));
+                            }
+                            hints.n = Some(n);
+                        }
+                    }
                     field @ ("previous_response_id" | "conversation" | "prompt") => {
                         let value: Value = map.next_value()?;
                         if !value.is_null() {
@@ -1116,6 +1154,8 @@ fn output_tokens(hints: &Hints, price: Option<&Price>, route: &str) -> Option<u6
     ]
     .iter()
     .any(|r| route.starts_with(r))
+        || route.contains(":embedContent")
+        || route.contains(":batchEmbedContents")
     {
         return Some(0);
     }
@@ -1695,6 +1735,10 @@ pub(crate) async fn admit(
                         "max_output_tokens"
                     } else if ask.route.starts_with("/v1/messages") {
                         "max_tokens"
+                    } else if crate::gemini_native(ask.route.split('?').next().unwrap_or_default())
+                        .is_some()
+                    {
+                        "generationConfig.maxOutputTokens"
                     } else {
                         "max_tokens (or max_completion_tokens)"
                     };
@@ -1773,7 +1817,9 @@ fn cacheable(ask: &Ask<'_>, hints: &Hints) -> bool {
         .filter_map(|v| v.to_str().ok())
         .any(|v| v.to_ascii_lowercase().contains("no-store"));
     let stored = !hints.stored.is_empty() && ask.route.starts_with("/v1/responses");
-    hints.stream != Some(true) && !no_store && !ask.free && !stored
+    // Google's Gemini API streams by its method, not a body field.
+    let streams = ask.route.contains(":streamGenerateContent");
+    hints.stream != Some(true) && !streams && !no_store && !ask.free && !stored
 }
 
 /// Who may be served an answer cached for this request: the rule, and the person, or their team under a team

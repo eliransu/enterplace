@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A provider of `kind: gemini` serves Google's Gemini API. Callers use the chat completions route as for any OpenAI model; Gantry translates each request to Gemini's generateContent body and the answer back.
+A provider of `kind: gemini` serves Google's Gemini API. Callers use the chat completions route as for any OpenAI model; Gantry translates each request to Gemini's generateContent body and the answer back. Callers that speak Google's own API, such as Gemini CLI, use `/v1beta/models/<model>:generateContent` and its siblings instead, and their requests go to the provider as sent, untranslated: see [Gemini CLI](/integrations/gemini-cli/). That route also reaches `kind: vertex` providers.
 
 ## Example
 

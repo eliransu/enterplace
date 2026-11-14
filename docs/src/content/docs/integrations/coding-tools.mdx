@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A coding tool goes through Gantry when it lets you set a base URL and a key for an OpenAI or Anthropic API. This page lists each tool Gantry has a guide for, the route it uses, and what it sends elsewhere whatever you configure.
+A coding tool goes through Gantry when it lets you set a base URL and a key for an OpenAI, Anthropic or Google Gemini API. This page lists each tool Gantry has a guide for, the route it uses, and what it sends elsewhere whatever you configure.
 
 | Tool | Route on Gantry | Stays outside Gantry | Run against Gantry |
 |---|---|---|---|
@@ -17,7 +17,7 @@ A coding tool goes through Gantry when it lets you set a base URL and a key for 
 | [Qwen Code](/integrations/qwen-code/) | `/v1/chat/completions`, `/v1/responses` | Usage statistics, model catalog | Yes |
 | [Kilo Code](/integrations/kilo-code/) | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | Autocomplete, telemetry | Yes (CLI) |
 | [GitHub Copilot](/integrations/github-copilot/) | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | Inline suggestions, embeddings, utility tasks by default | Yes (CLI) |
-| [Gemini CLI](/integrations/gemini-cli/) | Google's native API, which Gantry does not serve | Everything: refused with `no_key` | Yes, refused |
+| [Gemini CLI](/integrations/gemini-cli/) | `/v1beta/models/<model>:streamGenerateContent` (Google's Gemini API) | Usage statistics, telemetry | Yes |
 | [Cursor](/integrations/cursor/) | `/v1/chat/completions`, from Cursor's servers | Tab completion | No |
 | [Continue](/integrations/continue/) | `/v1/chat/completions`, `/v1/messages` | | No |
 | [Cline](/integrations/cline/) | `/v1/chat/completions`, `/v1/messages` | | No |
