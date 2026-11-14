@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gantry: every AI request, on the record</title>
-<meta name="description" content="Gantry is a self-hosted AI gateway built for governance. It identifies who sent each model or MCP request, decides by your policy, and writes a tamper-evident audit record before anything leaves. One Docker image and Postgres, in your cloud.">
+<title>Gantry: know who uses AI at your company, what it costs, and what left</title>
+<meta name="description" content="Gantry is a self-hosted AI gateway. Every call from coding tools, apps and MCP clients goes through it with a person's name, a budget, guardrails and a record in a hash-chained audit log. One Docker image and Postgres, in your cloud.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <link rel="canonical" href="https://gantry.eliran.me/">
@@ -12,8 +12,8 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://gantry.eliran.me/">
-<meta property="og:title" content="Gantry: every AI request, on the record">
-<meta property="og:description" content="The self-hosted AI gateway built for governance. Identity, policy and a tamper-evident audit record on every model and MCP request.">
+<meta property="og:title" content="Gantry: know who uses AI at your company, what it costs, and what left">
+<meta property="og:description" content="A self-hosted AI gateway, governance first. A name, a budget and a verifiable record on every model and MCP request.">
 <meta property="og:image" content="https://gantry.eliran.me/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -30,278 +30,568 @@
       gantry
     </a>
     <nav class="nav" aria-label="Sections">
-      <a href="#how">How it works</a>
-      <a href="#proof">Audit log</a>
-      <a href="#controls">Controls</a>
-      <a href="#open-source">Editions</a>
+      <a href="#steps">Five steps</a>
+      <a href="#use-cases">Use cases</a>
+      <a href="#rollouts">Example rollouts</a>
+      <a href="#different">Compare</a>
+      <a href="#editions">Editions</a>
       <a href="/security.html">Security</a>
       <a href="https://gantry-docs.eliran.me/">Docs</a>
     </nav>
     <div class="header-actions">
       <a class="btn btn-line btn-sm hide-sm" href="https://github.com/ggantry/gantry">GitHub</a>
       <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
+      <details class="menu">
+        <summary aria-label="Menu"><span></span></summary>
+        <nav aria-label="Sections, small screens">
+          <a href="#steps">Five steps</a>
+          <a href="#use-cases">Use cases</a>
+          <a href="#rollouts">Example rollouts</a>
+          <a href="#different">Compare</a>
+          <a href="#deploy">Security and deployment</a>
+          <a href="#editions">Editions</a>
+          <a href="https://gantry-docs.eliran.me/">Docs</a>
+          <a href="https://github.com/ggantry/gantry">GitHub</a>
+        </nav>
+      </details>
     </div>
   </div>
 </header>
 
 <main>
-  <section class="wrap hero" id="top">
-    <p class="eyebrow live">Self-hosted AI gateway, open source core</p>
-    <h1>Every AI request, on the record.</h1>
-    <p class="lead">Gantry runs in your cloud, between your people and the model providers and MCP servers they call. It knows who sent each request, decides by your policy, and writes a tamper-evident record before anything leaves. One Docker image and Postgres.</p>
-    <div class="actions">
-      <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
-      <a class="btn btn-line" href="https://gantry-docs.eliran.me/deploy/overview/">Deploy in your cloud</a>
-      <div class="command">
-        <span><span class="prompt">$</span> <span id="cmd">gantry serve gantry.policy.yaml</span></span>
-        <button type="button" data-copy="cmd">Copy</button>
-      </div>
-    </div>
-  </section>
 
-  <div class="wrap">
-    <figure class="gate-panel" aria-label="Requests from four people pass the Gantry gate. One is refused because its model is not allowed." style="margin-inline: 0">
-      <div class="gate-who" aria-hidden="true"><span>maya.cohen</span><span>svc-invoice-bot</span><span>dana.levi</span><span>noa.bar</span></div>
-      <div class="gate-track" aria-hidden="true">
-        <div class="gate-bar"></div>
-        <div class="gate-label">gantry</div>
-        <div class="lane"><span class="disc" style="animation-delay: 0s"></span><span class="disc" style="animation-delay: 3.5s"></span></div>
-        <div class="lane"><span class="disc" style="animation-delay: 1.2s"></span><span class="disc" style="animation-delay: 4.7s"></span></div>
-        <div class="lane"><span class="disc stop" style="animation-delay: 0.6s"></span><span class="refusal" style="animation-delay: 0.6s">refused: model_not_allowed</span></div>
-        <div class="lane"><span class="disc" style="animation-delay: 2.3s"></span><span class="disc" style="animation-delay: 5.8s"></span></div>
-      </div>
-      <div class="gate-to" aria-hidden="true"><span>Anthropic</span><span>OpenAI</span><span>Amazon Bedrock</span><span>Vertex AI</span></div>
-    </figure>
-  </div>
-
-  <section class="works" aria-label="Works with">
-    <div class="wrap">
-      <span class="eyebrow">Works with</span>
-      <span>Claude Code</span><span>Codex</span><span>GitHub Copilot</span><span>Cursor</span><span>Zed</span><span>JetBrains AI</span><span>Qwen Code</span><span>Open WebUI</span><span>LibreChat</span><span>MCP clients</span>
-    </div>
-  </section>
-
-  <section class="band" id="how">
-    <div class="wrap">
-      <div class="band-intro">
-        <p class="eyebrow">How it works</p>
-        <h2 class="section-title">Four steps. Every request. No exceptions.</h2>
-        <p>The same fixed order for every call, from a developer's laptop, a production agent or an MCP tool call. A request that cannot be recorded never leaves.</p>
-      </div>
-      <div class="steps">
-        <article class="step reveal">
-          <div class="step-head"><span>01</span><h3>Identify</h3></div>
-          <p>Each person and workload holds its own Gantry key. The provider's key stays inside the gateway and never reaches a laptop.</p>
-          <pre class="snippet">Authorization: Bearer gantry_8f2c...
-<span class="ok">→</span> maya.cohen, team payments</pre>
-        </article>
-        <article class="step reveal">
-          <div class="step-head"><span>02</span><h3>Decide</h3></div>
-          <p>The first rule that names the caller decides: which models and MCP tools, what budget, how many requests at once, which guardrails, and which tool calls wait for an admin.</p>
-          <pre class="snippet">- name: payments-team
-  principals: { team: payments }
-  models: [claude-sonnet-5-5, claude-haiku-5-5]
-  budget: { usd: 2000, per: month, tz: Asia/Jerusalem }
-  parallel: 20
-  guardrails: [no-secrets, mask-pii]
-  tools: [github.*]
-  approve_tools: [github.merge_pull_request]</pre>
-        </article>
-        <article class="step reveal">
-          <div class="step-head"><span>03</span><h3>Record</h3></div>
-          <p>One line in a hash-chained log, written before anything is forwarded. Refusals are recorded too. If the line cannot be written, the request is refused.</p>
-          <pre class="snippet">{"seq": 119, "person": "maya.cohen", "verdict": "allow",
- "prev": "6b86b273ff34", "hash": "d4735e3a265e"}</pre>
-        </article>
-        <article class="step reveal">
-          <div class="step-head"><span>04</span><h3>Forward</h3></div>
-          <p>The caller's key comes out, the provider's key goes in. The deployment is picked by latency, cost or region, with retries and a fallback if the first one fails. The answer comes back as the provider sent it.</p>
-          <div class="chips"><span>Anthropic</span><span>OpenAI</span><span>Azure OpenAI</span><span>Amazon Bedrock</span><span>Vertex AI</span><span>Gemini</span><span>Local models</span></div>
-        </article>
-      </div>
-    </div>
-  </section>
-
-  <section class="proof" id="proof">
-    <div class="wrap">
-      <div class="split-head reveal">
-        <h2 class="section-title">Proof you can check yourself.</h2>
-        <p>Each record carries the hash of the one before it. Change, insert or reorder a line and the chain breaks at that exact record. The console checks every row of its request log against the chain the same way.</p>
-      </div>
-      <div class="terminal reveal" role="img" aria-label="gantry audit verify checks five records, three of them refused or blocked, and reports an unbroken chain.">
-        <div class="terminal-bar">gantry-audit.jsonl</div>
-        <div class="terminal-body" aria-hidden="true">
-          <div><span class="dim">$ </span><span class="typed">gantry audit verify gantry-audit.jsonl</span></div>
-          <div class="gap"></div>
-          <div class="row reveal-line r1"><span class="dim">000118  14:02:07</span>  noa.bar          platform   <span class="mid">allow</span>                      <span class="dim">prev 5feceb66  hash 6b86b273</span></div>
-          <div class="row reveal-line r2"><span class="dim">000119  14:02:08</span>  maya.cohen       payments   <span class="mid">allow</span>                      <span class="dim">prev 6b86b273  hash d4735e3a</span></div>
-          <div class="row reveal-line r3"><span class="dim">000120  14:02:09</span>  svc-invoice-bot  payments   <span class="bad">blocked</span> private_key        <span class="dim">prev d4735e3a  hash 4e074085</span></div>
-          <div class="row reveal-line r4"><span class="dim">000121  14:02:10</span>  unknown key      -          <span class="bad">refused</span> unknown_key        <span class="dim">prev 4e074085  hash 4b227777</span></div>
-          <div class="row reveal-line r5"><span class="dim">000122  14:02:11</span>  dana.levi        interns    <span class="bad">refused</span> model_not_allowed  <span class="dim">prev 4b227777  hash ef2d127d</span></div>
-          <div class="gap"></div>
-          <div class="reveal-line r6"><span class="good">122 records in an unbroken chain from record 1 to record 122.</span><br>Last hash: ef2d127de37b942b <span class="caret"></span></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="wrap controls" id="controls">
-    <div class="controls-head reveal">
-      <p class="eyebrow">Controls</p>
-      <h2 class="section-title">What the gateway decides, and what it keeps.</h2>
-      <p>Each control below is a line of policy or a page in the console, and each decision it makes is a record in the same hash-chained log.</p>
-    </div>
-
-    <div class="doc">
-      <h3 class="doc-title">Guardrails</h3>
-      <ul class="doc-list">
-        <li>Built-in detectors for secrets and personal data, plus your own regex patterns and keyword lists. Block, mask or record, on requests and answers.</li>
-        <li>Shadow mode runs a new guardrail until a date you set and records what it would have stopped. Backtest one against a corpus of your examples for precision and recall before it enforces anything.</li>
-        <li>Eight vendors built in, among them Lakera Guard, Presidio, Bedrock guardrails, Azure Content Safety and Google Model Armor, or any service of your own by webhook.</li>
-        <li class="doc-link"><a href="https://gantry-docs.eliran.me/governance/guardrails/">Guardrails in the docs</a></li>
-      </ul>
-    </div>
-
-    <div class="doc">
-      <h3 class="doc-title">MCP gateway</h3>
-      <ul class="doc-list">
-        <li>Your MCP servers behind one endpoint. Each person sees only the tools, prompts and resources their rule allows, and signs in with their key or by OAuth from the client.</li>
-        <li>Guardrails run on tool calls. Tools you name wait for an admin to approve each call.</li>
-        <li>Every tool is pinned by a hash of its description and schema. A changed tool can be held until an admin approves it, and any tool can be stopped with a kill switch.</li>
-        <li>A server can run each call with the person's own credential, sealed under your master key.</li>
-        <li class="doc-link"><a href="https://gantry-docs.eliran.me/governance/mcp-gateway/">MCP gateway in the docs</a></li>
-      </ul>
-    </div>
-
-    <div class="doc">
-      <h3 class="doc-title">Spend and limits</h3>
-      <ul class="doc-list">
-        <li>Budgets on any scope: organization, team, person, key, end customer, tag, model or the whole install. Periods from a minute to a year, in your time zone.</li>
-        <li>Requests and tokens per minute and requests in flight, exact across every replica on one Postgres store.</li>
-        <li><code>gantry explain</code> shows which rule decided, every limit that applied, and the entries it overrode.</li>
-        <li>Answer cache scoped to a person or a team, with semantic matching, and Anthropic prompt caching marked for you. Savings are counted per team.</li>
-        <li class="doc-link"><a href="https://gantry-docs.eliran.me/governance/budgets-and-rate-limits/">Budgets in the docs</a></li>
-      </ul>
-    </div>
-
-    <div class="doc">
-      <h3 class="doc-title">Policy changes</h3>
-      <ul class="doc-list">
-        <li>Edit providers, models, prices, rules and keys in the console. Each save is a new policy version, checked like <code>gantry check</code> checks a file.</li>
-        <li>A second admin approves a version after reading its diff and a dry run against this gateway's recent requests. Any earlier version is one click away.</li>
-        <li>Or keep git as the source: the console stays read only for policy and CI runs <code>gantry check</code>.</li>
-        <li class="doc-link"><a href="https://gantry-docs.eliran.me/operations/console-editing/">Console editing in the docs</a></li>
-      </ul>
-    </div>
-
-    <div class="doc">
-      <h3 class="doc-title">Request log</h3>
-      <ul class="doc-list">
-        <li>Search every request by person, team, key, model, provider, outcome, cost and latency. Each row is checked against the audit chain.</li>
-        <li>Analytics with p50, p95 and p99 latency, and a forecast for each budget: whether it lasts the period, or when it runs out.</li>
-        <li>A rule can keep redacted request and answer bodies, sealed apart from the log, readable only by the people it names. Every read is recorded first.</li>
-        <li class="doc-link"><a href="https://gantry-docs.eliran.me/operations/request-log/">Request log in the docs</a></li>
-      </ul>
-    </div>
-
-    <div class="doc">
-      <h3 class="doc-title">Access</h3>
-      <ul class="doc-list">
-        <li>Keys per person and workload, updated or rotated with a grace period for the old key. Allowed networks per key and per rule.</li>
-        <li>JWTs from your identity provider in place of Gantry keys, single sign-on for the console, SCIM, and console roles you define.</li>
-        <li>Provider keys sealed in the store under your master key. A caller may send their own provider key only on rules that allow it.</li>
-        <li class="doc-link"><a href="https://gantry-docs.eliran.me/governance/access-control/">Access control in the docs</a></li>
-      </ul>
-    </div>
-
-    <div class="doc">
-      <h3 class="doc-title">APIs and routing</h3>
-      <ul class="doc-list">
-        <li>Chat completions, Responses, messages, embeddings and completions, plus OpenAI files, batches and fine-tuning, Anthropic message batches, OpenAI Realtime and Gemini Live. Each file, batch and job belongs to the person who made it, and every batch line is checked.</li>
-        <li>Lowest latency or lowest cost across deployments, requests kept in the regions a rule allows, and a coding agent's session kept on one deployment.</li>
-        <li class="doc-link"><a href="https://gantry-docs.eliran.me/providers/batches-and-realtime/">Batches and realtime in the docs</a></li>
-      </ul>
-    </div>
-
-    <div class="doc">
-      <h3 class="doc-title">Alerts and export</h3>
-      <ul class="doc-list">
-        <li>Alerts to Slack, Teams, PagerDuty, email or a signed webhook, on spend, unusual spend, rate limits, refusals, provider errors, latency, guardrail blocks, kill switches, a key on a new address, and use after hours.</li>
-        <li>Audit export to Splunk, Datadog, Elastic, Sentinel, S3, Google Cloud Storage and Azure Blob. Every batch carries the hash range it holds, so the SIEM can check its copy.</li>
-        <li>Traces over OTLP, Langfuse, or an HTTP callback, with prompt text only when you turn it on, redacted.</li>
-        <li class="doc-link"><a href="https://gantry-docs.eliran.me/operations/alerting/">Alerting in the docs</a></li>
-      </ul>
-    </div>
-
-    <div class="doc">
-      <h3 class="doc-title">Runs in your cloud</h3>
-      <ul class="doc-list">
-        <li>One Docker image and Postgres. Docker Compose, a Helm chart, and Terraform for AWS ECS, Google Cloud Run and Azure Container Apps.</li>
-        <li>Cloudflare Containers, with each gateway's audit chain kept in R2.</li>
-        <li>Readiness on <code>/readyz</code> and a drain on shutdown that finishes requests in flight and writes every record.</li>
-        <li class="doc-link"><a href="https://gantry-docs.eliran.me/deploy/overview/">Deployment guides</a></li>
-      </ul>
-    </div>
-  </section>
-
-  <section class="wrap duo" id="claude-code">
-    <div class="duo-text reveal">
-      <p class="eyebrow">Claude Code</p>
-      <h2>Roll out Claude Code without losing track of it.</h2>
-      <p>Two environment variables per developer. Every session goes through Gantry, under their own name, inside their team's budget. When something is refused, they see why in the terminal they already use. <code>gantry audit coverage</code> lists who sent requests from which tool, and which key holders sent nothing.</p>
-      <pre class="env">export ANTHROPIC_BASE_URL=https://gantry.internal
-export ANTHROPIC_API_KEY=gantry_...</pre>
-    </div>
-    <div class="terminal reveal">
-      <div class="terminal-bar">claude</div>
-      <div class="session">
-        <div><span class="good">&gt;</span> refactor the invoice parser and add tests</div>
-        <div class="mid">Using claude-opus-5-5</div>
-        <div style="color: #f2f2f2"><span class="bad">API Error: 403</span> Refused (model_not_allowed): the interns team may use claude-sonnet-5-5 and claude-haiku-5-5.<br><span class="mid">Decision 01JCM8SWA5RZ43AGXHJNQ3MTM3</span></div>
-        <div class="mid">/model claude-sonnet-5-5</div>
-        <div><span class="good">●</span> Reading src/invoice/parser.rs</div>
-      </div>
-    </div>
-  </section>
-
-  <section class="wrap plans" id="open-source">
-    <h2 class="section-title reveal">Open source gateway. The license adds what a company needs.</h2>
-    <div class="plan-grid">
-      <article class="plan free reveal">
-        <h3>Open source</h3>
-        <p>Apache 2.0, for any number of people. One binary on files, or several replicas on Postgres.</p>
-        <ul>
-          <li>Keys per person and workload, policy as code, kill switches</li>
-          <li>Hash-chained audit log with a command that verifies it</li>
-          <li>Guardrails, MCP gateway, budgets, rate limits and caching</li>
-          <li>Every major provider, with routing, retries and fallbacks</li>
-          <li>Admin console with single sign-on</li>
-        </ul>
-        <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
-      </article>
-      <article class="plan paid reveal">
-        <h3>Gantry Enterprise</h3>
-        <p>The same gateway in one image, with features a signed license key turns on. The key is checked offline and nothing calls home. A lapsed license never stops model traffic.</p>
-        <ul>
-          <li>Console members and SCIM from Okta or Microsoft Entra ID</li>
-          <li>Alerts, SIEM export and LLM observability destinations</li>
-          <li>Audit retention with a legal hold</li>
-          <li>Compose, Helm, Terraform and Cloudflare deployment templates</li>
-        </ul>
-        <a class="btn btn-line" href="https://gantry-docs.eliran.me/operations/license/">How the license works</a>
-      </article>
-    </div>
-  </section>
-
-  <section class="cta">
-    <div class="cta-box reveal">
-      <h2>Put a gate in front of your AI.</h2>
+<section class="wrap hero" id="top">
+  <p class="eyebrow live">Self-hosted AI gateway, open source core</p>
+  <h1>Your company already uses AI. Nobody can say who, what it costs, or what left.</h1>
+  <div class="hero-cols">
+    <div class="hero-text">
+      <p class="lead">Gantry is one gateway in your own cloud that every AI call goes through: coding tools, internal apps and MCP clients. Each request gets a person's name, a budget and a line in an audit log you can verify. On the first day it only watches.</p>
       <div class="actions">
         <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
-        <span class="clone">git clone https://github.com/ggantry/gantry</span>
+        <a class="btn btn-line" href="#steps">See the five steps</a>
+      </div>
+      <ol class="hero-steps" aria-label="The five steps">
+        <li><b>See</b> who uses which tool, and what it costs</li>
+        <li><b>Know</b> the person behind every request</li>
+        <li><b>Limit</b> spend, rate and runaway agents</li>
+        <li><b>Protect</b> prompts, answers and MCP tools</li>
+        <li><b>Prove</b> it with a log anyone can verify</li>
+      </ol>
+      <p class="hero-note">One Docker image and Postgres. Apache 2.0 core. Nothing calls home.</p>
+    </div>
+
+    <div class="terminal try" aria-label="Try Gantry on your laptop">
+      <div class="terminal-bar"><span>Try it on your laptop</span><button type="button" data-copy="try-cmd">Copy</button></div>
+      <div class="try-body">
+        <p class="try-label">1. Start a gateway. Three commands, after you build the binary.</p>
+        <pre class="code" id="try-cmd"><span class="dim">$ </span>gantry init --provider openai
+<span class="dim">$ </span>export OPENAI_PROVIDER_KEY=sk-...
+<span class="dim">$ </span>gantry serve gantry.policy.yaml</pre>
+        <pre class="code out">gantry 0.0.1 listening on http://127.0.0.1:8080</pre>
+        <p class="try-label">2. Point a tool at it. This is what the audit log holds afterwards.</p>
+        <ul class="records">
+          <li>
+            <span class="rec-n">#41</span>
+            <span class="rec-who">maya.cohen <i>payments</i></span>
+            <span class="verdict pass">allow</span>
+            <span class="rec-meta">gpt-4o-mini, rule payments-team</span>
+          </li>
+          <li>
+            <span class="rec-n">#42</span>
+            <span class="rec-who">dana.levi <i>interns</i></span>
+            <span class="verdict stop">refused</span>
+            <span class="rec-meta">gpt-4o, budget_exceeded: interns has a 50 USD daily budget</span>
+          </li>
+        </ul>
+        <p class="try-foot">Example records. Each one carries the hash of the record before it, and refusals are recorded too. <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">The quickstart</a> has the build step and the full walk.</p>
       </div>
     </div>
-  </section>
+  </div>
+</section>
+
+<section class="works" id="works" aria-label="Works with">
+  <div class="wrap works-head">
+    <p class="eyebrow">Works with the tools your people already use</p>
+    <button type="button" class="pause" id="pause" aria-pressed="false">Pause</button>
+  </div>
+  <div class="marquee">
+    <div class="marquee-track">
+      <ul>
+        <li><span class="logo" style="--m: url(/logos/claude.svg)"></span>Claude Code</li>
+        <li>OpenAI Codex</li>
+        <li><span class="logo" style="--m: url(/logos/githubcopilot.svg)"></span>GitHub Copilot</li>
+        <li><span class="logo" style="--m: url(/logos/cursor.svg)"></span>Cursor</li>
+        <li><span class="logo" style="--m: url(/logos/zedindustries.svg)"></span>Zed</li>
+        <li><span class="logo" style="--m: url(/logos/jetbrains.svg)"></span>JetBrains AI</li>
+        <li>Qwen Code</li>
+        <li>Open WebUI</li>
+        <li>LibreChat</li>
+        <li><span class="logo" style="--m: url(/logos/modelcontextprotocol.svg)"></span>MCP clients</li>
+      </ul>
+      <ul aria-hidden="true">
+        <li><span class="logo" style="--m: url(/logos/claude.svg)"></span>Claude Code</li>
+        <li>OpenAI Codex</li>
+        <li><span class="logo" style="--m: url(/logos/githubcopilot.svg)"></span>GitHub Copilot</li>
+        <li><span class="logo" style="--m: url(/logos/cursor.svg)"></span>Cursor</li>
+        <li><span class="logo" style="--m: url(/logos/zedindustries.svg)"></span>Zed</li>
+        <li><span class="logo" style="--m: url(/logos/jetbrains.svg)"></span>JetBrains AI</li>
+        <li>Qwen Code</li>
+        <li>Open WebUI</li>
+        <li>LibreChat</li>
+        <li><span class="logo" style="--m: url(/logos/modelcontextprotocol.svg)"></span>MCP clients</li>
+      </ul>
+    </div>
+  </div>
+  <div class="marquee back">
+    <div class="marquee-track">
+      <ul>
+        <li>OpenAI</li>
+        <li><span class="logo" style="--m: url(/logos/anthropic.svg)"></span>Anthropic</li>
+        <li>Azure OpenAI</li>
+        <li>AWS Bedrock</li>
+        <li><span class="logo" style="--m: url(/logos/googlecloud.svg)"></span>Vertex AI</li>
+        <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini</li>
+        <li><span class="logo" style="--m: url(/logos/mistralai.svg)"></span>Mistral</li>
+        <li>Groq</li>
+        <li>Local models</li>
+      </ul>
+      <ul aria-hidden="true">
+        <li>OpenAI</li>
+        <li><span class="logo" style="--m: url(/logos/anthropic.svg)"></span>Anthropic</li>
+        <li>Azure OpenAI</li>
+        <li>AWS Bedrock</li>
+        <li><span class="logo" style="--m: url(/logos/googlecloud.svg)"></span>Vertex AI</li>
+        <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini</li>
+        <li><span class="logo" style="--m: url(/logos/mistralai.svg)"></span>Mistral</li>
+        <li>Groq</li>
+        <li>Local models</li>
+      </ul>
+    </div>
+  </div>
+  <p class="wrap works-note">Integrations, named so you can find yours. Each mark belongs to its owner. <a href="https://gantry-docs.eliran.me/integrations/coding-tools/">Which tools were tested, and what each one sends elsewhere</a></p>
+</section>
+
+<section class="wrap problem" id="problem">
+  <div class="problem-head">
+    <p class="eyebrow">The problem</p>
+    <h2 class="section-title">Three questions most companies cannot answer today.</h2>
+  </div>
+  <dl class="asks">
+    <div>
+      <dt>Who uses which AI tool?</dt>
+      <dd>Developers installed Claude Code, Cursor and Copilot on their own. A team wired an agent to an MCP server. The list lives in nobody's system.</dd>
+    </div>
+    <div>
+      <dt>What does it cost, and who spent it?</dt>
+      <dd>The provider sends one invoice for one shared key. It has a total and no names, so a runaway agent shows up at the end of the month.</dd>
+    </div>
+    <div>
+      <dt>What was sent out?</dt>
+      <dd>Source code, customer records and secrets go into prompts every day. When security or an auditor asks for the record, there is none to hand over.</dd>
+    </div>
+  </dl>
+  <p class="problem-close">This is where most companies are, and it is fixable without stopping anyone's work. Send every call through one place you run, watch first, and add one control at a time. The five steps below are that order.</p>
+</section>
+
+<section class="ladder" id="steps">
+  <div class="wrap">
+    <div class="ladder-head">
+      <p class="eyebrow">Five steps</p>
+      <h2 class="section-title">One change at a time, in this order.</h2>
+      <p>Each step is a few lines in one policy file or one page in the console. You can stop after any of them and keep what you have.</p>
+    </div>
+
+    <ol class="rungs">
+      <li class="rung">
+        <div class="rung-mark" aria-hidden="true">1</div>
+        <div class="rung-text">
+          <h3>See</h3>
+          <p>Point your tools at Gantry with a rule that allows everything. Nothing is blocked. After a week you know which tools are in use, by which teams, and what each one costs.</p>
+          <p class="gets"><strong>You get:</strong> a record of every request, spend per team and model, and <code>gantry audit coverage</code>, which lists who sent requests from which tool and which key holders sent nothing.</p>
+          <a class="more" href="https://gantry-docs.eliran.me/governance/coverage/">Coverage in the docs</a>
+        </div>
+        <pre class="code"><span class="dim"># gantry.policy.yaml</span>
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+
+<span class="dim"># on each laptop, for Claude Code</span>
+export ANTHROPIC_BASE_URL=https://gantry.internal
+export ANTHROPIC_API_KEY=gantry_...</pre>
+      </li>
+
+      <li class="rung">
+        <div class="rung-mark" aria-hidden="true">2</div>
+        <div class="rung-text">
+          <h3>Know</h3>
+          <p>Give each person and each service its own key, or let developers sign in with your identity provider. The provider's key stays inside the gateway and never reaches a laptop.</p>
+          <p class="gets"><strong>You get:</strong> a person and a team on every record. Keys are shown once and stored as a hash, and one person's key can be revoked without touching anyone else.</p>
+          <a class="more" href="https://gantry-docs.eliran.me/governance/keys/">Keys and identity in the docs</a>
+        </div>
+        <pre class="code"><span class="dim"># a key per person</span>
+gantry key new maya.cohen --team payments
+
+<span class="dim"># or single sign-on from the terminal</span>
+gantry login https://gantry.example.com
+
+<span class="dim"># or JWTs from your identity provider</span>
+jwt:
+  - issuer: https://login.example.com
+    audience: gantry
+    person_claim: email
+    team_claim: team</pre>
+      </li>
+
+      <li class="rung">
+        <div class="rung-mark" aria-hidden="true">3</div>
+        <div class="rung-text">
+          <h3>Limit</h3>
+          <p>Put a budget and a rate limit on a team, a person, a key or a model. Keep a kill switch for the day an agent loops or a key leaks.</p>
+          <p class="gets"><strong>You get:</strong> spend that cannot pass the number you wrote, a refusal that tells the person why and when the budget starts again, and a switch that stops matching traffic within a second.</p>
+          <a class="more" href="https://gantry-docs.eliran.me/governance/budgets-and-rate-limits/">Budgets and rate limits in the docs</a>
+        </div>
+        <pre class="code">rules:
+  - name: payments-team
+    principals: { team: payments }
+    models: [claude-sonnet-5-5, claude-haiku-5-5]
+    budget: { usd: 2000, per: month }
+    rate: { rpm: 600 }
+    parallel: 20
+
+<span class="dim"># when something goes wrong</span>
+gantry kill --team payments \
+  --reason "runaway agent, investigating"</pre>
+      </li>
+
+      <li class="rung">
+        <div class="rung-mark" aria-hidden="true">4</div>
+        <div class="rung-text">
+          <h3>Protect</h3>
+          <p>Turn on guardrails for prompts, answers and MCP tool calls. Run each one in shadow mode first: it records what it would have stopped and blocks nothing until the date you set.</p>
+          <p class="gets"><strong>You get:</strong> secrets and personal data blocked or masked before they leave, your own patterns and keyword lists, vendor guardrails such as Lakera Guard, Presidio and Bedrock guardrails, and MCP tools that wait for an admin's approval.</p>
+          <a class="more" href="https://gantry-docs.eliran.me/governance/guardrails/">Guardrails in the docs</a>
+        </div>
+        <pre class="code">guardrails:
+  - name: no-secrets
+    type: secrets
+    action: block
+    shadow_until: 2027-01-15
+  - name: mask-pii
+    type: pii
+    action: mask
+rules:
+  - name: payments-team
+    <span class="dim"># ...</span>
+    guardrails: [no-secrets, mask-pii]
+    tools: [github.*]
+    approve_tools: [github.merge_pull_request]</pre>
+      </li>
+
+      <li class="rung">
+        <div class="rung-mark" aria-hidden="true">5</div>
+        <div class="rung-text">
+          <h3>Prove</h3>
+          <p>Every record carries the hash of the one before it. Change, insert or reorder a line and the chain breaks at that record. Anyone can check it with one command.</p>
+          <p class="gets"><strong>You get:</strong> an audit log you can verify yourself. With Gantry Enterprise, export to Splunk, Datadog, Elastic, Sentinel or object storage, a retention period, and a legal hold. Each exported batch carries its hash range, so the SIEM can check its copy.</p>
+          <a class="more" href="https://gantry-docs.eliran.me/governance/audit-log/">Audit log in the docs</a>
+        </div>
+        <pre class="code"><span class="dim">$ </span>gantry audit verify gantry-audit.jsonl
+<span class="good">gantry-audit.jsonl: 122 records in an
+unbroken chain from record 1 to record 122.</span>
+Last hash: ef2d127d...
+
+<span class="dim"># one record, shortened</span>
+{"n":119,"person":"maya.cohen",
+ "team":"payments","verdict":"allow",
+ "rule":"payments-team",
+ "prev":"6b86b273...","hash":"d4735e3a..."}</pre>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section class="wrap uses" id="use-cases">
+  <div class="uses-head">
+    <p class="eyebrow">Use cases</p>
+    <h2 class="section-title">Who asks for it, and what they get.</h2>
+  </div>
+
+  <div class="roles" role="table" aria-label="Use cases by role">
+    <div class="role" role="row">
+      <h3 role="cell">Security</h3>
+      <p class="role-q" role="cell">"What left the company, and can I prove it?"</p>
+      <p role="cell">Guardrails on requests, answers and tool calls. A hash-chained record of every decision, with no prompt text, keys or matched secrets in it. Alerts on guardrail blocks and on a key used from a new address.</p>
+    </div>
+    <div class="role" role="row">
+      <h3 role="cell">Platform</h3>
+      <p class="role-q" role="cell">"How do I give 300 people model access without handing out provider keys?"</p>
+      <p role="cell">One endpoint for OpenAI, Anthropic, Azure OpenAI, Bedrock, Vertex AI and Gemini. Aliases, retries and fallbacks. A policy file that <code>gantry check</code> validates in CI, where a misspelled field is an error with its line number.</p>
+    </div>
+    <div class="role" role="row">
+      <h3 role="cell">Finance</h3>
+      <p class="role-q" role="cell">"Who spent this, and will the budget last the month?"</p>
+      <p role="cell">Spend per organization, team, person, key and model. Budgets in your time zone with periods from a minute to a year, and a forecast for each one: it lasts, or the day it runs out.</p>
+    </div>
+    <div class="role" role="row">
+      <h3 role="cell">Engineering leaders</h3>
+      <p class="role-q" role="cell">"Can we roll out coding agents without losing track of them?"</p>
+      <p role="cell">Two environment variables per developer. Each session runs under the developer's own name and inside the team's budget. A refusal shows up in the terminal they already use, with the reason and a decision ID.</p>
+    </div>
+  </div>
+
+  <div class="situations">
+    <a class="situation" href="https://gantry-docs.eliran.me/integrations/claude-code/">
+      <h3>Rolling out a coding agent</h3>
+      <p>Claude Code, Codex, Copilot, Cursor and others, each developer signed in through your identity provider, each with a daily budget.</p>
+      <span>Coding tool guides</span>
+    </a>
+    <a class="situation" href="https://gantry-docs.eliran.me/governance/mcp-gateway/">
+      <h3>MCP tools</h3>
+      <p>Your MCP servers behind one endpoint. Each person sees the tools their rule allows. A tool whose description changed can be held until an admin approves it.</p>
+      <span>MCP gateway</span>
+    </a>
+    <a class="situation" href="https://gantry-docs.eliran.me/integrations/connect-a-project/">
+      <h3>Internal apps and agents</h3>
+      <p>A key per service, a budget per end customer or tag, and the same audit record as a person's request. The OpenAI and Anthropic SDKs need a base URL and a key.</p>
+      <span>Connect a project</span>
+    </a>
+    <a class="situation" href="https://gantry-docs.eliran.me/routing/strategies/">
+      <h3>Regulated data</h3>
+      <p>Requests kept in the regions a rule allows, personal data masked before it leaves, and optional redacted bodies sealed apart from the log for the people you name.</p>
+      <span>Regions and routing</span>
+    </a>
+  </div>
+</section>
+
+<section class="rollouts" id="rollouts">
+  <div class="wrap">
+    <div class="rollouts-head">
+      <p class="eyebrow">Example rollouts</p>
+      <h2 class="section-title">Three ways this goes, written out.</h2>
+      <p class="honest">These are scenarios we wrote to show the steps, with real policy lines. They are not customers. Gantry is pre-1.0 and has no customer stories to publish yet.</p>
+    </div>
+
+    <details class="rollout" open>
+      <summary>
+        <p class="tag">Example rollout</p>
+        <h3>A 200-person fintech rolling out Claude Code</h3>
+        <p>Sixty engineers already use Claude Code with one shared Anthropic key. Finance sees a single invoice. Security has been asked whether card data has gone into a prompt.</p>
+      </summary>
+      <div class="rollout-body">
+      <div class="rollout-text">
+        <ol>
+          <li><strong>See.</strong> The shared key moves into Gantry and laptops point at the gateway. Nothing is blocked for two weeks.</li>
+          <li><strong>Know.</strong> Engineers run <code>gantry login</code> and get a personal key through the identity provider. The shared key is revoked.</li>
+          <li><strong>Limit.</strong> A daily budget per person and a monthly budget per team.</li>
+          <li><strong>Protect.</strong> The secrets guardrail runs in shadow, then blocks. Personal data is masked.</li>
+        </ol>
+        <p class="result"><strong>What they have:</strong> spend by engineer and team, a refusal message developers can act on, and a log that answers the card data question with records.</p>
+      </div>
+      <pre class="code">rules:
+  - name: engineering
+    principals: { team: engineering }
+    models: [claude-sonnet-5-5, claude-haiku-5-5]
+    budget: { usd: 6000, per: month }
+    guardrails: [no-secrets, mask-pii]
+limits:
+  - { person: "*", budget: { usd: 30, per: day } }
+guardrails:
+  - { name: no-secrets, type: secrets, action: block }
+  - { name: mask-pii, type: pii, action: mask }</pre>
+          </div>
+    </details>
+
+    <details class="rollout" open>
+      <summary>
+        <p class="tag">Example rollout</p>
+        <h3>A platform team with 40 MCP servers</h3>
+        <p>Agents across the company call internal MCP servers for GitHub, the data warehouse and deploys. Each server has its own token, and nobody can list which agent may call which tool.</p>
+      </summary>
+      <div class="rollout-body">
+      <div class="rollout-text">
+        <ol>
+          <li><strong>See.</strong> The servers go behind Gantry's one MCP endpoint. Every tool call is recorded with the person who made it.</li>
+          <li><strong>Know.</strong> People sign in with their key or by OAuth from the client. Each rule lists the tools its team may see.</li>
+          <li><strong>Limit.</strong> Merges and deploys wait for an admin's approval. Any tool has a kill switch.</li>
+          <li><strong>Protect.</strong> Each tool is pinned by a hash of its description and schema. A changed tool is held until an admin approves it.</li>
+        </ol>
+        <p class="result"><strong>What they have:</strong> one list of every tool, who called it, and a way to stop one tool without taking a server down.</p>
+      </div>
+      <pre class="code">mcp:
+  - name: github
+    url: https://api.githubcopilot.com/mcp/
+    tool_changes: block
+  - name: warehouse
+    url: https://warehouse-mcp.internal/mcp
+    tool_changes: block
+rules:
+  - name: platform
+    principals: { team: platform }
+    models: [claude-sonnet-5-5]
+    tools: [github.*, warehouse.query]
+    approve_tools: [github.merge_pull_request]
+    approval_timeout_seconds: 120</pre>
+          </div>
+    </details>
+
+    <details class="rollout" open>
+      <summary>
+        <p class="tag">Example rollout</p>
+        <h3>A healthcare company that must keep PHI in region</h3>
+        <p>Clinical teams want model help with notes. Compliance requires that patient data stays with an EU endpoint under a signed agreement, and that six years of records can be produced on request.</p>
+      </summary>
+      <div class="rollout-body">
+      <div class="rollout-text">
+        <ol>
+          <li><strong>See.</strong> Gantry runs in the company's own EU cloud account, from the Terraform module.</li>
+          <li><strong>Limit.</strong> The clinical rule reaches only deployments labelled <code>eu</code>. A request with no EU deployment is refused before anything is sent.</li>
+          <li><strong>Protect.</strong> Personal data is masked, and a regex guardrail masks patient record numbers.</li>
+          <li><strong>Prove.</strong> With Gantry Enterprise: export to the SIEM, a retention period, and a legal hold when a case opens.</li>
+        </ol>
+        <p class="result"><strong>What they have:</strong> a record per request naming the region rule that decided it. Gantry enforces the label you set on each deployment. It does not check where a provider runs.</p>
+      </div>
+      <pre class="code">aliases:
+  - name: clinical
+    deployments:
+      - { provider: azure-eu, model: gpt-4o, region: eu }
+      - { provider: openai, model: gpt-4o, region: us }
+guardrails:
+  - { name: mask-pii, type: pii, action: mask }
+  - name: patient-ids
+    type: regex
+    action: mask
+    patterns: { mrn: 'MRN-[0-9]{8}' }
+rules:
+  - name: clinical
+    principals: { team: clinical }
+    models: [clinical]
+    regions: [eu]
+    guardrails: [mask-pii, patient-ids]</pre>
+          </div>
+    </details>
+  </div>
+</section>
+
+<section class="wrap different" id="different">
+  <div class="different-head">
+    <p class="eyebrow">What is different</p>
+    <h2 class="section-title">A gateway built around the record.</h2>
+    <p>Gantry covers the gateway features you expect from LiteLLM or Bifrost: one endpoint, many providers, routing, retries, caching, budgets. The difference is what it does before a request leaves.</p>
+  </div>
+
+  <ol class="points">
+    <li><h3>Governance on every scope</h3><p>Budgets, rate limits and kill switches per organization, team, person, key, end customer, tag and model. <code>gantry explain</code> shows which rule decided and every limit that applied.</p></li>
+    <li><h3>An audit log you can verify</h3><p>The record is written before the request is forwarded. If it cannot be written, the request is refused. The chain is checked with one command, in the open source edition.</p></li>
+    <li><h3>One image, in your cloud</h3><p>A single static binary in an image built from scratch, running as a non-root user, with Postgres as the only other part. No Redis. Prompts and answers stay out of the log.</p></li>
+    <li><h3>One policy file</h3><p>Providers, rules, budgets and guardrails in one YAML file you keep in git. An unknown field is an error with its line and the nearest known word.</p></li>
+    <li><h3>Open source core</h3><p>Apache 2.0, for any number of people. Enterprise features are in the same image and turn on with a license key that is checked offline.</p></li>
+  </ol>
+
+  <div class="compare" role="table" aria-label="Audit and sign-on in the open source editions">
+    <div class="compare-row compare-top" role="row">
+      <span role="columnheader">In the open source edition</span>
+      <span role="columnheader">Gantry</span>
+      <span role="columnheader">LiteLLM</span>
+      <span role="columnheader">Bifrost</span>
+    </div>
+    <div class="compare-row" role="row">
+      <span role="cell">A record of every request</span>
+      <span role="cell" data-l="Gantry">Yes, hash-chained, written before the request is forwarded</span>
+      <span role="cell" data-l="LiteLLM">Audit logs are an Enterprise feature and record admin changes</span>
+      <span role="cell" data-l="Bifrost">Audit logs are an Enterprise feature</span>
+    </div>
+    <div class="compare-row" role="row">
+      <span role="cell">Single sign-on for the admin console</span>
+      <span role="cell" data-l="Gantry">Yes, OpenID Connect</span>
+      <span role="cell" data-l="LiteLLM">Free for up to 5 users, then Enterprise</span>
+      <span role="cell" data-l="Bifrost">Enterprise</span>
+    </div>
+  </div>
+  <p class="compare-note">From each project's public documentation: <a href="https://docs.litellm.ai/docs/proxy/audit_logs">LiteLLM audit logs</a>, <a href="https://docs.litellm.ai/docs/proxy/admin_ui_sso">LiteLLM SSO</a>, <a href="https://docs.getbifrost.ai/enterprise/audit-logs.md">Bifrost audit logs</a>. Both projects are older than Gantry and each does some jobs better. <a href="https://gantry-docs.eliran.me/migrate/comparison/">The full comparison, including where they lead</a></p>
+</section>
+
+<section class="wrap deploy" id="deploy">
+  <div class="deploy-head">
+    <p class="eyebrow">Security and deployment</p>
+    <h2 class="section-title">It runs where your data already is.</h2>
+  </div>
+  <div class="deploy-cols">
+    <ul class="doc-list">
+      <li>The audit log holds no prompt text, no answer text and no keys. A rule can keep redacted bodies, sealed apart from the log, for the people it names.</li>
+      <li>Gantry keys are shown once and stored as a SHA-256 hash. Provider credentials kept in the store are sealed with AES-256-GCM under a master key you hold.</li>
+      <li>The image holds one static binary and runs as user 65532. The license is checked offline, and a lapsed license never stops model traffic.</li>
+      <li>Gantry is pre-1.0 and has not yet had an independent security audit. <a href="/security.html">What it protects, and where it stops</a></li>
+    </ul>
+    <div class="targets">
+      <a href="https://gantry-docs.eliran.me/deploy/docker/"><strong>Docker Compose</strong><span>Gateway and Postgres on one machine</span></a>
+      <a href="https://gantry-docs.eliran.me/deploy/kubernetes/"><strong>Kubernetes</strong><span>Helm chart</span></a>
+      <a href="https://gantry-docs.eliran.me/deploy/aws/"><strong>AWS</strong><span>Terraform for ECS</span></a>
+      <a href="https://gantry-docs.eliran.me/deploy/gcp/"><strong>Google Cloud</strong><span>Terraform for Cloud Run</span></a>
+      <a href="https://gantry-docs.eliran.me/deploy/azure/"><strong>Azure</strong><span>Terraform for Container Apps</span></a>
+      <a href="https://gantry-docs.eliran.me/deploy/cloudflare/"><strong>Cloudflare</strong><span>Containers, audit chain in R2</span></a>
+    </div>
+  </div>
+  <p class="deploy-note">The deploy guides use the Gantry Enterprise image. The open source gateway builds from source with one script, and runs the same way.</p>
+
+  <div class="index">
+    <h3>Everything the gateway does, by docs page</h3>
+    <ul>
+      <li><a href="https://gantry-docs.eliran.me/governance/guardrails/">Guardrails</a><span>Built-in detectors, your patterns, eight vendors, webhooks, shadow mode and backtests</span></li>
+      <li><a href="https://gantry-docs.eliran.me/governance/mcp-gateway/">MCP gateway</a><span>Tool allow lists, approvals, tool pins, per-person credentials</span></li>
+      <li><a href="https://gantry-docs.eliran.me/governance/budgets-and-rate-limits/">Budgets and limits</a><span>Dollars, requests, tokens and requests in flight, exact across replicas</span></li>
+      <li><a href="https://gantry-docs.eliran.me/governance/access-control/">Access</a><span>Keys with rotation, allowed networks, JWTs, SSO, SCIM, console roles</span></li>
+      <li><a href="https://gantry-docs.eliran.me/operations/console-editing/">Policy changes</a><span>Versions, a second admin's approval, a dry run against recent requests</span></li>
+      <li><a href="https://gantry-docs.eliran.me/operations/request-log/">Request log</a><span>Search by person, model, cost and outcome, with a forecast per budget</span></li>
+      <li><a href="https://gantry-docs.eliran.me/routing/strategies/">Routing</a><span>Lowest latency or cost, regions, retries, fallbacks, session affinity</span></li>
+      <li><a href="https://gantry-docs.eliran.me/providers/batches-and-realtime/">APIs</a><span>Chat, Responses, messages, embeddings, files, batches, Realtime</span></li>
+      <li><a href="https://gantry-docs.eliran.me/operations/alerting/">Alerts and export</a><span>Slack, Teams, PagerDuty, email, SIEM destinations, OTLP traces</span></li>
+    </ul>
+  </div>
+</section>
+
+<section class="wrap plans" id="editions">
+  <div class="plans-head">
+    <p class="eyebrow">Editions</p>
+    <h2 class="section-title">Open source gateway. A license adds what a company needs.</h2>
+  </div>
+  <div class="plan-grid">
+    <article class="plan free">
+      <h3>Open source</h3>
+      <p>Apache 2.0, for any number of people. One binary on files, or several replicas on Postgres.</p>
+      <ul>
+        <li>Keys per person and workload, policy as code, kill switches</li>
+        <li>Hash-chained audit log with a command that verifies it</li>
+        <li>Guardrails, MCP gateway, budgets, rate limits and caching</li>
+        <li>Every major provider, with routing, retries and fallbacks</li>
+        <li>Admin console with single sign-on</li>
+      </ul>
+      <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+    </article>
+    <article class="plan paid">
+      <h3>Gantry Enterprise</h3>
+      <p>The same gateway in one image, with features a signed license key turns on. The key is checked offline and nothing calls home. A lapsed license never stops model traffic.</p>
+      <ul>
+        <li>Console members and SCIM from Okta or Microsoft Entra ID</li>
+        <li>Alerts, SIEM export and LLM observability destinations</li>
+        <li>Audit retention with a legal hold</li>
+        <li>Compose, Helm, Terraform and Cloudflare deployment templates</li>
+      </ul>
+      <a class="btn btn-line" href="https://gantry-docs.eliran.me/operations/license/">How the license works</a>
+    </article>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="cta-box">
+    <h2>Start with step one. Block nothing, and find out what is in use.</h2>
+    <div class="actions">
+      <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink-line" href="https://gantry-docs.eliran.me/deploy/overview/">Deploy in your cloud</a>
+      <a class="btn btn-ink-line" href="https://github.com/ggantry/gantry">GitHub</a>
+    </div>
+  </div>
+</section>
 </main>
 
 <footer class="footer">
@@ -311,36 +601,41 @@ export ANTHROPIC_API_KEY=gantry_...</pre>
       <p>The self-hosted AI gateway built for governance.</p>
     </div>
     <nav class="cols" aria-label="Footer">
-      <div><strong>Product</strong><a href="#how">How it works</a><a href="#proof">Audit log</a><a href="#controls">Controls</a><a href="#open-source">Editions</a><a href="/security.html">Security</a></div>
+      <div><strong>Product</strong><a href="#steps">Five steps</a><a href="#use-cases">Use cases</a><a href="#rollouts">Example rollouts</a><a href="#editions">Editions</a><a href="/security.html">Security</a></div>
       <div><strong>Docs</strong><a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a><a href="https://gantry-docs.eliran.me/governance/policy/">Policy file</a><a href="https://gantry-docs.eliran.me/deploy/overview/">Deploy</a><a href="https://gantry-docs.eliran.me/operations/security/">Security model</a></div>
       <div><strong>Project</strong><a href="https://github.com/ggantry/gantry">GitHub</a><a href="https://gantry-docs.eliran.me/getting-started/status/">Status</a><a href="https://gantry-docs.eliran.me/migrate/comparison/">Compared with LiteLLM and Bifrost</a></div>
     </nav>
   </div>
-  <p class="wrap legal">Apache 2.0. Version 0.0.1, pre-1.0.</p>
+  <p class="wrap legal">Apache 2.0. Version 0.0.1, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
 </footer>
 
 <script>
-// Header border once the page scrolls, the current section in the nav, and copy buttons. Nothing else runs here.
+// Header border on scroll, the marquee's pause button, the copy button, and closing the small-screen menu after a tap.
 (() => {
   const header = document.getElementById('header');
   const onScroll = () => header.classList.toggle('scrolled', window.scrollY > 8);
   onScroll();
   window.addEventListener('scroll', onScroll, { passive: true });
 
-  const links = [...document.querySelectorAll('.nav a[href^="#"]')];
-  const seen = new IntersectionObserver((entries) => {
-    for (const e of entries) {
-      if (!e.isIntersecting) continue;
-      links.forEach((a) => a.setAttribute('aria-current', String(a.getAttribute('href') === '#' + e.target.id)));
-    }
-  }, { rootMargin: '-45% 0px -50% 0px' });
-  links.forEach((a) => { const s = document.querySelector(a.getAttribute('href')); if (s) seen.observe(s); });
+  const pause = document.getElementById('pause');
+  pause.addEventListener('click', () => {
+    const paused = document.getElementById('works').classList.toggle('paused');
+    pause.setAttribute('aria-pressed', String(paused));
+    pause.textContent = paused ? 'Play' : 'Pause';
+  });
 
   document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(document.getElementById(b.dataset.copy).textContent); b.textContent = 'Copied'; }
+    const text = document.getElementById(b.dataset.copy).textContent.replace(/^\$ /gm, '');
+    try { await navigator.clipboard.writeText(text); b.textContent = 'Copied'; }
     catch { b.textContent = 'Press Cmd+C'; }
     setTimeout(() => { b.textContent = 'Copy'; }, 1600);
   }));
+
+  const menu = document.querySelector('.menu');
+  menu.addEventListener('click', (e) => { if (e.target.closest('a')) menu.open = false; });
+
+  // On a phone the example rollouts start folded, except the first.
+  if (window.matchMedia('(max-width: 760px)').matches) document.querySelectorAll('.rollout').forEach((d, i) => { d.open = i === 0; });
 })();
 </script>
 </body>
