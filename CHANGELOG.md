@@ -27,6 +27,19 @@ one repository. How a release is made: RELEASING.md.
   teams.
 - Setup guides for Okta, Microsoft Entra ID, Google Workspace, OneLogin, Keycloak and JumpCloud, for OpenID Connect
   and SAML.
+- `gantry login` over SAML: on a setup with `console.saml` and no `console.sso`, `gantry login` opens the SAML
+  sign-in and the browser comes back to the CLI's listener on 127.0.0.1 with a one-use code, traded for the key with
+  the PKCE verifier, as with OpenID Connect. Turned on by `console.saml.self_issue` (same fields as
+  `console.sso.self_issue`); groups place the key in a team the same way.
+- `console.sso.scopes`: the scopes asked for at the authorization endpoint, `openid email profile` unless set (must
+  include `openid`). Okta's org authorization server and OneLogin send a `groups` claim only when `groups` is asked
+  for; their guides now use `scopes: openid email profile groups`.
+- An ID token whose `iss` is `accounts.google.com` is taken for `issuer: https://accounts.google.com`, as Google
+  documents both forms.
+- The identity provider guides were checked against each vendor's current documentation: Okta's Classic experience
+  step and legacy group statements, JumpCloud's response-only signing default and SSO IdP URL, Entra's direct
+  membership rule for groups assigned to the app, Google's one-time client secret and Audience page, Keycloak's PKCE
+  setting before 26.3, OneLogin's parameter labels. Details the vendors do not document are marked.
 
 ### Secrets
 
@@ -37,6 +50,11 @@ one repository. How a release is made: RELEASING.md.
   second. Each manager signs in with its platform's chain (Vault token or Kubernetes auth, the AWS default chain,
   Application Default Credentials, Entra client secret, workload or managed identity). Without the feature a
   reference stops the start with the fix, and is never sent as a key.
+- Each secret a refresh finds rotated writes a `secret_rotated` audit record, and each one it cannot read a
+  `secret_refresh_failed` record (code `secret_refresh_failed`, with the reason): the variable, its reference and the
+  manager, never the value. Counted in `/metrics` as `gantry_secret_rotations_total` and
+  `gantry_secret_refresh_failures_total` by manager. With the `alerts` feature, a **system** alert rule fires on a
+  failed refresh.
 
 ### Browser access
 

@@ -70,6 +70,8 @@ console:
     admin_values: [gantry-admins]
     read_only_values: [gantry-viewers]
     allowed_domains: [example.com]
+    self_issue:
+      allowed_domains: [example.com]
 "
     );
     std::fs::write(dir.join("gantry.policy.yaml"), policy)?;
@@ -426,6 +428,142 @@ async fn unsigned_misdirected_unstarted_and_roleless_answers_are_refused() -> Te
     })?;
     post(&s, &cookie, request, &xml).await?;
     assert_eq!(last_refusal(&s)?, "sso_email");
+    Ok(())
+}
+
+/// RFC 7636, appendix B: the verifier and its S256 challenge.
+const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+
+/// Runs the browser's side of a `gantry login` on a SAML-only setup, up to where it goes back to the CLI's
+/// listener, and returns that address.
+async fn cli_browse(s: &Setup, email: &str, groups: &[&str]) -> Result<String, Error> {
+    let login = format!(
+        "/console/cli/login?cli_port=1&cli_state=abcdefghijklmnop&cli_challenge={CHALLENGE}"
+    );
+    let (status, headers, body) = send(&s.app, "GET", &login, "", "").await?;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let to = headers
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(to.starts_with("/console/saml/start?"), "{to}");
+    assert_eq!(param(&to, "cli_challenge"), CHALLENGE);
+    let (status, headers, body) = send(&s.app, "GET", &to, "", "").await?;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let idp = headers
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let id = param(&idp, "RelayState");
+    let (saml, cli) = (
+        set_cookie(&headers, "gantry_saml"),
+        set_cookie(&headers, "gantry_cli"),
+    );
+    assert!(!cli.is_empty(), "no gantry_cli cookie");
+    let xml = respond(&Answer {
+        request: id.clone(),
+        email,
+        groups,
+        audience: SP,
+        signed: true,
+    })?;
+    let (status, headers, body) = send(
+        &s.app,
+        "POST",
+        "/console/saml/acs",
+        &format!("gantry_saml={saml}; gantry_cli={cli}"),
+        &format!(
+            "SAMLResponse={}&RelayState={}",
+            enc(&x509::base64_encode(xml.as_bytes())),
+            enc(&id)
+        ),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    // Neither a console session nor the key: only a one-use code, for the CLI that holds the verifier.
+    assert!(set_cookie(&headers, "gantry_console").is_empty());
+    Ok(headers
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string())
+}
+
+#[tokio::test]
+async fn gantry_login_over_saml_issues_a_key_in_the_team_the_groups_give() -> TestResult {
+    let s = setup("cli")?;
+    let back = cli_browse(&s, "Dana@Example.com", &["payments-eng"]).await?;
+    assert!(
+        back.starts_with("http://127.0.0.1:1/callback?state=abcdefghijklmnop&code="),
+        "{back}"
+    );
+    let code = param(&back, "code");
+    // Without the verifier the code is worth nothing, and is spent.
+    let (status, _, _) = send(
+        &s.app,
+        "POST",
+        "/console/cli/token",
+        "",
+        &format!("code={code}&verifier=wrong"),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let back = cli_browse(&s, "Dana@Example.com", &["payments-eng"]).await?;
+    let (status, _, body) = send(
+        &s.app,
+        "POST",
+        "/console/cli/token",
+        "",
+        &format!("code={}&verifier={VERIFIER}", param(&back, "code")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let got: Value = serde_json::from_str(&body)?;
+    assert_eq!(got["name"], "dana@example.com");
+    assert_eq!(got["team"], "payments");
+    let key = got["key"].as_str().unwrap_or("");
+    let keys = std::fs::read_to_string(s.dir.join("gantry.keys.yaml"))?;
+    assert!(
+        keys.contains(&format!(
+            "  - name: dana@example.com\n    team: payments\n    sha256: {}\n",
+            sha256_hex(key.as_bytes())
+        )),
+        "{keys}"
+    );
+    let issued = admin_records(&s)?.pop().ok_or("no record")?;
+    assert_eq!(issued["action"], "self_issue_key");
+    assert_eq!(issued["team"], "payments");
+    Ok(())
+}
+
+#[tokio::test]
+async fn gantry_login_over_saml_refuses_who_self_issue_or_the_teams_do_not_place() -> TestResult {
+    let s = setup("cli-refused")?;
+    // Teams place people by group, so a person in none of them gets no key, and the CLI is told why.
+    let back = cli_browse(&s, "dana@example.com", &["staff"]).await?;
+    assert!(back.contains("error=sso_team"), "{back}");
+    let last = admin_records(&s)?.pop().ok_or("no record")?;
+    assert_eq!(last["code"], "sso_team");
+    assert_eq!(last["target"]["via"], "saml");
+    // With no self_issue under console.saml, gantry login is off.
+    let path = s.dir.join("gantry.policy.yaml");
+    let text = std::fs::read_to_string(&path)?;
+    std::fs::write(
+        &path,
+        text.replace(
+            "    self_issue:\n      allowed_domains: [example.com]\n",
+            "",
+        ),
+    )?;
+    let login = format!(
+        "/console/saml/start?cli_port=1&cli_state=abcdefghijklmnop&cli_challenge={CHALLENGE}"
+    );
+    let (status, _, body) = send(&s.app, "GET", &login, "", "").await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(body.contains("console.saml.self_issue"), "{body}");
     Ok(())
 }
 

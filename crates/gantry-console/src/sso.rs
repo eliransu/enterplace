@@ -284,10 +284,11 @@ pub(crate) fn authorize_url(
         '?'
     };
     format!(
-        "{}{join}response_type=code&client_id={}&redirect_uri={}&scope=openid%20email%20profile&state={state}&nonce={nonce}&code_challenge={challenge}&code_challenge_method=S256",
+        "{}{join}response_type=code&client_id={}&redirect_uri={}&scope={}&state={state}&nonce={nonce}&code_challenge={challenge}&code_challenge_method=S256",
         provider.authorization_endpoint,
         enc(&sso.client_id),
-        enc(&sso.redirect_url)
+        enc(&sso.redirect_url),
+        enc(&sso.scopes.join(" "))
     )
 }
 
@@ -436,7 +437,7 @@ pub(crate) fn verify(
         .and_then(|b| serde_json::from_slice(&b).ok())
         .ok_or_else(|| bad("its claims are not base64url JSON"))?;
     let claim = |name: &str| claims.get(name).and_then(Value::as_str).unwrap_or("");
-    if claim("iss") != sso.issuer {
+    if !issuer_matches(claim("iss"), &sso.issuer) {
         return Err(refuse(
             "sso_issuer",
             format!(
@@ -485,6 +486,12 @@ pub(crate) fn verify(
         ));
     }
     Ok(claims)
+}
+
+/// Whether an ID token's `iss` names the configured issuer. Exact, except that Google documents the `iss` of its
+/// ID tokens as either `https://accounts.google.com` or `accounts.google.com`.
+fn issuer_matches(iss: &str, issuer: &str) -> bool {
+    iss == issuer || (issuer == "https://accounts.google.com" && iss == "accounts.google.com")
 }
 
 /// The verified email of the claims, lower case.
@@ -580,23 +587,39 @@ pub(crate) fn admit_self(
     teams: &[gantry_core::policy::Team],
 ) -> Result<(String, String, u32), (Option<String>, Refusal)> {
     let email = verified_email(claims)?;
-    let Some(si) = &sso.self_issue else {
-        return Err((
-            Some(email),
-            refuse(
-                "sso_self_issue",
-                "gantry login is off: the policy file has no console.sso.self_issue section. Ask an admin to add one, or for a key.",
-            ),
-        ));
+    let groups = values(claims, &sso.role_claim);
+    admit_self_person(
+        email,
+        &groups,
+        &Access::of_sso(sso),
+        sso.self_issue.as_ref(),
+        teams,
+    )
+}
+
+/// [`admit_self`] for a person the identity provider vouched for, over OpenID Connect or SAML.
+pub(crate) fn admit_self_person(
+    email: String,
+    groups: &[&str],
+    access: &Access<'_>,
+    self_issue: Option<&gantry_core::config::SelfIssue>,
+    teams: &[gantry_core::policy::Team],
+) -> Result<(String, String, u32), (Option<String>, Refusal)> {
+    let Some(si) = self_issue else {
+        let message = format!(
+            "gantry login is off: the policy file has no {}.self_issue section. Ask an admin to add one, or for a key.",
+            access.section
+        );
+        return Err((Some(email), refuse("sso_self_issue", message)));
     };
     if !listed(&email, &si.allowed_emails, &si.allowed_domains) {
         let message = format!(
-            "{email} may not get a key with gantry login. Ask an admin to add it, or its domain, to console.sso.self_issue in the policy file, or for a key."
+            "{email} may not get a key with gantry login. Ask an admin to add it, or its domain, to {}.self_issue in the policy file, or for a key.",
+            access.section
         );
         return Err((Some(email), refuse("sso_self_issue", message)));
     }
-    let groups = values(claims, &sso.role_claim);
-    let team = match gantry_core::policy::team_of(teams, &email, &groups) {
+    let team = match gantry_core::policy::team_of(teams, &email, groups) {
         Some(team) => team.name.clone(),
         None if si.team_set
             || teams
@@ -608,7 +631,7 @@ pub(crate) fn admit_self(
         None => {
             let message = format!(
                 "{email} is in no team: the policy's teams list neither the email nor any of its \"{}\" values ({}). Ask an admin to add you to a team's members, or your group to a team's sso_values, in the policy file.",
-                sso.role_claim,
+                access.attribute,
                 if groups.is_empty() {
                     "it has none".to_string()
                 } else {
@@ -723,5 +746,29 @@ mod tests {
         assert_eq!(base64(b"fooba", STANDARD, true), "Zm9vYmE=");
         assert_eq!(base64(b"foob", STANDARD, true), "Zm9vYg==");
         assert_eq!(b64url_decode("a+b"), None);
+    }
+
+    #[test]
+    fn the_issuer_must_match_but_for_googles_two_documented_forms() {
+        assert!(issuer_matches(
+            "https://idp.example.com",
+            "https://idp.example.com"
+        ));
+        assert!(!issuer_matches(
+            "idp.example.com",
+            "https://idp.example.com"
+        ));
+        assert!(!issuer_matches(
+            "https://idp.example.com/",
+            "https://idp.example.com"
+        ));
+        assert!(issuer_matches(
+            "accounts.google.com",
+            "https://accounts.google.com"
+        ));
+        assert!(!issuer_matches(
+            "accounts.google.com.evil",
+            "https://accounts.google.com"
+        ));
     }
 }

@@ -37,6 +37,8 @@ Metrics: http://127.0.0.1:9464/metrics
 | `gantry_audit_queue_depth` | gauge | none | Records waiting for the audit writer |
 | `gantry_audit_broken` | gauge | none | `1` when the audit log cannot be written and every request is refused until a restart |
 | `gantry_spend_usd_total` | counter | `team`, `model` | US dollars charged since Gantry started, as usage records write them |
+| `gantry_secret_rotations_total` | counter | `source` | Gantry Enterprise: secrets a refresh found changed in their [secret manager](/operations/secret-managers/), by manager (`vault`, `aws-sm`, `gcp-sm`, `azure-kv`) |
+| `gantry_secret_refresh_failures_total` | counter | `source` | Gantry Enterprise: secrets a refresh could not read from their manager, by manager. The value read before stays in use |
 
 | Label | Values |
 |---|---|

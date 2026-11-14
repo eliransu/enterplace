@@ -17,9 +17,9 @@ The examples use `https://gantry.example.com` for your Gantry address, `https://
 
 1. In the Keycloak admin console, select the realm, click **Clients** and then **Create client**. Leave **Client type** set to **OpenID Connect**, enter the **Client ID** `gantry-console`, and continue.
 
-2. Under **Capability config**, turn **Client authentication** on and keep **Standard flow** on. Set **PKCE method** to **S256** (Gantry always sends an S256 challenge).
+2. Under **Capability config**, turn **Client authentication** on and keep **Standard flow** on. Set **PKCE method** to **S256** (Gantry always sends an S256 challenge). On Keycloak older than 26.3, the setting is **Proof Key for Code Exchange Code Challenge Method** on the **Advanced** tab.
 
-3. Under **Valid redirect URIs**, add `https://gantry.example.com/console/sso/callback` and save. `gantry login` comes back on the same URI.
+3. Under **Access settings** > **Valid redirect URIs**, add `https://gantry.example.com/console/sso/callback` and save. `gantry login` comes back on the same URI.
 
 4. On the **Credentials** tab, keep **Client ID and Secret** as the client authenticator and copy the client secret.
 

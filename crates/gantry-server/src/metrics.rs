@@ -181,6 +181,23 @@ impl Metrics {
                 usd_text(*usd)
             );
         }
+        let secrets = gantry_core::secrets::counts();
+        if !secrets.is_empty() {
+            out.push_str("# HELP gantry_secret_rotations_total Secrets read from a secret manager that changed on a refresh, by manager.\n# TYPE gantry_secret_rotations_total counter\n");
+            for (source, rotated, _) in &secrets {
+                let _ = writeln!(
+                    out,
+                    "gantry_secret_rotations_total{{source=\"{source}\"}} {rotated}"
+                );
+            }
+            out.push_str("# HELP gantry_secret_refresh_failures_total Secrets a refresh could not read from their manager (the value read before is kept), by manager.\n# TYPE gantry_secret_refresh_failures_total counter\n");
+            for (source, _, failed) in &secrets {
+                let _ = writeln!(
+                    out,
+                    "gantry_secret_refresh_failures_total{{source=\"{source}\"}} {failed}"
+                );
+            }
+        }
         out
     }
 }

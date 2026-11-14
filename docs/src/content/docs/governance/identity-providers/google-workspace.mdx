@@ -15,17 +15,17 @@ The examples use `https://gantry.example.com` for your Gantry address and `examp
 
 <Steps>
 
-1. In the Google Cloud console, select or create a project for Gantry. Fill in the **Branding** page of the consent screen. If your project offers an internal audience, choose it, so only accounts in your organization can use the client.
+1. In the Google Cloud console, select or create a project for Gantry. Fill in the **Branding** page. On the **Audience** page, choose **Internal**, so only accounts in your organization can use the client (Google offers it to Workspace organizations only).
 
 2. On the **Clients** page, click **Create client** and choose a web application.
 
 3. Under authorized redirect URIs, add `https://gantry.example.com/console/sso/callback`. The value must match exactly. `gantry login` comes back on the same URI.
 
-4. Copy the client ID and the client secret.
+4. Copy the client ID, and copy or download the client secret now: Google shows the full secret only once, when it is created.
 
 </Steps>
 
-Google's ID token has `email`, `email_verified` and `hd` (the Workspace domain) but no groups claim. Use `email` as the role claim and list people by address:
+Google's ID token has `email`, `email_verified` and `hd` (the Workspace domain) but no groups claim. Google documents its `iss` as either `https://accounts.google.com` or `accounts.google.com`; with `issuer: https://accounts.google.com`, Gantry takes both. Use `email` as the role claim and list people by address:
 
 ```yaml title="gantry.policy.yaml"
 console:
@@ -63,13 +63,13 @@ With `role_claim: email`, a team's `sso_values` and a role's `sso_values` are em
 
 4. In **Attribute mapping**, click **Add mapping**, choose **Primary email** and name the app attribute `email`.
 
-5. Under **Group membership**, add the Google groups that give console access (for example `gantry-admins` and `gantry-viewers`) and enter `groups` as the **App attribute**. Google sends only the listed groups the person belongs to, directly or through another group, up to 75 groups per app.
+5. Under **Group membership**, add the Google groups that give console access (for example `gantry-admins` and `gantry-viewers`) and enter `groups` as the **App attribute**. Google sends only the listed groups the person belongs to, directly or through another group. You can list up to 75 groups.
 
 6. Click **Finish**. Then open the app, click **User access**, and turn it **On** for the organizational units or access group that need the console. The change can take up to 24 hours.
 
 </Steps>
 
-Google sends each group by its name, so the values in the policy are group names. After renaming a group, add it again under **Group membership** so the new name is sent, and update the policy.
+Google's documentation does not say whether a group is sent by its name or its email address. If a member of a listed group is refused with `sso_role` while the name is right, put the group's email address in the policy instead. After renaming a group, add it again under **Group membership** so the new name is sent, and update the policy.
 
 
 {/* not checked: the certificate is a placeholder */}

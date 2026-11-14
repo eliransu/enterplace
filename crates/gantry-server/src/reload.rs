@@ -138,6 +138,27 @@ fn config_record(
     record
 }
 
+/// A rotation of a secret read from a secret manager, or a refresh that failed: the variable, its reference and the
+/// manager, never the value. The error a source gives never holds one either.
+fn secret_record(change: &gantry_core::secrets::Change<'_>) -> Map<String, Value> {
+    let mut record = Map::new();
+    let event = if change.error.is_some() {
+        "secret_refresh_failed"
+    } else {
+        "secret_rotated"
+    };
+    record.insert("event".into(), event.into());
+    record.insert("time".into(), audit::timestamp().into());
+    record.insert("variable".into(), change.variable.into());
+    record.insert("reference".into(), change.reference.into());
+    record.insert("source".into(), change.source.into());
+    if let Some(error) = change.error {
+        record.insert("code".into(), "secret_refresh_failed".into());
+        record.insert("reason".into(), error.into());
+    }
+    record
+}
+
 /// The number of the store's live version, when the policy is kept in the store and `text` is that version.
 fn live_version(policy_path: &Path, text: &str) -> Option<i64> {
     store::policy_store(policy_path)
@@ -520,6 +541,13 @@ pub fn governed_with(
         audit_path: Some(loaded.audit_path.clone()),
     };
     let log = Arc::new(AuditLog::open(&loaded.audit_path)?);
+    // Weak: the observer is process-wide, and must not keep a log (and its lock) open after the server drops it.
+    let to_log = Arc::downgrade(&log);
+    gantry_core::secrets::observe(Arc::new(move |change| {
+        if let Some(log) = to_log.upgrade() {
+            log.append_record_then(&secret_record(change), |_| {});
+        }
+    }));
     // The whole chain is checked before serving: Gantry does not add records to a log it cannot vouch for.
     // ponytail: this reads the whole file at every start. When logs grow past a few gigabytes, checkpoint the verified prefix.
     let last = if audit::has_records(&loaded.audit_path) {

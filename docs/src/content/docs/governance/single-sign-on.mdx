@@ -72,6 +72,7 @@ The policy file is read on every console page, so `console.sso` changes need no 
 | `admin_values` | list | `[]` | Claim values that give the admin role. |
 | `read_only_values` | list | `[]` | Claim values that give the read-only role. |
 | `self_issue` | map | none | Turns on `gantry login`. See [below](#developer-keys-with-gantry-login). |
+| `scopes` | string | `openid email profile` | The scopes asked for, space separated. Must include `openid`. Okta's org authorization server and OneLogin send a `groups` claim only with `openid email profile groups`. |
 
 ### Roles
 
@@ -152,6 +153,8 @@ The CLI writes `~/.config/gantry/credentials` (`$XDG_CONFIG_HOME/gantry/credenti
 Logging in again gives up the previous key and rewrites `env`, so a profile that sources it keeps working. A profile that holds the key itself breaks at the next login. When a login key expires or is revoked, the refusal (`key_expired` or `unknown_key`) says to run `gantry login` again.
 
 `--no-browser` prints the sign-in address instead of opening it.
+
+On a setup with SAML and no OpenID Connect, `gantry login` signs in through SAML: see [gantry login over SAML](/governance/saml/#gantry-login-over-saml).
 
 ### self_issue fields
 

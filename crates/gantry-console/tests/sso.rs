@@ -433,6 +433,7 @@ async fn start(s: &Setup) -> Result<Started, Error> {
     assert!(to.starts_with(&format!("{}/authorize?", s.issuer)), "{to}");
     assert_eq!(param(to, "code_challenge_method"), "S256");
     assert_eq!(param(to, "client_id"), CLIENT_ID);
+    assert!(to.contains("&scope=openid%20email%20profile&"), "{to}");
     let state = param(to, "state");
     let cookie = set_cookie(&headers, "gantry_sso");
     // The cookie carries the state, sealed: the server keeps nothing for a sign-in it started.
@@ -1581,5 +1582,45 @@ async fn a_role_kept_to_a_team_signs_in_by_group_and_sees_only_that_team() -> Te
     )
     .await?;
     assert_eq!(status, StatusCode::OK, "{page}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_scopes_setting_is_what_the_provider_is_asked_for_and_must_hold_openid() -> TestResult {
+    let s = setup().await?;
+    let path = s.dir.join("gantry.policy.yaml");
+    let text = std::fs::read_to_string(&path)?;
+    std::fs::write(
+        &path,
+        text.replace(
+            "    role_claim: groups\n",
+            "    role_claim: groups\n    scopes: openid email profile groups\n",
+        ),
+    )?;
+    let (status, headers, body) = send(&s.app, "GET", "/console/sso/start", "", "").await?;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let to = headers
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        to.contains("&scope=openid%20email%20profile%20groups&"),
+        "{to}"
+    );
+    std::fs::write(
+        &path,
+        text.replace(
+            "    role_claim: groups\n",
+            "    role_claim: groups\n    scopes: email \"groups\"\n",
+        ),
+    )?;
+    let errors = gantry_core::config::load(&path, None)
+        .err()
+        .ok_or("loaded")?
+        .join("\n");
+    assert!(
+        errors.contains("scopes must be space separated scope names that include openid"),
+        "{errors}"
+    );
     Ok(())
 }

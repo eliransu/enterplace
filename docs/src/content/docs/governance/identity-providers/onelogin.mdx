@@ -19,7 +19,7 @@ The examples use `https://gantry.example.com` for your Gantry address, `example`
 
 2. On the **Configuration** tab, add `https://gantry.example.com/console/sso/callback` as the redirect URI and save. OneLogin can take a few minutes to apply a changed redirect URI. `gantry login` comes back on the same URI.
 
-3. On the **Parameters** tab, open **Groups**. Set the default value to **User Roles** and the transform to semicolon-delimited input with multi-value output, then save.
+3. On the **Parameters** tab, open **Groups**. Set **Default if no value** to **User Roles**, select **Semicolon Delimited input (Multi-value output)** in the field next to it, then save.
 
 4. On the **SSO** tab, set **Application Type** to **Web** and the token endpoint authentication method to **Basic** or **POST** (not **None (PKCE)**: Gantry sends a client secret and a PKCE challenge). Copy the **Client ID** and **Client Secret**.
 
@@ -27,8 +27,8 @@ The examples use `https://gantry.example.com` for your Gantry address, `example`
 
 </Steps>
 
-<Aside type="caution">
-OneLogin documents the `groups` claim for requests that ask for the `groups` scope. Gantry asks for `openid email profile`. Sign in once and check the ID token: if it carries no `groups` claim, every sign-in is refused with `sso_role`, and roles from OneLogin need SAML 2.0 below.
+<Aside>
+OneLogin puts the `groups` claim in the ID token only when the request asks for the `groups` scope, so the policy sets `scopes: openid email profile groups`. A person with no roles gets no `groups` claim and is refused with `sso_role`.
 </Aside>
 
 ```yaml title="gantry.policy.yaml"
@@ -38,6 +38,7 @@ console:
     client_id: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
     client_secret_env: GANTRY_SSO_SECRET
     redirect_url: https://gantry.example.com/console/sso/callback
+    scopes: openid email profile groups
     allowed_domains: [example.com]
     role_claim: groups
     admin_values: [gantry-admins]
@@ -60,7 +61,7 @@ The issuer is `https://<subdomain>.onelogin.com/oidc/2`. Set the secret where Ga
    - **Login URL**: `https://gantry.example.com/console/saml/start`, so the OneLogin portal tile starts an SP-initiated sign-in
    - Set the SAML initiator to the service provider, the name ID format to email, and the signature element to the assertion (or both), and leave encryption off
 
-3. On the **Parameters** tab, keep the name ID mapped to **Email**. Add a parameter named `email` with the value **Email**, and a parameter named `groups` with the value **User Roles** (or a directory group attribute such as `MemberOf`). Mark both **Include in SAML Assertion**, and send `groups` as multiple values.
+3. On the **Parameters** tab, keep the name ID mapped to **Email**. Add a parameter named `email` with the value **Email**, and a parameter named `groups` with **Include in SAML assertion** and **Multi-value parameter** checked, **Default if no value** set to **User Roles** and **Semicolon Delimited input (Multi-value output)** selected. Mark `email` **Include in SAML assertion** too. (A directory group attribute such as `MemberOf` can stand in for **User Roles**; this option is not confirmed in OneLogin's public docs.)
 
 4. On the **SSO** tab, set the SAML signature algorithm to SHA-256. Gantry refuses SHA-1.
 

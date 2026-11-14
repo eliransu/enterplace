@@ -188,7 +188,7 @@ impl RuleKind {
             Self::NewIp => "A key used from a new address",
             Self::AfterHours => "A key used after hours",
             Self::UnusualSpend => "Unusual spend by a person",
-            Self::System => "Audit log or store trouble",
+            Self::System => "Audit log, store or secret manager trouble",
         }
     }
 
@@ -1088,6 +1088,20 @@ impl Engine {
                             rule,
                             format!("{person}:{}", time.get(..10).unwrap_or_default()),
                             String::new(),
+                            0,
+                        );
+                    }
+                    (RuleKind::System, "secret_refresh_failed") => {
+                        let variable = record["variable"].as_str().unwrap_or("?");
+                        hit(
+                            rule,
+                            format!("{}:secret:{variable}", self.replica),
+                            format!(
+                                "{variable} ({}) could not be read again from {}: {}. The gateway keeps the value it read before; fix access to the secret manager before that value is revoked.",
+                                record["reference"].as_str().unwrap_or("?"),
+                                record["source"].as_str().unwrap_or("its secret manager"),
+                                record["reason"].as_str().unwrap_or("no reason given")
+                            ),
                             0,
                         );
                     }

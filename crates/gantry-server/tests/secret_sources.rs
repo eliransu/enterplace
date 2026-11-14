@@ -138,5 +138,63 @@ rules:
     );
     let seen = seen.lock().map_err(|e| e.to_string())?.clone();
     assert_eq!(seen, ["Bearer sk-first", "Bearer sk-second"]);
+
+    // The rotation and the failed refresh are both in the audit chain: which variable and reference, when, from
+    // which manager, and never the value.
+    let audit = dir.join("gantry-audit.jsonl");
+    let mut text = String::new();
+    for _ in 0..50 {
+        text = std::fs::read_to_string(&audit).unwrap_or_default();
+        if text.contains("secret_refresh_failed") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
+    assert!(
+        !text.contains("sk-first") && !text.contains("sk-second"),
+        "{text}"
+    );
+    let records: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let rotated = records
+        .iter()
+        .find(|r| r["event"] == "secret_rotated")
+        .ok_or("no rotation record")?;
+    assert_eq!(rotated["variable"], "OPENAI_KEY");
+    assert_eq!(rotated["reference"], "vault://secret/data/gantry#openai");
+    assert_eq!(rotated["source"], "vault");
+    assert!(rotated["time"].as_str().is_some_and(|t| !t.is_empty()));
+    let failed = records
+        .iter()
+        .find(|r| r["event"] == "secret_refresh_failed")
+        .ok_or("no failure record")?;
+    assert_eq!(failed["code"], "secret_refresh_failed");
+    assert_eq!(failed["reference"], "vault://gone#x");
+    assert!(
+        failed["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("no such secret")),
+        "{failed}"
+    );
+    assert!(gantry_core::audit::verify(&audit).is_ok());
+
+    // And counted for Prometheus, by manager.
+    let response = gw
+        .metrics
+        .clone()
+        .oneshot(Request::get("/metrics").body(Body::empty())?)
+        .await?;
+    let body = response.into_body().collect().await?.to_bytes();
+    let metrics = String::from_utf8_lossy(&body);
+    assert!(
+        metrics.contains("gantry_secret_rotations_total{source=\"vault\"} 1"),
+        "{metrics}"
+    );
+    assert!(
+        metrics.contains("gantry_secret_refresh_failures_total{source=\"vault\"} 1"),
+        "{metrics}"
+    );
     Ok(())
 }
