@@ -2,10 +2,14 @@
 
 use std::{process::ExitCode, time::Duration};
 
-use gantry_bench::{BoxError, Load, Report, run_load, spawn_gateway, spawn_mock_upstream};
+use gantry_bench::{
+    BoxError, Load, Report, load_client, ramp, run_load, run_load_on, spawn_gateway,
+    spawn_mock_upstream_with_latency,
+};
 
 const USAGE: &str = "\
-Usage: gantry-bench [--rps N] [--secs N] [--stream] [--messages] [--no-policy] [--max-p99-overhead-us N]
+Usage: gantry-bench [--rps N] [--secs N] [--stream] [--messages] [--no-policy] [--upstream-ms N]
+                    [--max-p99-overhead-us N]
 
 Runs a mock model server and the gateway in this process, sends the same load to each, and prints
 what the gateway adds, two ways:
@@ -14,6 +18,8 @@ what the gateway adds, two ways:
   self-time  time the gateway reports spending on each request itself (its Server-Timing header).
 Defaults: --rps 5000 --secs 10. The gateway checks every request against a policy of 1,000 keys
 unless --no-policy is given. --messages sends to Claude Code's route, /v1/messages, which needs the policy.
+--upstream-ms makes the mock wait N milliseconds before each answer, as a provider does (Bifrost's
+published setup: --rps 5000 --upstream-ms 1500). Self-time leaves that wait out.
 With --max-p99-overhead-us the exit code is 1 when added latency is above N microseconds at p99, or
 when the upstream alone has a p99 above N (a run too noisy to measure what the gateway adds).
 Self-time covers identifying, deciding and recording only, so it is shown and not gated.
@@ -27,6 +33,7 @@ struct Args {
     load: Load,
     check_policy: bool,
     gate_us: Option<u64>,
+    upstream: Duration,
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
@@ -39,6 +46,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         },
         check_policy: true,
         gate_us: None,
+        upstream: Duration::ZERO,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -57,6 +65,7 @@ fn parse_args() -> Result<Option<Args>, String> {
                     .map_err(|_| "--rps is too large.".to_string())?
             }
             "--secs" => args.load.duration = Duration::from_secs(number("--secs")?),
+            "--upstream-ms" => args.upstream = Duration::from_millis(number("--upstream-ms")?),
             "--max-p99-overhead-us" => args.gate_us = Some(number("--max-p99-overhead-us")?),
             "--stream" => args.load.stream = true,
             "--messages" => args.load.messages = true,
@@ -90,19 +99,14 @@ fn line(name: &str, r: &Report) {
 }
 
 async fn run(args: &Args) -> Result<bool, BoxError> {
-    let upstream = spawn_mock_upstream("127.0.0.1:0".parse()?).await?;
+    let upstream = spawn_mock_upstream_with_latency("127.0.0.1:0".parse()?, args.upstream).await?;
     let (gateway, audit) = spawn_gateway(upstream, args.check_policy).await?;
-    let warmup = Load {
-        duration: Duration::from_secs(1),
-        ..args.load
-    };
-    run_load(upstream, warmup).await?;
-    let warm = run_load(gateway, warmup).await?;
 
     println!(
-        "{} requests per second for {} s, {}, policy check {}",
+        "{} requests per second for {} s, upstream waits {} ms, {}, policy check {}",
         args.load.rps,
         args.load.duration.as_secs(),
+        args.upstream.as_millis(),
         if args.load.stream {
             "streamed"
         } else {
@@ -110,8 +114,37 @@ async fn run(args: &Args) -> Result<bool, BoxError> {
         },
         if args.check_policy { "on" } else { "off" }
     );
-    let direct = run_load(upstream, args.load).await?;
-    let through = run_load(gateway, args.load).await?;
+    let (direct, through, warm_sent) = if args.upstream.is_zero() {
+        let warmup = Load {
+            duration: Duration::from_secs(1),
+            ..args.load
+        };
+        run_load(upstream, warmup).await?;
+        let warm = run_load(gateway, warmup).await?;
+        (
+            run_load(upstream, args.load).await?,
+            run_load(gateway, args.load).await?,
+            warm.sent,
+        )
+    } else {
+        // A slow upstream keeps rate times latency requests in flight, each on a connection of its own. Each
+        // target is warmed on the client that measures it, and the first client's connections are closed and
+        // left to expire before the second run, so the two runs together stay inside this machine's ephemeral
+        // ports (about 16,000 on macOS).
+        // ponytail: a fixed 35 s pause (macOS TIME_WAIT is 30 s); a second source address would avoid it.
+        let client = load_client();
+        ramp(&client, upstream, args.load).await?;
+        let direct = run_load_on(&client, upstream, args.load).await?;
+        drop(client);
+        tokio::time::sleep(Duration::from_secs(35)).await;
+        let client = load_client();
+        let warm_sent = ramp(&client, gateway, args.load).await?;
+        (
+            direct,
+            run_load_on(&client, gateway, args.load).await?,
+            warm_sent,
+        )
+    };
     line("upstream", &direct);
     line("gateway", &through);
 
@@ -146,7 +179,7 @@ async fn run(args: &Args) -> Result<bool, BoxError> {
     if let Some(path) = &audit {
         // With the policy on, every request must have exactly one decision record and one usage record, and the chain
         // must hold. A usage record is written as its answer ends, so the last few may still be on their way.
-        let expected = u64::try_from(warm.sent + through.sent)?;
+        let expected = u64::try_from(warm_sent + through.sent)?;
         let mut checked = gantry_core::audit::verify_full(path, None);
         for _ in 0..50 {
             if !matches!(&checked, Ok(s) if s.usage < expected) {

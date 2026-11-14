@@ -1,0 +1,56 @@
+---
+title: Open WebUI
+description: Connect Open WebUI to Gantry as an OpenAI-compatible API, shared or per person.
+sidebar:
+  order: 20
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Open WebUI connects to Gantry as an OpenAI-compatible API. An admin connection is called from the Open WebUI server with one key; a direct connection is called from each person's browser with their own key.
+
+## Setup
+
+<Tabs>
+<TabItem label="Admin connection">
+
+Open **Settings**, **Admin**, **Connections**, and under **Manage OpenAI API Connections** choose **Add Connection**:
+
+| Field | Value |
+|---|---|
+| URL | Gantry's address with `/v1`, for example `http://gantry:8080/v1` |
+| API Key | A Gantry key for Open WebUI |
+| Provider (Advanced) | Default |
+
+**Verify Connection** calls `GET /v1/models`. The same can be set with `OPENAI_API_BASE_URL` and `OPENAI_API_KEY` on first start; after that, the values saved in Open WebUI's database win.
+
+</TabItem>
+<TabItem label="Direct connections">
+
+An admin turns on **Direct Connections** under **Settings**, **Admin**, **Connections** (or `ENABLE_DIRECT_CONNECTIONS=true`). Each person then adds Gantry under **User Settings**, **Connections**, with Gantry's `/v1` address and their own Gantry key. The key stays in their browser.
+
+</TabItem>
+</Tabs>
+
+Requests go to `POST /v1/chat/completions`.
+
+## What Gantry governs
+
+- Every chat request. With an admin connection, everyone shares one key, so Gantry records and budgets Open WebUI as one identity.
+- With direct connections, each request carries the person's own key.
+
+## What Gantry does not see
+
+- Background steps such as titles and tags, which the Open WebUI server runs with its own connections even when the chat itself is a direct connection.
+- Features configured with other providers: embeddings for documents, web search, image generation.
+
+<Aside type="caution">
+Direct connections are called from the browser, so they need CORS, which Gantry does not send. Put a reverse proxy in front of Gantry that answers `OPTIONS` and allows Open WebUI's origin, or use the admin connection.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="LibreChat" href="/integrations/librechat/" description="Per-user keys with user_provided." />
+	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue a key per person or workload." />
+</CardGrid>

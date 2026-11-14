@@ -1,0 +1,54 @@
+---
+title: Gemini CLI
+description: What Gemini CLI sends when pointed at Gantry, and why Gantry refuses it until it serves Google's native API.
+sidebar:
+  order: 11
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Gemini CLI speaks Google's native Gemini API only. Gantry does not serve that API inbound, so Gemini CLI cannot use Gantry yet. Every request it sends is refused and recorded.
+
+## What Gemini CLI sends
+
+Gemini CLI's only base URL setting is the environment variable `GOOGLE_GEMINI_BASE_URL`, used with Gemini API key auth:
+
+```bash
+export GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8080
+export GEMINI_API_KEY=gantry_...
+gemini
+```
+
+```json title="~/.gemini/settings.json"
+{ "security": { "auth": { "selectedType": "gemini-api-key" } } }
+```
+
+With this, Gemini CLI sends `POST /v1beta/models/<model>:streamGenerateContent` with the key in `x-goog-api-key`. Gantry has no such route and does not read a key from `x-goog-api-key`, so the request is refused with `no_key` before any provider is chosen:
+
+```text
+/v1beta/models/gemini-2.5-pro:streamGenerateContent refused no_key  user_agent GeminiCLI-tui/0.68.0/...
+```
+
+Gemini CLI shows this as a 401 error.
+
+## What is missing in Gantry
+
+- An inbound route for `generateContent` and `streamGenerateContent`, with the model checked against the policy and usage read from the answer. Gantry already translates chat completions to Google's format outbound, to `gemini` and `vertex` providers.
+- `x-goog-api-key` as a place for the Gantry key, with the same check as `Authorization` and `x-api-key`.
+
+Both are open items on the [Project status](/getting-started/status/) page. Until they land, use a client that speaks OpenAI's or Anthropic's API for Gemini models: [Qwen Code](/integrations/qwen-code/), [OpenCode](/integrations/opencode/) or Claude Code with `accept_messages` on a `gemini` provider ([Translation](/routing/translation/)).
+
+## What Gantry would not see
+
+Even with the route in place, Gantry would not see Google sign-in (not used with a key), usage statistics (`privacy.usageStatisticsEnabled`, on by default) or telemetry sent to an OTLP endpoint of your own. Gemini CLI's docs do not say whether its web search and URL fetch tools use the base URL.
+
+<Aside type="note">
+This follows Gemini CLI's configuration and authentication documentation. It was run headless (`gemini -p`) against a local Gantry: the refusal above is from that run. Google has replaced Gemini CLI with Antigravity CLI for free-tier users.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Gemini provider" href="/providers/gemini/" description="Gantry sending to Google's Gemini API." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="no_key and every other code." />
+</CardGrid>

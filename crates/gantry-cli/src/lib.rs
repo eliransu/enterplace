@@ -69,6 +69,9 @@ Commands:
         For a log whose last line was cut short by a write that failed (a full disk): shows that line
         and the chain before it, which must hold. With --yes, removes only that line and appends an
         audit_repaired record that holds what was removed. Run it while Gantry is stopped.
+  audit coverage [<file>] [--keys <file>]
+        Requests per person and coding tool (from each record's user agent), with refusals and the last
+        time seen. With --keys, every key holder who sent nothing is listed with last seen never.
   serve --unchecked
         Forward every request without checking it, on this machine only. For benchmarks.
         GANTRY_ADDR sets the address, GANTRY_UPSTREAM the server to forward to.
@@ -283,6 +286,16 @@ pub async fn run(args: &[String]) -> ExitCode {
             )),
             _ => None,
         },
+        ["audit", "coverage", rest @ ..] => match options(rest, &["--keys"]) {
+            Some((positional, named)) if positional.len() <= 1 => Some(
+                audit_coverage(
+                    Path::new(positional.first().copied().unwrap_or("gantry-audit.jsonl")),
+                    named.get("--keys").map(Path::new),
+                )
+                .map_or_else(fail, |()| ExitCode::SUCCESS),
+            ),
+            _ => None,
+        },
         ["audit", "repair", rest @ ..]
             if rest.iter().filter(|a| **a != "--yes").count() <= 1
                 && rest
@@ -399,6 +412,7 @@ pub async fn run(args: &[String]) -> ExitCode {
                 "gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>]",
             ),
             ["audit", "repair", ..] => Some("gantry audit repair [<file>] [--yes]"),
+            ["audit", "coverage", ..] => Some("gantry audit coverage [<file>] [--keys <file>]"),
             ["providers", ..] => Some("gantry providers [--markdown]"),
             ["init", ..] => Some("gantry init [--provider <id>] [--models <a,b>] [--out <policy file>]"),
             ["login", ..] => Some("gantry login <gantry url> [--no-browser]"),
@@ -916,6 +930,53 @@ fn not_a_folder(path: &Path) -> Option<ExitCode> {
         );
         ExitCode::from(1)
     })
+}
+
+/// Requests per person and coding tool, from the audit log's request records and their `user_agent`, and with
+/// `--keys`, every key holder who sent nothing. Tab-separated, like `key list`.
+fn audit_coverage(path: &Path, keys: Option<&Path>) -> Result<(), String> {
+    use std::collections::BTreeMap;
+    use std::io::BufRead;
+    // (person, tool) -> (team, requests, refused, last seen)
+    let mut rows: BTreeMap<(String, String), (String, u64, u64, String)> = BTreeMap::new();
+    let reader = audit::chain_reader(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("{}: {e}", path.display()))?;
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        // A request's decision record has a verdict and no event; admin records have both, usage and
+        // configuration records have no verdict.
+        let (Some(verdict), None) = (record["verdict"].as_str(), record.get("event")) else {
+            continue;
+        };
+        let text = |field: &str| record[field].as_str().unwrap_or("-").to_string();
+        let tool = audit::tool_of(record["user_agent"].as_str());
+        let row = rows
+            .entry((text("person"), tool))
+            .or_insert_with(|| (text("team"), 0, 0, String::new()));
+        row.1 += 1;
+        row.2 += u64::from(verdict != "allow");
+        row.3 = text("time");
+    }
+    if let Some(keys) = keys {
+        let text = config::read_keys(keys)?.ok_or_else(|| {
+            format!(
+                "{} does not exist. Name the keys file the gateway serves with.",
+                keys.display()
+            )
+        })?;
+        for entry in config::key_entries(keys, &text).map_err(|problems| problems.join("\n"))? {
+            if !rows.keys().any(|(person, _)| *person == entry.name) {
+                rows.insert((entry.name, "-".into()), (entry.team, 0, 0, "never".into()));
+            }
+        }
+    }
+    println!("person\tteam\ttool\trequests\trefused\tlast_seen");
+    for ((person, tool), (team, requests, refused, last)) in rows {
+        println!("{person}\t{team}\t{tool}\t{requests}\t{refused}\t{last}");
+    }
+    Ok(())
 }
 
 fn audit_verify(path: &Path, expect: Option<&str>) -> ExitCode {

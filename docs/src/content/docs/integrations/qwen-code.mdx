@@ -1,0 +1,71 @@
+---
+title: Qwen Code
+description: Send Qwen Code's requests through Gantry with its OpenAI-compatible provider and a Gantry key.
+sidebar:
+  order: 12
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Qwen Code reaches Gantry through its `openai` auth type. Its requests go to `POST /v1/chat/completions` on Gantry, or to `POST /v1/responses` with `wireApi: responses`, identified by a Gantry key.
+
+## Setup
+
+<Tabs>
+<TabItem label="Environment">
+
+```bash
+export OPENAI_BASE_URL=http://127.0.0.1:8080/v1   # Gantry's address, with /v1
+export OPENAI_API_KEY=gantry_...                  # the Gantry key
+export OPENAI_MODEL=gpt-4o-mini                   # the model as the policy names it
+qwen
+```
+
+With `OPENAI_API_KEY` set, Qwen Code picks its OpenAI-compatible auth from the environment alone. `--openai-base-url` and `--openai-api-key` do the same for one run.
+
+</TabItem>
+<TabItem label="settings.json">
+
+```json title="~/.qwen/settings.json"
+{
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "gpt-4o-mini",
+        "envKey": "GANTRY_KEY",
+        "baseUrl": "http://127.0.0.1:8080/v1",
+        "wireApi": "chat-completions"
+      }
+    ]
+  },
+  "security": { "auth": { "selectedType": "openai" } },
+  "model": { "name": "gpt-4o-mini" }
+}
+```
+
+`envKey` names the variable that holds the Gantry key, never the key itself. `baseUrl` is the `/v1` root: Qwen Code adds the request path. `wireApi: responses` uses `POST /v1/responses`, which reaches `openai` providers only.
+
+</TabItem>
+</Tabs>
+
+## What Gantry governs
+
+- Every model request: identity, the rule's model list, budgets, guardrails and one audit record each.
+- Its records carry the user agent `QwenCode/<version>`, which [Coverage](/governance/coverage/) counts as `qwen-code`.
+
+## What Gantry does not see
+
+- Usage statistics, sent to Qwen Code's own collection endpoint unless `QWEN_USAGE_STATISTICS_ENABLED=false` or `privacy.usageStatisticsEnabled: false`.
+- The model catalog download from `models.dev`. `QWEN_CODE_MODELS_DEV=off` stops it.
+- The built-in `web_search` tool on Qwen's own plans. With a Gantry key it is not set up.
+
+<Aside type="note">
+This setup follows Qwen Code's configuration, auth and model providers documentation. It was run headless (`qwen -p`) against a local Gantry and a mock provider: each turn was one allowed request on `/v1/chat/completions`.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue a key per person, with expiry and a budget." />
+	<LinkCard title="Coverage" href="/governance/coverage/" description="Requests per person and coding tool." />
+</CardGrid>

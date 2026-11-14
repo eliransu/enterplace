@@ -1988,6 +1988,11 @@ async fn decide(
         .map(|addr| addr.0.ip().to_string());
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
+    let user_agent = request
+        .headers()
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
     let mut seen = Seen::default();
     let mut outcome = check(state, version, policy, request, &mut seen).await;
     // What the guardrails found, when the rule has any: an empty list says they ran and found nothing.
@@ -2069,6 +2074,7 @@ async fn decide(
             person: seen.person.map(|p| p.name.as_str()),
             team: seen.person.map(|p| p.team.as_str()),
             client: client.as_deref(),
+            user_agent: user_agent.as_deref(),
             key: seen.key.as_deref(),
             method: &method,
             path: &path,

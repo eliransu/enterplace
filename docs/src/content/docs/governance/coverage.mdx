@@ -1,0 +1,73 @@
+---
+title: Coverage
+description: See which people's coding tools send through Gantry, request by request, and which key holders have sent nothing.
+sidebar:
+  order: 9
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+`gantry audit coverage` reads the audit log and counts requests per person and coding tool, with refusals and the last time each was seen. With the keys file, it also lists every person who holds a key and has sent nothing.
+
+```bash
+gantry audit coverage /var/lib/gantry/gantry-audit.jsonl --keys gantry.keys.yaml
+```
+
+```text
+person	team	tool	requests	refused	last_seen
+ana	dev	claude-code	2	0	2026-11-14T06:13:19.949Z
+ana	dev	kilo-code	1	0	2026-11-14T06:13:07.391Z
+ana	dev	qwen-code	2	0	2026-11-14T06:12:24.509Z
+ana	dev	OpenAI/JS	1	0	2026-11-14T06:12:53.397Z
+cara	dev	-	0	0	never
+unknown	-	gemini-cli	1	1	2026-11-14T06:12:33.309Z
+```
+
+The output is tab-separated, one row per person and tool. It reads sealed segments too.
+
+## How the tool is named
+
+Every request record holds the caller's `user-agent` header as `user_agent`, cut to 200 characters. The report names the tool from it:
+
+| User agent contains | Tool |
+|---|---|
+| `claude-cli` | `claude-code` |
+| `codex` | `codex` |
+| `GeminiCLI` | `gemini-cli` |
+| `QwenCode` | `qwen-code` |
+| `Kilo-Code` | `kilo-code` |
+| `copilot` | `github-copilot` |
+| `cursor`, `roo-code`, `cline`, `opencode` | that tool |
+
+Matching ignores case. Any other user agent is shown by its first product without the version (`OpenAI/JS 5.20.1` is `OpenAI/JS`), and a request with none as `unknown`. The first four user agents above were seen from the real tools; the rest are matched by name.
+
+## Reading the report
+
+| Row | Means |
+|---|---|
+| A tool with requests | That person's tool reached Gantry with their key |
+| A tool with only refusals | It reaches Gantry but is not allowed, or is misconfigured. Gemini CLI shows this way, refused with `no_key` |
+| `unknown` person | Requests with no key Gantry knows: a tool configured with a wrong or missing key |
+| Tool `-`, last seen `never` | The person holds a key and has sent nothing: their tools call providers directly, or they do not use AI tools |
+| `OpenAI/JS`, `OpenAI/Python` and similar | A tool or script that sends its SDK's user agent |
+
+<Aside type="caution">
+The audit log shows what reached Gantry. It cannot show a tool that calls a provider directly. A person who uses Gantry from one tool and a provider key in another shows up as covered.
+</Aside>
+
+## What the report does not cover yet
+
+The report is built from audit data alone. The device agent in Gantry Enterprise (`gantry-enterprise device`) inspects each machine's tool settings and could tell "configured for Gantry" from "configured for a provider directly", but it reports only to the hosted Gantry app. The self-hosted gateway lacks:
+
+- The `GET /device/profile` and `POST /device/report` endpoints the agent calls.
+- Enrolment tokens and storage for device reports.
+- A "configured for a provider directly" state in the agent's report. It reports `installed`, `configured` (pointed at Gantry) and `drift`, for Claude Code, Codex, Cursor and VS Code only.
+
+MCP records (`/mcp`) do not carry `user_agent`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Coding tools" href="/integrations/coding-tools/" description="Every tool with a guide, and what stays outside Gantry." />
+	<LinkCard title="Audit records" href="/reference/audit-records/" description="Every field of a request record." />
+</CardGrid>

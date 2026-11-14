@@ -34,6 +34,8 @@ pub struct Entry<'a> {
     pub person: Option<&'a str>,
     pub team: Option<&'a str>,
     pub client: Option<&'a str>,
+    /// The caller's `user-agent`, which names the coding tool and is what the coverage report counts by.
+    pub user_agent: Option<&'a str>,
     /// First 8 hex characters of the hash of the key the request came with, issued or not.
     pub key: Option<&'a str>,
     pub method: &'a str,
@@ -1082,7 +1084,48 @@ pub fn record(entry: &Entry<'_>) -> Map<String, Value> {
     if let Some(cache) = entry.cache {
         record.insert("cache".into(), cache.into());
     }
+    // Only when sent, so records of callers that send none keep their shape.
+    if let Some(user_agent) = entry.user_agent {
+        record.insert("user_agent".into(), cut(user_agent).into());
+    }
     record
+}
+
+/// The coding tool a `user-agent` names: a known tool by its short name, otherwise the product the agent names
+/// first (an SDK such as `OpenAI/JS` when a tool sends its SDK's default), and `unknown` when there is none.
+/// ponytail: substring list of tools whose user agent is known; a tool missing here shows up as its product token.
+pub fn tool_of(user_agent: Option<&str>) -> String {
+    const KNOWN: [(&str, &str); 13] = [
+        ("claude-cli", "claude-code"),
+        ("claude-code", "claude-code"),
+        ("codex", "codex"),
+        ("geminicli", "gemini-cli"),
+        ("qwen", "qwen-code"),
+        ("githubcopilot", "github-copilot"),
+        ("copilot", "github-copilot"),
+        ("cursor", "cursor"),
+        ("kilo", "kilo-code"),
+        ("roo-code", "roo-code"),
+        ("roocode", "roo-code"),
+        ("cline", "cline"),
+        ("opencode", "opencode"),
+    ];
+    let Some(agent) = user_agent.map(str::trim).filter(|a| !a.is_empty()) else {
+        return "unknown".into();
+    };
+    let lower = agent.to_ascii_lowercase();
+    if let Some((_, tool)) = KNOWN.iter().find(|(needle, _)| lower.contains(needle)) {
+        return (*tool).into();
+    }
+    // The first word, without a version after its last slash: `OpenAI/JS 5.20.0` is `OpenAI/JS`,
+    // `python-requests/2.31` is `python-requests`.
+    let first = agent.split_whitespace().next().unwrap_or(agent);
+    match first.rsplit_once('/') {
+        Some((product, version)) if version.starts_with(|c: char| c.is_ascii_digit()) => {
+            product.into()
+        }
+        _ => first.into(),
+    }
 }
 
 impl AuditLog {

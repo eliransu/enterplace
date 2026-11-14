@@ -1,0 +1,46 @@
+---
+title: Claude for Office
+description: Point the Claude add-in for Excel, PowerPoint, Word and Outlook at Gantry, and the CORS proxy it needs.
+sidebar:
+  order: 18
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The Claude add-in for Microsoft 365 can send to a gateway instead of Anthropic. It calls the gateway from the add-in's page in the browser, so the gateway must answer cross-origin requests from `https://pivot.claude.ai`.
+
+<Aside type="caution">
+Gantry sends no CORS headers and does not answer `OPTIONS` preflight requests. Put a reverse proxy in front of Gantry that answers the preflight and adds `Access-Control-Allow-Origin: https://pivot.claude.ai` with the request headers the add-in sends (`content-type`, `anthropic-version`, `x-api-key` or `authorization`). Without it, every request fails in the browser before it reaches Gantry.
+</Aside>
+
+## Setup
+
+Set these as manifest URL parameters when you generate `manifest.xml`, after a `#` so the key is not sent to Microsoft's servers, then upload the manifest in the Microsoft 365 admin center:
+
+| Parameter | Value |
+|---|---|
+| `gateway_url` | The proxy's public address, without `/v1/messages` |
+| `gateway_api_format` | `anthropic` |
+| `gateway_auth_header` | `x-api-key` (the default) or `authorization`. Gantry accepts both |
+
+The add-in uses `POST /v1/messages`, streamed and not, and `GET /v1/models`. The gateway must forward `anthropic-version`, which Gantry does. Per-user keys can come from a bootstrap endpoint or Entra ID extension attributes instead of the manifest.
+
+## What Gantry governs
+
+- Every prompt and answer: they go only to the gateway.
+
+## What Gantry does not see
+
+- The task pane, analytics and telemetry on `pivot.claude.ai`, feature flags on `claude.ai`, Microsoft sign-in and crash reports. None carry prompts.
+- Dictation and working across apps, which are not available with a gateway.
+
+<Aside type="note">
+This follows Anthropic's Office agents documentation (third-party platforms). It was not run through Gantry.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Claude Desktop" href="/integrations/claude-desktop/" description="The desktop app's gateway mode." />
+	<LinkCard title="Deployment" href="/operations/deployment/" description="TLS and a proxy in front of Gantry." />
+</CardGrid>

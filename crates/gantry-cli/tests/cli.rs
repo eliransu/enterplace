@@ -270,6 +270,90 @@ fn audit_verify_reports_the_count_or_the_first_broken_record() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn audit_coverage_counts_requests_per_person_and_tool_and_names_who_was_not_seen() -> TestResult {
+    let dir = workdir("coverage")?;
+    let log_path = dir.join("gantry-audit.jsonl");
+    let log = gantry_core::audit::AuditLog::open(&log_path)?;
+    let request = |id, person, user_agent, allowed| gantry_core::audit::Entry {
+        id,
+        person: Some(person),
+        team: Some("payments"),
+        user_agent,
+        allowed,
+        method: "POST",
+        path: "/v1/messages",
+        ..Default::default()
+    };
+    for entry in [
+        request("A", "ana", Some("claude-cli/2.0.14 (external, cli)"), true),
+        request("B", "ana", Some("claude-cli/2.0.14 (external, cli)"), false),
+        request(
+            "C",
+            "ana",
+            Some("codex_cli_rs/0.46.0 (Mac OS 26.0; arm64)"),
+            true,
+        ),
+        request("D", "ben", Some("OpenAI/JS 5.20.0"), true),
+        request("E", "ben", None, true),
+    ] {
+        log.append(&entry)?;
+    }
+    // An admin record has a verdict too, and is not a request.
+    let mut admin = serde_json::Map::new();
+    admin.insert("event".into(), "admin".into());
+    admin.insert("person".into(), "ana".into());
+    admin.insert("verdict".into(), "allow".into());
+    log.append_record(&admin)?;
+    // A usage record is not a request and is not counted.
+    let mut usage = serde_json::Map::new();
+    usage.insert("usage_of".into(), "A".into());
+    log.append_record(&usage)?;
+    drop(log);
+    let keys = path(&dir, "gantry.keys.yaml");
+    for name in ["ana", "cara"] {
+        let out = gantry(
+            &[
+                "key", "new", name, "--team", "payments", "--keys", &keys, "--quiet",
+            ],
+            &[],
+        )?;
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let file = log_path.display().to_string();
+    let out = gantry(&["audit", "coverage", &file, "--keys", &keys], &[])?;
+    let text = String::from_utf8(out.stdout)?;
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rows: Vec<Vec<&str>> = text.lines().map(|l| l.split('\t').collect()).collect();
+    let row = |person: &str, tool: &str| {
+        rows.iter()
+            .find(|r| r.first() == Some(&person) && r.get(2) == Some(&tool))
+            .map(|r| r[3..5].join(" "))
+    };
+    assert_eq!(
+        rows.first().map(|r| r.join(" ")).as_deref(),
+        Some("person team tool requests refused last_seen")
+    );
+    assert_eq!(row("ana", "claude-code").as_deref(), Some("2 1"), "{text}");
+    assert_eq!(row("ana", "codex").as_deref(), Some("1 0"), "{text}");
+    // A tool Gantry does not know by name is shown by the product in its user agent, here an SDK.
+    assert_eq!(row("ben", "OpenAI/JS").as_deref(), Some("1 0"), "{text}");
+    assert_eq!(row("ben", "unknown").as_deref(), Some("1 0"), "{text}");
+    // Holds a key, sent nothing.
+    assert_eq!(row("cara", "-").as_deref(), Some("0 0"), "{text}");
+    assert!(text.contains("cara\tpayments\t-\t0\t0\tnever"), "{text}");
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn audit_verify_says_what_was_retired_and_that_the_rest_holds() -> TestResult {

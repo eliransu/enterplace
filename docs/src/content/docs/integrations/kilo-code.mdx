@@ -1,0 +1,75 @@
+---
+title: Kilo Code
+description: Add Gantry as a custom provider in Kilo Code for VS Code and the Kilo CLI.
+sidebar:
+  order: 16
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Kilo Code takes Gantry as a custom provider, in the VS Code extension or in `kilo.json` for the Kilo CLI. Its requests then go to Gantry, identified by a Gantry key.
+
+## Setup
+
+<Tabs>
+<TabItem label="VS Code">
+
+Open Settings (the gear), then the **Providers** tab, then **Custom provider**:
+
+| Field | Value |
+|---|---|
+| Provider ID | `gantry` |
+| Display name | Gantry |
+| Provider API | OpenAI Compatible (`POST /v1/chat/completions`), OpenAI Responses (`POST /v1/responses`) or Anthropic Messages (`POST /v1/messages`) |
+| Base URL | Gantry's address with `/v1`, for example `http://127.0.0.1:8080/v1` |
+| API key | The Gantry key |
+| Models | **Fetch models** lists the models the key may use from `GET /v1/models` |
+
+</TabItem>
+<TabItem label="Kilo CLI">
+
+```json title="~/.config/kilo/kilo.json"
+{
+  "provider": {
+    "gantry": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Gantry",
+      "options": { "baseURL": "http://127.0.0.1:8080/v1", "apiKey": "{env:GANTRY_KEY}" },
+      "models": {
+        "gpt-4o-mini": { "name": "gpt-4o-mini", "limit": { "context": 128000, "output": 16000 } }
+      }
+    }
+  }
+}
+```
+
+```bash
+export GANTRY_KEY=gantry_...
+kilo run -m gantry/gpt-4o-mini "explain this repository"
+```
+
+Set `limit` on each model: without it Kilo assumes a context of 0 and turns off compaction. `{env:GANTRY_KEY}` is read only in a trusted file (the global `~/.config/kilo`, `KILO_CONFIG` or an MDM-managed file), never from a `kilo.json` committed to a project.
+
+</TabItem>
+</Tabs>
+
+## What Gantry governs
+
+- Every request to the custom provider. Its records carry the user agent `Kilo-Code/<version>`, which [Coverage](/governance/coverage/) counts as `kilo-code`.
+
+## What Gantry does not see
+
+- Autocomplete, which always goes through Kilo's own gateway to Codestral, or to Mistral with a Mistral key. It is on by default.
+- Requests to the built-in Kilo Code provider, if someone picks it.
+- Kilo CLI telemetry, on by default. `experimental.openTelemetry = false` turns it off.
+
+<Aside type="note">
+This follows Kilo Code's documentation (custom models, OpenAI-compatible provider, CLI). The CLI setup above was run (`kilo run`, Kilo CLI 7.8.27) against a local Gantry and a mock provider: one allowed request on `/v1/chat/completions`. The VS Code setup was not run.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="OpenCode" href="/integrations/opencode/" description="Kilo CLI is a fork of OpenCode." />
+	<LinkCard title="Coverage" href="/governance/coverage/" description="Requests per person and coding tool." />
+</CardGrid>

@@ -64,6 +64,7 @@ Fields present only in some cases:
 | Field | Type | Present when |
 |---|---|---|
 | `cache` | string | The rule has a cache: `hit` when the answer came from the cache, `miss` when it could have and did not |
+| `user_agent` | string | The caller sent a `user-agent` header, cut to 200 characters. [Coverage](/governance/coverage/) counts requests per tool from it. Not on MCP records |
 | `translated` | `true` | The request was translated for the provider (`accept_chat`, `accept_messages`, Gemini, Vertex AI) |
 | `alias`, `deployment` | string | The model is an alias: the alias sent, and the deployment tried first as `provider/model` |
 | `limit` | object | Refused by a rate limit: `{"kind":"rpm","of":"rule","value":60}`, or `{"kind":"tpm","of":"rule","value":1000,"request_could_use":1228}` where `of` is `rule` or `key` |

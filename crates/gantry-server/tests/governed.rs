@@ -763,7 +763,7 @@ async fn the_record_says_where_the_request_came_from() -> TestResult {
     let mut socket = tokio::net::TcpStream::connect(addr).await?;
     let body = r#"{"model":"m","messages":[]}"#;
     let request = format!(
-        "POST /v1/chat/completions HTTP/1.1\r\nHost: gantry\r\nAuthorization: Bearer {OMER}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: gantry\r\nUser-Agent: claude-cli/2.0.14 (external, cli)\r\nAuthorization: Bearer {OMER}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     socket.write_all(request.as_bytes()).await?;
@@ -775,6 +775,11 @@ async fn the_record_says_where_the_request_came_from() -> TestResult {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["client"], "127.0.0.1");
     assert_eq!(records[0]["person"], "omer.katz");
+    // The tool, for the coverage report.
+    assert_eq!(
+        records[0]["user_agent"],
+        "claude-cli/2.0.14 (external, cli)"
+    );
     Ok(())
 }
 
