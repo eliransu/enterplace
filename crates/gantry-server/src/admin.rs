@@ -15,7 +15,7 @@ use gantry_core::{
     audit,
     config::{self, valid_name},
     id, keyfile, kill,
-    policy::{Policy, Principal},
+    policy::{Permission, Policy, Principal, Role},
 };
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
@@ -24,14 +24,17 @@ use crate::{
     AppState, ClientAddr, DECISION, Refusal, Reload, Snapshot, Trigger, caller_key, read_body,
 };
 
-const ROUTES: &str = "GET /admin/keys, POST /admin/keys, DELETE /admin/keys/<first 8 hex characters of the hash>, DELETE /admin/keys/self, GET, POST and DELETE /admin/kills, GET and POST /admin/credentials, and PUT and DELETE /admin/credentials/<name>";
+const ROUTES: &str = "GET /admin/explain?key=<prefix>&model=<model>[&customer=<name>][&tags=<a,b>], GET /admin/keys, POST /admin/keys, DELETE /admin/keys/<first 8 hex characters of the hash>, DELETE /admin/keys/self, GET, POST and DELETE /admin/kills, GET and POST /admin/credentials, and PUT and DELETE /admin/credentials/<name>";
 
 /// Why there is no credential to add or list on a gateway without a store.
 const NEED_STORE: &str = "Refused: provider credentials are kept in the store, sealed with a master key, and this gateway's policy has no store: section. Keep provider keys in environment variables with key_env (or in files with key_file), or add `store: { postgres_url_env: DATABASE_URL }` to the policy and set GANTRY_MASTER_KEY.";
 
 /// What an admin call asks for, once it is allowed.
 enum Plan {
-    List,
+    /// The keys, of one organization when the caller's role is confined to one.
+    List(Option<String>),
+    /// Why a request would be allowed or refused, and every limit it would count against with what it has spent.
+    Explain(Box<Value>),
     Issue {
         name: String,
         team: String,
@@ -199,6 +202,16 @@ struct NewKey {
     models: Option<Vec<String>>,
     #[serde(default)]
     tpm: Option<u32>,
+    #[serde(default)]
+    org: Option<String>,
+    #[serde(default)]
+    customer: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    parallel: Option<u32>,
+    #[serde(default)]
+    role: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -206,6 +219,34 @@ struct NewKey {
 struct NewBudget {
     usd: f64,
     per: String,
+    #[serde(default)]
+    tz: Option<String>,
+}
+
+/// The permission each admin action needs.
+fn needs(action: &str) -> Permission {
+    match action {
+        "list_keys" => Permission::SeeKeys,
+        "issue_key" => Permission::IssueKeys,
+        "revoke_key" => Permission::RevokeKeys,
+        "list_kills" | "set_kill" | "clear_kill" => Permission::Kill,
+        "explain" => Permission::SeeSpend,
+        _ => Permission::Credentials,
+    }
+}
+
+/// A query parameter, percent-decoded for the characters names hold.
+fn query_param(query: &str, name: &str) -> Option<String> {
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, _)| *k == name)
+        .map(|(_, v)| {
+            v.replace("%2C", ",")
+                .replace("%2c", ",")
+                .replace("%40", "@")
+                .replace('+', " ")
+        })
 }
 
 pub(crate) async fn handle(State(state): State<AppState>, request: Request) -> Response {
@@ -274,6 +315,7 @@ async fn allow(
         .strip_prefix("/admin/keys/")
         .map(str::to_string);
     let kills = parts.uri.path() == "/admin/kills";
+    let explain = parts.uri.path() == "/admin/explain";
     let credential = parts
         .uri
         .path()
@@ -289,6 +331,8 @@ async fn allow(
     };
     call.action = match (&parts.method, prefix.as_deref(), kills) {
         _ if credential.is_some() => call.action,
+        (&Method::GET, None, false) if explain => Some("explain"),
+        _ if explain => None,
         (&Method::GET, None, false) => Some("list_keys"),
         (&Method::POST, None, false) => Some("issue_key"),
         (&Method::DELETE, Some("self"), _) => Some("revoke_own_key"),
@@ -324,16 +368,16 @@ async fn allow(
             Some(json!({ "name": person.name, "team": person.team, "sha256_prefix": &hash[..8] }));
         return Ok(Plan::Revoke { prefix: hash });
     }
-    if !person.admin {
+    let Some(role) = policy.role_of(person) else {
         return Err(refused(
             StatusCode::FORBIDDEN,
             "not_admin",
             format!(
-                "Refused: the admin API is for keys marked `admin: true` in the keys file, and the key of \"{}\" is not. Ask a Gantry admin.",
+                "Refused: the admin API is for keys marked `admin: true` or given a role: in the keys file, and the key of \"{}\" is neither. Ask a Gantry admin.",
                 person.name
             ),
         ));
-    }
+    };
     let not_here = || {
         refused(
             StatusCode::NOT_FOUND,
@@ -341,7 +385,93 @@ async fn allow(
             format!("Refused: the admin API serves {ROUTES}. Check the method and the path."),
         )
     };
-    match call.action.ok_or_else(not_here)? {
+    let action = call.action.ok_or_else(not_here)?;
+    if !role.may(needs(action)) {
+        return Err(refused(
+            StatusCode::FORBIDDEN,
+            "not_permitted",
+            format!(
+                "Refused: role \"{}\" of \"{}\" does not have the {} permission, which {action} needs. Ask a Gantry admin to add it to the role under roles: in the policy, or to give you another role.",
+                role.name,
+                person.name,
+                needs(action).word()
+            ),
+        ));
+    }
+    // Kill switches and provider credentials act on the whole install: a role kept to one organization has neither.
+    if let (Some(org), Permission::Kill | Permission::Credentials) = (&role.org, needs(action)) {
+        return Err(refused(
+            StatusCode::FORBIDDEN,
+            "not_permitted",
+            format!(
+                "Refused: {action} acts on the whole install, and role \"{}\" is kept to organization \"{org}\". Ask an admin of the whole install.",
+                role.name
+            ),
+        ));
+    }
+    match action {
+        "explain" => {
+            let query = parts.uri.query().unwrap_or_default();
+            let (Some(key), Some(model)) = (query_param(query, "key"), query_param(query, "model"))
+            else {
+                return Err(refused(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "Refused: name the caller and the model, for example GET /admin/explain?key=1a2b3c4d&model=gpt-4o, and optionally &customer=<name> and &tags=<a,b>.",
+                ));
+            };
+            let key = key.to_ascii_lowercase();
+            let who = policy
+                .entries()
+                .map(|(_, p)| p)
+                .filter(|p| key.len() >= 8 && p.key.starts_with(&key[..8]) || p.name == key)
+                .find(|p| role.org.as_ref().is_none_or(|o| *o == p.org))
+                .ok_or_else(|| {
+                    refused(
+                        StatusCode::NOT_FOUND,
+                        "no_such_key",
+                        format!("Refused: no key you may see has the hash prefix or name \"{key}\". GET /admin/keys lists them."),
+                    )
+                })?;
+            call.target = Some(json!({ "explain": { "key": who.key, "model": model } }));
+            let customer = query_param(query, "customer").or_else(|| who.customer.clone());
+            let mut tags = who.tags.clone();
+            for tag in query_param(query, "tags").unwrap_or_default().split(',') {
+                let tag = tag.trim();
+                if !tag.is_empty() && !tags.iter().any(|t| t == tag) {
+                    tags.push(tag.to_string());
+                }
+            }
+            let deployed = version
+                .aliases
+                .iter()
+                .find(|a| a.name == model)
+                .and_then(|a| a.deployments.first())
+                .map_or(model.clone(), |d| d.model.clone());
+            let ctx = gantry_core::policy::Context {
+                sent: &model,
+                model: &deployed,
+                customer: customer.as_deref(),
+                tags: &tags,
+            };
+            let mut explained = policy.explain(who, ctx);
+            // What each budget has spent and holds in its period now.
+            if let Some(limits) = explained["limits"].as_array_mut() {
+                for limit in limits {
+                    let per = limit["per"]
+                        .as_str()
+                        .and_then(gantry_core::policy::Period::from_word);
+                    if let (Some(per), Some(scope)) = (per, limit["scope"].as_str()) {
+                        if let Some((spent, reserved)) = state.spend.spent_now(scope, per).await {
+                            limit["spent_usd"] = spent.into();
+                            limit["reserved_usd"] = reserved.into();
+                            limit["resets"] = per.resets(&per.label(&audit::timestamp())).into();
+                        }
+                    }
+                }
+            }
+            Ok(Plan::Explain(Box::new(explained)))
+        }
         action @ ("list_credentials" | "add_credential" | "rotate_credential"
         | "remove_credential") => {
             let keys_path = state
@@ -433,7 +563,7 @@ async fn allow(
                 by,
             })
         }
-        "list_keys" => Ok(Plan::List),
+        "list_keys" => Ok(Plan::List(role.org.clone())),
         "list_kills" => Ok(Plan::Kills),
         action @ ("set_kill" | "clear_kill") => {
             let (bytes, _held) = read_body(Some(&person.name), state, &parts.headers, body).await?;
@@ -504,14 +634,17 @@ async fn allow(
             let budget = match &new.budget {
                 None => None,
                 Some(b) => {
-                    let per = match b.per.as_str() {
-                        "day" => Some(gantry_core::policy::Period::Day),
-                        "month" => Some(gantry_core::policy::Period::Month),
-                        _ => None,
-                    };
+                    let per = gantry_core::policy::Period::parse(&b.per, b.tz.as_deref());
                     match per {
-                        Some(per) if b.usd.is_finite() && b.usd > 0.0 => {
+                        Ok(per) if b.usd.is_finite() && b.usd > 0.0 => {
                             Some(gantry_core::policy::Budget { usd: b.usd, per })
+                        }
+                        Err(problem) => {
+                            return Err(refused(
+                                StatusCode::BAD_REQUEST,
+                                "invalid_request",
+                                format!("Refused: {problem}"),
+                            ));
                         }
                         _ => {
                             return Err(refused(
@@ -523,6 +656,56 @@ async fn allow(
                     }
                 }
             };
+            // A role kept to one organization issues keys in it only.
+            let org = match (&role.org, new.org.clone()) {
+                (Some(own), Some(asked)) if *own != asked => {
+                    return Err(refused(
+                        StatusCode::FORBIDDEN,
+                        "not_permitted",
+                        format!(
+                            "Refused: role \"{}\" issues keys in organization \"{own}\" only, and this key asks for \"{asked}\". Leave org out, or ask an admin of the whole install.",
+                            role.name
+                        ),
+                    ));
+                }
+                (Some(own), _) => own.clone(),
+                (None, asked) => asked.unwrap_or_default(),
+            };
+            // A key may not be given more than its issuer holds: a role with a permission the issuer lacks, or one
+            // not kept to the issuer's organization.
+            if let Some(name) = &new.role {
+                let granted: Option<Role> = policy.role(name);
+                let Some(granted) = granted else {
+                    return Err(refused(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request",
+                        format!(
+                            "Refused: role \"{name}\" is not defined under roles in the policy, and is not a built-in role (admin, read_only)."
+                        ),
+                    ));
+                };
+                let wider = granted.permissions.iter().any(|p| !role.may(*p))
+                    || (role.org.is_some() && org.is_empty());
+                if wider {
+                    return Err(refused(
+                        StatusCode::FORBIDDEN,
+                        "not_permitted",
+                        format!(
+                            "Refused: role \"{name}\" grants more than your role \"{}\" holds, so you may not give it to a key. Ask an admin of the whole install.",
+                            role.name
+                        ),
+                    ));
+                }
+            }
+            if !org.is_empty() && !policy.orgs().contains(&org) {
+                return Err(refused(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    format!(
+                        "Refused: organization \"{org}\" is not listed under orgs in the policy. Add it there first, or check the spelling."
+                    ),
+                ));
+            }
             if let Some(models) = &new.models {
                 let served: Vec<&String> = version
                     .providers
@@ -569,6 +752,11 @@ async fn allow(
                     budget,
                     models: new.models,
                     tpm: new.tpm,
+                    org,
+                    customer: new.customer,
+                    tags: new.tags,
+                    parallel: new.parallel,
+                    role: new.role,
                 },
             })
         }
@@ -606,6 +794,15 @@ async fn allow(
                     "no_such_key",
                     format!(
                         "Refused: no key in the keys file has a hash that starts with {prefix}. GET /admin/keys lists them."
+                    ),
+                )),
+                [found] if role.org.as_ref().is_some_and(|o| *o != found.org) => Err(refused(
+                    StatusCode::FORBIDDEN,
+                    "not_permitted",
+                    format!(
+                        "Refused: the key {prefix} is not in organization \"{}\", the one role \"{}\" is kept to.",
+                        role.org.as_deref().unwrap_or_default(),
+                        role.name
                     ),
                 )),
                 [found] => {
@@ -834,11 +1031,13 @@ async fn act(state: &AppState, version: &Snapshot, plan: Plan) -> Result<Respons
                 None => Err(no_such(&name)),
             }
         }
-        Plan::List => {
+        Plan::Explain(explained) => Ok(json_response(StatusCode::OK, &explained)),
+        Plan::List(org) => {
             let mut keys: Vec<Value> = version
                 .policy
                 .iter()
                 .flat_map(|policy| policy.entries())
+                .filter(|(_, who)| org.as_ref().is_none_or(|o| *o == who.org))
                 .map(|(hash, who)| {
                     json!({
                         "name": who.name,
@@ -849,6 +1048,11 @@ async fn act(state: &AppState, version: &Snapshot, plan: Plan) -> Result<Respons
                         "budget": who.budget.map(|b| json!({ "usd": b.usd, "per": b.per.word() })),
                         "models": who.models,
                         "tpm": who.tpm,
+                        "org": (!who.org.is_empty()).then_some(&who.org),
+                        "customer": who.customer,
+                        "tags": who.tags,
+                        "parallel": who.parallel,
+                        "role": who.role,
                     })
                 })
                 .collect();

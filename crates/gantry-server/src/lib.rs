@@ -498,8 +498,29 @@ fn build(
     let mut spend = spend::Spend::default();
     spend.store = config.store.clone();
     let spend = Arc::new(spend);
+    // Holds on parallel limits still in flight at the turn of the hour move to the new hour's counter, also on a
+    // gateway that admits nothing meanwhile.
+    if spend.store.is_some()
+        && let Ok(runtime) = tokio::runtime::Handle::try_current()
+    {
+        let mover = Arc::downgrade(&spend);
+        runtime.spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tick.tick().await;
+                let Some(spend) = mover.upgrade() else { break };
+                spend.move_holds();
+            }
+        });
+    }
     if let Some(path) = &config.spent_from {
-        spend.replay(path).map_err(ConfigError)?;
+        let snapshot = match live.read() {
+            Ok(version) => version.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        spend
+            .replay(path, snapshot.policy.as_ref())
+            .map_err(ConfigError)?;
     }
     let client = Client::builder(TokioExecutor::new()).build(connector);
     // Spans are finished from the audit records, so traces need the audit log.
@@ -564,6 +585,7 @@ fn build(
             .route("/admin/keys", any(admin::handle))
             .route("/admin/keys/{prefix}", any(admin::handle))
             .route("/admin/kills", any(admin::handle))
+            .route("/admin/explain", any(admin::handle))
             .route("/admin/credentials", any(admin::handle))
             .route("/admin/credentials/{name}", any(admin::handle));
     }
@@ -989,6 +1011,126 @@ struct Seen<'a> {
     hit: Option<Box<spend::Admitted>>,
     /// The first 8 hex characters of the SHA-256 of a provider key the caller sent, never the key.
     caller_key: Option<String>,
+    /// The end customer the request is for, from its key or `x-gantry-customer`.
+    customer: Option<String>,
+    /// Its tags, from its key and `x-gantry-tags`.
+    tags: Vec<String>,
+}
+
+const CUSTOMER: &str = "x-gantry-customer";
+const TAGS: &str = "x-gantry-tags";
+
+/// The end customer and tags of a request: the key's, and those the caller sends in `x-gantry-customer` and
+/// `x-gantry-tags` when the rule lets them. A name the rule does not list is refused by name, so a caller cannot
+/// charge another customer or forge a tag. Both headers are taken out: they are Gantry's, not the provider's.
+fn customer_and_tags(
+    headers: &mut HeaderMap,
+    person: &Principal,
+    rule: &Rule,
+    seen: &mut Seen<'_>,
+) -> Result<(), Refusal> {
+    let once = |name: &str, headers: &HeaderMap| -> Result<Option<String>, Refusal> {
+        let mut values = headers.get_all(name).iter();
+        let first = values.next();
+        if values.next().is_some() {
+            return Err(Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "bad_header",
+                format!("Refused: {name} is sent more than once. Send it once."),
+            ));
+        }
+        first
+            .map(|v| {
+                v.to_str().map(|t| t.trim().to_string()).map_err(|_| {
+                    Refusal::new(
+                        StatusCode::BAD_REQUEST,
+                        "bad_header",
+                        format!("Refused: {name} holds characters that are not text. Send names in letters, digits, dots, dashes, underscores and @."),
+                    )
+                })
+            })
+            .transpose()
+    };
+    let customer = once(CUSTOMER, headers)?;
+    let tags = once(TAGS, headers)?;
+    headers.remove(CUSTOMER);
+    headers.remove(TAGS);
+    seen.customer = person.customer.clone();
+    if let Some(customer) = customer.filter(|c| !c.is_empty()) {
+        if !gantry_core::config::valid_name(&customer) {
+            return Err(Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "bad_header",
+                "Refused: x-gantry-customer names a customer in letters, digits, dots, dashes, underscores and @ only, at most 100 characters.",
+            ));
+        }
+        match &person.customer {
+            Some(own) if *own != customer => {
+                return Err(Refusal::new(
+                    StatusCode::FORBIDDEN,
+                    "customer_not_allowed",
+                    format!(
+                        "Refused: the key {} is for customer \"{own}\", and this request names customer \"{customer}\" in x-gantry-customer. Leave the header out, or use that customer's key.",
+                        person.key
+                    ),
+                ));
+            }
+            Some(_) => {}
+            None if !rule.accepts_customer(&customer) => {
+                return Err(Refusal::new(
+                    StatusCode::FORBIDDEN,
+                    "customer_not_allowed",
+                    format!(
+                        "Refused: rule \"{}\" does not let a caller name customer \"{customer}\" in x-gantry-customer. Leave the header out, or ask a Gantry admin to add it (or \"*\") to the rule's customers.",
+                        rule.name
+                    ),
+                ));
+            }
+            None => seen.customer = Some(customer),
+        }
+    }
+    let mut all = person.tags.clone();
+    for tag in tags
+        .iter()
+        .flat_map(|t| t.split(','))
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        if all.iter().any(|t| t == tag) {
+            continue;
+        }
+        if !gantry_core::config::valid_name(tag) {
+            return Err(Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "bad_header",
+                "Refused: x-gantry-tags is a comma-separated list of tags, each in letters, digits, dots, dashes, underscores and @ only, at most 100 characters.",
+            ));
+        }
+        if !rule.accepts_tag(tag) {
+            return Err(Refusal::new(
+                StatusCode::FORBIDDEN,
+                "tag_not_allowed",
+                format!(
+                    "Refused: rule \"{}\" does not let a caller send tag \"{tag}\" in x-gantry-tags. Remove it, or ask a Gantry admin to add it to the rule's tags.",
+                    rule.name
+                ),
+            ));
+        }
+        all.push(tag.to_string());
+    }
+    if all.len() > gantry_core::config::MAX_TAGS {
+        return Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            "bad_header",
+            format!(
+                "Refused: this request carries {} tags with its key's, more than {}. Send fewer in x-gantry-tags.",
+                all.len(),
+                gantry_core::config::MAX_TAGS
+            ),
+        ));
+    }
+    seen.tags = all;
+    Ok(())
 }
 
 /// On the messages routes the caller is most likely Claude Code asking for its default model: the fix is the
@@ -1220,6 +1362,11 @@ async fn check<'a>(
     };
     // Rules decide on the name the caller sent, an alias included: an admin allows "smart", not each deployment.
     let decision = policy.decide(person, &peek.model);
+    if let Decision::Allow(rule) = decision {
+        seen.rule = Some(rule);
+        seen.model = Some(peek.model.clone());
+        customer_and_tags(&mut parts.headers, person, rule, seen)?;
+    }
     let model = seen.model.insert(peek.model);
     killed(state, person, &key_sha256, Some(model))?;
     // UX12-1: a switch on a model also stops each alias that can send to it.
@@ -1428,6 +1575,7 @@ async fn passthrough<'a>(
         ));
     };
     seen.rule = Some(rule);
+    customer_and_tags(&mut parts.headers, person, rule, seen)?;
     // A dot segment could climb out of the listed prefix at the provider, whatever the prefix match says here.
     let climbs = native
         .split('/')
@@ -2103,6 +2251,20 @@ async fn decide(
         {
             record.extend(extra.clone());
         }
+        // Only when set, so records of an install without organizations, customers or tags keep their shape.
+        if let Some(org) = seen
+            .person
+            .map(|p| p.org.as_str())
+            .filter(|o| !o.is_empty())
+        {
+            record.insert("org".into(), org.into());
+        }
+        if let Some(customer) = &seen.customer {
+            record.insert("customer".into(), customer.as_str().into());
+        }
+        if !seen.tags.is_empty() {
+            record.insert("tags".into(), seen.tags.clone().into());
+        }
         if let Some(prefix) = &seen.caller_key {
             // That the caller's own key was sent, and which: never the key.
             record.insert("caller_provider_key".into(), true.into());
@@ -2167,7 +2329,20 @@ async fn limit(
     let deployed = plan.and_then(|p| p.chain.first()).map(|(_, m)| m.clone());
     let sent = model;
     let model = deployed.as_deref().unwrap_or(model);
+    let applied = policy.applied(
+        person,
+        rule,
+        gantry_core::policy::Context {
+            sent,
+            model,
+            customer: seen.customer.as_deref(),
+            tags: &seen.tags,
+        },
+    );
     let ask = spend::Ask {
+        applied: &applied,
+        customer: seen.customer.as_deref(),
+        tags: &seen.tags,
         decision,
         person,
         rule,

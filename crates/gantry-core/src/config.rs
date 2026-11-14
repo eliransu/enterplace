@@ -12,7 +12,10 @@ use serde::Deserialize;
 use crate::{
     guard::{self, Guardrail, GuardrailFile},
     id::sha256_hex,
-    policy::{Budget, CallerKey, Limits, Models, Period, Policy, Principal, Rule, Who},
+    policy::{
+        Budget, CallerKey, Cap, Limits, Models, Period, Permission, Policy, Principal, Role, Rule,
+        ScopeKind, ScopeLimit, Who,
+    },
     usage::{PriceOverrides, price_for},
 };
 
@@ -112,6 +115,22 @@ const KNOWN: &[&str] = &[
     "postgres_url_env",
     "credential",
     "caller_provider_key",
+    "orgs",
+    "org",
+    "limits",
+    "global",
+    "person",
+    "customer",
+    "customers",
+    "tag",
+    "tags",
+    "parallel",
+    "tz",
+    "profiles",
+    "roles",
+    "role",
+    "permissions",
+    "sso_values",
 ];
 /// Keys whose value is a map whose keys the user chooses: model names, or header names under `headers_env`.
 /// Those names are not Gantry keys, so the unknown-key scan never reads them.
@@ -139,6 +158,91 @@ struct PolicyFile {
     mcp: Vec<crate::mcp::ServerFile>,
     #[serde(default)]
     store: Option<StoreFile>,
+    /// The organizations of a multi-tenant install. Keys, rules, limits and roles that name one must name one here.
+    #[serde(default)]
+    orgs: Vec<String>,
+    #[serde(default)]
+    limits: Vec<LimitFile>,
+    #[serde(default)]
+    profiles: Vec<ProfileFile>,
+    #[serde(default)]
+    roles: Vec<RoleFile>,
+}
+
+/// One entry of `limits:`: one kind of scope (`global: true`, or a name or `*`), its organization, and its limits.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LimitFile {
+    #[serde(default)]
+    global: Option<bool>,
+    #[serde(default)]
+    org: Option<String>,
+    #[serde(default)]
+    team: Option<String>,
+    #[serde(default)]
+    person: Option<String>,
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    customer: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    budget: Option<BudgetsFile>,
+    #[serde(default)]
+    rate: Option<RateFile>,
+    #[serde(default)]
+    parallel: Option<i64>,
+}
+
+/// A named set of models, guardrails, tools and limits that rules include with `profiles:`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileFile {
+    name: String,
+    #[serde(default)]
+    models: Vec<String>,
+    #[serde(default)]
+    guardrails: Vec<String>,
+    #[serde(default)]
+    tools: Vec<String>,
+    #[serde(default)]
+    budget: Option<BudgetsFile>,
+    #[serde(default)]
+    rate: Option<RateFile>,
+    #[serde(default)]
+    parallel: Option<i64>,
+}
+
+/// A console role: what its holders may do.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoleFile {
+    name: String,
+    permissions: Vec<String>,
+    #[serde(default)]
+    org: Option<String>,
+    #[serde(default)]
+    sso_values: Vec<String>,
+}
+
+/// One budget, or a list of them (a daily and a monthly one).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum BudgetsFile {
+    One(BudgetFile),
+    Many(Vec<BudgetFile>),
+}
+
+impl BudgetsFile {
+    fn list(&self) -> &[BudgetFile] {
+        match self {
+            BudgetsFile::One(one) => std::slice::from_ref(one),
+            BudgetsFile::Many(many) => many,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -265,11 +369,23 @@ struct ProviderFile {
 struct RuleFile {
     name: String,
     principals: PrincipalsFile,
-    models: Vec<String>,
+    /// Optional only for a rule that takes its models from profiles.
+    #[serde(default)]
+    models: Option<Vec<String>>,
     #[serde(default)]
     guardrails: Vec<String>,
     #[serde(default)]
-    budget: Option<BudgetFile>,
+    budget: Option<BudgetsFile>,
+    #[serde(default)]
+    org: Option<String>,
+    #[serde(default)]
+    profiles: Vec<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    customers: Vec<String>,
+    #[serde(default)]
+    parallel: Option<i64>,
     #[serde(default)]
     rate: Option<RateFile>,
     #[serde(default)]
@@ -299,6 +415,11 @@ struct PassthroughFile {
 struct BudgetFile {
     usd: f64,
     per: String,
+    #[serde(default)]
+    tz: Option<String>,
+    /// In a rule or a profile: count only these models.
+    #[serde(default)]
+    models: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -324,6 +445,8 @@ const MAX_CACHE_TTL: i64 = 86_400;
 struct PrincipalsFile {
     team: Option<String>,
     name: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
     any: Option<bool>,
 }
 
@@ -548,6 +671,16 @@ struct KeyFile {
     /// Most tokens this key may use per minute.
     #[serde(default)]
     tpm: Option<i64>,
+    #[serde(default)]
+    org: Option<String>,
+    #[serde(default)]
+    customer: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    parallel: Option<i64>,
+    #[serde(default)]
+    role: Option<String>,
 }
 
 /// One entry of a keys file, as checked.
@@ -563,7 +696,36 @@ pub struct KeyEntry {
     pub budget: Option<Budget>,
     pub models: Option<Vec<String>>,
     pub tpm: Option<u32>,
+    /// The key's organization, empty in an install without organizations.
+    pub org: String,
+    /// The end customer every request with the key is for.
+    pub customer: Option<String>,
+    /// Tags every request with the key carries.
+    pub tags: Vec<String>,
+    /// Most requests the key may have in flight at once.
+    pub parallel: Option<u32>,
+    /// The console role the key signs in with.
+    pub role: Option<String>,
 }
+
+/// The most requests in flight a `parallel:` may allow.
+const MAX_PARALLEL: i64 = 100_000;
+
+/// A `parallel:` value, or what is wrong with it.
+fn parallel_of(n: i64, at: &str, errors: &mut Vec<String>) -> Option<u32> {
+    match u32::try_from(n) {
+        Ok(n) if (1..=MAX_PARALLEL).contains(&i64::from(n)) => Some(n),
+        _ => {
+            errors.push(format!(
+                "{at}: parallel is the most requests that may be in flight at once, 1 to {MAX_PARALLEL}, for example parallel: 10. To set no limit, remove it."
+            ));
+            None
+        }
+    }
+}
+
+/// The most tags one request may carry, from its key and its header together.
+pub const MAX_TAGS: usize = 16;
 
 /// The tokens-per-minute limit `tpm` names, or what is wrong with it. `at` names where it is written.
 fn tpm_of(tpm: i64, at: &str, errors: &mut Vec<String>) -> Option<u32> {
@@ -673,15 +835,12 @@ pub fn issuable_expiry(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Reads a budget's `per` and `usd`, or says what is wrong with them. `at` names where the budget is written.
+/// Reads a budget's `per`, `tz` and `usd`, or says what is wrong with them. `at` names where the budget is written.
 fn budget_of(budget: &BudgetFile, at: &str, errors: &mut Vec<String>) -> Option<Budget> {
-    let per = match budget.per.as_str() {
-        "day" => Some(Period::Day),
-        "month" => Some(Period::Month),
-        other => {
-            errors.push(format!(
-                "{at}: per is \"{other}\". A budget starts again each day or each month (UTC): write per: day or per: month."
-            ));
+    let per = match Period::parse(&budget.per, budget.tz.as_deref()) {
+        Ok(per) => Some(per),
+        Err(problem) => {
+            errors.push(format!("{at}: {problem}"));
             None
         }
     };
@@ -695,6 +854,63 @@ fn budget_of(budget: &BudgetFile, at: &str, errors: &mut Vec<String>) -> Option<
         usd: budget.usd,
         per,
     })
+}
+
+/// The budgets of a rule or profile, with their model lists. Two that count the same models over the same period
+/// would be one counter with two limits: refused.
+fn caps_of(
+    budgets: &BudgetsFile,
+    at: &str,
+    from: Option<&str>,
+    errors: &mut Vec<String>,
+) -> Vec<Cap> {
+    let mut caps: Vec<Cap> = Vec::new();
+    for file in budgets.list() {
+        let Some(budget) = budget_of(file, at, errors) else {
+            continue;
+        };
+        let mut models = file.models.clone();
+        models.sort();
+        if caps
+            .iter()
+            .any(|c| c.budget.per == budget.per && c.models == models)
+        {
+            errors.push(format!(
+                "{at}: two budgets count the same models over the same period ({}). Keep one, or give one of them other models.",
+                budget.per.describe()
+            ));
+            continue;
+        }
+        caps.push(Cap {
+            budget,
+            models,
+            from: from.map(str::to_string),
+        });
+    }
+    caps
+}
+
+/// Budgets of a scope, where model lists have no place: the scope says what counts.
+fn scope_budgets(budgets: &BudgetsFile, at: &str, errors: &mut Vec<String>) -> Vec<Budget> {
+    let mut out: Vec<Budget> = Vec::new();
+    for file in budgets.list() {
+        if !file.models.is_empty() {
+            errors.push(format!(
+                "{at}: models on a budget belongs in a rule or a profile. Here, add an entry with model: <name> to the limits list instead."
+            ));
+        }
+        if let Some(budget) = budget_of(file, at, errors) {
+            if out.iter().any(|b| b.per == budget.per) {
+                errors.push(format!(
+                    "{at}: two budgets over the same period ({}). Keep one.",
+                    budget.per.describe()
+                ));
+                continue;
+            }
+            out.push(budget);
+        }
+    }
+    out
 }
 
 /// Which API a provider speaks, and so which routes reach it.
@@ -970,6 +1186,20 @@ fn explain(file: &Path, source: &str, err: &serde_saphyr::Error) -> String {
         let word = rest.split(',').next().unwrap_or(rest);
         return format!(
             "{at}: \"{word}\" is written twice in the same place. Keep one, so the file says one thing."
+        );
+    }
+    // One budget or a list of them: the parser can only say neither shape matched.
+    if text.contains("untagged enum BudgetsFile") {
+        let given = err.location().map_or_else(
+            || "another kind of value".to_string(),
+            |l| {
+                let line = usize::try_from(l.line()).unwrap_or(0);
+                let column = usize::try_from(l.column()).unwrap_or(0);
+                written_at(source, line, column).1
+            },
+        );
+        return format!(
+            "{at}: budget is {given}. Write it as budget: {{ usd: 20, per: month }} (tz and, in a rule or profile, models are optional), or a list of them such as budget: [{{ usd: 20, per: day }}, {{ usd: 300, per: month }}]."
         );
     }
     if let Some(wanted) = wanted_kind(text)
@@ -1351,20 +1581,52 @@ fn policy_rules(
             ));
         }
         let p = &rule.principals;
-        let who = match (&p.team, &p.name, p.any) {
-            (Some(team), None, None) => Who::Team(team.clone()),
-            (None, Some(name), None) => Who::Name(name.clone()),
-            (None, None, Some(true)) => Who::Any,
+        let who = match (&p.team, &p.name, &p.tag, p.any) {
+            (Some(team), None, None, None) => Who::Team(team.clone()),
+            (None, Some(name), None, None) => Who::Name(name.clone()),
+            (None, None, Some(tag), None) => Who::Tag(tag.clone()),
+            (None, None, None, Some(true)) => Who::Any,
             _ => {
                 errors.push(format!(
-                    "{}: principals must be exactly one of {{ team: <team> }}, {{ name: <person or workload> }} or {{ any: true }}.",
+                    "{}: principals must be exactly one of {{ team: <team> }}, {{ name: <person or workload> }}, {{ tag: <tag on the key> }} or {{ any: true }}.",
                     at("principals")
                 ));
                 continue;
             }
         };
-        let wildcard = rule.models.iter().any(|m| m == "*");
-        if wildcard && rule.models.len() > 1 {
+        let own_models = match (&rule.models, rule.profiles.is_empty()) {
+            (Some(models), _) => models.clone(),
+            (None, false) => Vec::new(),
+            (None, true) => {
+                errors.push(format!(
+                    "{}: \"models\" is missing here. Add it: the models the rule allows, [\"*\"] for all or [] for none, or include a profile that lists them.",
+                    at("name")
+                ));
+                continue;
+            }
+        };
+        let mut profiles = Vec::new();
+        for name in &rule.profiles {
+            match parsed.profiles.iter().find(|p| p.name == *name) {
+                Some(profile) => profiles.push(profile),
+                None => errors.push(format!(
+                    "{}: rule \"{}\" includes profile \"{name}\", which is not defined under profiles. Define it there, or check the spelling. The profiles are: {}.",
+                    at("profiles"),
+                    rule.name,
+                    names_or_none(parsed.profiles.iter().map(|p| p.name.as_str()))
+                )),
+            }
+        }
+        let mut all_models = own_models.clone();
+        for profile in &profiles {
+            for model in &profile.models {
+                if !all_models.contains(model) {
+                    all_models.push(model.clone());
+                }
+            }
+        }
+        let wildcard = all_models.iter().any(|m| m == "*");
+        if own_models.iter().any(|m| m == "*") && own_models.len() > 1 {
             errors.push(format!(
                 "{}: \"*\" already allows every model. List it alone, or list the models by name.",
                 at("models")
@@ -1373,10 +1635,33 @@ fn policy_rules(
         let models = if wildcard {
             Models::Any
         } else {
-            Models::Only(rule.models.clone())
+            Models::Only(all_models)
         };
-        let limits = limits(rule, &at, errors);
-        crate::mcp::check_tools(&at("tools"), &rule.tools, &parsed.mcp, errors);
+        let mut limits = limits(rule, &at, errors);
+        let mut overrides = Vec::new();
+        for profile in &profiles {
+            merge_profile(profile, &mut limits, &mut overrides, &at("profiles"));
+        }
+        let mut tools = rule.tools.clone();
+        for profile in &profiles {
+            for tool in &profile.tools {
+                if !tools.contains(tool) {
+                    tools.push(tool.clone());
+                }
+            }
+        }
+        crate::mcp::check_tools(&at("tools"), &tools, &parsed.mcp, errors);
+        for (list, what) in [(&rule.tags, "tags"), (&rule.customers, "customers")] {
+            if let Some(bad) = list.iter().find(|t| *t != "*" && !valid_name(t)) {
+                errors.push(format!(
+                    "{}: \"{bad}\" in {what} is not a name Gantry accepts. Use letters, digits, dots, dashes, underscores and @, at most 100 characters, or \"*\" for any.",
+                    at(what)
+                ));
+            }
+        }
+        if let Some(org) = &rule.org {
+            check_org(&parsed.orgs, org, &at("org"), errors);
+        }
         rules.push(Rule {
             name: rule.name.clone(),
             line,
@@ -1392,10 +1677,322 @@ fn policy_rules(
                     paths: p.paths.clone(),
                 })
                 .collect(),
-            tools: rule.tools.clone(),
+            tools,
+            org: rule.org.clone(),
+            profiles: rule.profiles.clone(),
+            tags: rule.tags.clone(),
+            customers: rule.customers.clone(),
+            overrides,
         });
     }
     rules
+}
+
+/// "a, b" or "none", for messages that list what is defined.
+fn names_or_none<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let names: Vec<&str> = names.collect();
+    if names.is_empty() {
+        "none".into()
+    } else {
+        names.join(", ")
+    }
+}
+
+/// An organization a rule, limit, role or key names must be one `orgs:` lists, so a misspelled one is caught here
+/// rather than becoming a tenant of its own.
+fn check_org(orgs: &[String], org: &str, at: &str, errors: &mut Vec<String>) {
+    if !orgs.iter().any(|o| o == org) {
+        errors.push(format!(
+            "{at}: organization \"{org}\" is not listed under orgs. Add it to orgs: at the top of the policy, or check the spelling. The organizations are: {}.",
+            names_or_none(orgs.iter().map(String::as_str))
+        ));
+    }
+}
+
+/// Adds what a profile sets and the rule does not. The rule's own value wins and the profile's is named as
+/// overridden; between profiles, the first listed wins.
+fn merge_profile(
+    profile: &ProfileFile,
+    limits: &mut Limits,
+    overrides: &mut Vec<String>,
+    at: &str,
+) {
+    let of = format!("of profile \"{}\"", profile.name);
+    // The profile's own values were checked once with it (check_profiles): a rule that includes it does not
+    // repeat its problems, so they go nowhere here.
+    let mut quiet = Vec::new();
+    if let Some(budgets) = &profile.budget {
+        for cap in caps_of(budgets, at, Some(&profile.name), &mut quiet) {
+            match limits
+                .budgets
+                .iter()
+                .find(|c| c.budget.per == cap.budget.per && c.models == cap.models)
+            {
+                Some(kept) => overrides.push(format!(
+                    "budget ${} a {} {of}, by {}",
+                    cap.budget.usd,
+                    cap.budget.per.describe(),
+                    kept.from
+                        .as_deref()
+                        .map_or("the rule".to_string(), |p| format!("profile \"{p}\""))
+                )),
+                None => limits.budgets.push(cap),
+            }
+        }
+    }
+    let rate = profile.rate.as_ref();
+    let values = [
+        (
+            "rpm",
+            rate.and_then(|r| r.rpm).and_then(|n| {
+                u32::try_from(n)
+                    .ok()
+                    .filter(|n| (1..=1_000_000).contains(n))
+            }),
+        ),
+        (
+            "tpm",
+            rate.and_then(|r| r.tpm)
+                .and_then(|n| tpm_of(n, at, &mut quiet)),
+        ),
+        (
+            "parallel",
+            profile
+                .parallel
+                .and_then(|n| parallel_of(n, at, &mut quiet)),
+        ),
+    ];
+    for (field, value) in values {
+        let Some(value) = value else { continue };
+        let slot = match field {
+            "rpm" => &mut limits.rpm,
+            "tpm" => &mut limits.tpm,
+            _ => &mut limits.parallel,
+        };
+        match slot {
+            Some(kept) => {
+                let by = limits
+                    .inherited
+                    .iter()
+                    .find(|(f, _)| *f == field)
+                    .map_or("the rule".to_string(), |(_, p)| format!("profile \"{p}\""));
+                overrides.push(format!("{field} {value} {of}, by {by} ({kept})"));
+            }
+            None => {
+                *slot = Some(value);
+                limits.inherited.push((field, profile.name.clone()));
+            }
+        }
+    }
+}
+
+/// The `profiles:` list: each name once and valid.
+fn check_profiles(file: &Path, text: &str, parsed: &PolicyFile, errors: &mut Vec<String>) {
+    let lines = list_lines(text, "profiles");
+    for (i, profile) in parsed.profiles.iter().enumerate() {
+        let at = format!("{}:{}", file.display(), lines.get(i).copied().unwrap_or(0));
+        if !valid_name(&profile.name) {
+            errors.push(format!(
+                "{at}: a profile name uses letters, digits, dots, dashes, underscores and @ only, at most 100 characters."
+            ));
+        }
+        if parsed.profiles[..i].iter().any(|p| p.name == profile.name) {
+            errors.push(format!(
+                "{at}: profile \"{}\" is defined twice. Give each profile its own name.",
+                profile.name
+            ));
+        }
+        if let Some(budgets) = &profile.budget {
+            caps_of(budgets, &at, None, errors);
+        }
+        if let Some(n) = profile.parallel {
+            parallel_of(n, &at, errors);
+        }
+        if let Some(tpm) = profile.rate.as_ref().and_then(|r| r.tpm) {
+            tpm_of(tpm, &at, errors);
+        }
+        if let Some(rate) = &profile.rate {
+            if rate.rpm.is_some_and(|n| !(1..=1_000_000).contains(&n)) {
+                errors.push(format!(
+                    "{at}: rpm is the number of requests one person may send per minute, 1 to 1000000, for example rate: {{ rpm: 600 }}. To set no limit, remove the line."
+                ));
+            }
+        }
+    }
+}
+
+/// The `limits:` list, each entry checked: exactly one kind of scope, an organization `orgs:` lists, and at least
+/// one limit.
+fn scope_limits(
+    file: &Path,
+    text: &str,
+    parsed: &PolicyFile,
+    errors: &mut Vec<String>,
+) -> Vec<ScopeLimit> {
+    let lines = list_lines(text, "limits");
+    let mut out: Vec<ScopeLimit> = Vec::new();
+    for (i, entry) in parsed.limits.iter().enumerate() {
+        let line = lines.get(i).copied().unwrap_or(0);
+        let at = format!("{}:{line}", file.display());
+        let kinds = [
+            (ScopeKind::Team, &entry.team),
+            (ScopeKind::Person, &entry.person),
+            (ScopeKind::Key, &entry.key),
+            (ScopeKind::Customer, &entry.customer),
+            (ScopeKind::Tag, &entry.tag),
+            (ScopeKind::Model, &entry.model),
+        ];
+        let named: Vec<(ScopeKind, &String)> = kinds
+            .iter()
+            .filter_map(|(k, v)| v.as_ref().map(|v| (*k, v)))
+            .collect();
+        let global = entry.global == Some(true);
+        let (kind, name, org) = match (global, named.as_slice(), &entry.org) {
+            (true, [], None) => (ScopeKind::Global, String::new(), None),
+            (false, [], Some(org)) => (ScopeKind::Org, org.clone(), None),
+            (false, [(kind, name)], org) => (*kind, (*name).clone(), org.clone()),
+            _ => {
+                errors.push(format!(
+                    "{at}: a limits entry names one scope: global: true, org: <org> (or \"*\" for each), or one of team, person, key, customer, tag or model (a name, or \"*\" for each), optionally with org: <org> to keep it to one organization."
+                ));
+                continue;
+            }
+        };
+        if kind != ScopeKind::Global && name != "*" && !valid_name(&name) {
+            errors.push(format!(
+                "{at}: \"{name}\" is not a name Gantry accepts. Use letters, digits, dots, dashes, underscores and @, at most 100 characters, or \"*\" for each one."
+            ));
+        }
+        if kind == ScopeKind::Key
+            && name != "*"
+            && !(name.len() == 8 && name.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            errors.push(format!(
+                "{at}: key names a key by the first 8 hex characters of its sha256, as gantry key list shows them, for example key: 1a2b3c4d."
+            ));
+        }
+        if kind == ScopeKind::Org && name != "*" {
+            check_org(&parsed.orgs, &name, &at, errors);
+        }
+        if let Some(org) = &org {
+            check_org(&parsed.orgs, org, &at, errors);
+        }
+        let budgets = entry
+            .budget
+            .as_ref()
+            .map(|b| scope_budgets(b, &at, errors))
+            .unwrap_or_default();
+        let (mut rpm, mut tpm) = (None, None);
+        if let Some(rate) = &entry.rate {
+            if let Some(n) = rate.rpm {
+                match u32::try_from(n) {
+                    Ok(n) if (1..=1_000_000).contains(&n) => rpm = Some(n),
+                    _ => errors.push(format!(
+                        "{at}: rpm is the number of requests the scope may send per minute, 1 to 1000000, for example rate: {{ rpm: 600 }}."
+                    )),
+                }
+            }
+            tpm = rate.tpm.and_then(|n| tpm_of(n, &at, errors));
+        }
+        let parallel = entry.parallel.and_then(|n| parallel_of(n, &at, errors));
+        if entry.budget.is_none() && entry.rate.is_none() && entry.parallel.is_none() {
+            errors.push(format!(
+                "{at}: this limits entry sets no limit. Give it budget, rate or parallel, or remove it."
+            ));
+        }
+        if kind == ScopeKind::Key && rpm.is_some() {
+            errors.push(format!(
+                "{at}: a key's requests per minute are its person's: use person: <name> for rpm, and tpm, budget or parallel on the key."
+            ));
+        }
+        if let Some(twin) = out
+            .iter()
+            .find(|e| e.kind == kind && e.name == name && e.org == org)
+        {
+            errors.push(format!(
+                "{at}: the same scope is listed at line {} too. Put its limits in one entry.",
+                twin.line
+            ));
+        }
+        out.push(ScopeLimit {
+            kind,
+            name,
+            org,
+            line,
+            budgets,
+            rpm,
+            tpm,
+            parallel,
+        });
+    }
+    out
+}
+
+/// The `roles:` list, checked: known permissions, a name that is not a built-in one, an organization `orgs:` lists.
+fn roles(file: &Path, text: &str, parsed: &PolicyFile, errors: &mut Vec<String>) -> Vec<Role> {
+    let lines = list_lines(text, "roles");
+    let mut out: Vec<Role> = Vec::new();
+    for (i, role) in parsed.roles.iter().enumerate() {
+        let line = lines.get(i).copied().unwrap_or(0);
+        let at = format!("{}:{line}", file.display());
+        if !valid_name(&role.name) {
+            errors.push(format!(
+                "{at}: a role name uses letters, digits, dots, dashes, underscores and @ only, at most 100 characters."
+            ));
+        }
+        if crate::policy::builtin_role(&role.name).is_some() {
+            errors.push(format!(
+                "{at}: \"{}\" is a built-in role. Give yours another name.",
+                role.name
+            ));
+        }
+        if out.iter().any(|r| r.name == role.name) {
+            errors.push(format!(
+                "{at}: role \"{}\" is defined twice. Give each role its own name.",
+                role.name
+            ));
+        }
+        let mut permissions = Vec::new();
+        for word in &role.permissions {
+            match Permission::from_word(word) {
+                Some(p) => permissions.push(p),
+                None => errors.push(format!(
+                    "{at}: \"{word}\" is not a permission. The permissions are: {}.",
+                    Permission::ALL.map(Permission::word).join(", ")
+                )),
+            }
+        }
+        if let Some(org) = &role.org {
+            check_org(&parsed.orgs, org, &at, errors);
+        }
+        out.push(Role {
+            name: role.name.clone(),
+            permissions,
+            org: role.org.clone(),
+            sso_values: role.sso_values.clone(),
+            line,
+        });
+    }
+    out
+}
+
+/// The `orgs:` list: valid names, each once.
+fn check_orgs(file: &Path, text: &str, parsed: &PolicyFile, errors: &mut Vec<String>) {
+    let line = line_of_key(text, "orgs", 1, usize::MAX);
+    for (i, org) in parsed.orgs.iter().enumerate() {
+        if !valid_name(org) || org == "*" {
+            errors.push(format!(
+                "{}:{line}: organization \"{org}\" uses letters, digits, dots, dashes, underscores and @ only, at most 100 characters.",
+                file.display()
+            ));
+        }
+        if parsed.orgs[..i].contains(org) {
+            errors.push(format!(
+                "{}:{line}: organization \"{org}\" is listed twice under orgs. List it once.",
+                file.display()
+            ));
+        }
+    }
 }
 
 /// Each rule's `passthrough:` entries must name a provider of a kind Gantry can send to as is, and paths that
@@ -1521,12 +2118,28 @@ fn rule_guardrails(
     };
     let (lines, end) = rule_lines(text);
     for (i, rule) in parsed.rules.iter().enumerate() {
-        if rule.guardrails.is_empty() {
+        // A profile's guardrails run before the rule's own, each once.
+        let mut names: Vec<String> = Vec::new();
+        for profile in parsed
+            .profiles
+            .iter()
+            .filter(|p| rule.profiles.contains(&p.name))
+        {
+            names.extend(profile.guardrails.iter().cloned());
+        }
+        names.extend(rule.guardrails.iter().cloned());
+        let mut once: Vec<String> = Vec::new();
+        for name in names {
+            if !once.contains(&name) {
+                once.push(name);
+            }
+        }
+        if once.is_empty() {
             continue;
         }
         let line = lines.get(i).copied().unwrap_or(0);
         let until = lines.get(i + 1).copied().unwrap_or(end);
-        match guard::for_rule(&rule.name, &rule.guardrails, &defined) {
+        match guard::for_rule(&rule.name, &once, &defined) {
             Ok(guards) => {
                 if let Some(built) = rules.iter_mut().find(|r| r.line == line) {
                     built.guardrails = guards;
@@ -1585,8 +2198,11 @@ fn rule_guardrails(
 /// The budget, rate and cache of one rule, each checked. `at` gives the place of a key in the rule.
 fn limits(rule: &RuleFile, at: &dyn Fn(&str) -> String, errors: &mut Vec<String>) -> Limits {
     let mut limits = Limits::default();
-    if let Some(budget) = &rule.budget {
-        limits.budget = budget_of(budget, &at("budget"), errors);
+    if let Some(budgets) = &rule.budget {
+        limits.budgets = caps_of(budgets, &at("budget"), None, errors);
+    }
+    if let Some(n) = rule.parallel {
+        limits.parallel = parallel_of(n, &at("parallel"), errors);
     }
     if let Some(rate) = &rule.rate {
         if rate.rpm.is_none() && rate.tpm.is_none() {
@@ -1662,7 +2278,7 @@ fn check_prices(
     }
     let (lines, end) = rule_lines(text);
     for (i, rule) in rules.iter().enumerate() {
-        if rule.limits.budget.is_none() {
+        if rule.limits.budgets.is_empty() {
             continue;
         }
         let reached: Vec<&String> = match &rule.models {
@@ -2081,7 +2697,7 @@ fn providers(
     let ruled: Vec<&str> = parsed
         .rules
         .iter()
-        .flat_map(|rule| rule.models.iter().map(String::as_str))
+        .flat_map(|rule| rule.models.iter().flatten().map(String::as_str))
         .filter(|model| *model != "*")
         .collect();
     for (i, entry) in parsed.providers.iter().enumerate() {
@@ -2424,6 +3040,25 @@ fn keys(file: &Path, text: &str, errors: &mut Vec<String>) -> Vec<KeyEntry> {
             continue;
         }
         let tpm = entry.tpm.and_then(|tpm| tpm_of(tpm, &at, errors));
+        let parallel = entry.parallel.and_then(|n| parallel_of(n, &at, errors));
+        for name in entry
+            .org
+            .iter()
+            .chain(entry.customer.iter())
+            .chain(entry.role.iter())
+            .chain(entry.tags.iter())
+        {
+            if !valid_name(name) {
+                errors.push(format!(
+                    "{at}: \"{name}\" is not a name Gantry accepts for org, customer, role or tags. Use letters, digits, dots, dashes, underscores and @ only, at most 100 characters."
+                ));
+            }
+        }
+        if entry.tags.len() > MAX_TAGS {
+            errors.push(format!(
+                "{at}: a key carries at most {MAX_TAGS} tags. Remove some."
+            ));
+        }
         if entry.models.as_ref().is_some_and(Vec::is_empty) {
             errors.push(format!("{at}: models is empty, so this key could use no model. List the models it may use, or remove the line to leave its rule's list."));
         }
@@ -2436,6 +3071,11 @@ fn keys(file: &Path, text: &str, errors: &mut Vec<String>) -> Vec<KeyEntry> {
             budget,
             models: entry.models,
             tpm,
+            org: entry.org.unwrap_or_default(),
+            customer: entry.customer,
+            tags: entry.tags,
+            parallel,
+            role: entry.role,
         });
     }
     entries
@@ -2462,6 +3102,11 @@ fn principals(entries: Vec<KeyEntry>) -> HashMap<[u8; 32], Principal> {
                 budget: entry.budget,
                 models: entry.models,
                 tpm: entry.tpm,
+                org: entry.org,
+                customer: entry.customer,
+                tags: entry.tags,
+                parallel: entry.parallel,
+                role: entry.role,
             },
         );
     }
@@ -2603,13 +3248,41 @@ pub fn load_texts(
     let aliases = aliases(policy_path, policy_text, &parsed, &providers, &mut errors);
     let mcp = crate::mcp::servers(policy_path, policy_text, &parsed.mcp, &mut errors);
     let store = store_setting(policy_path, policy_text, &parsed, &mut errors);
+    check_orgs(policy_path, policy_text, &parsed, &mut errors);
+    check_profiles(policy_path, policy_text, &parsed, &mut errors);
+    let scope_limits = scope_limits(policy_path, policy_text, &parsed, &mut errors);
+    let roles = roles(policy_path, policy_text, &parsed, &mut errors);
+    // A key's org and role must be ones the policy has: a misspelled org would be a tenant with no rules, and a
+    // misspelled role a key that cannot sign in.
+    for entry in &keys {
+        let line = keys_text
+            .lines()
+            .position(|l| l.contains(&entry.sha256))
+            .map_or(0, |i| i + 1);
+        let at = format!("{}:{line}", keys_file.display());
+        if !entry.org.is_empty() {
+            check_org(&parsed.orgs, &entry.org, &at, &mut errors);
+        }
+        if let Some(role) = &entry.role
+            && crate::policy::builtin_role(role).is_none()
+            && !roles.iter().any(|r| r.name == *role)
+        {
+            errors.push(format!(
+                "{at}: role \"{role}\" is not defined under roles in the policy, and is not a built-in role (admin, read_only). Define it, or check the spelling."
+            ));
+        }
+    }
     let audit_path = match &parsed.audit {
         Some(audit) => audit.path.clone(),
         None => policy_path.with_file_name("gantry-audit.jsonl"),
     };
     match providers {
         providers if errors.is_empty() => Ok(Loaded {
-            policy: Policy::from_parts(principals(keys), rules).with_prices(parsed.prices),
+            policy: Policy::from_parts(principals(keys), rules)
+                .with_prices(parsed.prices)
+                .with_scope_limits(scope_limits)
+                .with_roles(roles)
+                .with_orgs(parsed.orgs.clone()),
             providers,
             audit_path,
             keys_path: keys_file.to_path_buf(),
@@ -3086,10 +3759,16 @@ rules:
         assert_eq!(
             rules[0].limits,
             Limits {
-                budget: Some(Budget {
-                    usd: 2000.0,
-                    per: Period::Month
-                }),
+                budgets: vec![crate::policy::Cap {
+                    budget: Budget {
+                        usd: 2000.0,
+                        per: Period::Month
+                    },
+                    models: Vec::new(),
+                    from: None,
+                }],
+                parallel: None,
+                inherited: Vec::new(),
                 rpm: Some(600),
                 tpm: None,
                 cache_ttl_seconds: Some(300),
@@ -3099,7 +3778,7 @@ rules:
             }
         );
         assert_eq!(
-            rules[1].limits.budget,
+            rules[1].limits.budget(),
             Some(Budget {
                 usd: 12.5,
                 per: Period::Day
@@ -3128,9 +3807,9 @@ rules:
         let cases = [
             (
                 "usd: 2000, per: month",
-                "usd: 2000, per: week",
+                "usd: 2000, per: fortnight",
                 ":17",
-                "per: day or per: month",
+                "per: day, per: month",
             ),
             (
                 "usd: 2000, per: month",
@@ -3400,7 +4079,10 @@ rules:
             // UX11 n3: a day the month does not have.
             ("    expires: 2026-02-29\n", "2026-02-29 is not a date"),
             ("    expires: 2026-11-31T00:00:00Z\n", "is not a date"),
-            ("    budget: { usd: 5, per: week }\n", "per is \"week\""),
+            (
+                "    budget: { usd: 5, per: fortnight }\n",
+                "per is \"fortnight\"",
+            ),
             ("    budget: { usd: 0, per: day }\n", "above 0"),
         ] {
             let problems = key_entries(Path::new("k.yaml"), &entry(bad))
@@ -4144,6 +4826,147 @@ rules:
             let text = errors(check("google-bad", &GOOGLE.replace(from, to), None)?)?;
             assert!(text.contains(expected), "{expected}: {text}");
         }
+        Ok(())
+    }
+
+    const HIERARCHY: &str = "\
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini, gpt-4o, o3]
+orgs: [acme, globex]
+guardrails:
+  - name: no-secrets
+    type: secrets
+    action: block
+profiles:
+  - name: standard
+    models: [gpt-4o-mini]
+    guardrails: [no-secrets]
+    budget: [{ usd: 10, per: day }, { usd: 100, per: month, tz: America/New_York }]
+    rate: { rpm: 60, tpm: 100000 }
+    parallel: 4
+rules:
+  - name: acme-payments
+    org: acme
+    principals: { team: payments }
+    profiles: [standard]
+    models: [o3]
+    budget: [{ usd: 20, per: day }, { usd: 5, per: week, models: [o3] }]
+    rate: { tpm: 50000 }
+    tags: [search, \"checkout\"]
+    customers: [\"*\"]
+  - name: ci
+    principals: { tag: ci }
+    models: [gpt-4o-mini]
+  - name: everyone-else
+    principals: { any: true }
+    models: []
+limits:
+  - { global: true, budget: { usd: 50000, per: month } }
+  - { org: acme, budget: { usd: 20000, per: month, tz: America/New_York }, parallel: 200 }
+  - { person: \"*\", budget: [{ usd: 5, per: day }, { usd: 50, per: month }] }
+  - { person: \"*\", org: acme, budget: { usd: 8, per: day } }
+  - { person: maya, org: acme, budget: { usd: 30, per: day } }
+  - { customer: \"*\", budget: { usd: 2, per: 6h }, rate: { rpm: 30 }, parallel: 2 }
+  - { tag: search, budget: { usd: 300, per: week } }
+  - { model: o3, budget: { usd: 1000, per: 3mo } }
+roles:
+  - name: finance
+    permissions: [see_spend, see_records]
+    org: acme
+    sso_values: [finance]
+";
+
+    #[test]
+    fn organizations_profiles_limits_and_roles_load_into_the_policy() -> TestResult {
+        let keys = format!(
+            "keys:\n  - name: maya\n    team: payments\n    sha256: {}\n    org: acme\n    customer: globex-shop\n    tags: [ci]\n    parallel: 3\n    role: finance\n",
+            "a".repeat(64)
+        );
+        let loaded = check("hierarchy", HIERARCHY, Some(&keys))?.map_err(|e| e.join("\n"))?;
+        let policy = &loaded.policy;
+        let rule = &policy.rule_list()[0];
+        assert_eq!(rule.org.as_deref(), Some("acme"));
+        // The profile's model joins the rule's, its guardrail runs, and the rule's own budget and tpm win.
+        assert_eq!(
+            rule.models,
+            Models::Only(vec!["o3".into(), "gpt-4o-mini".into()])
+        );
+        assert_eq!(rule.guardrails.len(), 1);
+        assert_eq!(rule.limits.tpm, Some(50000));
+        assert_eq!(rule.limits.rpm, Some(60));
+        assert_eq!(rule.limits.parallel, Some(4));
+        assert_eq!(rule.limits.budgets.len(), 3);
+        assert!(
+            rule.overrides
+                .iter()
+                .any(|o| o.contains("tpm 100000 of profile \"standard\""))
+        );
+        assert!(
+            rule.overrides
+                .iter()
+                .any(|o| o.contains("budget $10 a day of profile \"standard\""))
+        );
+        let per_ny = rule.limits.budgets[2].budget.per;
+        assert_eq!(per_ny.tz, Some("America/New_York"));
+        assert_eq!(policy.scope_limits().len(), 8);
+        assert_eq!(policy.roles()[0].org.as_deref(), Some("acme"));
+        let who = policy
+            .entries()
+            .map(|(_, p)| p.clone())
+            .next()
+            .ok_or("no key")?;
+        assert_eq!((who.org.as_str(), who.parallel), ("acme", Some(3)));
+        assert_eq!(who.customer.as_deref(), Some("globex-shop"));
+        let role = policy.role_of(&who).ok_or("no role")?;
+        assert!(role.may(crate::policy::Permission::SeeSpend));
+        assert!(!role.may(crate::policy::Permission::IssueKeys));
+        assert!(
+            matches!(policy.decide(&who, "o3"), Decision::Allow(r) if r.name == "acme-payments")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hierarchy_mistakes_are_named_with_their_line_and_fix() -> TestResult {
+        let bad = HIERARCHY
+            .replace(
+                "org: acme\n    principals",
+                "org: acme-corp\n    principals",
+            )
+            .replace("profiles: [standard]", "profiles: [standrd]")
+            .replace("tz: America/New_York }]", "tz: Mars/Olympus }]")
+            .replace("see_records]", "see_records, see_everything]")
+            .replace("{ tag: search, budget", "{ tag: search, team: x, budget")
+            .replace("per: 3mo", "per: 13mo");
+        let errors = errors(check("hierarchy-bad", &bad, None)?)?;
+        for expected in [
+            "organization \"acme-corp\" is not listed under orgs",
+            "includes profile \"standrd\", which is not defined under profiles",
+            "tz is \"Mars/Olympus\", which is not a time zone Gantry knows",
+            "\"see_everything\" is not a permission",
+            "a limits entry names one scope",
+            "longer than a year",
+        ] {
+            assert!(errors.contains(expected), "{expected} in\n{errors}");
+        }
+        let keys = format!(
+            "keys:\n  - name: dana\n    team: t\n    sha256: {}\n    org: initech\n    role: auditor\n",
+            "b".repeat(64)
+        );
+        let errors = super::tests::errors(check("hierarchy-keys", HIERARCHY, Some(&keys))?)?;
+        assert!(
+            errors.contains("gantry.keys.yaml:4: organization \"initech\" is not listed"),
+            "{errors}"
+        );
+        assert!(
+            errors.contains("role \"auditor\" is not defined under roles"),
+            "{errors}"
+        );
         Ok(())
     }
 }

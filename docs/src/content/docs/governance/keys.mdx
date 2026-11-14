@@ -74,9 +74,14 @@ A key is shown once. Hand it over through your secret manager or device manageme
 | `--team <team>` | `team` | yes | Required. The team rules match on. |
 | `--admin` | none | yes | May sign in to the console and call the admin API. |
 | `--expires <date>` | `expires` | yes | UTC date (`2026-12-31`: refused from the start of that day) or time (`2026-12-31T18:00:00Z`). |
-| `--budget <usd>/<day\|month>` | `budget` | yes | What this key alone may spend, for example `20/month`. |
+| `--budget <usd>/<period>` | `budget` | yes | What this key alone may spend, for example `20/month`, `5/6h` or `100/month@America/New_York` (a time zone after `@`; the API takes `{"usd": 100, "per": "month", "tz": "America/New_York"}`). |
 | `--models <a,b>` | `models` | no | Narrows the rule's models for this key. |
 | `--tpm <n>` | `tpm` | no | Tokens per minute for this key, 1 to 1000000000. |
+| `--parallel <n>` | `parallel` | no | Most requests this key may have in flight at once, 1 to 100000. |
+| `--org <org>` | `org` | no | The [organization](/governance/policy/#organizations) the key belongs to. An admin kept to one organization issues keys in it only. |
+| `--customer <name>` | `customer` | no | The [end customer](/governance/budgets-and-rate-limits/#end-customers-and-tags) every request with the key is for. |
+| `--tags <a,b>` | `tags` | no | Tags every request with the key carries, at most 16. |
+| `--role <role>` | `role` | no | A [console role](/governance/policy/#console-roles) the key signs in with and calls the admin API with. An issuer may give only a role whose permissions it holds. |
 | `--url <url>` | none | no | The address printed in the env lines. Default `http://127.0.0.1:8080`. |
 | `--quiet` | none | no | Print the key alone. |
 | `--keys <file>` | none | no | The keys file. Default `gantry.keys.yaml` in the current directory. |
@@ -144,9 +149,14 @@ keys:
 | `sha256` | string | required | SHA-256 of the key, 64 hex characters. |
 | `admin` | boolean | `false` | Console and admin API access. |
 | `expires` | string | none | UTC date or time. |
-| `budget` | map | none | `{ usd: <above 0>, per: day \| month }`. |
+| `budget` | map | none | `{ usd: <above 0>, per: <period>, tz: <zone> }`. |
 | `models` | list | none | Models this key may use, within its rule's. |
 | `tpm` | integer | none | Tokens per minute for this key. |
+| `parallel` | integer | none | Requests in flight at once for this key. |
+| `org` | string | none | Organization, one the policy's `orgs:` lists. |
+| `customer` | string | none | End customer of every request with this key. |
+| `tags` | list | `[]` | Tags of every request with this key. |
+| `role` | string | none | Console role, built in or from the policy's `roles:`. |
 
 How keys are stored:
 

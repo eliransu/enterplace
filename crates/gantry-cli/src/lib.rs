@@ -19,7 +19,13 @@ Usage: gantry <command>
 Commands:
   check <policy> [--keys <file>]
         Check a policy file and its keys file. Prints every problem with its file and line.
-  key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>/<day|month>] [--models <a,b>] [--tpm <n>]
+  explain <policy> --key <hash prefix or name> --model <model> [--customer <name>] [--tags <a,b>] [--keys <file>]
+        Say why a request from that key for that model would be allowed or refused: the rules passed over, the
+        rule that decides, and every limit that applies (rule, key, organization, team, person, customer, tag,
+        model, global) with where it is written and what it overrides. A running gateway adds what each budget
+        has spent: GET /admin/explain.
+  key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>]
+          [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>]
           [--url <gateway url>] [--quiet] [--keys <file>]
         Make a key for a person or a workload. The key is printed once, with the lines that point
         Claude Code and OpenAI SDKs at Gantry (--url, default http://127.0.0.1:8080). Only its hash is
@@ -27,6 +33,10 @@ Commands:
         admin starts here). --expires 2026-12-31 refuses the key from that UTC day on (or a time:
         2026-12-31T18:00:00Z). --budget 20/month caps what this key alone may spend. --models
         gpt-4o-mini,o3 narrows its rule's models for this key; --tpm 200000 caps its tokens per minute.
+        The period of --budget is day, week, month, year, hour, minute or a count such as 6h, with @<zone>
+        for a time zone: --budget 100/month@America/New_York. --org puts the key in an organization the
+        policy lists; --customer makes every request with it for that end customer; --tags tags them;
+        --parallel 4 caps its requests in flight; --role names a console role from the policy.
         --quiet prints the key alone.
   key list [--keys <file>]
         List the keys in the keys file: name, team, hash prefix, admin, expiry, budget,
@@ -158,6 +168,22 @@ pub async fn run(args: &[String]) -> ExitCode {
             }
             _ => None,
         },
+        ["explain", rest @ ..] => match options(
+            rest,
+            &["--keys", "--key", "--model", "--customer", "--tags"],
+        ) {
+            Some((positional, named))
+                if positional.len() == 1
+                    && named.contains_key("--key")
+                    && named.contains_key("--model") =>
+            {
+                Some(
+                    explain(Path::new(positional[0]), &named)
+                        .map_or_else(fail, |()| ExitCode::SUCCESS),
+                )
+            }
+            _ => None,
+        },
         ["check", rest @ ..] => match options(rest, &["--keys"]) {
             Some((positional, named)) if positional.len() == 1 => Some(check(
                 Path::new(positional[0]),
@@ -184,6 +210,11 @@ pub async fn run(args: &[String]) -> ExitCode {
                     "--models",
                     "--tpm",
                     "--url",
+                    "--org",
+                    "--customer",
+                    "--tags",
+                    "--parallel",
+                    "--role",
                 ],
             ) {
                 Some((positional, named))
@@ -382,6 +413,9 @@ pub async fn run(args: &[String]) -> ExitCode {
         // A known command with the wrong arguments gets its own usage line, not the whole help.
         let usage = match args.as_slice() {
             ["check", ..] => Some("gantry check <policy> [--keys <file>]"),
+            ["explain", ..] => Some(
+                "gantry explain <policy> --key <hash prefix or name> --model <model> [--customer <name>] [--tags <a,b>] [--keys <file>]",
+            ),
             ["key", "list", ..] => Some("gantry key list [--keys <file>] [--policy <file>]"),
             ["key", "prune", ..] => Some("gantry key prune [--keys <file>] [--policy <file>]"),
             ["key", "revoke", ..] => {
@@ -393,7 +427,7 @@ pub async fn run(args: &[String]) -> ExitCode {
                 "gantry import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>]",
             ),
             ["key", ..] => Some(
-                "gantry key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>/<day|month>] [--models <a,b>] [--tpm <n>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]",
+                "gantry key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]",
             ),
             ["serve", ..] => Some(
                 "gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>]",
@@ -525,16 +559,17 @@ fn attributes(admin: bool, named: &HashMap<&str, &str>) -> Result<keyfile::Attri
         Some(text) => {
             let wrong = || {
                 format!(
-                    "--budget is \"{text}\". Write US dollars and a period, for example --budget 20/month or --budget 5/day."
+                    "--budget is \"{text}\". Write US dollars and a period, for example --budget 20/month, --budget 5/day or --budget 100/month@America/New_York."
                 )
             };
             let (usd, per) = text.split_once('/').ok_or_else(wrong)?;
             let usd: f64 = usd.trim_start_matches('$').parse().map_err(|_| wrong())?;
-            let per = match per {
-                "day" => Period::Day,
-                "month" => Period::Month,
-                _ => return Err(wrong()),
+            let (per, tz) = match per.split_once('@') {
+                Some((per, tz)) => (per, Some(tz)),
+                None => (per, None),
             };
+            let per = Period::parse(per, tz)
+                .map_err(|problem| format!("--budget is \"{text}\": {problem}"))?;
             if !usd.is_finite() || usd <= 0.0 {
                 return Err(wrong());
             }
@@ -569,13 +604,98 @@ fn attributes(admin: bool, named: &HashMap<&str, &str>) -> Result<keyfile::Attri
             }
         },
     };
+    let parallel = match named.get("--parallel") {
+        None => None,
+        Some(text) => match text.parse::<u32>() {
+            Ok(n) if (1..=100_000).contains(&n) => Some(n),
+            _ => {
+                return Err(format!(
+                    "--parallel is \"{text}\". Give the most requests the key may have in flight at once, 1 to 100000, for example --parallel 4."
+                ));
+            }
+        },
+    };
     Ok(keyfile::Attributes {
         admin,
         expires,
         budget,
         models,
         tpm,
+        org: named
+            .get("--org")
+            .map(|o| o.to_string())
+            .unwrap_or_default(),
+        customer: named.get("--customer").map(|c| c.to_string()),
+        tags: named
+            .get("--tags")
+            .map(|t| {
+                t.split(',')
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        parallel,
+        role: named.get("--role").map(|r| r.to_string()),
     })
+}
+
+/// `gantry explain`: why a request would be allowed or refused, and the limits it would count against.
+fn explain(policy: &Path, named: &HashMap<&str, &str>) -> Result<(), String> {
+    let loaded = config::load(policy, named.get("--keys").map(Path::new)).map_err(|problems| {
+        format!(
+            "{}\n{} cannot be used: {} problems above. Fix them with gantry check first.",
+            problems.join("\n"),
+            policy.display(),
+            problems.len()
+        )
+    })?;
+    let key = named["--key"].to_ascii_lowercase();
+    let who = loaded
+        .policy
+        .entries()
+        .map(|(_, p)| p)
+        .find(|p| (key.len() >= 8 && p.key.starts_with(&key[..8])) || p.name == named["--key"])
+        .ok_or_else(|| {
+            format!(
+                "no key in {} has the hash prefix or name \"{}\". gantry key list shows them.",
+                loaded.keys_path.display(),
+                named["--key"]
+            )
+        })?;
+    let model = named["--model"];
+    let deployed = loaded
+        .aliases
+        .iter()
+        .find(|a| a.name == model)
+        .and_then(|a| a.deployments.first())
+        .map_or(model.to_string(), |d| d.model.clone());
+    let customer = named
+        .get("--customer")
+        .map(|c| c.to_string())
+        .or_else(|| who.customer.clone());
+    let mut tags = who.tags.clone();
+    for tag in named.get("--tags").copied().unwrap_or_default().split(',') {
+        let tag = tag.trim();
+        if !tag.is_empty() && !tags.iter().any(|t| t == tag) {
+            tags.push(tag.to_string());
+        }
+    }
+    let explained = loaded.policy.explain(
+        who,
+        gantry_core::policy::Context {
+            sent: model,
+            model: &deployed,
+            customer: customer.as_deref(),
+            tags: &tags,
+        },
+    );
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&explained).map_err(|e| e.to_string())?
+    );
+    Ok(())
 }
 
 fn key_new(

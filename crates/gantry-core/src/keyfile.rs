@@ -18,6 +18,16 @@ pub struct Attributes {
     pub models: Option<Vec<String>>,
     /// Most tokens this key may use per minute.
     pub tpm: Option<u32>,
+    /// The key's organization, empty for none.
+    pub org: String,
+    /// The end customer every request with the key is for.
+    pub customer: Option<String>,
+    /// Tags every request with the key carries.
+    pub tags: Vec<String>,
+    /// Most requests the key may have in flight at once.
+    pub parallel: Option<u32>,
+    /// The console role the key signs in with.
+    pub role: Option<String>,
 }
 
 /// A key that was just made. `key` is shown once and kept nowhere.
@@ -112,6 +122,29 @@ pub fn add_with(
     {
         return Err("tpm is the number of tokens this key may use per minute, 1 to 1000000000, for example 200000. Nothing was changed and no key was made.".into());
     }
+    if let Some(bad) = std::iter::once(&attributes.org)
+        .filter(|o| !o.is_empty())
+        .chain(attributes.customer.iter())
+        .chain(attributes.role.iter())
+        .chain(attributes.tags.iter())
+        .find(|n| !config::valid_name(n))
+    {
+        return Err(format!(
+            "\"{bad}\" is not a name Gantry accepts for org, customer, role or tags: use letters, digits, dots, dashes, underscores and @ only, at most 100 characters. Nothing was changed and no key was made."
+        ));
+    }
+    if attributes.tags.len() > config::MAX_TAGS {
+        return Err(format!(
+            "a key carries at most {} tags. Nothing was changed and no key was made.",
+            config::MAX_TAGS
+        ));
+    }
+    if attributes
+        .parallel
+        .is_some_and(|p| !(1..=100_000).contains(&p))
+    {
+        return Err("parallel is the most requests the key may have in flight at once, 1 to 100000, for example 4. Nothing was changed and no key was made.".into());
+    }
     if !config::valid_name(name) || !config::valid_name(team) {
         return Err("a name and a team use letters, digits, dots, dashes, underscores and @ only, at most 100 characters, for example maya.cohen and payments.".into());
     }
@@ -126,6 +159,11 @@ pub fn add_with(
             budget: attributes.budget,
             models: attributes.models.clone(),
             tpm: attributes.tpm,
+            org: attributes.org.clone(),
+            customer: attributes.customer.clone(),
+            tags: attributes.tags.clone(),
+            parallel: attributes.parallel,
+            role: attributes.role.clone(),
         });
     }
     let entry = entry_text(name, team, &hash, attributes);
@@ -163,6 +201,11 @@ pub fn keys_text(entries: &[config::KeyEntry]) -> String {
             budget: entry.budget,
             models: entry.models.clone(),
             tpm: entry.tpm,
+            org: entry.org.clone(),
+            customer: entry.customer.clone(),
+            tags: entry.tags.clone(),
+            parallel: entry.parallel,
+            role: entry.role.clone(),
         };
         text.push_str(&entry_text(
             &entry.name,
@@ -184,10 +227,18 @@ fn entry_text(name: &str, team: &str, hash: &str, attributes: &Attributes) -> St
         entry.push_str(&format!("    expires: {expires}\n"));
     }
     if let Some(budget) = attributes.budget {
+        let zone = budget
+            .per
+            .tz
+            .map_or(String::new(), |tz| format!(", tz: {tz}"));
+        let per = crate::policy::Period {
+            tz: None,
+            ..budget.per
+        };
         entry.push_str(&format!(
-            "    budget: {{ usd: {}, per: {} }}\n",
+            "    budget: {{ usd: {}, per: {}{zone} }}\n",
             budget.usd,
-            budget.per.word()
+            per.word()
         ));
     }
     if let Some(models) = &attributes.models {
@@ -197,6 +248,22 @@ fn entry_text(name: &str, team: &str, hash: &str, attributes: &Attributes) -> St
     }
     if let Some(tpm) = attributes.tpm {
         entry.push_str(&format!("    tpm: {tpm}\n"));
+    }
+    if !attributes.org.is_empty() {
+        entry.push_str(&format!("    org: {}\n", attributes.org));
+    }
+    if let Some(customer) = &attributes.customer {
+        entry.push_str(&format!("    customer: \"{customer}\"\n"));
+    }
+    if !attributes.tags.is_empty() {
+        let quoted: Vec<String> = attributes.tags.iter().map(|t| format!("\"{t}\"")).collect();
+        entry.push_str(&format!("    tags: [{}]\n", quoted.join(", ")));
+    }
+    if let Some(parallel) = attributes.parallel {
+        entry.push_str(&format!("    parallel: {parallel}\n"));
+    }
+    if let Some(role) = &attributes.role {
+        entry.push_str(&format!("    role: {role}\n"));
     }
     entry
 }
@@ -682,6 +749,11 @@ mod tests {
             }),
             models: Some(vec!["gpt-4o-mini".into(), "o3".into()]),
             tpm: Some(5000),
+            org: "acme".into(),
+            customer: Some("globex-shop".into()),
+            tags: vec!["ci".into(), "search".into()],
+            parallel: Some(4),
+            role: Some("finance".into()),
         };
         issue_with("ci", "t", &attributes, &path)?;
         let text = std::fs::read_to_string(&path)?;
@@ -690,6 +762,11 @@ mod tests {
         assert_eq!(entries[0].budget, attributes.budget);
         assert_eq!(entries[0].models, attributes.models);
         assert_eq!(entries[0].tpm, attributes.tpm);
+        assert_eq!(entries[0].org, attributes.org);
+        assert_eq!(entries[0].customer, attributes.customer);
+        assert_eq!(entries[0].tags, attributes.tags);
+        assert_eq!(entries[0].parallel, attributes.parallel);
+        assert_eq!(entries[0].role, attributes.role);
         let bad = Attributes {
             expires: Some("soon".into()),
             ..Attributes::default()

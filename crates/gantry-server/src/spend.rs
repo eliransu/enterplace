@@ -23,7 +23,7 @@ use axum::{
 use gantry_core::{
     audit::{self, AuditLog},
     id::sha256,
-    policy::{Budget, Period, Principal, Rule, Who},
+    policy::{Applied, Budget, Limit, Period, Policy, Principal, Rule, applied_json},
     store::{Bucket as Counter, Change, LEASE, Lease, Reserve, Store},
     usage::{Price, PriceOverrides, Usage, UsageScanner, price_for},
 };
@@ -62,6 +62,38 @@ pub(crate) struct Spend {
     /// Shared with other gateways when the policy has `store:`: budgets are then reserved and settled there, and
     /// the ledger above only counts for this process.
     pub(crate) store: Option<Arc<dyn Store>>,
+    /// Requests in flight per scope with a `parallel:` limit, without a store.
+    parallel: Mutex<HashMap<String, u32>>,
+    /// With a store: this gateway's holds on `parallel:` limits, by ID, with the hour's counter each is in now.
+    holds: Mutex<HashMap<u64, (String, String)>>,
+    next_hold: std::sync::atomic::AtomicU64,
+}
+
+/// A request's place under one `parallel:` limit, given back when its answer ends.
+pub(crate) struct Hold {
+    scope: String,
+    /// With a store: the ID of the hold in `Spend::holds`.
+    id: Option<u64>,
+}
+
+/// What a limit's refusal says allows it: `rule "payments-team"`, `its key's entry`, or where the policy sets it.
+fn allows(applied: &Applied, rule: &Rule) -> String {
+    match applied.of {
+        "rule" => format!("rule \"{}\"", rule.name),
+        "key" => "its key's entry".to_string(),
+        _ => applied.source.clone(),
+    }
+}
+
+/// The fields a refusal by a limit adds to its decision record: `limit` as the console reads it for rpm and tpm,
+/// and `applied`, naming the scope, the counter and where the limit is written.
+fn limit_record(applied: &Applied, legacy: Value) -> Value {
+    let mut fields = Map::new();
+    if !legacy.is_null() {
+        fields.insert("limit".into(), legacy);
+    }
+    fields.insert("applied".into(), applied_json(applied));
+    Value::Object(fields)
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -109,45 +141,13 @@ struct Bucket {
 }
 
 /// The period a timestamp (`2026-11-13T09:14:02.120Z`) falls in.
-fn period_of(time: &str, per: Period) -> &str {
-    let len = match per {
-        Period::Month => 7,
-        Period::Day => 10,
-    };
-    time.get(..len).unwrap_or(time)
+fn period_of(time: &str, per: Period) -> String {
+    per.label(time)
 }
 
 /// When a period ends, as `2026-12-01 00:00 UTC`.
-fn resets(period: &str) -> String {
-    let mut parts = period.split('-').map(|p| p.parse::<u32>().unwrap_or(1));
-    let (year, month, day) = (
-        parts.next().unwrap_or(1970),
-        parts.next().unwrap_or(1),
-        parts.next(),
-    );
-    let next_month = |y: u32, m: u32| if m == 12 { (y + 1, 1) } else { (y, m + 1) };
-    let (y, m, d) = match day {
-        None => {
-            let (y, m) = next_month(year, month);
-            (y, m, 1)
-        }
-        Some(day) => {
-            let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-            let last = match month {
-                2 if leap => 29,
-                2 => 28,
-                4 | 6 | 9 | 11 => 30,
-                _ => 31,
-            };
-            if day < last {
-                (year, month, day + 1)
-            } else {
-                let (y, m) = next_month(year, month);
-                (y, m, 1)
-            }
-        }
-    };
-    format!("{y:04}-{m:02}-{d:02} 00:00 UTC")
+fn resets(period: &str, per: Period) -> String {
+    per.resets(period)
 }
 
 /// Dollars as a person reads them: cents, or four places for amounts under a dollar.
@@ -177,24 +177,39 @@ impl Reservation {
     }
 }
 
-/// The buckets a cost counts in: its person, team and key, for the day and the month of `time`.
-fn buckets(person: &str, team: &str, key: &str, time: &str) -> Vec<Counter> {
-    let mut scopes = vec![format!("person:{person}"), format!("team:{team}")];
+/// The buckets a cost counts in: its person, team and key, for the day and the month of `time`, and every other
+/// budget counter the request counted against (`counted`), each once.
+fn buckets(
+    person: &str,
+    team: &str,
+    key: &str,
+    counted: &[(String, Period)],
+    time: &str,
+) -> Vec<Counter> {
+    let mut scopes = vec![person.to_string(), team.to_string()];
     // Records written before keys were named in usage records have no key: they count for person and team only.
     if !key.is_empty() {
         scopes.push(format!("key:{key}"));
     }
-    let mut buckets = Vec::with_capacity(scopes.len() * 2);
+    let mut pairs: Vec<(String, Period)> = Vec::with_capacity(scopes.len() * 2 + counted.len());
     for scope in scopes {
         for per in [Period::Day, Period::Month] {
-            buckets.push(Counter {
-                scope: scope.clone(),
-                per,
-                period: period_of(time, per).to_string(),
-            });
+            pairs.push((scope.clone(), per));
         }
     }
-    buckets
+    for pair in counted {
+        if !pairs.contains(pair) {
+            pairs.push(pair.clone());
+        }
+    }
+    pairs
+        .into_iter()
+        .map(|(scope, per)| Counter {
+            period: period_of(time, per),
+            scope,
+            per,
+        })
+        .collect()
 }
 
 /// The store cannot be asked for a reservation: the request is refused, never let through unchecked.
@@ -253,20 +268,21 @@ impl Spend {
         now: &str,
     ) -> Result<Reservation, Over> {
         let period = period_of(now, budget.per);
+        let period = period.as_str();
         let mut ledger = locked(&self.ledger);
         let Some(bucket) = Self::bucket(&mut ledger, scope, budget.per, period) else {
             // The clock went back past a period boundary. Counting nothing would let spend through unchecked.
             return Err(Over {
                 spent: 0.0,
                 reserved: 0.0,
-                resets: resets(period),
+                resets: resets(period, budget.per),
             });
         };
         if bucket.spent + bucket.reserved + usd > budget.usd {
             return Err(Over {
                 spent: bucket.spent,
                 reserved: bucket.reserved,
-                resets: resets(period),
+                resets: resets(period, budget.per),
             });
         }
         bucket.reserved += usd;
@@ -290,7 +306,7 @@ impl Spend {
         let Some(store) = &self.store else {
             return self.reserve(scope, budget, usd, now).map_err(Ok);
         };
-        let period = period_of(now, budget.per).to_string();
+        let period = period_of(now, budget.per);
         let bucket = Counter {
             scope: scope.to_string(),
             per: budget.per,
@@ -306,7 +322,7 @@ impl Spend {
             Ok(Reserve::Over { spent, reserved }) => Err(Ok(Over {
                 spent,
                 reserved,
-                resets: resets(&period),
+                resets: resets(&period, budget.per),
             })),
             Err(err) => Err(Err(err)),
         }
@@ -329,13 +345,22 @@ impl Spend {
         }
     }
 
-    /// Counts what a request cost against its person, its team and its key, for the day and the month of `time`.
-    fn add(&self, person: &str, team: &str, key: &str, usd: f64, time: &str) {
+    /// Counts what a request cost against its person, its team and its key, for the day and the month of `time`,
+    /// and every other budget counter it counted against.
+    fn add(
+        &self,
+        person: &str,
+        team: &str,
+        key: &str,
+        counted: &[(String, Period)],
+        usd: f64,
+        time: &str,
+    ) {
         if usd <= 0.0 || !usd.is_finite() {
             return;
         }
         let mut ledger = locked(&self.ledger);
-        for b in buckets(person, team, key, time) {
+        for b in buckets(person, team, key, counted, time) {
             if let Some(bucket) = Self::bucket(&mut ledger, &b.scope, b.per, &b.period) {
                 bucket.spent += usd;
             }
@@ -344,7 +369,7 @@ impl Spend {
 
     /// Sums the usage records of the current month from the audit log, so a restart does not forget spend.
     // ponytail: reads the whole log at start, as the chain check before it does. A checkpoint comes with that one.
-    pub(crate) fn replay(&self, path: &Path) -> Result<(), String> {
+    pub(crate) fn replay(&self, path: &Path, policy: Option<&Policy>) -> Result<(), String> {
         // Sealed segments too: the month may have begun before the last seal.
         let file = match audit::chain_reader(path) {
             Ok(file) => file,
@@ -357,7 +382,11 @@ impl Spend {
             }
         };
         let now = audit::timestamp();
-        let month = period_of(&now, Period::Month);
+        // The longest budget period is a year: a record from before last year counts in none.
+        let since = now
+            .get(..4)
+            .and_then(|y| y.parse::<u32>().ok())
+            .map_or(String::new(), |y| format!("{:04}", y.saturating_sub(1)));
         for line in file.lines() {
             let line = line.map_err(|err| {
                 format!(
@@ -372,7 +401,7 @@ impl Spend {
                 continue;
             };
             let text = |key: &str| record[key].as_str().unwrap_or_default();
-            if period_of(text("time"), Period::Month) != month {
+            if text("time") < since.as_str() {
                 continue;
             }
             // Caller-paid spend the rule kept out of its budgets stays out after a restart too.
@@ -380,10 +409,56 @@ impl Spend {
                 continue;
             }
             let charged = record["charged_usd"].as_f64().unwrap_or_default();
+            let who = Principal {
+                name: text("person").to_string(),
+                team: text("team").to_string(),
+                key: text("key").to_string(),
+                org: text("org").to_string(),
+                ..Principal::default()
+            };
+            // The budgets the policy in force sets for this record's caller, customer, tags and model.
+            let tags: Vec<String> = record["tags"]
+                .as_array()
+                .map(|t| {
+                    t.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let counted: Vec<(String, Period)> = policy
+                .and_then(|policy| {
+                    let identified = policy
+                        .entries()
+                        .find(|(_, p)| p.key == who.key)
+                        .map_or(who.clone(), |(_, p)| p.clone());
+                    let rule = policy.rule_for(&identified)?;
+                    let ctx = gantry_core::policy::Context {
+                        sent: if text("alias").is_empty() {
+                            text("model")
+                        } else {
+                            text("alias")
+                        },
+                        model: text("model"),
+                        customer: record["customer"].as_str(),
+                        tags: &tags,
+                    };
+                    Some(
+                        policy
+                            .applied(&identified, rule, ctx)
+                            .into_iter()
+                            .filter_map(|a| match a.limit {
+                                Limit::Budget(b) => Some((a.scope, b.per)),
+                                _ => None,
+                            })
+                            .collect(),
+                    )
+                })
+                .unwrap_or_default();
             self.add(
-                text("person"),
-                text("team"),
-                text("key"),
+                &who.person_scope(),
+                &who.team_scope(),
+                &who.key,
+                &counted,
                 charged,
                 text("time"),
             );
@@ -516,6 +591,137 @@ impl Spend {
         window.reserved = window.reserved.saturating_sub(held);
         if let Some(used) = used.filter(|n| *n > 0) {
             window.used.push_back((Instant::now(), used));
+        }
+    }
+
+    /// Takes a place under `limit` requests in flight for `scope`. With a store the count is shared by every
+    /// gateway, kept in a counter of the current hour that holds still running at the turn of the hour are moved to.
+    async fn hold_parallel(&self, scope: &str, limit: u32) -> Result<Hold, Short> {
+        let Some(store) = &self.store else {
+            let mut all = locked(&self.parallel);
+            let n = all.entry(scope.to_string()).or_default();
+            if *n >= limit {
+                return Err(Short::Over(1));
+            }
+            *n += 1;
+            return Ok(Hold {
+                scope: scope.to_string(),
+                id: None,
+            });
+        };
+        self.move_holds();
+        let scope = format!("parallel:{scope}");
+        let period = period_of(&audit::timestamp(), Period::Hour);
+        let bucket = Counter {
+            scope: scope.clone(),
+            per: Period::Hour,
+            period: period.clone(),
+        };
+        match store.reserve(bucket, 1.0, f64::from(limit)).await {
+            Ok(Reserve::Done) => {
+                let id = self
+                    .next_hold
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                locked(&self.holds).insert(id, (scope.clone(), period));
+                Ok(Hold {
+                    scope,
+                    id: Some(id),
+                })
+            }
+            Ok(Reserve::Over { .. }) => Err(Short::Over(1)),
+            Err(err) => Err(Short::Down(err)),
+        }
+    }
+
+    /// Gives a place under a `parallel:` limit back.
+    fn release_parallel(&self, hold: &Hold) {
+        match (&self.store, hold.id) {
+            (Some(store), Some(id)) => {
+                if let Some((scope, period)) = locked(&self.holds).remove(&id) {
+                    store.settle(vec![Change {
+                        bucket: Counter {
+                            scope,
+                            per: Period::Hour,
+                            period,
+                        },
+                        spent: 0.0,
+                        reserved: -1.0,
+                    }]);
+                }
+            }
+            _ => {
+                let mut all = locked(&self.parallel);
+                if let Some(n) = all.get_mut(&hold.scope) {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        all.remove(&hold.scope);
+                    }
+                }
+            }
+        }
+    }
+
+    /// At the turn of the hour, moves this gateway's holds still in flight into the new hour's counter, so they
+    /// keep counting there. A hold left by a gateway that stopped counts until its hour ends, then frees itself.
+    pub(crate) fn move_holds(&self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let now = period_of(&audit::timestamp(), Period::Hour);
+        let mut changes = Vec::new();
+        for (scope, period) in locked(&self.holds).values_mut() {
+            if *period == now {
+                continue;
+            }
+            let at = |period: &str| Counter {
+                scope: scope.clone(),
+                per: Period::Hour,
+                period: period.to_string(),
+            };
+            changes.push(Change {
+                bucket: at(period),
+                spent: 0.0,
+                reserved: -1.0,
+            });
+            changes.push(Change {
+                bucket: at(&now),
+                spent: 0.0,
+                reserved: 1.0,
+            });
+            *period = now.clone();
+        }
+        if !changes.is_empty() {
+            store.settle(changes);
+        }
+    }
+
+    /// What a budget's counter has spent and holds now, for the explanation. With a store, read from it: a
+    /// reservation that can never pass (a limit below zero) holds nothing and answers with the counter.
+    pub(crate) async fn spent_now(&self, scope: &str, per: Period) -> Option<(f64, f64)> {
+        let now = audit::timestamp();
+        let period = period_of(&now, per);
+        match &self.store {
+            Some(store) => match store
+                .reserve(
+                    Counter {
+                        scope: scope.to_string(),
+                        per,
+                        period,
+                    },
+                    0.0,
+                    -1.0,
+                )
+                .await
+            {
+                Ok(Reserve::Over { spent, reserved }) => Some((spent, reserved)),
+                _ => None,
+            },
+            None => Some(
+                locked(&self.ledger)
+                    .get(&(scope.to_string(), per))
+                    .filter(|b| b.period == period)
+                    .map_or((0.0, 0.0), |b| (b.spent, b.reserved)),
+            ),
         }
     }
 
@@ -778,6 +984,19 @@ pub(crate) struct Admitted {
     forwarded: bool,
     /// Sent with the caller's own provider key, and whether its spend counts against budgets.
     caller_paid: Option<bool>,
+    /// The counters of the person and the team, inside the key's organization.
+    person_scope: String,
+    team_scope: String,
+    /// The organization, end customer and tags, for the usage record.
+    org: String,
+    customer: Option<String>,
+    tags: Vec<String>,
+    /// The alias the caller sent, when it is not the model, for the usage record.
+    alias: Option<String>,
+    /// Every budget counter the request counted against, to charge its cost to each.
+    counted: Vec<(String, Period)>,
+    /// Places held under `parallel:` limits until the answer ends.
+    parallel: Vec<Hold>,
 }
 
 impl Drop for Admitted {
@@ -799,6 +1018,9 @@ impl Drop for Admitted {
         // Never sent, or never answered: what it held goes back and nothing is counted as used.
         for (scope, held, grant) in self.tokens.drain(..) {
             self.spend.settle_tokens(&scope, held, None, grant);
+        }
+        for hold in self.parallel.drain(..) {
+            self.spend.release_parallel(&hold);
         }
     }
 }
@@ -841,6 +1063,12 @@ pub(crate) struct Ask<'a> {
     pub free: bool,
     /// Sent with the caller's own provider key: `Some(true)` when its spend still counts against budgets.
     pub caller_paid: Option<bool>,
+    /// Every limit the request counts against, from `Policy::applied`.
+    pub applied: &'a [Applied],
+    /// The end customer, from the key or the `x-gantry-customer` header.
+    pub customer: Option<&'a str>,
+    /// The tags, from the key and the `x-gantry-tags` header.
+    pub tags: &'a [String],
 }
 
 /// Applies the rule's cache, rate and budget to an allowed request, in that order: a cached answer costs nothing
@@ -880,12 +1108,23 @@ pub(crate) async fn admit(
         tokens: Vec::new(),
         forwarded: false,
         caller_paid: ask.caller_paid,
+        person_scope: ask.person.person_scope(),
+        team_scope: ask.person.team_scope(),
+        org: ask.person.org.clone(),
+        customer: ask.customer.map(str::to_string),
+        tags: ask.tags.to_vec(),
+        alias: (ask.sent != ask.model).then(|| ask.sent.to_string()),
+        counted: Vec::new(),
+        parallel: Vec::new(),
     };
     // The caller pays their provider: unless the rule says otherwise, budgets (what the organization pays) do not
     // reserve or count it. Rate and token limits still hold.
-    let budgeted =
-        (limits.budget.is_some() || ask.person.budget.is_some()) && ask.caller_paid != Some(false);
-    let tpm = limits.tpm.is_some() || ask.person.tpm.is_some();
+    let budgeted = ask
+        .applied
+        .iter()
+        .any(|a| matches!(a.limit, Limit::Budget(_)))
+        && ask.caller_paid != Some(false);
+    let tpm = ask.applied.iter().any(|a| matches!(a.limit, Limit::Tpm(_)));
     if !budgeted && !ask.free {
         admitted.estimate_from = Some((ask.body.clone(), ask.route.to_string()));
     }
@@ -936,16 +1175,14 @@ pub(crate) async fn admit(
             admitted.cache = Some((key, Duration::from_secs(ttl)));
         }
     }
-    if let Some(rpm) = limits.rpm {
+    for applied in ask.applied {
+        let Limit::Rpm(rpm) = applied.limit else {
+            continue;
+        };
         let counted = match &spend.store {
-            None => spend.rate(&ask.person.name, rpm, Instant::now()),
+            None => spend.rate(&applied.scope, rpm, Instant::now()),
             Some(store) => match spend
-                .take(
-                    store,
-                    &format!("rpm:{}", ask.person.name),
-                    1,
-                    u64::from(rpm),
-                )
+                .take(store, &format!("rpm:{}", applied.scope), 1, u64::from(rpm))
                 .await
             {
                 Ok(_) => Ok(()),
@@ -958,14 +1195,16 @@ pub(crate) async fn admit(
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limited",
                 format!(
-                    "Refused: \"{}\" has sent {rpm} requests in the last minute, the most rule \"{}\" allows. Send this one again in {wait} seconds.",
-                    ask.person.name, ask.rule.name
+                    "Refused: {} has sent {rpm} requests in the last minute, the most {} allows. Send this one again in {wait} seconds.",
+                    applied.whose,
+                    allows(applied, ask.rule)
                 ),
             );
             refusal.retry_after = Some(wait);
-            refusal.record = Some(Box::new(
-                serde_json::json!({ "limit": { "kind": "rpm", "of": "rule", "value": rpm } }),
-            ));
+            refusal.record = Some(Box::new(limit_record(
+                applied,
+                serde_json::json!({ "kind": "rpm", "of": applied.of, "value": rpm }),
+            )));
             return Err(refusal);
         }
     }
@@ -981,24 +1220,16 @@ pub(crate) async fn admit(
             )
         })?;
         let most = (ask.body.len().div_ceil(3) as u64).saturating_add(output);
-        let team_scope = match &ask.rule.who {
-            Who::Team(team) => format!("team:{team}"),
-            Who::Name(_) | Who::Any => format!("person:{}", ask.person.name),
-        };
-        let limits = [
-            limits
-                .tpm
-                .map(|n| (team_scope, n, format!("rule \"{}\"", ask.rule.name), "rule")),
-            ask.person.tpm.map(|n| {
-                (
-                    format!("key:{}", ask.person.key),
-                    n,
-                    format!("the key {} of \"{}\"", ask.person.key, ask.person.name),
-                    "key",
-                )
-            }),
-        ];
-        for (scope, limit, whose, of) in limits.into_iter().flatten() {
+        for applied in ask.applied {
+            let Limit::Tpm(limit) = applied.limit else {
+                continue;
+            };
+            let scope = applied.scope.clone();
+            let whose = if applied.of == "key" {
+                applied.whose.clone()
+            } else {
+                allows(applied, ask.rule)
+            };
             let held = match &spend.store {
                 None => spend
                     .hold_tokens(&scope, limit, most, Instant::now())
@@ -1033,9 +1264,10 @@ pub(crate) async fn admit(
                     if most <= u64::from(limit) {
                         refusal.retry_after = Some(wait);
                     }
-                    refusal.record = Some(Box::new(
-                        serde_json::json!({ "limit": { "kind": "tpm", "of": of, "value": limit, "request_could_use": most } }),
-                    ));
+                    refusal.record = Some(Box::new(limit_record(
+                        applied,
+                        serde_json::json!({ "kind": "tpm", "of": applied.of, "value": limit, "request_could_use": most }),
+                    )));
                     return Err(refusal);
                 }
             };
@@ -1048,27 +1280,67 @@ pub(crate) async fn admit(
             admitted.tokens.push((scope, most, grant));
         }
     }
+    for applied in ask.applied {
+        let Limit::Parallel(limit) = applied.limit else {
+            continue;
+        };
+        match spend.hold_parallel(&applied.scope, limit).await {
+            Ok(hold) => admitted.parallel.push(hold),
+            Err(Short::Down(err)) => return Err(rate_store_unavailable(&err)),
+            Err(Short::Over(_)) => {
+                let mut refusal = Refusal::new(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "parallel_limited",
+                    format!(
+                        "Refused: {} already has {limit} requests in flight, the most {} allows at once. Send this one again when one of them has finished.",
+                        applied.whose,
+                        allows(applied, ask.rule)
+                    ),
+                );
+                refusal.retry_after = Some(1);
+                refusal.record = Some(Box::new(limit_record(applied, Value::Null)));
+                return Err(refusal);
+            }
+        }
+    }
     if budgeted && !ask.free {
+        let budgets: Vec<&Applied> = ask
+            .applied
+            .iter()
+            .filter(|a| matches!(a.limit, Limit::Budget(_)))
+            .collect();
         let Some(price) = &admitted.price else {
-            // The loader refuses a rule budget over an unpriced model, so only a key budget or a policy built in
-            // code gets here.
+            // The loader refuses a rule budget over an unpriced model, so only a key budget, a scope's budget or a
+            // policy built in code gets here.
             return Err(Refusal::new(
                 StatusCode::FORBIDDEN,
                 "no_price",
                 format!(
-                    "Refused: a budget applies to this request (rule \"{}\" or the key of \"{}\") and {named} has no price, so its spend could not be counted. Ask a Gantry admin to add its price under prices: in the policy.",
-                    ask.rule.name, ask.person.name
+                    "Refused: a budget applies to this request ({}) and {named} has no price, so its spend could not be counted. Ask a Gantry admin to add its price under prices: in the policy.",
+                    budgets
+                        .iter()
+                        .map(|a| a.source.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
             ));
         };
         let Some(output) = output_tokens(&hints, Some(price), ask.route) else {
-            let whose = match (limits.budget.is_some(), ask.person.budget.is_some()) {
-                (true, true) => format!(
-                    "the budget of rule \"{}\" and of the key of \"{}\" apply",
-                    ask.rule.name, ask.person.name
+            let whose = match budgets.as_slice() {
+                [one] if one.of == "rule" => {
+                    format!("the budget of rule \"{}\" applies", ask.rule.name)
+                }
+                [one] if one.of == "key" => {
+                    format!("the key of \"{}\" has a budget", ask.person.name)
+                }
+                [one] => format!("the budget of {} applies", one.whose),
+                many => format!(
+                    "the budgets of {} apply",
+                    many.iter()
+                        .map(|a| a.whose.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" and ")
                 ),
-                (true, false) => format!("the budget of rule \"{}\" applies", ask.rule.name),
-                _ => format!("the key of \"{}\" has a budget", ask.person.name),
             };
             // Each API names its output limit differently; the caller can only send its own route's.
             let images = ask.route.starts_with("/v1/images");
@@ -1115,34 +1387,32 @@ pub(crate) async fn admit(
             None => most_cost(price, ask.body.len(), context, output),
         };
         let now = audit::timestamp();
-        if let Some(budget) = limits.budget {
-            let (scope, whose) = match &ask.rule.who {
-                Who::Team(team) => (format!("team:{team}"), format!("team \"{team}\"")),
-                Who::Name(_) | Who::Any => (
-                    format!("person:{}", ask.person.name),
-                    format!("\"{}\"", ask.person.name),
-                ),
+        for applied in budgets {
+            let Limit::Budget(budget) = applied.limit else {
+                continue;
             };
-            let under = format!(" under rule \"{}\"", ask.rule.name);
+            let (code, under) = match applied.of {
+                "rule" => (
+                    "budget_exceeded",
+                    format!(" under rule \"{}\"", ask.rule.name),
+                ),
+                "key" => ("key_budget_exceeded", String::new()),
+                _ => ("budget_exceeded", format!(" set by {}", applied.source)),
+            };
             let reservation = spend
-                .reserve_shared(&scope, budget, most, &now)
+                .reserve_shared(&applied.scope, budget, most, &now)
                 .await
                 .map_err(|over| match over {
-                    Ok(over) => over_budget(&over, "budget_exceeded", &whose, budget, &under, most),
+                    Ok(over) => {
+                        let mut refusal =
+                            over_budget(&over, code, &applied.whose, budget, &under, most);
+                        refusal.record = Some(Box::new(limit_record(applied, Value::Null)));
+                        refusal
+                    }
                     Err(err) => store_unavailable(&err),
                 })?;
             admitted.reservations.push(reservation);
-        }
-        if let Some(budget) = ask.person.budget {
-            let whose = format!("the key {} of \"{}\"", ask.person.key, ask.person.name);
-            let reservation = spend
-                .reserve_shared(&format!("key:{}", ask.person.key), budget, most, &now)
-                .await
-                .map_err(|over| match over {
-                    Ok(over) => over_budget(&over, "key_budget_exceeded", &whose, budget, "", most),
-                    Err(err) => store_unavailable(&err),
-                })?;
-            admitted.reservations.push(reservation);
+            admitted.counted.push((applied.scope.clone(), budget.per));
         }
     }
     Ok(Admit::Go(
@@ -1201,7 +1471,7 @@ fn over_budget(
             "Refused: {whose} has spent {} of its {} budget for this {}{under}{held}. This request could cost up to {}, which would pass it.{smaller} The budget starts again at {}. Ask a Gantry admin to raise it if you need more before then.",
             dollars(over.spent),
             dollars(budget.usd),
-            budget.per.word(),
+            budget.per.describe(),
             dollars(most),
             over.resets
         ),
@@ -1391,13 +1661,19 @@ impl Admitted {
                     .collect();
                 if charged > 0.0 && charged.is_finite() {
                     changes.extend(
-                        buckets(&self.person, &self.team, &self.key, &now)
-                            .into_iter()
-                            .map(|bucket| Change {
-                                bucket,
-                                spent: charged,
-                                reserved: 0.0,
-                            }),
+                        buckets(
+                            &self.person_scope,
+                            &self.team_scope,
+                            &self.key,
+                            &self.counted,
+                            &now,
+                        )
+                        .into_iter()
+                        .map(|bucket| Change {
+                            bucket,
+                            spent: charged,
+                            reserved: 0.0,
+                        }),
                     );
                 }
                 store.settle(changes);
@@ -1409,8 +1685,17 @@ impl Admitted {
             }
         }
         if self.caller_paid != Some(false) {
-            self.spend
-                .add(&self.person, &self.team, &self.key, charged, &now);
+            self.spend.add(
+                &self.person_scope,
+                &self.team_scope,
+                &self.key,
+                &self.counted,
+                charged,
+                &now,
+            );
+        }
+        for hold in self.parallel.drain(..) {
+            self.spend.release_parallel(&hold);
         }
         self.spend.metrics.charged(&self.team, &self.model, charged);
         if let (Some((key, ttl)), Some((content_type, body)), true) = (
@@ -1438,6 +1723,19 @@ impl Admitted {
         record.insert("person".into(), self.person.as_str().into());
         record.insert("team".into(), self.team.as_str().into());
         record.insert("key".into(), self.key.as_str().into());
+        // Only when set, so records of an install without organizations, customers or tags keep their shape.
+        if !self.org.is_empty() {
+            record.insert("org".into(), self.org.as_str().into());
+        }
+        if let Some(customer) = &self.customer {
+            record.insert("customer".into(), customer.as_str().into());
+        }
+        if !self.tags.is_empty() {
+            record.insert("tags".into(), self.tags.clone().into());
+        }
+        if let Some(alias) = &self.alias {
+            record.insert("alias".into(), alias.as_str().into());
+        }
         record.insert("model".into(), self.model.as_str().into());
         record.insert("provider".into(), self.provider.as_str().into());
         // No answer reached a caller who left before it started.
@@ -1660,12 +1958,12 @@ mod tests {
         let now = "2026-12-31T23:59:59.999Z";
         assert_eq!(period_of(now, Period::Month), "2026-12");
         assert_eq!(period_of(now, Period::Day), "2026-12-31");
-        assert_eq!(resets("2026-12"), "2027-01-01 00:00 UTC");
-        assert_eq!(resets("2026-11"), "2026-12-01 00:00 UTC");
-        assert_eq!(resets("2026-12-31"), "2027-01-01 00:00 UTC");
-        assert_eq!(resets("2028-02-28"), "2028-02-29 00:00 UTC");
-        assert_eq!(resets("2026-02-28"), "2026-03-01 00:00 UTC");
-        assert_eq!(resets("2026-11-13"), "2026-11-14 00:00 UTC");
+        assert_eq!(resets("2026-12", Period::Month), "2027-01-01 00:00 UTC");
+        assert_eq!(resets("2026-11", Period::Month), "2026-12-01 00:00 UTC");
+        assert_eq!(resets("2026-12-31", Period::Day), "2027-01-01 00:00 UTC");
+        assert_eq!(resets("2028-02-28", Period::Day), "2028-02-29 00:00 UTC");
+        assert_eq!(resets("2026-02-28", Period::Day), "2026-03-01 00:00 UTC");
+        assert_eq!(resets("2026-11-13", Period::Day), "2026-11-14 00:00 UTC");
     }
 
     #[test]
@@ -1684,12 +1982,19 @@ mod tests {
         if let Ok(first) = first {
             spend.release(&first);
         }
-        spend.add("p", "t", "", 1.5, &now);
+        spend.add("person:p", "team:t", "", &[], 1.5, &now);
         assert_eq!(spend.spent("team:t", Period::Month), 1.5);
         assert_eq!(spend.spent("person:p", Period::Day), 1.5);
         assert!(spend.reserve("team:t", budget, 8.5, &now).is_ok());
         // Spend from an earlier month is not counted, and a record from last month does not reset this one.
-        spend.add("p", "t", "", 100.0, "2000-01-01T00:00:00.000Z");
+        spend.add(
+            "person:p",
+            "team:t",
+            "",
+            &[],
+            100.0,
+            "2000-01-01T00:00:00.000Z",
+        );
         assert_eq!(spend.spent("team:t", Period::Month), 1.5);
     }
 

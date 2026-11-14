@@ -83,7 +83,10 @@ Each rule names exactly one principal. The name and team come from the caller's 
 |---|---|
 | `{ name: maya.cohen }` | The one key, or keys, issued to that name. Keys from `gantry login` are named by email. |
 | `{ team: payments }` | Every key issued to that team. |
+| `{ tag: ci }` | Every key whose entry carries that tag. A tag sent in a header never picks a rule. |
 | `{ any: true }` | Every identified caller. Put it last as the catch-all. |
+
+A rule with `org: <org>` names only callers of that [organization](#organizations); a rule without one names callers of every organization.
 
 ### Models
 
@@ -109,6 +112,10 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `aliases` | list | `[]` | One model name served by several deployments, with weights, cooldown and named fallbacks. See [Providers](/providers/overview/). |
 | `audit` | map | see below | `{ path: <file> }`. Where the audit log is written. Default `gantry-audit.jsonl` beside the policy file. |
 | `console` | map | none | `{ sso: ... }`. Console sign-in and `gantry login`. See [Single sign-on](/governance/single-sign-on/). |
+| `orgs` | list | `[]` | The [organizations](#organizations) of a multi-tenant install. |
+| `profiles` | list | `[]` | [Access profiles](#access-profiles) rules include. |
+| `limits` | list | `[]` | Budgets, rates and `parallel` per scope: global, organization, team, person, key, customer, tag, model. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#scopes-and-the-limits-list). |
+| `roles` | list | `[]` | [Console roles](#console-roles) beside the built-in `admin` and `read_only`. |
 
 ### Providers
 
@@ -139,10 +146,15 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | required | Letters, digits, `.`, `-`, `_` and `@`. Shown in refusals and audit records. |
-| `principals` | map | required | Exactly one of `{ team: ... }`, `{ name: ... }`, `{ any: true }`. |
-| `models` | list | required | Exact names, `["*"]`, or `[]`. |
+| `principals` | map | required | Exactly one of `{ team: ... }`, `{ name: ... }`, `{ tag: ... }`, `{ any: true }`. |
+| `models` | list | required | Exact names, `["*"]`, or `[]`. Optional for a rule that includes profiles: theirs are added to the rule's. |
+| `org` | string | none | Name only callers of this organization, one `orgs:` lists. |
+| `profiles` | list | `[]` | [Access profiles](#access-profiles) the rule includes, in order. |
+| `customers` | list | `[]` | End customers a caller may name in `x-gantry-customer`, or `["*"]` for any. See [End customers and tags](/governance/budgets-and-rate-limits/#end-customers-and-tags). |
+| `tags` | list | `[]` | Tags a caller may send in `x-gantry-tags`, or `["*"]` for any. |
+| `parallel` | integer | none | Most requests in flight at once, 1 to 100000, counted where the budget is. |
 | `guardrails` | list | `[]` | Names from the top-level `guardrails:`, run in this order. An undefined name is an error. |
-| `budget` | map | none | `{ usd: <above 0>, per: day \| month }`. See [Budgets and rate limits](/governance/budgets-and-rate-limits/). |
+| `budget` | map or list | none | `{ usd: <above 0>, per: <period>, tz: <zone>, models: [...] }`, or a list of them. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#budgets). |
 | `rate` | map | none | `{ rpm: 1 to 1000000, tpm: 1 to 1000000000 }`, either or both. |
 | `cache` | map | none | `{ ttl_seconds: 1 to 86400 }`. See [Caching](/routing/caching/). |
 | `buffer_stream` | boolean | `false` | Hold a streamed answer whole so `on: [answer]` guardrails check it first. Needs a guardrail with `on: [answer]`. |
@@ -151,6 +163,123 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `caller_provider_key` | string | `refused` | Whether a caller may send their own provider key in `x-gantry-provider-key`: `refused`, `allowed` (sent in place of Gantry's, spend recorded as caller-paid and not counted against budgets) or `allowed_budgeted` (counted). See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key). |
 
 Every model a budgeted rule reaches must have a price, built in or under `prices:`. For `models: ["*"]` that is every model every provider serves. `gantry check` refuses a file that breaks this.
+
+## Organizations
+
+One install may hold several organizations, each with its own rules, budgets, keys and console view:
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini]
+orgs: [acme, globex]
+rules:
+  - name: acme-everyone
+    org: acme
+    principals: { any: true }
+    models: [gpt-4o-mini]
+  - name: globex-data
+    org: globex
+    principals: { team: data }
+    models: [gpt-4o-mini]
+limits:
+  - { org: acme, budget: { usd: 20000, per: month } }
+  - { org: globex, budget: { usd: 5000, per: month }, parallel: 50 }
+```
+
+- A key belongs to the organization its entry names (`org: acme`, or `gantry key new --org acme`). A key without one belongs to none, and counts as before organizations.
+- A rule with `org:` names only that organization's callers. Teams, people, customers, tags and models are counted per organization, so `team:acme/payments` and `team:globex/payments` are two counters.
+- A key, rule, limit or role naming an organization `orgs:` does not list is refused by `gantry check`, so a misspelling never becomes a tenant of its own.
+- A console role kept to an organization (a key with `org:` and a role, or a role with `org:`) sees only that organization's keys, records and spend, issues keys only in it, and cannot set kill switches or change provider credentials, which act on the whole install.
+- Records carry `org`. Every organization's records are in the install's one audit chain.
+
+## Access profiles
+
+A profile is a named set of models, guardrails, tools and limits that rules include:
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini, o3]
+guardrails:
+  - name: no-secrets
+    type: secrets
+    action: block
+profiles:
+  - name: standard
+    models: [gpt-4o-mini]
+    guardrails: [no-secrets]
+    budget: [{ usd: 10, per: day }, { usd: 100, per: month }]
+    rate: { rpm: 60, tpm: 100000 }
+    parallel: 4
+rules:
+  - name: payments
+    principals: { team: payments }
+    profiles: [standard]
+    models: [o3]
+    budget: { usd: 20, per: day }
+  - name: everyone-else
+    principals: { any: true }
+    profiles: [standard]
+```
+
+- **Models and tools** of the profiles are added to the rule's. **Guardrails** of the profiles run first, then the rule's, each once.
+- **Limits**: the rule's own value wins, then the first profile listed that sets it. A budget is overridden only by one over the same period and models. Above, `payments` gets $20 a day (its own), $100 a month, 60 rpm, 100000 tpm and 4 in flight (from `standard`).
+- What the rule overrode is listed in the [explanation](/governance/budgets-and-rate-limits/#why-was-this-allowed-or-refused) under `rule.overrides`, and each limit names the profile it came from.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Unique. |
+| `models`, `guardrails`, `tools` | list | As on a rule. |
+| `budget`, `rate`, `parallel` | | As on a rule. |
+
+## Console roles
+
+Every install has two roles: `admin` (every permission) and `read_only` (`see_keys`, `see_spend`, `see_records`). The policy may define more:
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini]
+orgs: [acme]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [gpt-4o-mini]
+roles:
+  - name: finance
+    permissions: [see_spend, see_records]
+    sso_values: [finance]
+  - name: acme-keys
+    permissions: [see_keys, issue_keys, revoke_keys]
+    org: acme
+```
+
+| Permission | Lets a person |
+|---|---|
+| `see_keys` | See keys and who holds them (console People, `GET /admin/keys`). |
+| `issue_keys` | Issue keys (`POST /admin/keys`). A role may give a new key only a role whose permissions it holds itself. |
+| `revoke_keys` | Revoke keys. |
+| `kill` | Set and clear kill switches. |
+| `credentials` | Add, rotate and remove provider credentials. |
+| `edit_policy` | Change the policy, where the console offers it. |
+| `see_spend` | See spend and budgets, and the explanation of a caller's limits (`GET /admin/explain`). |
+| `see_records` | See the audit log. |
+| `see_bodies` | See captured request and answer bodies, where capture is on. |
+
+A key gets a role with `role:` in its entry (`gantry key new --role finance`); `admin: true` is the role `admin`. A person signing in through [single sign-on](/governance/single-sign-on/) gets `admin` for an `admin_values` claim value, else the first role whose `sso_values` the claim holds, else `read_only` for a `read_only_values` value. The console and the admin API check the permission each page and action needs on every request, and a refusal names the role and the missing permission (`not_permitted`). Roles live in the policy file, so a change to them is reviewed in git like any rule.
 
 ## Passthrough
 
@@ -191,9 +320,9 @@ Each request passes these steps in order and stops at the first that refuses it.
 
 3. **Cache.** A hit is answered here.
 
-4. **Rate limit.** Requests and tokens per minute.
+4. **Rate limit.** Requests and tokens per minute, then requests in flight, for the rule, the key and every `limits:` scope.
 
-5. **Budget.** The request reserves the most it could cost.
+5. **Budget.** The request reserves the most it could cost against every budget that applies.
 
 6. **Record.** The decision record is written. Nothing is sent before it is on file.
 
@@ -262,7 +391,12 @@ An unknown key stops the check of that file at that point, because the rest cann
 | `"*"` with other models | `"*" already allows every model. List it alone, or list the models by name.` |
 | `retries` too high | `retries is at most 5. Each retry can wait as long as the provider's whole timeout, so more would leave a caller waiting for many minutes.` |
 | Unknown `fallback` | `fallback names provider "bedrok", and there is none. The providers are: groq, azure, anthropic, bedrock.` |
-| Budget period | `per is "week". A budget starts again each day or each month (UTC): write per: day or per: month.` |
+| Budget period | `per is "fortnight". A budget starts again each minute, hour, day, week, month or year, or every so many of them: write per: day, per: month, or a count such as per: 6h, 15min, 7d, 2w or 3mo.` |
+| Time zone | `tz is "Mars/Olympus", which is not a time zone Gantry knows. Write an IANA name such as America/New_York, Europe/Berlin or Asia/Jerusalem, or leave tz out for UTC.` |
+| Organization not listed | `organization "acme-corp" is not listed under orgs. Add it to orgs: at the top of the policy, or check the spelling.` |
+| Profile not defined | `rule "payments" includes profile "standrd", which is not defined under profiles. Define it there, or check the spelling.` |
+| Limits entry | `a limits entry names one scope: global: true, org: <org> (or "*" for each), or one of team, person, key, customer, tag or model ...` |
+| Unknown permission | `"see_everything" is not a permission. The permissions are: see_keys, issue_keys, ...` |
 | Budget on an unpriced model | `rule "everyone-else" has a budget in dollars, and model "my-model" has no price, so its spend could not be counted. Add its price ...` |
 | Rate | `rpm is the number of requests one person may send per minute, 1 to 1000000, for example rate: { rpm: 600 }. To set no limit, remove the line.` |
 | Cache | `ttl_seconds is how long an answer is served again, 1 to 86400 seconds, for example cache: { ttl_seconds: 300 }. To cache nothing, remove the line.` |

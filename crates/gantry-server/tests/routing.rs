@@ -519,10 +519,14 @@ async fn images_are_charged_by_the_image_and_their_prompt_is_guarded() -> TestRe
             on: gantry_core::guard::On::REQUEST,
         }])
         .with_limits(Limits {
-            budget: Some(Budget {
-                usd: 10.0,
-                per: Period::Day,
-            }),
+            budgets: vec![gantry_core::policy::Cap {
+                budget: Budget {
+                    usd: 10.0,
+                    per: Period::Day,
+                },
+                models: Vec::new(),
+                from: None,
+            }],
             ..Limits::default()
         })
         .with_prices(prices);
@@ -723,10 +727,14 @@ async fn image_and_speech_requests_under_a_budget_need_a_price_that_bounds_them(
     prices.insert("img-max".into(), price(Some(5000)));
     let policy = everyone()
         .with_limits(Limits {
-            budget: Some(Budget {
-                usd: 10.0,
-                per: Period::Day,
-            }),
+            budgets: vec![gantry_core::policy::Cap {
+                budget: Budget {
+                    usd: 10.0,
+                    per: Period::Day,
+                },
+                models: Vec::new(),
+                from: None,
+            }],
             ..Limits::default()
         })
         .with_prices(prices);

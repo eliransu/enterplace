@@ -21,8 +21,11 @@ gantry key new noa.bar --team platform --admin
 |---|---|
 | No key | 401 `no_key` |
 | Unknown key | 401 `unknown_key` |
-| Valid key, not an admin's | 403 `not_admin` |
-| Admin key | Allowed |
+| Valid key, neither an admin's nor given a role | 403 `not_admin` |
+| Key whose [role](/governance/policy/#console-roles) lacks the route's permission | 403 `not_permitted` |
+| Admin key, or a key whose role has the permission | Allowed |
+
+Each route needs one permission: `see_keys` to list keys, `issue_keys`, `revoke_keys`, `kill` for kill switches, `credentials` for provider credentials and `see_spend` for the explanation. A role kept to an organization lists, issues, revokes and explains only that organization's keys, and has no kill switches or credentials.
 
 `DELETE /admin/keys/self` is the one exception: any valid key may revoke itself.
 
@@ -34,6 +37,7 @@ The admin API exists only when Gantry serves from a keys file. Under `gantry ser
 
 | Method | Path | `action` | Does |
 |---|---|---|---|
+| `GET` | `/admin/explain?key=<prefix or name>&model=<model>[&customer=<name>][&tags=<a,b>]` | `explain` | Why a request would be allowed or refused, and every limit with its source and spend. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#why-was-this-allowed-or-refused) |
 | `GET` | `/admin/keys` | `list_keys` | Lists the keys in use |
 | `POST` | `/admin/keys` | `issue_key` | Issues a key |
 | `DELETE` | `/admin/keys/<prefix>` | `revoke_key` | Revokes a key by its hash prefix |
@@ -66,7 +70,10 @@ curl http://127.0.0.1:8080/admin/keys -H "Authorization: Bearer $GANTRY_ADMIN_KE
 | `sha256_prefix` | string | The first 8 hex characters of the key's SHA-256 |
 | `admin` | boolean | Whether it is an admin key |
 | `expires` | string or null | UTC date or time |
-| `budget` | object or null | `{"usd": number, "per": "day" or "month"}` |
+| `budget` | object or null | `{"usd": number, "per": "day", "month", "6h", "month@America/New_York", ...}` |
+| `org`, `customer`, `role` | string or null | The key's organization, end customer and console role |
+| `tags` | array | The key's tags |
+| `parallel` | number or null | Requests in flight at once for the key |
 | `models` | array or null | The key's own model list |
 | `tpm` | integer or null | The key's own tokens-per-minute limit |
 

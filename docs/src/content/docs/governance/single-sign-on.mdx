@@ -80,7 +80,9 @@ The policy file is read on every console page, so `console.sso` changes need no 
 | Admin | Everything in the console: issue and revoke keys, including admin keys. |
 | Read only | See the audit log, people and keys, policy and spend. An attempt to issue or revoke is refused and recorded with code `read_only`. |
 
-There is no default role. A person whose role claim holds neither an admin nor a read-only value is refused. A role change at the provider applies at the next sign-in. Removing `console.sso`, or a person's email or domain, ends their session at once.
+The policy may define more roles with fine-grained permissions under `roles:`; a role's `sso_values` lists the claim values that give it. An admin value wins, then the first role whose `sso_values` match, then a read-only value. See [Console roles](/governance/policy/#console-roles).
+
+There is no default role. A person whose role claim holds no admin, role or read-only value is refused. A role change at the provider applies at the next sign-in. Removing `console.sso`, or a person's email or domain, ends their session at once.
 
 People can still sign in with an admin Gantry key alongside SSO.
 

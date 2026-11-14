@@ -1,62 +1,187 @@
 ---
 title: Budgets and rate limits
-description: Cap spend in dollars per team, person or key, and requests and tokens per minute, with reservations that cannot be overrun.
+description: Cap spend in dollars and requests, tokens and requests in flight, for an organization, team, person, key, end customer, tag, model or the whole install, with reservations that cannot be overrun.
 sidebar:
   order: 4
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A budget caps what a team, a person or a key spends in US dollars per day or month. A rate limit caps requests and tokens per minute. Both are checked when a request is admitted, so requests in flight cannot overrun them together.
+A budget caps what a scope spends in US dollars over a period. A rate limit caps requests and tokens per minute, and `parallel` caps requests in flight at once. All are checked when a request is admitted, so requests in flight cannot overrun them together, and with a [store](/operations/store/) every replica enforces the same numbers.
+
+Limits sit in three places, and a request must fit all of them at once:
+
+- **its rule** (`budget`, `rate`, `parallel` on the rule, or from an [access profile](/governance/policy/#access-profiles) the rule includes),
+- **its key** (`budget`, `tpm`, `parallel` in the keys file),
+- **the `limits:` list**, one entry per scope: the whole install, an organization, a team, a person, a key, an end customer, a tag or a model.
 
 ## Example
 
 ```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini, o3]
+orgs: [acme, globex]
 rules:
-  - name: payments-team
-    principals: { team: payments }
-    models: [gpt-4o-mini]
-    budget: { usd: 2000, per: month }
+  - name: acme-shop
+    org: acme
+    principals: { team: shop }
+    models: [gpt-4o-mini, o3]
+    # A daily and a monthly budget, and one for o3 alone.
+    budget:
+      - { usd: 200, per: day }
+      - { usd: 4000, per: month, tz: America/New_York }
+      - { usd: 50, per: week, models: [o3] }
     rate: { rpm: 600, tpm: 200000 }
+    parallel: 20
+    customers: ["*"]
+    tags: [search, checkout]
+  - name: everyone-else
+    principals: { any: true }
+    models: [gpt-4o-mini]
+limits:
+  - { global: true, budget: { usd: 50000, per: month } }
+  - { org: acme, budget: { usd: 20000, per: month, tz: America/New_York }, parallel: 400 }
+  - { person: "*", budget: [{ usd: 5, per: day }, { usd: 50, per: month }] }
+  - { person: "*", org: acme, budget: { usd: 8, per: day } }
+  - { person: maya.cohen, org: acme, budget: { usd: 30, per: day } }
+  - { customer: "*", budget: { usd: 2, per: 6h }, rate: { rpm: 30 }, parallel: 2 }
+  - { customer: globex-shop, budget: { usd: 100, per: day } }
+  - { tag: search, budget: { usd: 300, per: week } }
+  - { model: o3, budget: { usd: 1000, per: 3mo } }
+prices:
+  o3: { input: 2, output: 8 }
 ```
 
-A key can carry its own budget and `tpm` on top of its rule's:
+A key can carry its own budget, `tpm` and `parallel` on top of its rule's:
 
 ```bash
-gantry key new ci.release --team platform --budget 20/month --tpm 50000
+gantry key new ci.release --team platform --budget 20/month --tpm 50000 --parallel 4
 ```
 
-## Fields
+## Budgets
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `budget.usd` | number | required | US dollars, above 0. |
-| `budget.per` | string | required | `day` or `month`. Periods start at midnight UTC, on the first of the month for `month`. |
-| `rate.rpm` | integer | none | Requests per sliding minute, per person. 1 to 1000000. |
-| `rate.tpm` | integer | none | Tokens (prompt and answer) per sliding minute. 1 to 1000000000. |
+| `usd` | number | required | US dollars, above 0. |
+| `per` | string | required | When the budget starts again. See [Periods](#periods). |
+| `tz` | string | UTC | An IANA time zone, such as `America/New_York` or `Asia/Jerusalem`. Calendar periods start at midnight there, daylight saving included. |
+| `models` | list | every model | In a rule or a profile only: count requests for these models alone (by the name sent, an alias, or the model an alias sends to), in a counter of their own. |
 
-`rpm` and `tpm` may be given together. On a key, the same limits are `budget: { usd, per }` and `tpm:` in its entry, or `--budget` and `--tpm` on [`gantry key new`](/governance/keys/#limits-per-key).
+`budget:` takes one budget or a list of them. Two budgets over the same period and the same models in one place are refused: they would be one counter with two limits.
 
-## Who a limit counts
+### Periods
 
-| Rule principal | `budget` and `tpm` count | `rpm` counts |
+| `per` | Starts again |
+|---|---|
+| `minute`, `hour`, `day`, `week`, `month`, `year` | At the start of each one on the zone's calendar. Weeks start on Monday. |
+| `15min`, `6h`, `7d`, `2w`, `3mo` | Every so many of the unit, counted from 1970-01-01 00:00 in the zone: `6h` at 00:00, 06:00, 12:00 and 18:00, `3mo` at each quarter. |
+
+The shortest period is a minute and the longest a year: `13mo` or `2y` is refused.
+
+**Rolling budgets are fixed-length windows.** `per: 30d` starts again every 30 days at midnight, counted from 1970-01-01, and is not a sliding window over the last 30 days. A sliding window cannot be reserved against exactly across replicas with one counter, so Gantry does not offer one. A budget's refusal says when its window ends, in its zone.
+
+## Scopes and the `limits:` list
+
+Each entry names one scope and sets any of `budget`, `rate` (`rpm`, `tpm`) and `parallel`:
+
+| Entry | Counts |
+|---|---|
+| `{ global: true }` | Everything the install sends, together. |
+| `{ org: acme }` | Everything organization `acme` sends. `{ org: "*" }` counts each organization on its own. |
+| `{ team: payments }`, `{ person: maya.cohen }` | That team or person. `"*"` counts each one on its own. |
+| `{ key: 1a2b3c4d }` | That key, by the first 8 hex characters of its hash. `"*"` is a default for every key. |
+| `{ customer: globex-shop }` | Requests for that [end customer](#end-customers-and-tags). `"*"` counts each customer on its own. |
+| `{ tag: search }` | Requests carrying that [tag](#end-customers-and-tags). |
+| `{ model: o3 }` | Requests for that model, by the name sent or the model an alias sends to. `"*"` counts each model on its own. |
+
+Add `org: <org>` to any entry but `global` and `org` to keep it to one organization. Team, person, customer, tag and model counters are kept per organization, so team `payments` of `acme` and team `payments` of `globex` never share one.
+
+### Inheritance and overrides
+
+A request counts against every kind of scope at once: the global total, its organization, team, person, key, customer, each tag and its model, besides its rule's and key's limits. Within one kind, **each limit comes from the most specific entry that sets it**:
+
+1. this name, in this organization (`{ person: maya.cohen, org: acme }`),
+2. every name, in this organization (`{ person: "*", org: acme }`),
+3. this name, in any organization (`{ person: maya.cohen }`),
+4. every name, anywhere (`{ person: "*" }`).
+
+A limit is a budget of one period, `rpm`, `tpm` or `parallel`. So in the example, `maya.cohen` of `acme` has a daily budget of $30 (her own entry overrides $8 for acme and $5 for everyone) and a monthly budget of $50 (inherited from every person, since no entry closer to her sets one). For the key kind, the key's own entry in the keys file is the most specific of all.
+
+Every override is visible in one place: the [explanation](#why-was-this-allowed-or-refused) of a request lists each limit with the entry it came from and the entries it overrode.
+
+### Who a rule's limits count
+
+| Rule principal | `budget`, `tpm` and `parallel` count | `rpm` counts |
 |---|---|---|
 | `{ team: ... }` | the whole team | each person |
-| `{ name: ... }` | that person | that person |
-| `{ any: true }` | each person | each person |
+| `{ name: ... }`, `{ tag: ... }`, `{ any: true }` | each person | each person |
 | A key's own limit | that key alone | none |
 
-A budget counts all of that team's or person's spend in the period, under any rule. A budget added mid-month starts from what was already spent.
+A budget counts all of that scope's spend in the period, under any rule. A budget added mid-period starts from what was already spent.
 
-A request must fit its rule's limits and its key's limits. Over the rule's budget it is refused with `budget_exceeded`, over the key's with `key_budget_exceeded`.
+## End customers and tags
 
+**End customers** are the customers of your own product. A request is for a customer when:
+
+- its key names one (`customer:` in the keys file, or `gantry key new --customer`): every request with the key is for it, and a header cannot change it, or
+- the caller sends `x-gantry-customer: <name>` and its rule lists the name, or `"*"`, under `customers:`. A name the rule does not list is refused with `customer_not_allowed`, so a caller cannot charge another customer.
+
+**Tags** attribute spend to a project, feature or tool. A request carries the tags of its key (`tags:` in the keys file) and those it sends in `x-gantry-tags: search,checkout` that its rule lists under `tags:` (or `"*"`). An unlisted tag is refused with `tag_not_allowed`, so tags cannot be forged. At most 16 tags per request.
+
+Both headers are taken out before the request is forwarded. Decision and usage records carry `org`, `customer` and `tags` when set, so reports can group spend by them, and a rule may name keys by tag with `principals: { tag: ci }` (key tags only, never a header's).
+
+## Requests in flight
+
+`parallel: N` on a rule, a key or a `limits:` entry lets at most N requests of that scope be in flight at once. A request holds its place from admission until its answer ends or its caller hangs up. Over the limit it is refused with `parallel_limited` (429) and `Retry-After: 1`.
+
+With a store, places are counted in Postgres and shared by every replica. A gateway that stops without giving its places back leaves them counting until the end of the hour, then they free themselves; a gateway moves the places of its requests still running at the turn of the hour into the new hour's count.
+
+## Why was this allowed or refused
+
+```bash
+gantry explain gantry.policy.yaml --key maya.cohen --model o3 --customer globex-shop --tags search
+```
+
+```bash
+curl "https://gantry.example.com/admin/explain?key=1a2b3c4d&model=o3&customer=globex-shop&tags=search" \
+  -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+```
+
+Both answer with the rules passed over and why, the rule that decides (with the profiles it includes and what the rule set over them), the verdict, and every limit that applies:
+
+```json
+{
+  "verdict": "allow",
+  "skipped": [{ "rule": "globex-all", "line": 12, "why": "is for organization \"globex\"" }],
+  "rule": { "name": "acme-shop", "line": 18, "profiles": [], "overrides": [] },
+  "limits": [
+    { "of": "rule", "scope": "team:acme/shop", "limit": "budget", "usd": 200, "per": "day",
+      "source": "rule \"acme-shop\" (line 18)", "overrides": [], "spent_usd": 12.4, "reserved_usd": 0.3,
+      "resets": "2026-11-15 00:00 UTC" },
+    { "of": "person", "scope": "person:acme/maya.cohen", "limit": "budget", "usd": 30, "per": "day",
+      "source": "limits { person: maya.cohen, org: acme } (line 41)",
+      "overrides": ["limits { person: *, org: acme } (line 40)", "limits { person: * } (line 39)"] },
+    { "of": "customer", "scope": "customer:acme/globex-shop", "limit": "parallel", "value": 2,
+      "source": "limits { customer: * } (line 42)", "overrides": [] }
+  ]
+}
+```
+
+The admin API adds what each budget has spent and holds now, and when it starts again; it needs the `see_spend` [permission](/governance/policy/#console-roles). A refusal by any limit names the same `applied` object in its decision record.
+
+## How a budget is counted
 ## How a budget is counted
 
 <Steps>
 
 1. **Reserve.** At admission the request reserves the most it could cost: one token per three bytes of its body at the model's dearest prompt price (input or cache write), plus its output tokens at the output price.
 
-2. **Admit.** The request is admitted only if spent, plus what requests in flight have reserved, plus its own reservation, fits the budget. Otherwise it is refused with `budget_exceeded`.
+2. **Admit.** The request is admitted only if spent, plus what requests in flight have reserved, plus its own reservation, fits every budget that applies. Otherwise it is refused with `budget_exceeded` (`key_budget_exceeded` for the key's own), naming the scope and where its budget is written.
 
 3. **Settle.** When the answer ends, the reservation is replaced by the real cost from the [usage record](/governance/audit-log/#what-is-recorded).
 
@@ -66,7 +191,7 @@ A budget is passed only when a provider bills more than the reservation: a model
 
 **Output tokens reserved** are the largest of `max_tokens`, `max_completion_tokens` and `max_output_tokens`, because a provider may read any of them. A request that states none reserves the model's `max_output` from its [price](/routing/pricing/), and is refused with `max_tokens_needed` when the price has none. A chat request with `n` reserves its output `n` times. Embeddings have no output tokens. `count_tokens` requests are free.
 
-**Spend survives a restart.** At start, Gantry sums the `charged_usd` of the current month's usage records from the audit log. A reload that changes a budget applies to the next request.
+**Spend survives a restart.** At start, Gantry sums the `charged_usd` of the usage records of this year and last from the audit log into every counter the policy's budgets keep for them. A reload that changes a budget applies to the next request.
 
 ### Answers without usage
 
@@ -93,7 +218,7 @@ Every model a budgeted rule reaches must have a price. `gantry check` refuses a 
 
 ## How rate limits are counted
 
-**`rpm`** allows each person at most that many requests in any 60 seconds. A request answered from the cache does not count.
+**`rpm`** allows each person (or, in a `limits:` entry, the scope) at most that many requests in any 60 seconds. A request answered from the cache does not count.
 
 **Several replicas.** With a [store](/operations/store/#rate-limits), `rpm` and `tpm` count across every replica: together they never admit more than the limit in any 60 seconds. Each replica leases slices of the limit from Postgres and admits from them in memory, so most requests make no database call. If the store cannot be reached, a request under `rpm` or `tpm` is refused with `store_unavailable` (503), as a budgeted one is.
 
@@ -102,6 +227,7 @@ Every model a budgeted rule reaches must have a price. `gantry check` refuses a 
 | Over the limit | Response |
 |---|---|
 | `rpm` | `rate_limited` (429), `Retry-After` set to the seconds until the oldest request leaves the minute, `x-should-retry: true` |
+| `parallel` | `parallel_limited` (429), `Retry-After: 1` |
 | `tpm`, would fit later | `rate_limited` (429) with `Retry-After` |
 | `tpm`, could never fit in one minute | `rate_limited` (429) without `Retry-After` |
 | `tpm`, size unknown | `max_tokens_needed` (400) |
@@ -112,9 +238,13 @@ The record of a refusal by a limit names it in `limit`, for example `{"kind": "t
 
 | Code | Status | Retry | Cause |
 |---|---|---|---|
-| `budget_exceeded` | 429 | no | The rule's budget would be passed. The message gives spent, budget, what requests in flight hold, and when the budget starts again. |
+| `budget_exceeded` | 429 | no | A budget of the rule or of a `limits:` scope would be passed. The message gives the scope, spent, budget, what requests in flight hold, where the budget is written, and when it starts again. |
 | `key_budget_exceeded` | 429 | no | The key's own budget would be passed. |
 | `rate_limited` | 429 | yes, after `Retry-After` | An `rpm` or `tpm` limit. |
+| `parallel_limited` | 429 | yes, after `Retry-After` | A `parallel` limit. |
+| `customer_not_allowed` | 403 | no | `x-gantry-customer` names a customer the rule does not list, or another than the key's. |
+| `tag_not_allowed` | 403 | no | `x-gantry-tags` holds a tag the rule does not list. |
+| `bad_header` | 400 | no | `x-gantry-customer` or `x-gantry-tags` is sent twice, holds a name Gantry does not accept, or carries more than 16 tags. |
 | `max_tokens_needed` | 400 | no | No output limit and no `max_output` price. |
 | `bad_limits` | 400 | no | Duplicate keys, a non-integer token limit or `n` out of range. |
 | `stored_context` | 400 | no | Stored Responses context under a budget without `max_context`. |
@@ -122,7 +252,7 @@ The record of a refusal by a limit names it in `limit`, for example `{"kind": "t
 Claude Code reads `x-should-retry` and does not retry a budget refusal. See [Refusal codes](/reference/refusal-codes/).
 
 <Aside type="note">
-Without a store, spend, reservations and rate-limit windows live in the memory of one Gantry process. Rate-limit windows start empty after a restart; spend is read back from the audit log. With a [store](/operations/store/), budgets are reserved and settled in Postgres and rate limits are leased from it, so every replica enforces one budget and one limit; if the store cannot be reached, requests under a budget, `rpm` or `tpm` are refused with `store_unavailable`.
+Without a store, spend, reservations, places in flight and rate-limit windows live in the memory of one Gantry process. Rate-limit windows start empty after a restart; spend is read back from the audit log. With a [store](/operations/store/), budgets of every scope are reserved and settled in Postgres, places in flight are counted there, and rate limits are leased from it, so every replica enforces one budget and one limit; if the store cannot be reached, requests under a budget, `rpm`, `tpm` or `parallel` are refused with `store_unavailable`.
 </Aside>
 
 ## Related
