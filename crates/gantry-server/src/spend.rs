@@ -2319,6 +2319,12 @@ impl Admitted {
             self.spend.release_parallel(&hold);
         }
         self.spend.metrics.charged(&self.team, &self.model, charged);
+        self.spend.metrics.settled(
+            &self.team,
+            &self.model,
+            usage.as_ref().filter(|_| !hit),
+            self.started.elapsed(),
+        );
         // What caching saved: a hit, what its answer cost when made; a provider's prompt cache, the prompt priced
         // as if none of it were cached, less what it cost. A cache write costs more than input, so that can be less
         // than nothing.

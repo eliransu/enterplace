@@ -704,6 +704,13 @@ impl Reloader {
         &self.keys_path
     }
 
+    pub(crate) fn audit_path(&self) -> PathBuf {
+        match self.current.lock() {
+            Ok(current) => current.loaded.audit_path.clone(),
+            Err(poisoned) => poisoned.into_inner().loaded.audit_path.clone(),
+        }
+    }
+
     pub(crate) fn policy_path(&self) -> &Path {
         &self.policy_path
     }

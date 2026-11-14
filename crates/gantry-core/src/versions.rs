@@ -325,6 +325,76 @@ fn tree(text: &str) -> Result<Map<String, Value>, String> {
     }
 }
 
+/// One top-level section of the policy text as JSON: `null` when the policy has none.
+pub fn section(text: &str, name: &str) -> Result<Value, String> {
+    Ok(tree(text)?.remove(name).unwrap_or(Value::Null))
+}
+
+/// Replaces a top-level section of the policy text with `value`, or removes it for `None`. Returns the new text.
+pub fn set_section(text: &str, name: &str, value: Option<Value>) -> Result<String, String> {
+    let mut map = tree(text)?;
+    match value {
+        Some(value) => {
+            map.insert(name.to_string(), value);
+        }
+        None => {
+            map.remove(name);
+        }
+    }
+    Ok(to_yaml(&Value::Object(map)))
+}
+
+/// Puts the entry named `item` into the list section `name` (replacing one of that name, else appending), or
+/// removes it for `None`. Returns the new text.
+pub fn set_item(
+    text: &str,
+    name: &str,
+    item: &str,
+    value: Option<Value>,
+) -> Result<String, String> {
+    let mut map = tree(text)?;
+    let list = map.entry(name).or_insert_with(|| Value::Array(Vec::new()));
+    let Value::Array(list) = list else {
+        return Err(format!(
+            "the policy's {name} is not a list. Fix it in the editor or with PUT /admin/policy."
+        ));
+    };
+    let at = list
+        .iter()
+        .position(|e| e.get("name").and_then(Value::as_str) == Some(item));
+    match (value, at) {
+        (Some(mut value), at) => {
+            let Value::Object(entry) = &mut value else {
+                return Err(format!("an entry of {name} is a JSON object."));
+            };
+            match entry.get("name").and_then(Value::as_str) {
+                None => {
+                    entry.insert("name".into(), item.into());
+                }
+                Some(named) if named != item => {
+                    return Err(format!(
+                        "the entry is named \"{named}\" but the path names \"{item}\". Send the same name, or leave name out."
+                    ));
+                }
+                Some(_) => {}
+            }
+            match at {
+                Some(at) => list[at] = value,
+                None => list.push(value),
+            }
+        }
+        (None, Some(at)) => {
+            list.remove(at);
+        }
+        (None, None) => {
+            return Err(format!(
+                "the policy has no entry named \"{item}\" under {name}."
+            ));
+        }
+    }
+    Ok(to_yaml(&Value::Object(map)))
+}
+
 /// Adds `model` to provider `provider`, with a price in US dollars per million tokens (input, output) and other
 /// names callers may send for it. Returns the new text. Comments of the policy are not kept by a form edit: the
 /// editor keeps them.

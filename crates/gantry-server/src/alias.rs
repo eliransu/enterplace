@@ -40,6 +40,8 @@ struct Deployed {
     base: Duration,
     /// Time to first byte of its last answers here, in milliseconds, oldest first.
     latency: std::collections::VecDeque<u32>,
+    /// Times it was put to cool down, for `/metrics`.
+    cooldowns: u64,
 }
 
 /// What a request brings to the choice of deployment besides the alias.
@@ -319,6 +321,7 @@ impl Pool {
         let mut deployments = locked(&self.deployments);
         let state = deployments.entry(deployment.to_string()).or_default();
         state.failures = state.failures.saturating_add(1);
+        state.cooldowns += 1;
         let factor = 1u32
             .checked_shl(state.failures - 1)
             .unwrap_or(MAX_BACKOFF)
@@ -329,6 +332,23 @@ impl Pool {
         if let Some(store) = &self.store {
             store.cooled(deployment, cooldown * factor);
         }
+    }
+
+    /// Each deployment seen here (`provider/model`), whether it is cooling down now, and how often it was put to.
+    pub(crate) fn health(&self) -> Vec<(String, bool, u64)> {
+        let now = Instant::now();
+        let mut out: Vec<_> = locked(&self.deployments)
+            .iter()
+            .map(|(name, d)| {
+                (
+                    name.clone(),
+                    d.cool_until.is_some_and(|t| t > now),
+                    d.cooldowns,
+                )
+            })
+            .collect();
+        out.sort();
+        out
     }
 
     /// A deployment answered: its circuit closes and its backoff starts over.

@@ -407,7 +407,7 @@ async fn act(state: &AppState, plan: Plan, by: &str) -> Result<Response, Refusal
 
 /// The answer to a change: the version, its diff, and whether this gateway uses it yet. Others follow within 2
 /// seconds.
-async fn changed(
+pub(crate) async fn changed(
     state: &AppState,
     done: Result<PolicyVersion, Refused>,
     status: StatusCode,
