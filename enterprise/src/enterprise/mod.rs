@@ -11,6 +11,7 @@ mod members;
 mod scim;
 mod segments;
 mod siem;
+pub(crate) mod watch;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -39,6 +40,8 @@ const DEVICES: &[&str] = &[
     devices::MIGRATION_2,
     devices::MIGRATION_3,
 ];
+/// Watch tokens, what tells a repeated export apart, and the daily sums of what Claude Code reported.
+const WATCH: &[&str] = &[watch::MIGRATION];
 /// Alert channels, rules and what fired. Runs after `SIEM`: alerting reads the records it ingests.
 const ALERTS: &[&str] = &[alerts::MIGRATION, alerts::DAILY];
 
@@ -161,13 +164,17 @@ pub fn extend_with(
         })
     };
     extension.on_org = Some(org_hook(None));
-    if !(members_on || siem_on || retention_on || alerts_on || devices_on) {
+    let watch_on = status.unlocked(watch::FEATURE);
+    if !watch_on {
+        watch::locked(&mut extension, status);
+    }
+    if !(members_on || siem_on || retention_on || alerts_on || devices_on || watch_on) {
         return Ok(extension);
     }
     // The license never stops traffic: a feature that cannot run says why and the gateway starts without it.
     let Some(pg) = host.postgres else {
         eprintln!(
-            "warning: the license unlocks enterprise features (members, audit export, retention, alerts, devices) that are kept in Postgres, but the policy has no store. Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then they are off and the console signs in with admin keys only."
+            "warning: the license unlocks enterprise features (members, audit export, retention, alerts, devices, watch mode) that are kept in Postgres, but the policy has no store. Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then they are off and the console signs in with admin keys only."
         );
         return Ok(extension);
     };
@@ -187,7 +194,18 @@ pub fn extend_with(
     if devices_on {
         pg.migrate("enterprise.devices", DEVICES)?;
     }
+    if watch_on {
+        pg.migrate("enterprise.watch", WATCH)?;
+    }
     let db = Arc::new(Db::new(pg.clone()));
+    if watch_on {
+        watch::register(
+            &mut extension,
+            db.clone(),
+            host.keys.to_path_buf(),
+            host.audit.clone(),
+        );
+    }
     if devices_on {
         devices::register(&mut extension, db.clone(), host.keys.to_path_buf());
     }

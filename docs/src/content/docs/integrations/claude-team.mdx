@@ -1,84 +1,175 @@
 ---
 title: Claude Team and Enterprise
-description: See who uses Claude Code on your Claude subscriptions, what it costs and which tools ran, without routing anything. Setup for Team, Enterprise and API key plans.
+description: Watch mode in a self-hosted Gantry. See who uses Claude Code on your Claude subscriptions, what it costs and which tools ran, from Claude Code's own telemetry, without routing anything.
 sidebar:
   order: 1
 ---
 
 import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
 
-When your developers use Claude Code on their own Claude Team or Enterprise seats, their requests cannot go through a gateway. Gantry's watch mode works with them as they are: Claude Code sends its own usage telemetry to Gantry, and you see who uses it, what it costs, which tools ran or were rejected, and which people have not been seen at all.
+When your developers use Claude Code on Claude Team or Enterprise seats, their requests cannot go through a gateway. Watch mode works with them as they are: Claude Code sends its own usage telemetry (OpenTelemetry) to your Gantry gateway, and Gantry records who used it, with which models, how many tokens, at what estimated cost, and which tools ran or were rejected.
 
-Watch mode observes. It does not block requests or enforce budgets. To enforce policy, route through a Gantry gateway with an API key or cloud provider access: see [Claude Code](/integrations/claude-code/).
+Watch mode is part of Gantry Enterprise (license feature `watch`) and runs in your own gateway. It needs a [store](/operations/store/). Nothing is sent to Gantry the company, and Claude Code sends this telemetry only to the address you set.
 
-## What you get
+## What watch mode can and cannot do
 
-| | Claude Team | Claude Enterprise | Gantry watch mode |
-|---|---|---|---|
-| Per-person usage and estimated cost | Spend report (CSV, daily) | Analytics API | Per person, model and day, updated about once a minute |
-| Per-request records | No | Compliance API | Every API request, error and refusal |
-| Tool decisions (accepted, rejected, by whom) | No | Compliance API | Yes |
-| Coverage: members not seen | No | No | Members with no session in 7 days |
-| Your own retention and export | No | Through Anthropic | Yes, with the rest of your Gantry audit data |
+| | Watch mode | Requests through Gantry |
+|---|---|---|
+| Who used Claude Code, when, on which model | Yes | Yes |
+| Tokens by type and estimated cost, per person, team and model | Yes, as Claude Code reports them | Yes, from the provider's answer |
+| Tool calls accepted, rejected and failed, by tool | Yes | Tool calls in requests and answers |
+| Lines changed, commits, pull requests, sessions, active time | Yes | No |
+| The request log, analytics, `/admin/usage`, coverage, alerts, SIEM export, retention | Yes, as source `watch` | Yes |
+| Block a model, a person or a request | No | Yes |
+| Budgets, rate limits, kill switches | No | Yes |
+| Guardrails on prompts and answers | No | Yes |
+| Prompt and answer text | Never kept | Only with `capture:` |
 
-Gantry keeps the event metadata: person, session, model, tokens, estimated cost, tool name, decision and errors. It never stores prompt, answer or tool content, even if those are turned on in Claude Code. Claude Code sends this telemetry only to the address you set, never to Anthropic.
+Watch mode observes. Claude Code talks to Anthropic directly, so Gantry cannot refuse or change anything. In the [five steps](/start/plan/), See, Know and Prove work on watch data; Limit and Protect need API traffic through Gantry. To enforce policy, give those developers an API key or cloud provider access and [route Claude Code through Gantry](/integrations/claude-code/).
+
+<Aside type="note">
+Costs in watch mode are Claude Code's own estimates at list price. Usage within Team or Enterprise seats is not billed per dollar, so read them as relative usage, not an invoice.
+</Aside>
 
 ## Set it up
 
 <Steps>
 
-1. Sign in to the Gantry app and open **Claude Code**, then **Set up**.
-2. Choose your Claude plan and select **Create setup**. Gantry shows a settings block with your organization's ingest token. Copy it: the token is shown once.
+1. Start the gateway with a license that has `watch` and a policy with `store:`. See [License](/operations/license/).
+
+2. Create a watch token and print the settings. `--gateway` is the address Claude Code reaches your gateway at:
+
+   ```sh
+   export GANTRY_ADMIN_KEY=gantry_...
+   gantry watch setup --gateway https://gantry.example.com --team engineering
+   ```
+
+   It prints a managed settings block with the token in it. The token is shown once: Gantry keeps its hash.
+
+   ```json title="Managed settings"
+   {
+     "env": {
+       "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+       "OTEL_METRICS_EXPORTER": "otlp",
+       "OTEL_LOGS_EXPORTER": "otlp",
+       "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+       "OTEL_EXPORTER_OTLP_ENDPOINT": "https://gantry.example.com/otlp",
+       "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer gantry_watch_..."
+     }
+   }
+   ```
+
 3. Apply the block for your plan, as below.
-4. Within a few minutes of each developer's next Claude Code session, they move from **not seen** to **reporting**.
+
+4. Within a few minutes of each developer's next Claude Code session, they appear:
+
+   ```sh
+   curl -H "Authorization: Bearer $GANTRY_ADMIN_KEY" https://gantry.example.com/console/watch/summary.json
+   ```
 
 </Steps>
 
 <Tabs>
 <TabItem label="Claude Team">
 
-As an Owner, open claude.ai, then **Organization settings**, **Claude Code**, **Managed settings**, paste the block and save. It applies to everyone in the organization, and Claude Code picks it up when it next starts. Nothing is installed on laptops.
+As an Owner or Primary Owner, open claude.ai, then **Organization settings**, **Claude Code**, **Managed settings**, paste the block and save. On Team it applies to everyone in the organization. Claude Code fetches it when it next starts and checks again every hour, so nothing is installed on laptops. Claude Code asks each developer once to approve a telemetry endpoint that arrives this way.
 
-```json title="Managed settings"
-{
-  "env": {
-    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
-    "OTEL_METRICS_EXPORTER": "otlp",
-    "OTEL_LOGS_EXPORTER": "otlp",
-    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
-    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "https://gantry-control.eliran.me/otlp/<your-org>/v1/metrics",
-    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "https://gantry-control.eliran.me/otlp/<your-org>/v1/logs",
-    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer gotel_..."
-  }
-}
-```
+Use one token for the organization (`--team` names the Gantry team its people are counted under). Each person is told apart by the email address they signed in to Claude with.
 
 </TabItem>
 <TabItem label="Claude Enterprise">
 
-The same place and the same block as Team. Enterprise can also apply managed settings to groups only, for a pilot. Gantry's view sits beside Anthropic's Compliance API and Analytics API, with your own retention and coverage.
+The same place and the same block as Team. Enterprise can give each group of members its own managed settings: create one token per group with `gantry watch setup --team <team>`, and each group is counted under its own Gantry team. Start with one group as a pilot.
+
+Gantry's view sits beside Anthropic's Compliance API and Analytics API, in your own audit chain, with your own retention and export.
 
 </TabItem>
-<TabItem label="API key, Bedrock, Vertex AI">
+<TabItem label="Device management (MDM)">
 
-Server-managed settings reach only Team and Enterprise logins. Otherwise, put the block in Claude Code's managed settings file on each machine, through your device management tool:
+Deliver the block as Claude Code's managed settings file with Jamf, Intune or your own tool:
 
 - macOS: `/Library/Application Support/ClaudeCode/managed-settings.json`
-- Linux: `/etc/claude-code/managed-settings.json`
+- Linux and WSL: `/etc/claude-code/managed-settings.json`
 - Windows: `C:\Program Files\ClaudeCode\managed-settings.json`
 
-On these plans Claude Code sends no email address, so add `OTEL_RESOURCE_ATTRIBUTES=user.email=<person>` per machine to see names. With an API key you can also route through a Gantry gateway instead, which adds policy and budgets.
+A file there is needed for developers who sign in with an API key, Amazon Bedrock or Vertex AI, whom server-managed settings do not reach. On those sign-ins Claude Code sends no email address: add `"OTEL_RESOURCE_ATTRIBUTES": "user.email=<person>"` per machine, or create one token per person (below). With an API key you can also route through Gantry instead, which adds policy and budgets.
+
+The Gantry [device agent](/operations/devices/) writes the same file and keeps the keys it does not manage, so the two work together. Templates are in `deploy/mdm/`.
+
+</TabItem>
+<TabItem label="One developer">
+
+```sh
+gantry watch setup --gateway https://gantry.example.com --person maya.cohen
+```
+
+A token made with `--person` counts everything it sends under that name, whatever the export says. Use the name on the person's Gantry key so their watched and routed usage line up. Put the printed `export` lines in the shell that starts Claude Code, or the `env` block in `~/.claude/settings.json`.
 
 </TabItem>
 </Tabs>
 
-<Aside type="note">
-Costs in watch mode are Claude Code's own estimates at list price. Usage within your Team or Enterprise seats is not billed per dollar, so read them as relative usage, not an invoice.
-</Aside>
+## Where watched people show up
 
-## What the page shows
+| Where | What |
+|---|---|
+| **Requests** (`/console/requests?source=watch`) | One row per model request Claude Code reported: person, team, model, tokens, estimated cost, latency. API errors and refusals are rows too |
+| **Analytics** (`/console/analytics`) | Rank by **Source** to compare watched and routed usage, or filter `source=watch` and rank by person, team or model |
+| [`/admin/usage`](/reference/admin-api/) | `?source=watch`, or `group_by=source` |
+| [`gantry audit coverage`](/governance/coverage/) | Tool `claude-code (watch)` per person, beside the tools that reach Gantry |
+| [Alerts](/operations/alerting/) | `budget` rules by amount and `unusual_spend` count watched cost |
+| [Audit export](/operations/siem-export/) and [retention](/operations/retention/) | `watch` records ship and expire as every audit record does |
+| `GET /console/watch/summary.json?days=30` | Sums per person, model and tool: sessions, tokens by type, cost, lines, commits, pull requests, prompts, tool calls accepted, rejected and failed, and where the five steps stand |
 
-- **By person:** sessions, tokens, estimated cost, lines added, commits and pull requests, last seen.
-- **By model:** tokens and estimated cost.
-- **Members not seen in 7 days:** people in your Gantry organization whose Claude Code has not reported, the gap to close first.
-- **Errors, refusals and rejected tool calls:** API errors, refusals, and tool calls a person or a hook rejected.
+Watched requests never count against a budget and are never refused: Gantry did not forward them.
+
+## What is kept
+
+Each model request, API error, refusal, tool decision, tool result and prompt Claude Code reports becomes one [`watch` record](/reference/audit-records/#watch) in the audit chain. Its metrics (sessions, tokens, cost, lines, commits, pull requests, edit decisions, active time) are summed per day, person, model and tool in the store, and each export's new sums are one record too. An export sent twice is counted once.
+
+Gantry keeps numbers and names: person, team, session, model, tokens, estimated cost, tool name, decision, error name, prompt length. It never keeps prompt, answer or tool text. If someone turns on `OTEL_LOG_USER_PROMPTS` or `OTEL_LOG_TOOL_DETAILS` in Claude Code, Gantry drops that text when it arrives and counts the event under `content_dropped`. Every other event Claude Code sends (plugins, hooks, settings) is dropped.
+
+The daily sums follow the [retention](/operations/retention/) period and legal hold, 365 days on an install without the retention feature.
+
+## Tokens
+
+A watch token starts with `gantry_watch_`, lasts 1 to 365 days (90 unless `--days` says otherwise) and belongs to a team or to one person. Owners and admins manage them with an admin key, and every change is an [admin record](/reference/audit-records/#admin).
+
+```sh
+# List: label, team or person, expiry, last export, status
+curl -H "Authorization: Bearer $GANTRY_ADMIN_KEY" https://gantry.example.com/console/watch/tokens
+# Create
+curl -X POST -H "Authorization: Bearer $GANTRY_ADMIN_KEY" https://gantry.example.com/console/watch/tokens \
+  -d '{"label": "claude-team", "team": "engineering", "days": 90}'
+# Revoke: exports with it are refused from then on
+curl -X DELETE -H "Authorization: Bearer $GANTRY_ADMIN_KEY" https://gantry.example.com/console/watch/tokens/wt-1a2b3c4d
+```
+
+Replace a token before it expires: create a new one, put its settings in place of the old, then revoke the old.
+
+## The receiver
+
+| | |
+|---|---|
+| Routes | `POST /otlp/v1/metrics`, `POST /otlp/v1/logs` on the gateway's address |
+| Encoding | OTLP over HTTP as protobuf (`http/protobuf`) or JSON (`http/json`), uncompressed, at most 4 MB an export. Not gRPC |
+| Sign-in | `Authorization: Bearer gantry_watch_...` |
+| Claude Code | Tested with 2.1.325 |
+
+| Status | Code | When |
+|---|---|---|
+| 401 | `invalid_token` | No token, an unknown one or a revoked one |
+| 401 | `token_expired` | The token's days are over |
+| 403 | `license_required` | The license does not have `watch` |
+| 415 | `unsupported_protocol`, `unsupported_encoding` | gRPC or another content type; a compressed body |
+| 413 | `too_large` | More than 4 MB |
+| 400 | `invalid_export` | Not an OTLP export |
+| 503 | `store_unavailable`, `audit_unavailable` | Nothing was kept; Claude Code sends the export again |
+
+If nothing arrives, run `claude --debug-file /tmp/claude-debug.log` and search the file for `[3P telemetry]`: Claude Code logs its export errors there.
+
+## Limits
+
+- No console page yet: read `summary.json`, the Requests and Analytics pages, and coverage.
+- A person on a team token is the email address Claude Code reports. It is not matched to a Gantry key holder's name; use a token per person for that.
+- Metrics need `session.id` on each point, which Claude Code sends unless `OTEL_METRICS_INCLUDE_SESSION_ID=false`.
+- With `audit: { per_org: true }`, watch records go to the install's chain.

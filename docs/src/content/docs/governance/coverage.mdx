@@ -49,6 +49,7 @@ Matching ignores case. Any other user agent is shown by its first product withou
 | A tool with only refusals | It reaches Gantry but is not allowed, or is misconfigured. Gemini CLI shows this way, refused with `no_key` |
 | `unknown` person | Requests with no key Gantry knows: a tool configured with a wrong or missing key |
 | Tool `-`, last seen `never` | The person holds a key and has sent nothing: their tools call providers directly, or they do not use AI tools |
+| `claude-code (watch)` | Gantry Enterprise: the person's Claude Code is on a Claude Team or Enterprise seat and reports through [watch mode](/integrations/claude-team/). `requests` counts the model requests it reported; none can be refused |
 | `OpenAI/JS`, `OpenAI/Python` and similar | A tool or script that sends its SDK's user agent |
 
 <Aside type="caution">

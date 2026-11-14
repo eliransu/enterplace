@@ -23,6 +23,7 @@ The audit log is a file of JSON lines, one record per line, in one hash chain. E
 | `secret_refresh_failed` | [Secret refresh failed](#secret_rotated) | Gantry Enterprise: when a refresh cannot read a secret manager |
 | `audit_repaired` | [Repair](#audit_repaired) | When `gantry audit repair --yes` removes a cut last line |
 | `audit_retired` | [Retirement](#audit_retired) | Before sealed segments at the start of the chain are deleted |
+| `watch` | [Watch](#watch) | Gantry Enterprise: for each model request, error, tool decision, tool result and prompt a watched Claude Code reports, and each export's new metric sums |
 | `alert` | Alert | Gantry Enterprise: when an alert rule fires. Names the rule, the subject and the records behind it: see [Alerting](/operations/alerting/#what-is-recorded) |
 
 Not recorded: `GET /healthz`, `HEAD /api/hello`, `GET /metrics`, and a request so malformed that the HTTP library rejects it before Gantry sees it.
@@ -302,6 +303,41 @@ One per admin API call and console action, allowed or refused, written before th
 | `view_body` | Reading a kept body on the console's Requests page. `target` holds `id` and `rule`. Refused with `not_a_viewer` for someone the rule does not name, or `no_body` when none is kept |
 | `console_sso_starts` | 100 or more single sign-on starts in a minute. `target` holds `starts` and `within_seconds` |
 | `console_sso_refusals` | Refused sign-ins from one address past the first 100 in a minute. `target` holds `client`, `refusals`, `codes` and `within_seconds` |
+
+## watch
+
+Gantry Enterprise, [watch mode](/integrations/claude-team/). Written for what a watched Claude Code reports about itself through its telemetry: Gantry did not decide or forward these requests. One record per model request, API error, refusal, tool decision, tool result and prompt, and one per export, person and session for new metric sums. An export received twice writes its records once.
+
+```json
+{"n":88,"event":"watch","id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-14T18:05:47.101Z","source":"watch","kind":"api_request","at":"2026-11-14T18:05:46.771Z","person":"maya.cohen@example.com","team":"payments","token":"wt-1a2b3c4d","session":"cef9c394-3421-43ba-a4f6-a456a0790968","user_agent":"claude-code/2.1.325","provider":"anthropic","model":"claude-sonnet-5-5","latency_ms":7,"input_tokens":1200,"output_tokens":40,"cache_read_tokens":5000,"cache_write_tokens":300,"cost_usd":0.00405,"prev":"...","hash":"..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event`, `source` | string | `watch` |
+| `kind` | string | `api_request`, `api_error`, `api_refusal`, `tool_decision`, `tool_result`, `user_prompt` or `metrics` |
+| `id` | string | An ID of the record's own, in the decision ID layout |
+| `time`, `at` | string | When Gantry received it, and when Claude Code says it happened |
+| `person` | string | The watch token's person, or the email address Claude Code signed in with; `unknown` without either |
+| `team` | string or null | The watch token's team |
+| `token` | string | The watch token's ID, never the token |
+| `session` | string or null | Claude Code's session ID |
+| `user_agent` | string | `claude-code/<version>` |
+| `provider` | string | `anthropic`, or the cloud Claude Code names |
+
+By kind:
+
+| `kind` | Fields |
+|---|---|
+| `api_request` | `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost_usd` (Claude Code's estimate), `latency_ms` |
+| `api_error` | `model`, `status`, `error` (the API's error name, cut to 120 characters), `latency_ms` |
+| `api_refusal` | `model` |
+| `tool_decision` | `tool`, `decision` (`accept` or `reject`), `decision_source` (such as `config`, `hook`, `user_reject`) |
+| `tool_result` | `tool`, `success`, `latency_ms` |
+| `user_prompt` | `prompt_length`. Never the prompt |
+| `metrics` | `totals`: what the export added, by metric and label, such as `sessions`, `lines_added`, `commits`, `tokens_input:claude-sonnet-5-5` |
+
+`content_dropped: true` marks an event that arrived with prompt, answer or tool text, which was not kept. The `api_request`, `api_error` and `api_refusal` kinds are rows of the request log with source `watch`; none counts against a budget.
 
 ## audit_repaired
 

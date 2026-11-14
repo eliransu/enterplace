@@ -836,6 +836,70 @@ fn usage(gw: &Gateway, id: &str) -> Result<(), Error> {
     )
 }
 
+/// Watch mode: what Claude Code reported it spent on a Claude seat counts for rules by amount and for unusual
+/// spend, as forwarded spend does. The record is the one `watch::keep` writes for an `api_request` event.
+#[tokio::test]
+async fn watched_spend_sets_off_budget_and_unusual_spend_rules() -> Result<(), Error> {
+    let Some(url) = database("alerts_watch").await? else {
+        return Ok(());
+    };
+    let sink = Sink::start().await?;
+    let (gw, ex) = quiet("alerts_watch", &url, &["alerts", "watch"])?;
+    let mut owner = Browser::admin(&gw.app).await?;
+    webhook(&mut owner, &gw, &sink).await?;
+    for fields in [
+        &[
+            ("kind", "budget"),
+            ("name_rule", "Seat spend"),
+            ("scope", "person"),
+            ("name", "maya@acme.co"),
+            ("period", "month"),
+            ("usd", "3"),
+        ][..],
+        &[
+            ("kind", "unusual_spend"),
+            ("name_rule", "Unusual"),
+            ("usd", "1"),
+        ][..],
+    ] {
+        let added = add_rule(&mut owner, &gw, fields).await?;
+        assert!(added.contains("Added rule"), "{added}");
+    }
+    let watched = |id: &str, kind: &str, cost: f64| {
+        write(
+            &gw,
+            json!({ "event": "watch", "id": id, "source": "watch", "kind": kind, "person": "maya@acme.co", "team": "payments",
+                    "token": "wt-1", "session": "s-1", "provider": "anthropic", "model": "claude-sonnet-5-5", "cost_usd": cost }),
+        )
+    };
+    // A metrics record repeats what the requests cost: only requests count.
+    watched("w0", "metrics", 50.0)?;
+    watched("w1", "api_request", 2.0)?;
+    run(&ex).await?;
+    let fired = |sink: &Sink| -> Vec<String> {
+        sink.deliveries()
+            .iter()
+            .map(|h| h.json()["rule"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    assert_eq!(
+        fired(&sink),
+        ["Unusual"],
+        "$2 is unusual for someone new, and under the $3 budget"
+    );
+    watched("w2", "api_request", 1.5)?;
+    run(&ex).await?;
+    let hits = sink.deliveries();
+    let budget = hits
+        .iter()
+        .find(|h| h.json()["rule"] == "Seat spend")
+        .ok_or_else(|| format!("no budget alert: {:?}", fired(&sink)))?
+        .json();
+    assert!(budget.to_string().contains("3.50"), "{budget}");
+    assert_eq!(budget["records"][0]["id"], "w2", "{budget}");
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_percent_rule_fires_at_its_share_of_each_policy_budget_for_its_period()
 -> Result<(), Error> {

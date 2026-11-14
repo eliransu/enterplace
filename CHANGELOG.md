@@ -7,6 +7,26 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Watch mode in the self-hosted gateway (Gantry Enterprise)
+
+- License feature `watch`: the gateway receives Claude Code's own OpenTelemetry export at `POST /otlp/v1/metrics` and
+  `POST /otlp/v1/logs` (OTLP over HTTP, protobuf or JSON), for people on Claude Team and Enterprise seats whose
+  requests cannot go through a gateway. It records who used Claude Code, models, tokens by type, estimated cost,
+  lines, commits, pull requests and tool decisions. It never blocks or budgets, and never keeps prompt, answer or tool
+  text, even when Claude Code is told to send it.
+- Watch tokens (`gantry_watch_...`) per team or person, kept as a hash, expiring and revocable, at
+  `/console/watch/tokens`. `gantry watch setup --gateway <url> --team <team>` creates one and prints Claude Code's
+  managed settings for Claude Team, Claude Enterprise, device management and a single developer.
+- New audit record type `watch`, one per reported model request, error, tool decision, tool result and prompt. The
+  request log has a new dimension, `source`: watched requests are rows with `source` `watch` on the Requests and
+  Analytics pages and in `/admin/usage` (`?source=watch`, `group_by=source`), and count against no budget.
+  `gantry audit coverage` lists them as the tool `claude-code (watch)`. Alert rules on spend by amount and on
+  unusual spend count watched cost. Audit export and retention cover the records as any other.
+- `GET /console/watch/summary.json`: sums per person, model and tool. Tables in namespace `enterprise.watch`
+  (`enterprise_watch_tokens`, `enterprise_watch_seen`, `enterprise_watch_series`, `enterprise_watch_daily`), which
+  follow the retention period and legal hold.
+- The hosted app's watch page is not carried over: a console page waits for a design.
+
 ### Fixed: a parallel place comes back with the answer
 
 - A request's place under a `parallel` limit (key or `limits:`) is given back as soon as its answer has ended, not

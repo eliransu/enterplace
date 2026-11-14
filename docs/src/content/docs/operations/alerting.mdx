@@ -76,6 +76,10 @@ Group by is `all` (default), `person`, `team` or `key`. The unusual kinds compar
 
 Each failure counts once: a try that was retried is in the attempts record, and the last try is in the usage record when the provider answered (a 5xx or 429 passed on) or in the upstream error record when none did. A failure Gantry made itself, such as a model with no deployment (`unknown_model`), is not a provider's and does not count.
 
+### Watched spend
+
+With [watch mode](/integrations/claude-team/), the cost Claude Code estimates for each request on a Claude Team or Enterprise seat counts for `budget` rules by amount and for `unusual_spend`, under the person and team of the watch token. A rule with a percent counts only requests that went through Gantry, as the policy's budgets do.
+
 ### A percent of a policy budget
 
 A `budget` rule with **percent** set watches the budgets the policy itself sets, instead of an amount of its own:

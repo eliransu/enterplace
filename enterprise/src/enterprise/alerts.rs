@@ -1377,8 +1377,8 @@ impl Engine {
                     }
                 }
             }
-            if event == "usage" {
-                let charged = record["charged_usd"].as_f64().unwrap_or(0.0);
+            if spends(event) {
+                let charged = charged(event, record);
                 if charged > 0.0 && charged.is_finite() {
                     let scopes = [
                         "all".to_string(),
@@ -1386,7 +1386,11 @@ impl Engine {
                         format!("person:{}", record["person"].as_str().unwrap_or_default()),
                         format!("key:{}", record["key"].as_str().unwrap_or_default()),
                     ];
-                    for scope in scopes {
+                    // A watched request has no key, and no team when its token names none.
+                    for scope in scopes
+                        .into_iter()
+                        .filter(|s| event == "usage" || !s.ends_with(':'))
+                    {
                         for period in [time.get(..10), time.get(..7)].into_iter().flatten() {
                             *spend
                                 .entry((scope.clone(), period.to_string()))
@@ -1397,9 +1401,8 @@ impl Engine {
             }
             for rule in &rules {
                 match (rule.kind, event) {
-                    (RuleKind::Budget, "usage")
-                        if rule.percent().is_none()
-                            && record["charged_usd"].as_f64().unwrap_or(0.0) > 0.0 =>
+                    (RuleKind::Budget, "usage" | "watch")
+                        if rule.percent().is_none() && charged(event, record) > 0.0 =>
                     {
                         let scope = rule.text("scope");
                         let value = match scope {
@@ -1596,9 +1599,7 @@ impl Engine {
                             );
                         }
                     }
-                    (RuleKind::UnusualSpend, "usage")
-                        if record["charged_usd"].as_f64().unwrap_or(0.0) > 0.0 =>
-                    {
+                    (RuleKind::UnusualSpend, "usage" | "watch") if charged(event, record) > 0.0 => {
                         let person = record["person"].as_str().unwrap_or_default();
                         hit(
                             rule,
@@ -3545,5 +3546,21 @@ async fn change(
                 String::new(),
             ))
         }
+    }
+}
+
+/// Whether a record of this kind can add to spend.
+fn spends(event: &str) -> bool {
+    matches!(event, "usage" | "watch")
+}
+
+/// What a record adds to spend: what a forwarded request was charged, or the cost Claude Code estimated for a
+/// request it reported itself (a `watch` record). Rules by amount and unusual spend count both; a share of a policy
+/// budget counts only the first, as the policy does.
+fn charged(event: &str, record: &Value) -> f64 {
+    match event {
+        "usage" => record["charged_usd"].as_f64().unwrap_or(0.0),
+        "watch" if record["kind"] == "api_request" => record["cost_usd"].as_f64().unwrap_or(0.0),
+        _ => 0.0,
     }
 }

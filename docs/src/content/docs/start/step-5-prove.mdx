@@ -37,6 +37,8 @@ Every record carries the hash of the one before it, so a changed, removed or reo
 
 Copy the `Last hash` line of the output to a place the Gantry host cannot write, such as a ticket. Later, `gantry audit verify <file> --expect-last <hash>` shows that nothing up to that record was changed or removed.
 
+What [watch mode](/integrations/claude-team/) sees on Claude Team or Enterprise seats is in the same chain, as `watch` records, and verifies with it.
+
 ## When you're ready
 
 All five steps are in place. The [rollout plan](/start/plan/) puts them on one page for the people you report to.
