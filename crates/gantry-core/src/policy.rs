@@ -804,7 +804,10 @@ impl Rule {
     pub fn allows(&self, model: &str) -> bool {
         match &self.models {
             Models::Any => true,
-            Models::Only(models) => models.iter().any(|allowed| allowed == model),
+            // `gpt-*` lets a rule allow a provider's new models without an edit.
+            Models::Only(models) => models
+                .iter()
+                .any(|allowed| crate::config::model_matches(allowed, model)),
         }
     }
 }

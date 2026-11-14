@@ -161,7 +161,7 @@ Follows a request record, with the same `id`, when the request was tried more th
 |---|---|---|
 | `event` | string | `attempts` |
 | `id` | string | The decision ID of the request |
-| `attempts` | array | Every try in order, each `{"provider", "outcome"}`. `outcome` is the HTTP status, or the code when the provider gave none, such as `upstream_timeout`. For an alias, `provider` names the deployment |
+| `attempts` | array | Every try in order, each `{"provider", "outcome"}`. `outcome` is the HTTP status, or the code when the provider gave none, such as `upstream_timeout`. For an alias, `provider` names the deployment. A try sent with a [key pool](/routing/key-pools/) key adds `key`, the key's SHA-256 hash prefix; a fallback that could not be translated to its API has `outcome` `untranslatable` |
 
 ## Upstream error
 

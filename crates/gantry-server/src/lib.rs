@@ -208,6 +208,10 @@ pub struct Timeouts {
     pub first_byte: Duration,
     /// For requests in flight to finish after a stop signal.
     pub shutdown: Duration,
+    /// For a provider's whole answer, body included, from sending. A provider, alias or deployment may set its own.
+    pub total: Duration,
+    /// Between two pieces of a provider's answer once it has started.
+    pub idle: Duration,
 }
 
 impl Default for Timeouts {
@@ -218,6 +222,9 @@ impl Default for Timeouts {
             connect: Duration::from_secs(5),
             first_byte: Duration::from_secs(120),
             shutdown: Duration::from_secs(30),
+            // Long enough for a reasoning model's longest answer; a stream that stalls is cut by `idle` long before.
+            total: Duration::from_secs(1800),
+            idle: Duration::from_secs(300),
         }
     }
 }
@@ -274,6 +281,12 @@ pub struct ProviderRoute {
     pub accept_chat: bool,
     /// Messages requests (Claude Code) for its models are translated to the chat completions API.
     pub accept_messages: bool,
+    /// Its own time limits, where an alias or deployment does not set one.
+    pub timeouts: gantry_core::config::Timeouts,
+    /// A pool of keys used in turn, in place of `key`. A key answered 401 or 403 is set aside; one answered 429 rests.
+    pub keys: Vec<Secret>,
+    /// Picks the pool's key with the fewest requests sent, not the next in turn.
+    pub least_used_key: bool,
 }
 
 /// What the server needs to start.
@@ -455,6 +468,9 @@ struct Snapshot {
     keys_sha256: String,
 }
 
+/// A pooled client to providers.
+type Upstreams = Client<HttpsConnector<HttpConnector>, Body>;
+
 /// The version in use. Requests take a snapshot of it. A reload puts a new one in place.
 type Live = Arc<RwLock<Arc<Snapshot>>>;
 
@@ -462,6 +478,8 @@ type Live = Arc<RwLock<Arc<Snapshot>>>;
 struct AppState {
     // One pooled client for the life of the process: connections to the provider are reused across requests.
     client: Client<HttpsConnector<HttpConnector>, Body>,
+    // Clients for providers with a connect timeout of their own, by that timeout.
+    clients: Arc<std::sync::Mutex<std::collections::HashMap<Duration, Upstreams>>>,
     live: Live,
     audit: Option<Audit>,
     reloader: Option<Arc<Reloader>>,
@@ -517,11 +535,24 @@ struct Upstream {
     retries: u32,
     accept_chat: bool,
     accept_messages: bool,
+    timeouts: gantry_core::config::Timeouts,
+    /// The key pool, each key as its header and its fingerprint (never the key). Empty without a pool.
+    pool: Vec<((HeaderName, HeaderValue), String)>,
+    least_used_key: bool,
 }
 
 impl Upstream {
     fn serves(&self, model: &str) -> bool {
-        self.models.is_empty() || self.models.iter().any(|m| m == model)
+        self.models.is_empty()
+            || self
+                .models
+                .iter()
+                .any(|m| gantry_core::config::model_matches(m, model))
+    }
+
+    /// Whether it lists `model` by its exact name, not only through a pattern.
+    fn lists(&self, model: &str) -> bool {
+        self.models.iter().any(|m| m == model)
     }
 }
 
@@ -576,15 +607,28 @@ pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError
             route.name
         )));
     }
+    let pool = route
+        .keys
+        .iter()
+        .map(|key| {
+            key_header(route.kind, key)
+                // A hash prefix names the key in records and logs; no part of the key itself is ever shown.
+                .map(|header| (header, id::sha256_hex(key.0.as_bytes())[..8].to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Upstream {
         name: route.name.clone(),
         kind: route.kind,
         url: checked_upstream(&route.url)?,
-        key: route
-            .key
-            .as_ref()
-            .map(|key| key_header(route.kind, key))
-            .transpose()?,
+        // A pool's first key stands in where one key is used (batches, realtime).
+        key: match pool.first() {
+            Some((header, _)) => Some(header.clone()),
+            None => route
+                .key
+                .as_ref()
+                .map(|key| key_header(route.kind, key))
+                .transpose()?,
+        },
         models: route.models.clone(),
         upstream_models: route.upstream_models.clone(),
         api_version: route.api_version.clone(),
@@ -595,6 +639,9 @@ pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError
         retries: route.retries,
         accept_chat: route.accept_chat,
         accept_messages: route.accept_messages,
+        timeouts: route.timeouts,
+        pool: if pool.len() > 1 { pool } else { Vec::new() },
+        least_used_key: route.least_used_key,
     })
 }
 
@@ -606,14 +653,6 @@ fn build(
         .upstream
         .map(|raw| checked_upstream(&raw))
         .transpose()?;
-    let mut connector = HttpConnector::new();
-    connector.set_connect_timeout(Some(config.timeouts.connect));
-    connector.enforce_http(false);
-    let connector = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_webpki_roots()
-        .https_or_http()
-        .enable_http1()
-        .wrap_connector(connector);
     let mut providers = Vec::new();
     for route in &config.providers {
         providers.push(upstream_of(route)?);
@@ -643,6 +682,9 @@ fn build(
             retries: 0,
             accept_chat: false,
             accept_messages: false,
+            timeouts: gantry_core::config::Timeouts::default(),
+            pool: Vec::new(),
+            least_used_key: false,
         });
     }
     let console = config.console;
@@ -693,7 +735,7 @@ fn build(
             .map_err(ConfigError)?;
         owned.replay(path, &spend).map_err(ConfigError)?;
     }
-    let client = Client::builder(TokioExecutor::new()).build(connector);
+    let client = client_with(config.timeouts.connect);
     // Spans are finished from the audit records, so traces need the audit log.
     let tracer = match (config.traces, &config.audit) {
         (Some(export), Some(audit)) => {
@@ -719,6 +761,7 @@ fn build(
     };
     let state = AppState {
         client,
+        clients: Arc::default(),
         tracer,
         live,
         audit: config.audit,
@@ -741,6 +784,7 @@ fn build(
     };
     let keep = Arc::new(state.clone());
     batch::spawn_poller(Arc::downgrade(&keep));
+    spawn_probes(Arc::downgrade(&keep));
     let metrics = Router::new()
         .route("/metrics", get(metrics::serve))
         .with_state(state.clone());
@@ -893,6 +937,21 @@ async fn readyz(
             Some(_) => check(true, None),
         },
     );
+    // Probed deployments are detail: one that is down is passed over, and the gateway still serves.
+    let probes = state.pool.probes();
+    if !probes.is_empty() {
+        let mut deployments = serde_json::Map::new();
+        for (name, probed) in probes {
+            deployments.insert(
+                name,
+                serde_json::json!({ "up": probed.up, "checked": probed.time, "outcome": probed.outcome }),
+            );
+        }
+        checks.insert(
+            "deployments".into(),
+            serde_json::json!({ "ready": true, "probed": deployments }),
+        );
+    }
     if draining.is_some_and(|d| d.0.0.load(std::sync::atomic::Ordering::Relaxed)) {
         checks.insert(
             "draining".into(),
@@ -1829,8 +1888,12 @@ async fn check<'a>(
                 tags: &tags,
                 regions: rule.limits.regions.as_deref(),
                 session: session_of(&parts.headers, person),
+                customer: seen.customer.clone(),
+                headers: &parts.headers,
+                body: &bytes,
             };
-            let found = match targets(state, version, route, parts.uri.path(), model, &want) {
+            let found = match targets(state, version, route, parts.uri.path(), model, &want, false)
+            {
                 Err(refusal) if refusal.code == "region_not_allowed" => {
                     let Some(by) = policy.observing(rule.shadow_until.as_deref()) else {
                         return Err(refusal);
@@ -1838,24 +1901,25 @@ async fn check<'a>(
                     // Observed residency: recorded, then routed as if the rule kept requests nowhere in particular.
                     observed(seen, refusal, by);
                     want.regions = None;
-                    targets(state, version, route, parts.uri.path(), model, &want)
+                    targets(state, version, route, parts.uri.path(), model, &want, false)
                 }
                 other => other,
             };
             let (chain, translate, routing) = found?;
             seen.routing = routing;
-            let chosen = chain.first().map_or(0, |c| c.0);
+            let chosen = chain.first().map_or(0, |c| c.provider);
             let alias = version.aliases.iter().find(|a| a.name == *model);
-            // A named fallback takes the same body, so it must take the same translation. QA14-2: a fallback a kill
-            // switch stops (by its own name, or a model of its deployments, as for the alias itself) is not taken.
+            // A fallback may speak the other API: its hop gets the body translated as it is sent. QA14-2: a fallback
+            // a kill switch stops (by its own name, or a model of its deployments, as for the alias itself) is not
+            // taken.
             let stopped = |m: &str| killed(state, person, &key_sha256, Some(m)).is_err();
             let fallback = |target: Option<&String>| {
                 target
                     .filter(|t| !stopped(t))
-                    .and_then(|t| targets(state, version, route, parts.uri.path(), t, &want).ok())
-                    .filter(|(chain, t, _)| {
-                        *t == translate && !chain.iter().any(|(_, m)| stopped(m))
+                    .and_then(|t| {
+                        targets(state, version, route, parts.uri.path(), t, &want, true).ok()
                     })
+                    .filter(|(chain, _, _)| !chain.iter().any(|hop| stopped(&hop.model)))
                     .map(|(chain, _, _)| chain)
                     .unwrap_or_default()
             };
@@ -1865,10 +1929,21 @@ async fn check<'a>(
                     fallback(a.content_policy_fallback.as_ref()),
                 )
             });
+            // An alias's fallbacks never widen access: the caller's rule must allow each by name.
+            let fallbacks: Vec<Chain> = alias
+                .map(|a| {
+                    a.fallbacks
+                        .iter()
+                        .filter(|t| matches!(policy.decide(person, t), Decision::Allow(_)))
+                        .map(|t| fallback(Some(t)))
+                        .filter(|chain| !chain.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
             if alias.is_some() {
                 seen.deployment = chain
                     .first()
-                    .map(|(i, m)| alias::label(&version.providers[*i].name, m));
+                    .map(|hop| alias::label(&version.providers[hop.provider].name, &hop.model));
             }
             let model = model.clone();
             seen.provider = Some(chosen);
@@ -1881,6 +1956,19 @@ async fn check<'a>(
             // Translated here, before the record is written, so a field that cannot be carried across is a
             // recorded refusal and never a request sent with that field missing.
             let from_messages = translate && route == Kind::Anthropic;
+            // Read only when a fallback may need the request translated as it is sent.
+            let crossing = !context.is_empty() || !content.is_empty() || !fallbacks.is_empty();
+            let include_usage = route == Kind::OpenAi
+                && crossing
+                && serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .is_ok_and(|request| translate::include_usage(&request));
+            let body_api = if from_messages {
+                Kind::OpenAi
+            } else if translate && !version.providers[chosen].kind.google() {
+                Kind::Anthropic
+            } else {
+                route
+            };
             let (bytes, translated) = if translate {
                 seen.translated = true;
                 if from_messages {
@@ -1909,6 +1997,10 @@ async fn check<'a>(
                 content,
                 passthrough: None,
                 caller_key: provider_key.map(Secret::new),
+                fallbacks,
+                fallback_on: alias.map(|a| a.fallback_on.clone()).unwrap_or_default(),
+                body_api,
+                include_usage,
             });
             Ok(Next::Forward(parts, bytes, permit))
         }
@@ -2372,12 +2464,16 @@ async fn passthrough<'a>(
         model: model.clone(),
         translated: None,
         from_messages: false,
-        chain: vec![(index, model)],
+        chain: vec![Hop::plain(index, model)],
         cooldown: None,
         context: Vec::new(),
         content: Vec::new(),
         passthrough: Some(target),
         caller_key: provider_key.map(Secret::new),
+        fallbacks: Vec::new(),
+        fallback_on: Vec::new(),
+        body_api: Kind::OpenAi,
+        include_usage: false,
     });
     Ok(Next::Forward(parts, bytes, permit))
 }
@@ -2403,17 +2499,25 @@ struct Plan {
     from_messages: bool,
     /// The deployments to try in order: each a provider by position and the model sent there. One entry for a
     /// model that is not an alias.
-    chain: Vec<(usize, String)>,
+    chain: Chain,
     /// For an alias: how long a deployment that failed is passed over.
     cooldown: Option<Duration>,
     /// Where the request goes when the provider says the prompt is longer than its context window.
-    context: Vec<(usize, String)>,
+    context: Chain,
     /// Where the request goes when the provider refuses it under its content policy.
-    content: Vec<(usize, String)>,
+    content: Chain,
     /// For a passthrough request: the native path and query it is sent to, as sent.
     passthrough: Option<String>,
     /// The caller's own provider key, sent in place of Gantry's, on a rule that allows it.
     caller_key: Option<Secret>,
+    /// An alias's `fallbacks`, each a chain of its own, tried in turn on a failure `fallback_on` names.
+    fallbacks: Vec<Chain>,
+    fallback_on: Vec<gantry_core::config::FallbackOn>,
+    /// The API the forwarded body is in: messages, or chat completions (Google's providers translate it as sent).
+    /// A hop of the other API gets it translated, so a fallback can cross from one to the other.
+    body_api: Kind,
+    /// Whether a chat client asked for usage in its stream.
+    include_usage: bool,
 }
 
 /// The model of a multipart form (an audio transcription), read as `Peek` reads a JSON body's.
@@ -2441,7 +2545,6 @@ fn form_model(headers: &HeaderMap, bytes: &[u8]) -> Result<Peek, Refusal> {
 
 /// What the caller brings to the choice of deployment: their team and tags for kept deployments, their rule's
 /// residency, and their session.
-#[derive(Default)]
 struct Want<'a> {
     team: &'a str,
     tags: &'a [String],
@@ -2449,10 +2552,34 @@ struct Want<'a> {
     regions: Option<&'a [String]>,
     /// Person and session, for an alias with session affinity.
     session: Option<String>,
+    /// What a deployment's `when` may look at.
+    customer: Option<String>,
+    headers: &'a HeaderMap,
+    body: &'a [u8],
 }
 
-/// Where a request may go, in the order to try it: each a provider by position and the model sent there.
-type Chain = Vec<(usize, String)>;
+/// One place a request may go: a provider by position, the model sent there, and, for an alias's deployment, its
+/// time limits and how long it is passed over after a failure.
+#[derive(Clone, Debug, Default)]
+struct Hop {
+    provider: usize,
+    model: String,
+    timeouts: gantry_core::config::Timeouts,
+    cooldown: Option<Duration>,
+}
+
+impl Hop {
+    fn plain(provider: usize, model: String) -> Self {
+        Hop {
+            provider,
+            model,
+            ..Hop::default()
+        }
+    }
+}
+
+/// Where a request may go, in the order to try it.
+type Chain = Vec<Hop>;
 
 /// The deployments that can take this request, in the order to try them, whether it is translated, and how the
 /// first was chosen (for the record). A model that is not an alias has one: the provider that lists it.
@@ -2463,7 +2590,20 @@ fn targets(
     path: &str,
     model: &str,
     want: &Want<'_>,
+    across: bool,
 ) -> Result<(Chain, bool, Option<serde_json::Value>), Refusal> {
+    // A fallback may go to a provider of the other API: chat to messages and back, translated as it is sent.
+    let fits = |provider: &Upstream, route: Kind, path: &str, model: &str| {
+        fits(provider, route, path, model).or_else(|refusal| {
+            let crosses = (path == CHAT && provider.kind.api() == Kind::Anthropic)
+                || (path == MESSAGES && provider.kind.api() == Kind::OpenAi);
+            if across && crosses {
+                Ok(true)
+            } else {
+                Err(refusal)
+            }
+        })
+    };
     let Some(alias) = version.aliases.iter().find(|a| a.name == model) else {
         if let Some(regions) = want.regions {
             // A model sent to its provider directly has no region label: residency cannot be shown, so it is refused.
@@ -2476,8 +2616,14 @@ fn targets(
                 ),
             ));
         }
-        let (index, translate) = provider_for(version, route, path, model)?;
-        return Ok((vec![(index, model.to_string())], translate, None));
+        let (index, translate, sent) = if across {
+            let (index, sent) = find_provider(version, model).ok_or_else(|| unserved(model))?;
+            let translate = fits(&version.providers[index], route, path, &sent)?;
+            (index, translate, sent)
+        } else {
+            provider_for(version, route, path, model)?
+        };
+        return Ok((vec![Hop::plain(index, sent)], translate, None));
     };
     let mut first_refusal = None;
     let mut eligible = Vec::new();
@@ -2529,19 +2675,43 @@ fn targets(
         }
         routing["regions"] = regions.into();
     }
-    // Deployments kept for a team or tag: a request that matches some goes only to those; one that matches none
-    // goes to the deployments kept for nobody.
+    // Deployments kept for a team, tag or condition: a request that matches some goes only to those; one that
+    // matches none goes to the deployments kept for nobody.
     let matches = |f: &gantry_core::config::For| match f {
         gantry_core::config::For::Team(team) => team == want.team,
         gantry_core::config::For::Tag(tag) => want.tags.contains(tag),
     };
+    // The body is read for a condition only when a deployment has one that needs it.
+    let facts = std::cell::OnceCell::new();
+    let facts = || *facts.get_or_init(|| body_facts(want.body));
+    let meets = |w: &gantry_core::config::When| {
+        w.team.as_ref().is_none_or(|t| t == want.team)
+            && w.tag.as_ref().is_none_or(|t| want.tags.contains(t))
+            && w.customer
+                .as_ref()
+                .is_none_or(|c| want.customer.as_ref() == Some(c))
+            && w.header.as_ref().is_none_or(|(name, value)| {
+                want.headers
+                    .get(name.as_str())
+                    .and_then(|v| v.to_str().ok())
+                    == Some(value.as_str())
+            })
+            && w.min_prompt_tokens.is_none_or(|min| facts().0 >= min)
+            && w.max_prompt_tokens.is_none_or(|max| facts().0 <= max)
+            && w.tools.is_none_or(|tools| facts().1 == tools)
+            && w.images.is_none_or(|images| facts().2 == images)
+    };
+    let kept_for = |d: &gantry_core::config::Deployment| d.for_.is_some() || d.when.is_some();
     let kept: Vec<(usize, usize)> = eligible
         .iter()
         .copied()
-        .filter(|(at, _)| alias.deployments[*at].for_.as_ref().is_some_and(matches))
+        .filter(|(at, _)| {
+            let d = &alias.deployments[*at];
+            kept_for(d) && d.for_.as_ref().is_none_or(matches) && d.when.as_ref().is_none_or(meets)
+        })
         .collect();
     if kept.is_empty() {
-        eligible.retain(|(at, _)| alias.deployments[*at].for_.is_none());
+        eligible.retain(|(at, _)| !kept_for(&alias.deployments[*at]));
         if eligible.is_empty() {
             return Err(Refusal::new(
                 StatusCode::FORBIDDEN,
@@ -2554,10 +2724,10 @@ fn targets(
     } else {
         let label = kept
             .iter()
-            .filter_map(|(at, _)| alias.deployments[*at].for_.as_ref())
-            .map(|f| match f {
-                gantry_core::config::For::Team(t) => format!("team:{t}"),
-                gantry_core::config::For::Tag(t) => format!("tag:{t}"),
+            .map(|(at, _)| match &alias.deployments[*at].for_ {
+                Some(gantry_core::config::For::Team(t)) => format!("team:{t}"),
+                Some(gantry_core::config::For::Tag(t)) => format!("tag:{t}"),
+                None => "when".to_string(),
             })
             .next()
             .unwrap_or_default();
@@ -2588,10 +2758,43 @@ fn targets(
         .into_iter()
         .filter_map(|at| {
             let index = eligible.iter().find(|(p, _)| *p == at)?.1;
-            Some((index, alias.deployments.get(at)?.model.clone()))
+            let deployment = alias.deployments.get(at)?;
+            Some(Hop {
+                provider: index,
+                model: deployment.model.clone(),
+                timeouts: deployment.timeouts.or(alias.timeouts),
+                cooldown: Some(Duration::from_secs(alias.cooldown_seconds)),
+            })
         })
         .collect();
     Ok((chain, translate.unwrap_or(false), Some(routing)))
+}
+
+/// What a deployment's `when` may ask of a request body: its size in tokens (bytes over four), whether it offers
+/// tools, and whether any message holds an image.
+// ponytail: bytes over four, not a tokenizer; close enough to send a long prompt to a long-context model.
+fn body_facts(body: &[u8]) -> (u64, bool, bool) {
+    let tokens = u64::try_from(body.len() / 4).unwrap_or(u64::MAX);
+    let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (tokens, false, false);
+    };
+    let tools = request["tools"].as_array().is_some_and(|t| !t.is_empty());
+    fn image(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Array(items) => items.iter().any(image),
+            serde_json::Value::Object(map) => {
+                matches!(
+                    map.get("type").and_then(serde_json::Value::as_str),
+                    Some("image_url" | "image" | "input_image")
+                ) || map.values().any(image)
+            }
+            _ => false,
+        }
+    }
+    let images = ["messages", "input", "contents"]
+        .iter()
+        .any(|field| image(&request[*field]));
+    (tokens, tools, images)
 }
 
 /// A chat completions request as a messages request, and whether its client asked for usage in the stream.
@@ -2667,20 +2870,41 @@ fn provider_for(
     route: Kind,
     path: &str,
     model: &str,
-) -> Result<(usize, bool), Refusal> {
-    let Some(index) = version.providers.iter().position(|p| p.serves(model)) else {
-        // 403, as for a model the policy does not allow. Found by running Claude Code through Gantry: it replaces the
-        // message of a 404 with its own, so the caller lost the model name and the decision ID, and it sends a 400 up
-        // to six times with parts of the request removed. A 403 is shown as it is, once.
-        return Err(Refusal::new(
-            StatusCode::FORBIDDEN,
-            "unknown_model",
-            format!(
-                "Refused: no provider of this Gantry serves model \"{model}\". Check the model name, or ask a Gantry admin to add it to a provider."
-            ),
-        ));
-    };
-    fits(&version.providers[index], route, path, model).map(|translate| (index, translate))
+) -> Result<(usize, bool, String), Refusal> {
+    let (index, sent) = find_provider(version, model).ok_or_else(|| unserved(model))?;
+    fits(&version.providers[index], route, path, &sent).map(|translate| (index, translate, sent))
+}
+
+/// The provider that serves `model` and the name it is sent there by. An exact name wins over a pattern, and a
+/// pattern over `<provider>/<model>`.
+fn find_provider(version: &Snapshot, model: &str) -> Option<(usize, String)> {
+    version
+        .providers
+        .iter()
+        .position(|p| p.lists(model))
+        .or_else(|| version.providers.iter().position(|p| p.serves(model)))
+        .map(|index| (index, model.to_string()))
+        .or_else(|| {
+            let (name, rest) = model.split_once('/')?;
+            let index = version
+                .providers
+                .iter()
+                .position(|p| p.name == name && !p.models.is_empty() && p.serves(rest))?;
+            Some((index, rest.to_string()))
+        })
+}
+
+/// No provider serves the model. 403, as for a model the policy does not allow. Found by running Claude Code through
+/// Gantry: it replaces the message of a 404 with its own, so the caller lost the model name and the decision ID, and
+/// it sends a 400 up to six times with parts of the request removed. A 403 is shown as it is, once.
+fn unserved(model: &str) -> Refusal {
+    Refusal::new(
+        StatusCode::FORBIDDEN,
+        "unknown_model",
+        format!(
+            "Refused: no provider of this Gantry serves model \"{model}\". Check the model name, or ask a Gantry admin to add it to a provider."
+        ),
+    )
 }
 
 /// Whether this provider can take a request on `route` and `path`, and if so whether it is translated.
@@ -2816,7 +3040,14 @@ fn model_list(
             .providers
             .iter()
             .filter(|provider| chat(provider))
-            .flat_map(|provider| provider.models.iter().map(move |m| (m, &provider.name)))
+            // A pattern is not a model a client can pick from a list.
+            .flat_map(|provider| {
+                provider
+                    .models
+                    .iter()
+                    .filter(|m| !m.contains('*'))
+                    .map(move |m| (m, &provider.name))
+            })
             .chain(aliases(chat))
             .filter(|(model, _)| allowed(model))
             .map(|(model, provider)| {
@@ -2837,7 +3068,7 @@ fn model_list(
         .providers
         .iter()
         .filter(|provider| messages(provider))
-        .flat_map(|provider| provider.models.iter())
+        .flat_map(|provider| provider.models.iter().filter(|m| !m.contains('*')))
         .chain(aliases(messages).map(|(name, _)| name))
         .filter(|model| allowed(model))
         .map(|model| {
@@ -3073,7 +3304,10 @@ async fn handle(State(state): State<AppState>, mut request: Request) -> Response
         response = events_as_array(response);
     }
     if let Ok(value) = HeaderValue::from_str(&decision) {
-        response.headers_mut().insert(DECISION, value);
+        response.headers_mut().insert(DECISION, value.clone());
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-gantry-request-id"), value);
     }
     if let Some(tracer) = &state.tracer {
         tracer.answered(&decision, response.status().as_u16());
@@ -3442,7 +3676,9 @@ async fn limit(
     // An alias is priced, budgeted and cached as the model it is sent to first. A fallback that answers is
     // charged at its own model's price when the answer is settled.
     let plan = parts.extensions.get::<Plan>();
-    let deployed = plan.and_then(|p| p.chain.first()).map(|(_, m)| m.clone());
+    let deployed = plan
+        .and_then(|p| p.chain.first())
+        .map(|hop| hop.model.clone());
     let sent = model;
     let model = deployed.as_deref().unwrap_or(model);
     let applied = policy.applied(
@@ -3536,7 +3772,9 @@ fn prompt_cacheable(version: &Snapshot, seen: &Seen<'_>, parts: &Parts) -> bool 
                     .chain
                     .iter()
                     .chain(&plan.context)
-                    .all(|(i, _)| messages(i))
+                    .chain(&plan.content)
+                    .chain(plan.fallbacks.iter().flatten())
+                    .all(|hop| messages(&hop.provider))
                 && messages(&plan.provider)
         }
         None => seen.provider.as_ref().is_some_and(messages),
@@ -4608,22 +4846,33 @@ async fn send(
             .map_or("/", |pq| pq.as_str())
             .to_string(),
     };
-    let mut chain = plan
+    let mut chain = plan.as_ref().map_or_else(
+        || vec![Hop::plain(first, String::new())],
+        |p| p.chain.clone(),
+    );
+    // A provider's own fallback takes the same model, and its fallback's fallback after it (A, then B, then C), each
+    // provider once; an alias has its deployments and fallbacks instead. A passthrough path is that provider's own
+    // API: another provider may not have it.
+    if plan
         .as_ref()
-        .map_or_else(|| vec![(first, String::new())], |p| p.chain.clone());
-    // A provider's own fallback takes the same model; an alias has its deployments instead.
-    // A passthrough path is that provider's own API: another provider may not have it.
-    if let Some(plan) = plan
-        .as_ref()
-        .filter(|p| p.cooldown.is_none() && p.passthrough.is_none())
-        && let Some(fallback) = provider
+        .is_some_and(|p| p.cooldown.is_none() && p.passthrough.is_none())
+    {
+        let model = chain
+            .first()
+            .map(|hop| hop.model.clone())
+            .unwrap_or_default();
+        let mut at = provider;
+        while let Some(next) = at
             .fallback
             .as_ref()
             .and_then(|name| version.providers.iter().position(|p| p.name == *name))
-    {
-        chain.push((fallback, plan.model.clone()));
+            .filter(|next| !chain.iter().any(|hop| hop.provider == *next))
+        {
+            chain.push(Hop::plain(next, model.clone()));
+            at = &version.providers[next];
+        }
     }
-    let mut attempts: Vec<(String, String)> = Vec::new();
+    let mut attempts: Vec<Attempt> = Vec::new();
     let mut sent = None;
     let try_chain = Tries {
         state,
@@ -4633,7 +4882,7 @@ async fn send(
         route: &route,
         plan: plan.as_ref(),
     };
-    let (mut last, mut served, mut busy) = try_chain
+    let mut tried = try_chain
         .run(&chain, &mut attempts, &mut sent, &mut admitted)
         .await?;
     // A named fallback for a prompt too long for the model's context, or one refused under the provider's content
@@ -4641,7 +4890,7 @@ async fn send(
     if let Some(plan) = plan
         .as_ref()
         .filter(|p| !p.context.is_empty() || !p.content.is_empty())
-        && let Some(Ok(response)) = last.as_mut()
+        && let Some(Ok(response)) = tried.last.as_mut()
         && response.status().is_client_error()
     {
         let body = whole(std::mem::take(response.body_mut())).await?;
@@ -4652,11 +4901,37 @@ async fn send(
         };
         *response.body_mut() = Body::from(body);
         if !next.is_empty() {
-            (last, served, busy) = try_chain
+            tried = try_chain
                 .run(next, &mut attempts, &mut sent, &mut admitted)
                 .await?;
         }
     }
+    // An alias's fallbacks, in turn, while the last answer is a failure its `fallback_on` names.
+    if let Some(plan) = plan.as_ref() {
+        for next in &plan.fallbacks {
+            let Some(why) = failure_of(&mut tried.last, &plan.fallback_on).await? else {
+                break;
+            };
+            if !plan.fallback_on.contains(&why) {
+                break;
+            }
+            tried = try_chain
+                .run(next, &mut attempts, &mut sent, &mut admitted)
+                .await?;
+        }
+    }
+    let Tried {
+        last,
+        served,
+        busy,
+        view,
+    } = tried;
+    // An answer from a provider of the other API is not kept in the cache: a hit is handed back as the first
+    // deployment's provider answers.
+    if let (Some(admitted), Some(_)) = (admitted.as_mut(), &view) {
+        admitted.not_cached();
+    }
+    let plan_used = view.as_ref().or(plan.as_ref());
     let (served, served_model) = served;
     let answered = Instant::now();
     if attempts.len() > 1 {
@@ -4664,15 +4939,19 @@ async fn send(
     }
     let response = last.unwrap_or_else(|| Err(unknown_route()))?;
     let response = native(&version.providers[served], response).await?;
+    let price = version
+        .policy
+        .as_ref()
+        .and_then(|p| gantry_core::usage::price_for(&served_model, p.prices()));
     // Usage is read in the provider's format (Bedrock's already decoded) before any translation, and settled with
     // the provider that answered, a fallback included.
     let response = match admitted {
         Some(mut admitted) => {
-            let price = version
-                .policy
-                .as_ref()
-                .and_then(|p| gantry_core::usage::price_for(&served_model, p.prices()));
-            admitted.served_by(&version.providers[served].name, &served_model, price);
+            admitted.served_by(
+                &version.providers[served].name,
+                &served_model,
+                price.clone(),
+            );
             spend::Metered::wrap(response, admitted)
         }
         None => response,
@@ -4690,12 +4969,31 @@ async fn send(
     let mut response = for_caller(
         version.providers[served].kind,
         &version.providers[served].name,
-        plan.as_ref(),
+        plan_used,
         decision,
         response,
     )
     .await?;
     strip_hop_by_hop(response.headers_mut());
+    let served_name = &version.providers[served].name;
+    let named = [
+        ("x-gantry-provider", served_name.clone()),
+        ("x-gantry-model", served_model.clone()),
+        (
+            "x-gantry-deployment",
+            alias::label(served_name, &served_model),
+        ),
+        ("x-gantry-attempts", attempts.len().max(1).to_string()),
+    ];
+    for (name, value) in named {
+        if let Ok(value) = HeaderValue::from_str(&value)
+            && !served_model.is_empty()
+        {
+            response
+                .headers_mut()
+                .insert(HeaderName::from_static(name), value);
+        }
+    }
     // Time from the request reaching Gantry's handler to it leaving for the provider, plus the time to hand the
     // answer back: identifying, deciding, recording. It does not cover reading the request off the socket or
     // streaming the answer, so the bench reads it as a breakdown and gates on what the client sees.
@@ -4709,10 +5007,211 @@ async fn send(
             .headers_mut()
             .append(HeaderName::from_static("server-timing"), value);
     }
+    let mut response = match price {
+        Some(price) => with_cost(response, &price, bytes.len()).await,
+        None => response,
+    };
     if let Some(check) = answer_check {
         response.extensions_mut().insert(check);
     }
     Ok(response)
+}
+
+/// The most of an answer read before its headers go, to name its exact cost in `x-gantry-cost-usd`.
+const COST_READ_BYTES: u64 = MIB as u64;
+
+/// The answer with `x-gantry-cost-usd`. A whole (not streamed) answer whose length is known, up to
+/// `COST_READ_BYTES`, is read first, so the header is its cost by the usage it reports. A stream, an answer of
+/// unknown length or a larger one is not held back: the header is then the prompt's cost alone, estimated as its bytes over four in tokens, and the exact cost is in the usage
+/// record.
+async fn with_cost(
+    response: Response,
+    price: &gantry_core::usage::Price,
+    prompt: usize,
+) -> Response {
+    let (parts, mut body) = response.into_parts();
+    let mut usd = None;
+    let mut read: Vec<Bytes> = Vec::new();
+    let streamed = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/event-stream"));
+    let mut whole = false;
+    // Only an answer that says its length is read: one that does not may be held open (a long poll, a slow
+    // answer), and reading it would hold back its headers and end its holds on parallel limits early.
+    let sized = http_body::Body::size_hint(&body)
+        .exact()
+        .is_some_and(|n| n <= COST_READ_BYTES);
+    if !streamed && sized {
+        let mut size = 0u64;
+        loop {
+            match body.frame().await {
+                None => {
+                    whole = true;
+                    break;
+                }
+                Some(Ok(frame)) => {
+                    if let Ok(data) = frame.into_data() {
+                        size += data.len() as u64;
+                        read.push(data);
+                    }
+                    if size > COST_READ_BYTES {
+                        break;
+                    }
+                }
+                Some(Err(err)) => {
+                    // The answer broke off: the caller gets what was read, then the same break.
+                    eprintln!(
+                        "gantry: the provider's answer broke off while it was read for its cost: {err}"
+                    );
+                    let failed = futures_util::stream::iter(
+                        read.into_iter().map(Ok).chain(std::iter::once(Err(err))),
+                    );
+                    return Response::from_parts(parts, Body::from_stream(failed));
+                }
+            }
+        }
+        if whole {
+            let bytes: Bytes = read.concat().into();
+            usd = gantry_core::usage::Usage::from_body(&bytes).map(|u| price.cost_usd(&u));
+            read = vec![bytes];
+        }
+    }
+    let usd = usd.unwrap_or_else(|| {
+        let tokens = u64::try_from(prompt / 4).unwrap_or(u64::MAX);
+        price.cost_usd(&gantry_core::usage::Usage {
+            input: tokens,
+            ..gantry_core::usage::Usage::default()
+        })
+    });
+    let mut response = if streamed {
+        Response::from_parts(parts, body)
+    } else if whole {
+        Response::from_parts(parts, Body::from(read.concat()))
+    } else {
+        use futures_util::StreamExt;
+        let rest =
+            futures_util::stream::iter(read.into_iter().map(Ok)).chain(body.into_data_stream());
+        Response::from_parts(parts, Body::from_stream(rest))
+    };
+    let text = format!("{usd:.9}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if let Ok(value) = HeaderValue::from_str(text) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-gantry-cost-usd"), value);
+    }
+    response
+}
+
+/// One attempt, for the attempts record: the deployment (an alias's) or provider tried, how it answered, and the
+/// fingerprint of the pool key it was sent with.
+struct Attempt {
+    who: String,
+    outcome: String,
+    key: Option<String>,
+}
+
+/// Which failure `fallback_on` would name in the last outcome of a chain, if it is one. An error answer is read
+/// whole only when a context window or content policy refusal is among those `fallback_on` names.
+async fn failure_of(
+    last: &mut Option<Result<Response, Refusal>>,
+    on: &[gantry_core::config::FallbackOn],
+) -> Result<Option<gantry_core::config::FallbackOn>, Refusal> {
+    use gantry_core::config::FallbackOn;
+    Ok(match last {
+        None => None,
+        Some(Err(refusal)) => match refusal.code {
+            "upstream_timeout" => Some(FallbackOn::Timeout),
+            "upstream_unreachable" | "upstream_failed" => Some(FallbackOn::Unreachable),
+            _ => None,
+        },
+        Some(Ok(response)) => {
+            let status = response.status();
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                Some(FallbackOn::RateLimit)
+            } else if status.is_server_error() {
+                Some(FallbackOn::ServerError)
+            } else if status.is_client_error()
+                && on
+                    .iter()
+                    .any(|o| matches!(o, FallbackOn::ContextWindow | FallbackOn::ContentPolicy))
+            {
+                let body = whole(std::mem::take(response.body_mut())).await?;
+                let why = match alias::refused(&body) {
+                    Some(alias::Refused::ContextWindow) => Some(FallbackOn::ContextWindow),
+                    Some(alias::Refused::ContentPolicy) => Some(FallbackOn::ContentPolicy),
+                    None => None,
+                };
+                *response.body_mut() = Body::from(body);
+                why
+            } else {
+                None
+            }
+        }
+    })
+}
+
+/// The time limits of one attempt, from its deployment, alias, provider and the gateway, in that order.
+#[derive(Clone, Copy, Debug)]
+struct Limits {
+    connect: Duration,
+    first_byte: Duration,
+    total: Duration,
+    idle: Duration,
+}
+
+impl AppState {
+    fn limits(&self, provider: &Upstream, hop: &Hop) -> Limits {
+        let set = hop.timeouts.or(provider.timeouts);
+        let ms =
+            |value: Option<u64>, default: Duration| value.map_or(default, Duration::from_millis);
+        let total = ms(set.total_ms, self.timeouts.total);
+        Limits {
+            connect: ms(set.connect_ms, self.timeouts.connect),
+            first_byte: ms(set.first_byte_ms, self.timeouts.first_byte).min(total),
+            total,
+            idle: ms(set.idle_ms, self.timeouts.idle),
+        }
+    }
+
+    /// The pooled client whose connections give up after `connect`. One per distinct setting, made on first use.
+    fn client_for(&self, connect: Duration) -> Client<HttpsConnector<HttpConnector>, Body> {
+        if connect == self.timeouts.connect {
+            return self.client.clone();
+        }
+        let mut clients = self
+            .clients
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clients
+            .entry(connect)
+            .or_insert_with(|| client_with(connect))
+            .clone()
+    }
+}
+
+/// A client with its own connection pool, whose connections give up after `connect`.
+fn client_with(connect: Duration) -> Client<HttpsConnector<HttpConnector>, Body> {
+    let mut connector = HttpConnector::new();
+    connector.set_connect_timeout(Some(connect));
+    connector.enforce_http(false);
+    let connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_or_http()
+        .enable_http1()
+        .wrap_connector(connector);
+    Client::builder(TokioExecutor::new()).build(connector)
+}
+
+/// "30 seconds", or "250 ms" for a limit that is not whole seconds.
+fn wait_text(limit: Duration) -> String {
+    if limit.subsec_millis() == 0 {
+        format!("{} seconds", limit.as_secs())
+    } else {
+        format!("{} ms", limit.as_millis())
+    }
 }
 
 /// What every attempt at one request shares.
@@ -4725,97 +5224,313 @@ struct Tries<'a> {
     plan: Option<&'a Plan>,
 }
 
-/// The last outcome of a chain, which deployment gave it (provider position and model), and, for an alias, the
-/// count that keeps that deployment busy.
-type Tried = (
-    Option<Result<Response, Refusal>>,
-    (usize, String),
-    Option<alias::Busy>,
-);
+/// The last outcome of a chain, which deployment gave it (provider position and model), for an alias the count
+/// that keeps that deployment busy, and, when that deployment took the request translated differently from the
+/// first (a fallback of the other API), the plan it was sent and is answered by.
+struct Tried {
+    last: Option<Result<Response, Refusal>>,
+    served: (usize, String),
+    busy: Option<alias::Busy>,
+    view: Option<Plan>,
+}
 
 impl Tries<'_> {
+    /// How this request goes to `provider`: as planned, or, for a provider of the other API (or a Google one behind
+    /// a plain chat provider), its own plan, its body translated, and its route. `None` keeps the plan as it is.
+    fn view(&self, provider: &Upstream) -> Result<Option<(Plan, Bytes, String)>, Refusal> {
+        let Some(plan) = self.plan.filter(|p| p.passthrough.is_none()) else {
+            return Ok(None);
+        };
+        let path = self.parts.uri.path();
+        if path != CHAT && path != MESSAGES {
+            return Ok(None);
+        }
+        let caller = if path == MESSAGES {
+            Kind::Anthropic
+        } else {
+            Kind::OpenAi
+        };
+        let api = provider.kind.api();
+        let translated =
+            caller == Kind::OpenAi && (api == Kind::Anthropic || provider.kind.google());
+        let from_messages = caller == Kind::Anthropic && api == Kind::OpenAi;
+        if plan.body_api == api
+            && plan.translated.is_some() == translated
+            && plan.from_messages == from_messages
+        {
+            return Ok(None);
+        }
+        let bytes = match (plan.body_api == api, api) {
+            (true, _) => self.bytes.clone(),
+            (false, Kind::Anthropic) => to_messages(self.bytes)?.0,
+            (false, _) => to_chat_request(self.bytes)?,
+        };
+        let mut view = plan.clone();
+        view.translated = if translated {
+            Some(plan.include_usage)
+        } else if from_messages && provider.kind.google() {
+            Some(true)
+        } else {
+            None
+        };
+        view.from_messages = from_messages;
+        view.body_api = api;
+        let route = if api == Kind::Anthropic {
+            MESSAGES
+        } else {
+            CHAT
+        };
+        Ok(Some((view, bytes, route.to_string())))
+    }
+
     /// Tries each deployment of `chain` in turn, each up to its provider's retries, until one answers with
-    /// something other than a connection failure, a timeout, a 429 or a 5xx.
+    /// something other than a connection failure, a timeout, a 429 or a 5xx. A provider with a key pool moves to its
+    /// next key on a 401, 403 or 429 before any of that counts.
     async fn run(
         &self,
-        chain: &[(usize, String)],
-        attempts: &mut Vec<(String, String)>,
+        chain: &[Hop],
+        attempts: &mut Vec<Attempt>,
         sent: &mut Option<Instant>,
         admitted: &mut Option<spend::Admitted>,
     ) -> Result<Tried, Refusal> {
-        let cooldown = self.plan.and_then(|p| p.cooldown);
-        let mut tried: Tried = (None, chain.first().cloned().unwrap_or_default(), None);
+        let mut tried = Tried {
+            last: None,
+            served: chain
+                .first()
+                .map(|hop| (hop.provider, hop.model.clone()))
+                .unwrap_or_default(),
+            busy: None,
+            view: None,
+        };
         let caller = self
             .plan
             .filter(|p| p.caller_key.is_some())
             .map(|p| p.provider);
-        'providers: for (index, model) in chain {
+        'providers: for hop in chain {
             // The caller's key is theirs for the provider they asked for: it never goes to a fallback elsewhere.
-            if caller.is_some_and(|first| first != *index) {
+            if caller.is_some_and(|first| first != hop.provider) {
                 continue;
             }
-            let provider = &self.version.providers[*index];
-            let label = alias::label(&provider.name, model);
+            let provider = &self.version.providers[hop.provider];
+            let label = alias::label(&provider.name, &hop.model);
+            let who = if hop.cooldown.is_some() {
+                label.clone()
+            } else {
+                provider.name.clone()
+            };
+            // A body that cannot be carried to this provider's API skips it, recorded, and the chain goes on.
+            let (view, bytes, route) = match self.view(provider) {
+                Ok(Some((view, bytes, route))) => (Some(view), bytes, route),
+                Ok(None) => (None, self.bytes.clone(), self.route.to_string()),
+                Err(refusal) => {
+                    attempts.push(Attempt {
+                        who,
+                        outcome: refusal.code.to_string(),
+                        key: None,
+                    });
+                    tried.last.get_or_insert(Err(refusal));
+                    continue;
+                }
+            };
+            let plan = view.as_ref().or(self.plan);
+            let limits = self.state.limits(provider, hop);
+            let ids: Vec<String> = provider.pool.iter().map(|(_, id)| id.clone()).collect();
             for retry in 0..=provider.retries {
                 if retry > 0 {
                     // ponytail: 200 ms doubling (100 << retry, from retry 1) with no jitter and no Retry-After; add
                     // both if providers ask for it.
                     tokio::time::sleep(Duration::from_millis(100 << retry.min(5))).await;
                 }
-                let request = outbound(
-                    provider, self.parts, self.bytes, self.route, self.plan, model,
-                )?;
-                let started = Instant::now();
-                sent.get_or_insert(started);
-                let busy = cooldown.map(|_| self.state.pool.busy(&label));
-                // Dropped while waiting here (the caller hung up), the request is charged: the provider has it.
-                if let Some(admitted) = admitted.as_mut() {
-                    admitted.forwarded(true);
-                }
-                let outcome = attempt(self.state, provider, request).await;
-                // A request that never reached an answer is not charged; an answer is settled when it is passed on.
-                if let Some(admitted) = admitted.as_mut() {
-                    admitted.forwarded(outcome.is_ok());
-                }
-                let (again, outcome_word) = match &outcome {
-                    Ok(response) => {
-                        let status = response.status();
-                        (
-                            status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error(),
-                            status.as_u16().to_string(),
-                        )
-                    }
-                    Err(refusal) => (
-                        refusal.code.starts_with("upstream_"),
-                        refusal.code.to_string(),
-                    ),
-                };
-                self.state
-                    .metrics
-                    .attempted(&provider.name, &outcome_word, started.elapsed());
-                attempts.push((
-                    if cooldown.is_some() {
-                        label.clone()
+                loop {
+                    let key = if plan.is_some_and(|p| p.caller_key.is_some()) {
+                        None
                     } else {
-                        provider.name.clone()
-                    },
-                    outcome_word,
-                ));
-                tried = (Some(outcome), (*index, model.clone()), busy);
-                if let Some(cooldown) = cooldown {
-                    if again {
-                        self.state.pool.failed(&label, cooldown);
-                    } else {
-                        self.state.pool.answered(&label);
-                        self.state.pool.observed(&label, started.elapsed());
+                        self.state
+                            .pool
+                            .key(&provider.name, &ids, provider.least_used_key)
+                    };
+                    let request =
+                        outbound(provider, self.parts, &bytes, &route, plan, &hop.model, key)?;
+                    let started = Instant::now();
+                    sent.get_or_insert(started);
+                    let busy = hop.cooldown.map(|_| self.state.pool.busy(&label));
+                    // Dropped while waiting here (the caller hung up), the request is charged: the provider has it.
+                    if let Some(admitted) = admitted.as_mut() {
+                        admitted.forwarded(true);
                     }
-                }
-                if !again {
-                    break 'providers;
+                    let outcome = attempt_within(self.state, provider, request, &limits).await;
+                    // A request that never reached an answer is not charged; an answer is settled when it is passed on.
+                    if let Some(admitted) = admitted.as_mut() {
+                        admitted.forwarded(outcome.is_ok());
+                    }
+                    let (again, outcome_word) = match &outcome {
+                        Ok(response) => {
+                            let status = response.status();
+                            (
+                                status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error(),
+                                status.as_u16().to_string(),
+                            )
+                        }
+                        Err(refusal) => (
+                            refusal.code.starts_with("upstream_"),
+                            refusal.code.to_string(),
+                        ),
+                    };
+                    self.state
+                        .metrics
+                        .attempted(&provider.name, &outcome_word, started.elapsed());
+                    let key_id = key.and_then(|k| ids.get(k).cloned());
+                    attempts.push(Attempt {
+                        who: who.clone(),
+                        outcome: outcome_word.clone(),
+                        key: key_id.clone(),
+                    });
+                    // A pool key refused (401, 403) or out of quota (429) is set aside, and the next key is tried at
+                    // once, before retries, cooldowns and fallbacks count it.
+                    if let (Some(k), Some(id), Ok(response)) = (key, &key_id, &outcome) {
+                        let retry_after = response
+                            .headers()
+                            .get(header::RETRY_AFTER)
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.trim().parse::<u64>().ok());
+                        if self.state.pool.key_answered(
+                            &provider.name,
+                            &ids,
+                            k,
+                            response.status(),
+                            retry_after,
+                        ) {
+                            self.state
+                                .metrics
+                                .key_switched(&provider.name, &outcome_word);
+                            eprintln!(
+                                "gantry: provider \"{}\" answered {outcome_word} to key {id}; it is set aside and the next key of the pool is tried.",
+                                provider.name
+                            );
+                            continue;
+                        }
+                    }
+                    if let Some(cooldown) = hop.cooldown {
+                        if let Ok(response) = &outcome {
+                            self.state.pool.rate_limits(&label, response.headers());
+                        }
+                        if again {
+                            self.state.pool.failed(&label, cooldown);
+                        } else {
+                            self.state.pool.answered(&label);
+                            self.state.pool.observed(&label, started.elapsed());
+                        }
+                    }
+                    // The rest of the answer is held to the total and idle limits; one that stalls counts as a
+                    // failure of its deployment.
+                    let stall = hop
+                        .cooldown
+                        .map(|cooldown| (self.state.pool.clone(), label.clone(), cooldown));
+                    let outcome = outcome.map(|response| {
+                        response.map(|body| {
+                            Body::new(Deadline::new(body, started, &limits, stall, &provider.name))
+                        })
+                    });
+                    tried = Tried {
+                        last: Some(outcome),
+                        served: (hop.provider, hop.model.clone()),
+                        busy,
+                        view: view.clone(),
+                    };
+                    if !again {
+                        break 'providers;
+                    }
+                    break;
                 }
             }
         }
         Ok(tried)
+    }
+}
+
+/// An answer's body held to its total and idle limits. When one passes, the body ends in an error (the caller's
+/// stream breaks, as a provider's broken stream would) and, for an alias's deployment, the deployment cools down.
+struct Deadline {
+    inner: Body,
+    idle: Duration,
+    until: tokio::time::Instant,
+    timer: std::pin::Pin<Box<tokio::time::Sleep>>,
+    stall: Option<(Arc<alias::Pool>, String, Duration)>,
+    provider: String,
+    done: bool,
+}
+
+impl Deadline {
+    fn new(
+        inner: Body,
+        started: Instant,
+        limits: &Limits,
+        stall: Option<(Arc<alias::Pool>, String, Duration)>,
+        provider: &str,
+    ) -> Self {
+        let until = tokio::time::Instant::from_std(started + limits.total);
+        let next = until.min(tokio::time::Instant::now() + limits.idle);
+        Deadline {
+            inner,
+            idle: limits.idle,
+            until,
+            timer: Box::pin(tokio::time::sleep_until(next)),
+            stall,
+            provider: provider.to_string(),
+            done: false,
+        }
+    }
+}
+
+impl http_body::Body for Deadline {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, axum::Error>>> {
+        use std::task::Poll;
+        if self.done {
+            return Poll::Ready(None);
+        }
+        if let Poll::Ready(frame) = std::pin::Pin::new(&mut self.inner).poll_frame(cx) {
+            if frame.is_none() {
+                self.done = true;
+            } else {
+                let next = self.until.min(tokio::time::Instant::now() + self.idle);
+                self.timer.as_mut().reset(next);
+            }
+            return Poll::Ready(frame);
+        }
+        if self.timer.as_mut().poll(cx).is_pending() {
+            return Poll::Pending;
+        }
+        self.done = true;
+        let which = if tokio::time::Instant::now() >= self.until {
+            "its total time limit"
+        } else {
+            "its idle limit between two pieces of the answer"
+        };
+        eprintln!(
+            "gantry: provider \"{}\" went past {which}; the answer was cut off.",
+            self.provider
+        );
+        if let Some((pool, label, cooldown)) = self.stall.take() {
+            pool.failed(&label, cooldown);
+        }
+        Poll::Ready(Some(Err(axum::Error::new(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("the provider went past {which}"),
+        )))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.done || self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
     }
 }
 
@@ -4854,6 +5569,7 @@ fn outbound(
     route: &str,
     plan: Option<&Plan>,
     model: &str,
+    pool_key: Option<usize>,
 ) -> Result<axum::http::Request<Body>, Refusal> {
     // The body names the model the caller sent. Sent to another, it names that one.
     let rewritten;
@@ -5018,7 +5734,10 @@ fn outbound(
                 "Refused: x-gantry-provider-key holds a character that cannot go in an HTTP header. Send your provider key alone.",
             )
         })?),
-        None => provider.key.clone(),
+        None => match pool_key.and_then(|k| provider.pool.get(k)) {
+            Some((header, _)) => Some(header.clone()),
+            None => provider.key.clone(),
+        },
     };
     if let Some((name, value)) = key {
         headers.insert(name, value);
@@ -5156,15 +5875,147 @@ fn sign_for_bedrock(
     Ok(())
 }
 
-/// One attempt: sends the request and waits for the provider to start answering.
+/// Checks each deployment that has `probe:` on its turn, so one that is down cools down before a caller is sent to
+/// it, and one that is back is used again. The cooldown is the alias's, shared through the store when there is one,
+/// so every replica passes over a deployment any replica found down.
+fn spawn_probes(state: std::sync::Weak<AppState>) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    runtime.spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            tick.tick().await;
+            let Some(state) = state.upgrade() else {
+                return;
+            };
+            let version = state.version();
+            for alias in &version.aliases {
+                for deployment in &alias.deployments {
+                    let Some(probe) = &deployment.probe else {
+                        continue;
+                    };
+                    let label = alias::label(&deployment.provider, &deployment.model);
+                    if !state
+                        .pool
+                        .probe_due(&label, Duration::from_secs(probe.every_seconds))
+                    {
+                        continue;
+                    }
+                    let Some(provider) = version
+                        .providers
+                        .iter()
+                        .position(|p| p.name == deployment.provider)
+                    else {
+                        continue;
+                    };
+                    // Marked as sent now, so a slow probe is not sent again on the next tick.
+                    state.pool.probed(&label, true, "sent".into());
+                    let hop = Hop {
+                        provider,
+                        model: deployment.model.clone(),
+                        timeouts: deployment.timeouts.or(alias.timeouts),
+                        cooldown: Some(Duration::from_secs(alias.cooldown_seconds)),
+                    };
+                    let (state, version, chat) = (state.clone(), version.clone(), probe.chat);
+                    tokio::spawn(async move {
+                        probe_once(&state, &version, &hop, chat).await;
+                    });
+                }
+            }
+        }
+    });
+}
+
+/// One health probe of a deployment: its provider's model list, or a one-token request. Any answer under 500 other
+/// than 429 means it is up (a 400 is still an answer); no answer, a 429 or a 5xx means it is down.
+async fn probe_once(state: &AppState, version: &Snapshot, hop: &Hop, chat: bool) {
+    let Some(provider) = version.providers.get(hop.provider) else {
+        return;
+    };
+    let label = alias::label(&provider.name, &hop.model);
+    let (method, route, body) = if !chat {
+        (Method::GET, MODELS.to_string(), Bytes::new())
+    } else if provider.kind.api() == Kind::Anthropic {
+        (
+            Method::POST,
+            MESSAGES.to_string(),
+            Bytes::from(
+                serde_json::json!({"model": hop.model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]})
+                    .to_string(),
+            ),
+        )
+    } else {
+        (
+            Method::POST,
+            CHAT.to_string(),
+            Bytes::from(
+                serde_json::json!({"model": hop.model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]})
+                    .to_string(),
+            ),
+        )
+    };
+    let Ok(request) = axum::http::Request::builder()
+        .method(method)
+        .uri(route.as_str())
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("anthropic-version", "2023-06-01")
+        .body(())
+    else {
+        return;
+    };
+    let (parts, ()) = request.into_parts();
+    let ids: Vec<String> = provider.pool.iter().map(|(_, id)| id.clone()).collect();
+    let key = state
+        .pool
+        .key(&provider.name, &ids, provider.least_used_key);
+    let outcome = match outbound(provider, &parts, &body, &route, None, &hop.model, key) {
+        Ok(request) => attempt_within(state, provider, request, &state.limits(provider, hop)).await,
+        Err(refusal) => Err(refusal),
+    };
+    let (up, word) = match &outcome {
+        Ok(response) => {
+            let status = response.status();
+            (
+                status != StatusCode::TOO_MANY_REQUESTS && !status.is_server_error(),
+                status.as_u16().to_string(),
+            )
+        }
+        Err(refusal) => (false, refusal.code.to_string()),
+    };
+    state.pool.probed(&label, up, word.clone());
+    if let Some(cooldown) = hop.cooldown {
+        if up {
+            state.pool.answered(&label);
+        } else {
+            eprintln!(
+                "gantry: the health probe of {label} got {word}; it is passed over until it answers again."
+            );
+            state.pool.failed(&label, cooldown);
+        }
+    }
+}
+
+/// One attempt with the provider's own time limits, for requests that are not an alias's (batches).
 async fn attempt(
     state: &AppState,
     provider: &Upstream,
     request: axum::http::Request<Body>,
 ) -> Result<Response, Refusal> {
+    let limits = state.limits(provider, &Hop::default());
+    attempt_within(state, provider, request, &limits).await
+}
+
+/// One attempt: sends the request and waits for the provider to start answering, within `limits`.
+async fn attempt_within(
+    state: &AppState,
+    provider: &Upstream,
+    request: axum::http::Request<Body>,
+    limits: &Limits,
+) -> Result<Response, Refusal> {
     let upstream = &provider.url;
-    let outcome =
-        tokio::time::timeout(state.timeouts.first_byte, state.client.request(request)).await;
+    let client = state.client_for(limits.connect);
+    let outcome = tokio::time::timeout(limits.first_byte, client.request(request)).await;
     match outcome {
         Ok(Ok(response)) => Ok(response.map(Body::new)),
         Ok(Err(err)) => {
@@ -5184,16 +6035,13 @@ async fn attempt(
             Err(Refusal::new(StatusCode::BAD_GATEWAY, code, message))
         }
         Err(_) => {
-            eprintln!(
-                "gantry: the provider at {upstream} sent nothing for {} seconds",
-                state.timeouts.first_byte.as_secs()
-            );
+            let wait = wait_text(limits.first_byte);
+            eprintln!("gantry: the provider at {upstream} sent nothing for {wait}");
             Err(Refusal::new(
                 StatusCode::GATEWAY_TIMEOUT,
                 "upstream_timeout",
                 format!(
-                    "The provider did not start answering within {} seconds. Try again. If it keeps happening, tell your Gantry admin.",
-                    state.timeouts.first_byte.as_secs()
+                    "The provider did not start answering within {wait}. Try again. If it keeps happening, tell your Gantry admin."
                 ),
             ))
         }
@@ -5202,13 +6050,19 @@ async fn attempt(
 
 /// Writes which providers were tried and how each answered, after the request record that let it through.
 /// That record is written before anything is forwarded, so it cannot know; this one follows it, with the same ID.
-fn record_attempts(state: &AppState, decision: &str, attempts: &[(String, String)]) {
+fn record_attempts(state: &AppState, decision: &str, attempts: &[Attempt]) {
     let Some(audit) = &state.audit else {
         return;
     };
     let list: Vec<serde_json::Value> = attempts
         .iter()
-        .map(|(provider, outcome)| serde_json::json!({ "provider": provider, "outcome": outcome }))
+        .map(|a| {
+            let mut entry = serde_json::json!({ "provider": a.who, "outcome": a.outcome });
+            if let Some(key) = &a.key {
+                entry["key"] = key.as_str().into();
+            }
+            entry
+        })
         .collect();
     let mut record = serde_json::Map::new();
     record.insert("event".into(), "attempts".into());

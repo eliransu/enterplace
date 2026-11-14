@@ -1,0 +1,54 @@
+---
+title: Wildcard models
+description: Let a provider serve model names that match a pattern, so a new model is usable without a policy edit, and keep budgets closed.
+sidebar:
+  order: 10
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A provider's `models` and a rule's `models` may hold patterns. `*` stands for any run of characters. A model a provider releases tomorrow reaches it the day it ships, while budgets still refuse what they cannot price.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: ["gpt-*", "o*"]
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_API_KEY
+    models: ["claude-*"]
+rules:
+  - name: engineering
+    principals: { team: engineering }
+    models: ["gpt-*", "anthropic/*"]
+```
+
+## Matching
+
+- A provider that lists a model by its exact name wins over one whose pattern matches it. Between two patterns, the provider listed first wins.
+- A caller may send `<provider>/<model>`, such as `anthropic/claude-sonnet-5-5`. When no provider lists that name, it goes to the provider named before the slash if that provider serves the rest, and the provider is sent `claude-sonnet-5-5`.
+- A rule's patterns match the name the caller sent: `anthropic/*` allows every `anthropic/...` name, `gpt-*` every name that starts with `gpt-`.
+- `GET /v1/models` lists exact names and aliases only; a pattern is not offered as a model.
+- `"*"` alone is still refused in a provider's `models`: it belongs in a rule, where it means every model.
+
+## Prices and budgets
+
+A model reached through a pattern is priced like any other: from `prices:` in the policy, then the built-in price map. `gantry check` cannot know every name a pattern will reach, so it does not ask for their prices. Instead, a request under a dollar budget for a model with no price is refused at once with `no_price`, before anything is sent. A pattern never lets spend escape a budget.
+
+<Aside type="tip">
+Add a price under `prices:` for a new model before a budgeted team uses it. Requests without a budget go through priced or not, and their usage records carry the tokens.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Pricing" href="/routing/pricing/" description="Where prices come from." />
+	<LinkCard title="Budgets" href="/governance/budgets-and-rate-limits/" description="What a budget refuses." />
+</CardGrid>

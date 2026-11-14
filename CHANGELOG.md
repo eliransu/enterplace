@@ -20,6 +20,35 @@ one repository. How a release is made: RELEASING.md.
   request is checked: it is never forwarded, traced or recorded. Refusals there use Google's error shape. A body
   naming another model than the path is refused with `ambiguous_model`.
 
+### Routing resilience
+
+- Timeouts per provider, alias and deployment: `timeouts: { connect_ms, first_byte_ms, total_ms, idle_ms }`, each
+  looked up deployment, alias, provider, then the gateway's default (5 s, 120 s, 30 min, 5 min). A connect or
+  first-byte timeout moves the request on and cools the deployment down; a total or idle timeout cuts the answer off
+  and cools it down.
+- Health probes: `probe: { every_seconds, with: models | chat }` on an alias's deployment checks it in the background
+  and cools it down when it fails, shared through the store's cooldowns. Shown in `/readyz` under
+  `checks.deployments` and as `gantry_deployment_up`.
+- Key pools: `keys: [{ key_env }, { credential }]` and `key_balance: round_robin | least_used` on a provider. A key
+  answered 401 or 403 is set aside for an hour, one answered 429 rests for its Retry-After; the request moves to the
+  next key at once. Each switch is in the attempts record (`key`, a hash prefix) and
+  `gantry_provider_key_switches_total`.
+- Fallbacks: a provider's `fallback` chain is followed hop by hop (A, then B, then C). An alias's `fallbacks` and
+  `fallback_on` (`rate_limit`, `server_error`, `timeout`, `unreachable`, `context_window`, `content_policy`) try
+  other models or aliases in turn, across APIs (chat to messages and back, translated as sent). The caller's rule
+  must allow each fallback by name.
+- Conditional routing: `when:` on a deployment keeps it for requests by team, tag, customer, prompt size, tools,
+  images or a header.
+- Rate-limit-aware routing: a deployment whose provider says less than 5% of a rate limit is left goes after the
+  others, under every balance (OpenAI `x-ratelimit-*`, Anthropic `anthropic-ratelimit-*`).
+- `balance: adaptive` with `weights: { latency, errors, cost }`: p90 latency, a moving error rate and price, scaled
+  and weighted.
+- Wildcard models: `*` patterns in a provider's and a rule's `models`, and `<provider>/<model>` names. A budgeted
+  request for an unpriced model is refused with `no_price`, so a pattern never escapes a budget.
+- Answer headers: `x-gantry-request-id` on every answer, and `x-gantry-provider`, `x-gantry-model`,
+  `x-gantry-deployment`, `x-gantry-attempts` and `x-gantry-cost-usd` on forwarded ones (a stream's cost is the
+  prompt's estimate).
+
 ### Replicas share routing and the dry run
 
 - With a store, session affinity pins and `lowest_latency` measurements are shared: every replica pins a coding

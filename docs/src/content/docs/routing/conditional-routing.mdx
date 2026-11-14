@@ -1,0 +1,78 @@
+---
+title: Conditional routing
+description: Send a request to a deployment by its team, tag, customer, prompt size, tools, images or a header.
+sidebar:
+  order: 9
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A deployment with `when:` is kept for requests that meet its conditions. Send long prompts to a long-context model, tool calls to a model that is good at them, or a paying tier to a dedicated deployment.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o, gpt-4o-mini, gpt-4.1]
+aliases:
+  - name: smart
+    deployments:
+      - { provider: openai, model: gpt-4o-mini }
+      - provider: openai
+        model: gpt-4.1
+        when: { min_prompt_tokens: 100000 }
+      - provider: openai
+        model: gpt-4o
+        when: { tools: true }
+      - provider: openai
+        model: gpt-4o
+        when: { header: { x-tier: gold }, customer: acme }
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [smart]
+    customers: ["*"]
+```
+
+## Conditions
+
+Every condition written must hold.
+
+| Condition | Type | Matches when |
+|---|---|---|
+| `team` | string | The caller's team is this one. |
+| `tag` | string | The request carries this [tag](/routing/strategies/#tags-and-teams-pick-deployments). |
+| `customer` | string | The request is for this [customer](/governance/keys/). |
+| `min_prompt_tokens` | integer | The request body is at least this many tokens, counted as its bytes over four. |
+| `max_prompt_tokens` | integer | The request body is at most this many tokens, counted the same way. |
+| `tools` | boolean | The request offers tools (`true`) or none (`false`). |
+| `images` | boolean | A message holds an image (`image_url`, `image` or `input_image` content), or none. |
+| `header` | map | One request header and the exact value it must have, for example `{ x-tier: gold }`. |
+
+`gantry check` refuses an empty `when`, a `header` with more than one entry, a `min_prompt_tokens` above `max_prompt_tokens`, and `when` beside `for` on one deployment.
+
+## Behavior
+
+Conditions work as [`for:`](/routing/strategies/#tags-and-teams-pick-deployments) does:
+
+- A request that meets the conditions of some deployments goes only to those, balanced among them, with the others as nothing.
+- A request that meets none goes to the deployments with no `when` and no `for`.
+- If every allowed deployment is kept for something the request does not meet, it is refused with `no_deployment`.
+
+The body is read for `min_prompt_tokens`, `max_prompt_tokens`, `tools` and `images` only when a deployment of the alias asks for one of them. The decision record's `routing.for` is `when` when a condition picked the deployments.
+
+<Aside type="note">
+A rule still decides on the alias's name. A condition picks where an allowed request goes; it never lets a caller reach a model their rule does not allow.
+</Aside>
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Routing strategies" href="/routing/strategies/" description="Balance, tags, teams and residency." />
+	<LinkCard title="Aliases" href="/routing/aliases/" description="Every alias field." />
+</CardGrid>

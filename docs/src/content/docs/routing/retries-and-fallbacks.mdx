@@ -39,7 +39,7 @@ rules:
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `retries` | integer | `0` | 0 to 5. How many more times to try the same provider. |
-| `fallback` | string | none | The name of another provider to try when this one still fails after its retries. |
+| `fallback` | string | none | The name of another provider to try when this one still fails after its retries. Its own `fallback` is followed too. |
 
 Both change without a restart.
 
@@ -48,11 +48,13 @@ Both change without a restart.
 Before the first byte of an answer reaches the caller, Gantry tries again after:
 
 - a connection failure,
-- a timeout (120 seconds without an answer),
+- a timeout (120 seconds without an answer by default; see [Timeouts](/routing/timeouts/)),
 - a 429,
 - any 5xx.
 
-The provider is tried `retries` more times, waiting 200 ms, 400 ms, 800 ms and so on between tries. If every try fails, the request goes to `fallback`, with the fallback's own `retries`. A fallback's own `fallback` is not followed. If the fallback fails too, the caller gets the last answer or refusal.
+The provider is tried `retries` more times, waiting 200 ms, 400 ms, 800 ms and so on between tries. If every try fails, the request goes to `fallback`, with the fallback's own `retries`, then to the fallback's own `fallback`, and so on (A, then B, then C). Each provider is tried once in the chain, so a loop of fallbacks ends. If the last one fails too, the caller gets the last answer or refusal.
+
+A provider with a [key pool](/routing/key-pools/) first moves to its next key on a 401, 403 or 429; only when no key is left does the 429 count here.
 
 Never retried:
 
@@ -77,6 +79,46 @@ It must also serve each model of the provider it backs: under the same name on `
 gantry.policy.yaml:22: fallback names provider "bedrok", and there is none. The providers are: groq, azure, anthropic, bedrock.
 ```
 
+## Alias fallbacks
+
+An [alias](/routing/aliases/) can name `fallbacks`: models or other aliases tried in turn when every deployment of the alias failed in a way `fallback_on` names. Each fallback is a chain of its own: an alias's deployments with their balance and cooldowns, or a model's provider with its retries and `fallback`.
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o, gpt-4o-mini]
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_API_KEY
+    models: [claude-sonnet-5-5]
+aliases:
+  - name: smart
+    deployments:
+      - { provider: openai, model: gpt-4o }
+    fallbacks: [claude-sonnet-5-5, gpt-4o-mini]
+    fallback_on: [rate_limit, server_error, timeout, unreachable, context_window]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [smart, claude-sonnet-5-5, gpt-4o-mini]
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `fallbacks` | list | none | Models or aliases, tried in the order written. |
+| `fallback_on` | list | `[rate_limit, server_error, timeout, unreachable]` | Which failures move the request on. Any of `rate_limit` (429), `server_error` (5xx), `timeout` (`upstream_timeout`), `unreachable` (`upstream_unreachable`, `upstream_failed`), `context_window` and `content_policy` (read from a 4xx answer as for the named fallbacks below). |
+
+- **Across APIs.** A fallback may speak the other API. A chat completions request falls back to a messages model (Anthropic, Bedrock, Vertex AI for Claude) and a messages request to a chat model, translated as it is sent and answered in the caller's format, with the [translation](/routing/translation/) Gantry already uses. A request whose fields cannot be carried across skips that fallback, and the attempts record says `untranslatable`.
+- **Never wider access.** The caller's rule must allow each fallback by name, or it is not taken. A fallback stopped by a kill switch is not taken either. A rule's `regions` apply to a fallback alias's deployments.
+- **Charged as served.** The usage record names the provider and model that answered, at that model's price. An answer from the other API is not stored in the answer cache.
+
+The named fallbacks `context_window_fallback` and `content_policy_fallback` (see [Aliases](/routing/aliases/#behavior)) are taken first, and may cross APIs the same way.
+
 ## Audit records
 
 The request record is written before anything is sent, so it names the first provider. When more than one try was made, an `attempts` record with the same `id` follows:
@@ -85,7 +127,7 @@ The request record is written before anything is sent, so it names the first pro
 {"n":12,"event":"attempts","id":"01M7...","time":"2026-11-13T03:30:02.114Z","attempts":[{"provider":"anthropic","outcome":"529"},{"provider":"anthropic","outcome":"529"},{"provider":"anthropic","outcome":"529"},{"provider":"bedrock","outcome":"200"}],"prev":"...","hash":"..."}
 ```
 
-`outcome` is the provider's status, or the refusal code for a try that got no answer: `upstream_unreachable`, `upstream_failed` or `upstream_timeout`. The usage record follows when the answer ends, and names the provider that answered. `gantry audit verify` counts attempts records apart.
+`outcome` is the provider's status, or the refusal code for a try that got no answer: `upstream_unreachable`, `upstream_failed` or `upstream_timeout`. A try with a pool key carries `key`, the key's hash prefix. An alias's deployment is named `provider/model`. The usage record follows when the answer ends, and names the provider that answered. `gantry audit verify` counts attempts records apart.
 
 <Aside type="tip">
 Clients retry on their own too. Gantry sets `x-should-retry: true` only on `busy`, `rate_limited` and the `upstream_*` codes, so Claude Code and the SDKs resend only what may clear. Codex needs `stream_max_retries = 0`; see [Codex](/integrations/codex/#retries).

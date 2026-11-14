@@ -1,0 +1,34 @@
+---
+title: Response headers
+description: Read which provider, deployment and model answered, how many attempts it took, what it cost and the request ID from every answer's headers.
+sidebar:
+  order: 11
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Every answer Gantry forwards names where it came from and what it cost, so a client can log it without reading the audit log.
+
+## Headers
+
+| Header | On | Value |
+|---|---|---|
+| `x-gantry-request-id` | every answer, refusals included | The decision ID, the `id` of the request's audit records. Same value as `x-gantry-decision`. |
+| `x-gantry-provider` | forwarded answers | The provider that answered, a fallback included. |
+| `x-gantry-model` | forwarded answers | The model it was sent to there. |
+| `x-gantry-deployment` | forwarded answers | `provider/model`, as the attempts record names deployments. |
+| `x-gantry-attempts` | forwarded answers | How many attempts the answer took, retries, key switches and fallbacks included. |
+| `x-gantry-cost-usd` | forwarded answers for a priced model | The cost in US dollars. See below. |
+
+## Cost
+
+- **A whole answer** (not a stream) up to 1 MiB is read before its headers are sent, and `x-gantry-cost-usd` is its cost by the usage the provider reported, as the usage record charges it.
+- **A stream**, or a larger answer, is not held back. Its headers leave before its usage is known, so `x-gantry-cost-usd` is the prompt's cost alone, estimated as the request body's bytes over four in tokens at the model's input price. The exact cost is in the request's [usage record](/reference/audit-records/). Gantry sends no HTTP trailer: most clients drop them.
+- A model with no price gets no `x-gantry-cost-usd`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Audit records" href="/reference/audit-records/" description="The usage and attempts records behind these headers." />
+	<LinkCard title="Pricing" href="/routing/pricing/" description="Where prices come from." />
+</CardGrid>

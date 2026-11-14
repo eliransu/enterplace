@@ -394,6 +394,23 @@ fn route(
         })?;
         (Some(Secret::new(key.trim())), None, None)
     };
+    let mut keys = Vec::new();
+    for source in &provider.keys {
+        let value = match source {
+            config::KeySource::Env(variable) => set(variable).ok_or_else(|| {
+                format!(
+                    "a key of provider \"{}\" is not set. The policy file says it is in the environment variable {variable}: set it (`export {variable}=...`) and start again.",
+                    provider.name
+                )
+            })?,
+            config::KeySource::Credential(name) => shared
+                .ok_or("a provider names a credential and the policy has no store: section")?
+                .credential_value(name)
+                .map_err(|err| format!("a key of provider \"{}\" is credential \"{name}\", and {err}", provider.name))?
+                .ok_or_else(|| format!("a key of provider \"{}\" is credential \"{name}\", and the store holds none by that name. Add it in the console or with the admin API, or fix the name.", provider.name))?,
+        };
+        keys.push(Secret::new(value.trim()));
+    }
     Ok(ProviderRoute {
         name: provider.name.clone(),
         kind: provider.kind,
@@ -409,6 +426,9 @@ fn route(
         retries: provider.retries,
         accept_chat: provider.accept_chat,
         accept_messages: provider.accept_messages,
+        timeouts: provider.timeouts,
+        keys,
+        least_used_key: provider.least_used_key,
     })
 }
 

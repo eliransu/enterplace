@@ -2150,6 +2150,11 @@ impl Admitted {
         self.forwarded = yes;
     }
 
+    /// The answer is not kept in the cache (a fallback of another API answered it, in that API's format).
+    pub(crate) fn not_cached(&mut self) {
+        self.cache = None;
+    }
+
     /// A fallback or another deployment of an alias answered: the usage record names it, and it is charged at its
     /// model's price.
     pub(crate) fn served_by(&mut self, provider: &str, model: &str, price: Option<Price>) {
