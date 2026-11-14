@@ -9,6 +9,25 @@
 # and the response cache stay per replica either way.
 replicaCount: 1
 
+# Scale on CPU, and optionally on a per-pod custom metric. Needs the policy's `store:` section (the chart refuses it
+# without one) and metrics-server in the cluster; replicaCount is then ignored.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  # A metric from the custom metrics API, per pod, for example the p99 of gantry_overhead_seconds or requests per
+  # second, published by prometheus-adapter from the /metrics port (metrics.enabled). Empty name: CPU only.
+  podMetric:
+    name: ""
+    targetAverageValue: ""
+
+# With more than one replica (or autoscaling), voluntary disruptions such as node drains take down at most this many
+# pods at once. Not rendered for one replica, where it would block every drain.
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
 image:
   repository: ghcr.io/ggantry/gantry
   # The newest build of main. Pin the commit SHA or version you were given for production.

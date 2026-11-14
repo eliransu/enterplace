@@ -2,6 +2,7 @@
 
   python3 scripts/signing.py sign <dist folder>     writes SHA256SUMS and provenance.json, and a .sig for each
   python3 scripts/signing.py verify <dist folder>   checks both signatures and every file's hash
+  python3 scripts/signing.py predicate              prints the SLSA v1 predicate alone, for cosign attest
 
 Signing uses an SSH key (`ssh-keygen -Y sign`, namespace gantry-release): the private key comes from
 RELEASE_SIGNING_KEY (its text, as CI passes a secret) or GANTRY_SIGNING_KEY_FILE (a path). Verifying needs only
@@ -136,6 +137,11 @@ def verify(dist):
 
 
 if __name__ == "__main__":
+    # The SLSA predicate alone, for `cosign attest --type slsaprovenance1`: cosign makes the statement around it, with
+    # the image digest as its subject.
+    if sys.argv[1:] == ["predicate"]:
+        print(json.dumps(provenance([])["predicate"], indent=2))
+        sys.exit(0)
     if len(sys.argv) != 3 or sys.argv[1] not in ("sign", "verify"):
         sys.exit(__doc__)
     {"sign": sign, "verify": verify}[sys.argv[1]](pathlib.Path(sys.argv[2]))

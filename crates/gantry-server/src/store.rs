@@ -134,7 +134,44 @@ ALTER TABLE gantry_keys ADD COLUMN org text, ADD COLUMN customer text, ADD COLUM
     "
 ALTER TABLE gantry_keys ADD COLUMN options text;
 ",
+    // Migration 6: the newest Gantry version that has migrated this database, so an older one can tell whether it
+    // may run beside it (`newer_allowed`).
+    "
+CREATE TABLE gantry_writer (id integer PRIMARY KEY CHECK (id = 1), version text NOT NULL);
+",
 ];
+
+/// Whether a Gantry of version `own` may use a database whose schema a Gantry of version `writer` moved ahead of it.
+/// Every migration is additive (expand), and a change that removes or renames what an older binary reads (contract)
+/// waits two minor versions, so a binary one minor version behind the writer still finds everything it uses. A
+/// rolling upgrade therefore runs N and N+1 side by side; N beside N+2 is refused. A writer that is not strictly
+/// newer is refused too: the same version cannot have written a schema this binary does not know.
+fn newer_allowed(own: &str, writer: &str) -> bool {
+    let (Some(own), Some(writer)) = (semver(own), semver(writer)) else {
+        return false;
+    };
+    let one_step =
+        (writer.0 == own.0 && writer.1 <= own.1 + 1) || (writer.0 == own.0 + 1 && writer.1 == 0);
+    writer > own && one_step
+}
+
+/// Major, minor and patch of a version such as `0.2.1` or `0.2.1-rc.1`.
+fn semver(version: &str) -> Option<(u64, u64, u64)> {
+    let core = version.split(['-', '+']).next()?;
+    let mut parts = core.split('.').map(|n| n.parse::<u64>().ok());
+    Some((parts.next()??, parts.next()??, parts.next()??))
+}
+
+/// The version recorded by the newest Gantry that migrated this database, if any. Only called once migration 6
+/// has run, so the table is there.
+async fn writer(
+    tx: &tokio_postgres::Transaction<'_>,
+) -> Result<Option<String>, tokio_postgres::Error> {
+    tx.query_opt("SELECT version FROM gantry_writer WHERE id = 1", &[])
+        .await?
+        .map(|row| row.try_get(0))
+        .transpose()
+}
 
 /// The policy versions' table, in a namespace of its own (`gantry_migrations`), so it never competes with the
 /// numbering of the core schema above. Never edit an entry that has shipped: add one.
@@ -659,10 +696,15 @@ async fn migrate(client: &mut Client) -> Result<(), String> {
         .map_err(failed)?;
     let applied: i32 = row.try_get(0).map_err(failed)?;
     let known = i32::try_from(MIGRATIONS.len()).unwrap_or(i32::MAX);
+    let own = gantry_core::VERSION;
     if applied > known {
-        return Err(format!(
-            "the store was written by a newer Gantry (schema version {applied}; this one knows up to {known}). Run the same Gantry version as the other gateways on this database, or point this one at another database."
-        ));
+        let by = writer(&tx).await.map_err(failed)?;
+        if !by.as_deref().is_some_and(|by| newer_allowed(own, by)) {
+            return Err(format!(
+                "the store was written by a newer Gantry ({}, schema version {applied}; this one is {own} and knows up to {known}). Gantry versions share one database only one minor version apart. Run the same Gantry version as the other gateways on this database (or upgrade this one), or point it at another database.",
+                by.as_deref().unwrap_or("version unknown")
+            ));
+        }
     }
     for (number, sql) in MIGRATIONS.iter().enumerate().skip(applied as usize) {
         tx.batch_execute(sql).await.map_err(failed)?;
@@ -670,6 +712,17 @@ async fn migrate(client: &mut Client) -> Result<(), String> {
         tx.execute("INSERT INTO gantry_schema VALUES ($1)", &[&version])
             .await
             .map_err(failed)?;
+    }
+    // The newest version to start on this database is what an older binary compares itself with. An older one
+    // never lowers it.
+    let by = writer(&tx).await.map_err(failed)?;
+    if by.is_none_or(|by| semver(own) > semver(&by)) {
+        tx.execute(
+            "INSERT INTO gantry_writer VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET version = excluded.version",
+            &[&own],
+        )
+        .await
+        .map_err(failed)?;
     }
     tx.commit().await.map_err(failed)
 }
@@ -1184,9 +1237,17 @@ async fn migrate_namespace(
         .unwrap_or(0);
     let known = i32::try_from(migrations.len()).unwrap_or(i32::MAX);
     if applied > known {
-        return Err(format!(
-            "the {namespace} tables were written by a newer version (schema version {applied}; this one knows up to {known}). Run the same version as the other gateways on this database, or point this one at another database."
-        ));
+        let by = writer(&tx).await.map_err(failed)?;
+        if !by
+            .as_deref()
+            .is_some_and(|by| newer_allowed(gantry_core::VERSION, by))
+        {
+            return Err(format!(
+                "the {namespace} tables were written by a newer version ({}, schema version {applied}; this one is {} and knows up to {known}). Versions share one database only one minor version apart. Run the same version as the other gateways on this database (or upgrade this one), or point it at another database.",
+                by.as_deref().unwrap_or("version unknown"),
+                gantry_core::VERSION
+            ));
+        }
     }
     for (number, sql) in migrations
         .iter()
@@ -2034,6 +2095,26 @@ impl<S: AsyncRead + AsyncWrite + Unpin> TlsStream for Tls<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_older_gantry_runs_beside_a_newer_one_only_one_minor_version_apart() {
+        for (own, writer, allowed) in [
+            ("0.2.0", "0.3.0", true),
+            ("0.2.4", "0.3.1", true),
+            ("0.2.0", "0.2.1", true),
+            ("0.2.0", "0.4.0", false),
+            ("0.9.0", "1.0.0", true),
+            ("0.2.0", "1.1.0", false),
+            ("1.9.2", "2.0.0", true),
+            ("1.9.2", "2.1.0", false),
+            ("0.2.0", "0.2.0", false),
+            ("0.3.0", "0.2.0", false),
+            ("0.2.0", "0.3.0-rc.1", true),
+            ("0.2.0", "garbage", false),
+        ] {
+            assert_eq!(newer_allowed(own, writer), allowed, "{own} beside {writer}");
+        }
+    }
 
     #[test]
     fn sslmode_and_sslrootcert_are_read_in_either_form() {

@@ -76,7 +76,7 @@ Commands:
         the catalog (default openai, see `gantry providers`) and the models it serves (--models; openai defaults
         to gpt-4o-mini): everyone may use them. Then set
         the provider key it names and run `gantry serve`, which prints a one-time link to make the first admin.
-  start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--yes] [--force] [--no-serve] [--all-tools]
+  start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--yes] [--force] [--no-serve] [--all-tools] [--container]
         Step 1 in one command. Reads provider keys from the environment (OPENAI_PROVIDER_KEY or OPENAI_API_KEY,
         and the same for ANTHROPIC and GEMINI), writes gantry.policy.yaml in observe mode with one rule that lets
         every key use every model and reads each key from <PROVIDER>_PROVIDER_KEY, makes an admin key (printed
@@ -84,7 +84,10 @@ Commands:
         (claude, codex, cursor, code on PATH; --all-tools prints all) and the OpenAI SDKs, and runs the gateway
         on --listen (default 127.0.0.1:8080). --dir names the folder (default the current one); --providers
         openai,anthropic picks providers in place of the ones found; on a terminal it asks unless --yes. It never
-        writes over a policy unless --force. --no-serve stops before running the gateway.
+        writes over a policy unless --force. --no-serve stops before running the gateway. --container is the
+        image's default command: it serves /etc/gantry/gantry.policy.yaml when one is mounted, else the policy an
+        earlier start wrote in --dir (default /var/lib/gantry), and only with neither writes one as above, with
+        --yes, --all-tools and --listen 0.0.0.0:8080.
   providers [--markdown]
         List the provider catalog: id, name, kind and URL. A policy provider may say `preset: <id>` in place
         of its url and kind. --markdown prints the reference page of the docs.
@@ -493,21 +496,31 @@ pub async fn run(args: &[String]) -> ExitCode {
             let pairs: Vec<&str> = rest
                 .iter()
                 .copied()
-                .filter(|a| !matches!(*a, "--yes" | "--force" | "--no-serve" | "--all-tools"))
+                .filter(|a| {
+                    !matches!(
+                        *a,
+                        "--yes" | "--force" | "--no-serve" | "--all-tools" | "--container"
+                    )
+                })
                 .collect();
             match options(&pairs, &["--dir", "--providers", "--listen"]) {
                 Some((positional, named)) if positional.is_empty() => {
+                    // In the image nobody answers a prompt, the tools are on the host, and the port is published.
+                    let container = flag("--container");
+                    let (dir, listen) = if container {
+                        (start::CONTAINER_DIR, start::CONTAINER_LISTEN)
+                    } else {
+                        (".", start::DEFAULT_LISTEN)
+                    };
                     let options = start::Options {
-                        dir: Path::new(named.get("--dir").copied().unwrap_or(".")),
+                        dir: Path::new(named.get("--dir").copied().unwrap_or(dir)),
                         providers: named.get("--providers").copied(),
-                        yes: flag("--yes"),
+                        yes: flag("--yes") || container,
                         force: flag("--force"),
                         serve: !flag("--no-serve"),
-                        listen: named
-                            .get("--listen")
-                            .copied()
-                            .unwrap_or(start::DEFAULT_LISTEN),
-                        all_tools: flag("--all-tools"),
+                        listen: named.get("--listen").copied().unwrap_or(listen),
+                        all_tools: flag("--all-tools") || container,
+                        container,
                     };
                     Some(
                         start::run(&options)
@@ -583,7 +596,7 @@ pub async fn run(args: &[String]) -> ExitCode {
                 "gantry guardrail test <name> (--corpus <file.jsonl> | --since <7d>) [--policy <file>]",
             ),
             ["start", ..] => Some(
-                "gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--yes] [--force] [--no-serve] [--all-tools]",
+                "gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--yes] [--force] [--no-serve] [--all-tools] [--container]",
             ),
             ["init", ..] => Some("gantry init [--provider <id>] [--models <a,b>] [--out <policy file>]"),
             ["login", ..] => Some("gantry login <gantry url> [--no-browser]"),

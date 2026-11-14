@@ -1,0 +1,35 @@
+# CodeQL static analysis of the Rust code (and the workflows themselves), on every pull request, every push to main
+# and weekly, so a new query catches old code too. Findings show under Security, Code scanning. `cargo deny check`
+# (ci.yml) covers known advisories in the dependencies; this covers bugs in Gantry's own code.
+name: codeql
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, actions]
+    steps:
+      - uses: actions/checkout@v4
+      # build-mode none: CodeQL reads the Rust sources without compiling them, so a run takes minutes, not a build.
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

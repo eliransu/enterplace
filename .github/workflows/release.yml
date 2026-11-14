@@ -3,6 +3,8 @@ name: release
 # On a v* tag the signed files go to a GitHub Release of this private repository, with the CHANGELOG section as its
 # notes. Run by hand (gh workflow run release.yml --ref <branch>) it is a dry run: every step but the GitHub Release.
 # How to release: RELEASING.md. image.yml adds the image digest to the same release.
+# The Helm chart goes to ghcr.io/<owner>/charts/gantry as an OCI artifact, signed with cosign keyless (this workflow's
+# GitHub OIDC identity). scripts/verify_release.sh checks it beside the image.
 on:
   push:
     tags: ["v*"]
@@ -60,6 +62,15 @@ jobs:
   rollback:
     needs: version
     runs-on: ubuntu-latest
+    # The mixed-version check runs both versions on this database at once.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,6 +83,48 @@ jobs:
           (cd ../previous && cargo build --release --locked -q -p gantry-cli)
           cargo build --release --locked -q -p gantry-cli
           python3 scripts/rollback_check.py ../previous/target/release/gantry target/release/gantry
+          # A rolling upgrade: the previous version and this one serve from one Postgres at the same time.
+          DATABASE_URL='postgres://postgres:test@127.0.0.1:5432/postgres?sslmode=disable' \
+            python3 scripts/mixed_version_check.py ../previous/target/release/gantry target/release/gantry
+
+  # The chart as a signed OCI artifact. A dry run packages and lints it and pushes nothing.
+  chart:
+    needs: [build, rollback]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      CHARTS: ghcr.io/${{ github.repository_owner }}/charts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - uses: sigstore/cosign-installer@v4
+        with:
+          cosign-release: v3.1.4
+      - name: Package, push and sign the chart
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          helm lint --strict deploy/helm/gantry
+          helm package deploy/helm/gantry -d chart
+          ls -l chart
+          if [ "${{ github.ref_type }}" != tag ]; then
+            echo "dry run: would push chart/*.tgz to oci://$CHARTS and sign it"
+            exit 0
+          fi
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "$GH_TOKEN" | cosign login ghcr.io -u "${{ github.actor }}" --password-stdin
+          out=$(helm push chart/gantry-*.tgz "oci://$CHARTS" 2>&1); echo "$out"
+          digest=$(sed -n 's/^Digest: //p' <<< "$out")
+          [ -n "$digest" ] || { echo "::error::helm push printed no digest"; exit 1; }
+          cosign sign --yes "$CHARTS/gantry@$digest"
+          cosign verify "$CHARTS/gantry@$digest" --certificate-identity "${{ github.server_url }}/${{ github.workflow_ref }}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          echo "signed $CHARTS/gantry@$digest"
 
   sign:
     needs: [build, rollback]
@@ -101,7 +154,7 @@ jobs:
 
   # The repository is private, so its releases are too: nothing here is public.
   publish:
-    needs: sign
+    needs: [sign, chart]
     runs-on: ubuntu-latest
     permissions:
       contents: write

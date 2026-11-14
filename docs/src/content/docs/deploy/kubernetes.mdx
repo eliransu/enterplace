@@ -32,6 +32,8 @@ The Helm chart ships inside the `gantry` image, so it always matches the version
    kubectl config set-context --current --namespace gantry
    ```
 
+   Or install the chart from the registry, where each release publishes it as a signed OCI artifact: `helm install gantry oci://ghcr.io/ggantry/charts/gantry --version $GANTRY_VERSION` in place of the local path below. Check the image and the chart first with `scripts/verify_release.sh $GANTRY_VERSION` ([Verify a release](/operations/verify-release/)).
+
 2. Create the secrets. The chart reads secret values only from Secrets you make: none goes in a values file.
 
    The image pull secret, because the registry is private:
@@ -236,11 +238,28 @@ helm upgrade gantry ./gantry-deploy/helm/gantry --reuse-values --set replicaCoun
 
 The new pod gets its own claim and starts its own chain. Scaling down keeps the claims, and scaling up again reuses them, so a returning pod continues its chain. Budgets are enforced once across every pod. Rate limits and the answer cache are counted per pod.
 
+### Autoscaling
+
+With `store:` in the policy, the chart can render a HorizontalPodAutoscaler that scales the StatefulSet on CPU, and optionally on a per-pod metric from the custom metrics API (for example the p99 of `gantry_overhead_seconds`, published from the `/metrics` port by prometheus-adapter). It needs metrics-server; `replicaCount` is then ignored.
+
+```yaml
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  podMetric:                       # optional
+    name: gantry_overhead_seconds_p99
+    targetAverageValue: 2m
+```
+
+The chart refuses `autoscaling.enabled` without `store:`. With more than one replica, or with autoscaling, it also renders a PodDisruptionBudget (`podDisruptionBudget.maxUnavailable`, default 1), so a node drain takes down one pod at a time.
+
 ## Upgrade and roll back
 
 <Steps>
 
-1. Back up Postgres. A newer Gantry may update the database schema, and an older one refuses a database a newer one has written.
+1. Back up Postgres. A newer Gantry may update the database schema. Upgrade one minor version at a time (0.2 to 0.3, not 0.2 to 0.4): during the rollout the old pods keep serving beside the new ones, and an old pod that restarts still starts. A Gantry two minor versions behind the database refuses it, naming both versions. See [Rolling upgrades](/operations/store/#rolling-upgrades).
 
 2. Upgrade.
 

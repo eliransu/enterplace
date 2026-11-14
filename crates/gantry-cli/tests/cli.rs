@@ -2098,6 +2098,39 @@ fn start_prints_only_the_tools_found_and_the_listen_address() -> TestResult {
 }
 
 #[test]
+fn start_in_a_container_writes_once_then_serves_what_it_wrote() -> TestResult {
+    // What the image runs with no policy mounted: the first start writes the policy and prints the admin key, with
+    // every tool's settings (the tools are on the host) and an address the host can open.
+    let dir = start_dir("container")?;
+    let out = start(&dir, &["--container"], BOTH_KEYS[..1].as_ref())?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let stdout = String::from_utf8(out.stdout)?;
+    assert_eq!(printed_keys(&stdout).len(), 1, "{stdout}");
+    for text in [
+        "export OPENAI_BASE_URL=http://localhost:8080/v1\n",
+        "Codex",
+        "console at http://localhost:8080/console",
+    ] {
+        assert!(stdout.contains(text), "{text}: {stdout}");
+    }
+    assert!(!stdout.contains("http://0.0.0.0"), "{stdout}");
+    let policy = std::fs::read_to_string(dir.join("gantry.policy.yaml"))?;
+    assert!(policy.contains("mode: observe\n"), "{policy}");
+
+    // A restart on the same volume serves that policy and keys: no second key, nothing rewritten.
+    let out = start(&dir, &["--container"], BOTH_KEYS[..1].as_ref())?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(printed_keys(&stdout).is_empty(), "{stdout}");
+    assert!(stdout.contains("gantry.policy.yaml"), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("gantry.policy.yaml"))?,
+        policy
+    );
+    Ok(())
+}
+
+#[test]
 fn start_without_any_provider_key_says_which_env_to_set() -> TestResult {
     let dir = start_dir("nokey")?;
     let out = start(&dir, &[], &[])?;

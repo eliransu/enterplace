@@ -28,7 +28,7 @@ gantry help
 Step 1 in one command: writes a policy in observe mode, makes an admin key, prints the settings for the coding tools on this machine and runs the gateway.
 
 ```text
-gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--yes] [--force] [--no-serve] [--all-tools]
+gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--yes] [--force] [--no-serve] [--all-tools] [--container]
 ```
 
 | Flag | Default | Description |
@@ -40,6 +40,7 @@ gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--yes] [
 | `--force` | off | Writes over an existing `gantry.policy.yaml`. The keys file is kept and gets one more admin key |
 | `--no-serve` | off | Stops after writing the files and printing the settings |
 | `--all-tools` | off | Prints the settings for every tool `start` knows, not only the ones found on this machine |
+| `--container` | off | The image's default command. Serves `/etc/gantry/gantry.policy.yaml` when one is mounted, else the policy an earlier start wrote in `--dir` (default `/var/lib/gantry`); only with neither does it write one, with `--yes`, `--all-tools` and `--listen 0.0.0.0:8080` |
 
 Provider keys are read from `OPENAI_PROVIDER_KEY` or `OPENAI_API_KEY`, and the same for `ANTHROPIC` and `GEMINI` (the `_PROVIDER_KEY` form wins when both are set). The policy always reads `<PROVIDER>_PROVIDER_KEY`, so the tool lines can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to the Gantry key in the same shell. The key itself is never written. A key found under `<PROVIDER>_API_KEY` is passed to the gateway `start` runs, and `start` prints the `export <PROVIDER>_PROVIDER_KEY=$<PROVIDER>_API_KEY` line to run before a later `gantry serve`.
 

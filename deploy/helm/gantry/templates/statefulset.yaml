@@ -12,7 +12,10 @@ metadata:
   labels:
     {{- include "gantry.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
+  # With autoscaling on, the HorizontalPodAutoscaler owns the count: a value here would reset it on every upgrade.
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   serviceName: {{ include "gantry.fullname" . }}
   # Replicas do not depend on each other: start and stop them together, not one by one.
   podManagementPolicy: Parallel

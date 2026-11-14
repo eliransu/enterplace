@@ -2,6 +2,10 @@
 # with the commit sha (and the version, on a v* tag). On a pull request or a branch, it builds both and pushes nothing.
 # On a v* tag it also checks that the repository names that version, and puts the image digest at the top of the
 # GitHub Release of this private repository (release.yml adds the signed tarballs). How to release: RELEASING.md.
+# Every image is scanned (scripts/scan_image.sh: fails on a high or critical vulnerability not allowed in .grype.yaml).
+# A published one is then signed with cosign, keyless (this workflow's GitHub OIDC identity, logged in Sigstore's
+# public transparency log), with its SBOM and SLSA provenance attached as signed attestations. Customers check all
+# three with scripts/verify_release.sh.
 name: image
 on:
   push:
@@ -16,6 +20,9 @@ permissions:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/gantry
+  COSIGN_VERSION: v3.1.4
+  SYFT_VERSION: v1.46.0
+  GRYPE_VERSION: v0.115.0
   PUBLISH: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
@@ -75,6 +82,13 @@ jobs:
           echo "${{ matrix.platform }}: $size bytes"
           [ "$size" -lt $((50 * 1024 * 1024)) ]
           [ "$(docker image inspect gantry:check --format '{{.Config.User}}')" = 65532:65532 ]
+      # One architecture is enough: both are built from one Cargo.lock, so they ship the same crates.
+      - name: Scan the image
+        if: env.PUBLISH != 'true' && matrix.platform == 'linux/amd64'
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin "$SYFT_VERSION"
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin "$GRYPE_VERSION"
+          scripts/scan_image.sh gantry:check
       - name: Keep the digest
         if: env.PUBLISH == 'true'
         run: |
@@ -92,7 +106,13 @@ jobs:
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # The OIDC token cosign trades for a short-lived Sigstore certificate naming this workflow and ref.
+      id-token: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: digest-*
@@ -119,6 +139,28 @@ jobs:
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf "$IMAGE@sha256:%s " *)
           docker buildx imagetools inspect "$IMAGE:${{ github.sha }}"
+      - uses: sigstore/cosign-installer@v4
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      # Scanned before it is signed: a failing scan leaves the image unsigned, and verify_release.sh refuses it.
+      - name: Scan, sign, and attest the SBOM and provenance
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin "$SYFT_VERSION"
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin "$GRYPE_VERSION"
+          digest=$(docker buildx imagetools inspect "$IMAGE:${{ github.sha }}" --format '{{json .Manifest}}' | jq -r .digest)
+          ref="$IMAGE@$digest"
+          scripts/scan_image.sh "$ref" sbom.cdx.json
+          python3 scripts/signing.py predicate > provenance.json
+          cosign sign --yes "$ref"
+          cosign attest --yes --type cyclonedx --predicate sbom.cdx.json "$ref"
+          cosign attest --yes --type slsaprovenance1 --predicate provenance.json "$ref"
+          cosign verify "$ref" --certificate-identity "${{ github.server_url }}/${{ github.workflow_ref }}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          echo "signed $ref"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cdx.json
 
   # The repository is private, so the release is too. Its notes name the image by digest, which no later push can move.
   # release.yml makes the same release with the signed tarballs: whichever job comes first creates it, the other adds to it.
@@ -133,6 +175,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: release-notes
+      - uses: actions/download-artifact@v4
+        with:
+          name: sbom
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -151,6 +196,8 @@ jobs:
             echo
             echo "Digest: \`$IMAGE@$digest\` (amd64 and arm64). Pin the digest in production."
             echo
+            echo "Signed with cosign, with an SBOM and SLSA provenance attached: \`scripts/verify_release.sh $VERSION\` checks all three."
+            echo
           } > image.md
           if gh release view "$GITHUB_REF_NAME" --repo "${{ github.repository }}" --json body --jq .body > body.md 2>/dev/null; then
             cat image.md body.md > notes.md
@@ -160,3 +207,4 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --repo "${{ github.repository }}" --verify-tag \
               --title "Gantry $VERSION" --notes-file notes.md
           fi
+          gh release upload "$GITHUB_REF_NAME" sbom.cdx.json --repo "${{ github.repository }}" --clobber

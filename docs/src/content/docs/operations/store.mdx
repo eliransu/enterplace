@@ -38,7 +38,7 @@ gantry serve gantry.policy.yaml
 ```
 
 - **Start.** `gantry serve` refuses to start, naming the fix, if the variable is unset or the database cannot be reached. `gantry check` checks the section without connecting.
-- **Tables.** Gantry creates its tables on first start, in the database the string names. The user needs `CREATE` on it. The schema is versioned in the binary (the `gantry_schema` table); a newer Gantry updates it, and an older Gantry refuses a database a newer one has written, so upgrade every replica to the same version.
+- **Tables.** Gantry creates its tables on first start, in the database the string names. The user needs `CREATE` on it. The schema is versioned in the binary (the `gantry_schema` table); a newer Gantry updates it. See Rolling upgrades below for which versions may share a database.
 - **Commands.** `gantry key new`, `key list`, `key revoke` and `key prune` change the store when the policy beside the keys file (or `--policy`) has `store:`, with the variable set. `gantry kill` and `unkill`, the admin API and the console change it through any replica.
 
 ### TLS
@@ -162,3 +162,18 @@ A replica that dies with requests in flight leaves their reservations held until
 	<LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" description="How a request is admitted under a budget." />
 	<LinkCard title="Kubernetes" href="/deploy/kubernetes/" description="The Helm chart, as a StatefulSet." />
 </CardGrid>
+
+## Rolling upgrades
+
+Two Gantry versions one minor version apart (0.2.x and 0.3.x) run on one database at the same time, so replicas can be replaced one by one while the gateway keeps serving:
+
+- The newer version applies its migrations when it starts. The older replicas keep serving, accept keys the newer one issues, and the newer accepts theirs.
+- An older replica that restarts mid-rollout starts on the schema the newer one moved ahead.
+- A Gantry two or more minor versions behind refuses the database at start, naming its own version and the newer one (`the store was written by a newer Gantry (0.4.0, ...; this one is 0.2.1 ...)`). Upgrade it, or upgrade in steps of one minor version.
+
+How it holds: every migration only adds (tables, columns, indexes). A change that removes or renames something an older version reads ships two minor versions later, when the version that read it can no longer run beside the database. The database records the newest version that started on it (`gantry_writer`), and an older binary compares itself with that. The release workflow runs `scripts/mixed_version_check.py`: the previous version and the new one on one Postgres at once, serving traffic while the new one migrates.
+
+The guarantee starts with the release that adds it: a version released before it refuses any newer schema when it restarts, so for that one upgrade, keep old pods from restarting during the rollout or replace every replica together.
+
+Rolling back past a migration still needs the backup taken before the upgrade: an older version beside a newer schema is supported only within one minor version.
+
