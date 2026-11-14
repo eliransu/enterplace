@@ -706,20 +706,7 @@ fn remove(keys: &Path, prefix: &str) -> Result<Option<Revoked>, String> {
             keys.display()
         )
     };
-    let at = lines
-        .iter()
-        .position(|line| line.contains(&found.sha256))
-        .ok_or_else(unclear)?;
-    let indent = |line: &str| line.len() - line.trim_start().len();
-    // The entry runs from its `- ` line to the next line at that depth or shallower.
-    let start = (0..=at)
-        .rev()
-        .find(|&i| lines[i].trim_start().starts_with("- "))
-        .ok_or_else(unclear)?;
-    let depth = indent(lines[start]);
-    let end = (at + 1..lines.len())
-        .find(|&i| !lines[i].trim().is_empty() && indent(lines[i]) <= depth)
-        .unwrap_or(lines.len());
+    let (start, end, _) = span(&lines, &found.sha256).ok_or_else(unclear)?;
     let rest: String = lines[..start].concat() + &lines[end..].concat();
     // Whatever the text looked like, the result must be the same file less exactly this one key.
     let left = config::key_entries(keys, &rest).map_err(|_| unclear())?;
@@ -732,6 +719,62 @@ fn remove(keys: &Path, prefix: &str) -> Result<Option<Revoked>, String> {
         team: found.team.clone(),
         sha256: found.sha256.clone(),
     }))
+}
+
+/// Where the entry holding `hash` is: its first line, the line after its last, and its indentation. The entry runs
+/// from its `- ` line to the next line at that depth or shallower.
+fn span(lines: &[&str], hash: &str) -> Option<(usize, usize, usize)> {
+    let at = lines.iter().position(|line| line.contains(hash))?;
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let start = (0..=at)
+        .rev()
+        .find(|&i| lines[i].trim_start().starts_with("- "))?;
+    let depth = indent(lines[start]);
+    let end = (at + 1..lines.len())
+        .find(|&i| !lines[i].trim().is_empty() && indent(lines[i]) <= depth)
+        .unwrap_or(lines.len());
+    Some((start, end, depth))
+}
+
+/// Replaces the attributes of the key whose hash is `sha256` (admin, expiry, budget, models, tpm), keeping its
+/// name, team and every other field. `Ok(None)` when no key has that hash. The keys file is changed only while it
+/// is as it was read.
+pub fn edit(
+    keys: &Path,
+    sha256: &str,
+    attributes: &Attributes,
+) -> Result<Option<config::KeyEntry>, String> {
+    if let Some(Err(problem)) = attributes.expires.as_deref().map(config::issuable_expiry) {
+        return Err(format!("{problem}. Nothing was changed."));
+    }
+    if attributes
+        .budget
+        .is_some_and(|b| !b.usd.is_finite() || b.usd <= 0.0)
+    {
+        return Err("a budget is a number of US dollars above 0, for example 20/month. Nothing was changed.".into());
+    }
+    if attributes
+        .models
+        .as_ref()
+        .is_some_and(|m| m.is_empty() || !m.iter().all(|n| config::valid_name(n) || n == "*"))
+    {
+        return Err("models lists the model names this key may use, at least one, each in letters, digits, '.', '-', '_' and '@', for example gpt-4o-mini,o3. Leave it empty for the rule's models. Nothing was changed.".into());
+    }
+    if attributes
+        .tpm
+        .is_some_and(|t| !(1..=1_000_000_000).contains(&t))
+    {
+        return Err("tpm is the number of tokens this key may use per minute, 1 to 1000000000, for example 200000. Nothing was changed.".into());
+    }
+    // The same change `PATCH /admin/keys` makes: checked by the loader's rules, the entry's other fields kept.
+    let change = |e: &mut config::KeyEntry| {
+        e.admin = attributes.admin;
+        e.expires.clone_from(&attributes.expires);
+        e.budget = attributes.budget;
+        e.models.clone_from(&attributes.models);
+        e.tpm = attributes.tpm;
+    };
+    Ok(update(keys, sha256, &change)?.map(|(_, after)| after))
 }
 
 /// Refuses a change that would leave a keys file `gantry serve` cannot load: a key "added" to it would take
@@ -923,6 +966,45 @@ mod tests {
     }
 
     const TWO: &str = "keys:\n  - name: a\n    team: t\n    sha256: aa\n  - name: b\n    team: t\n    sha256: bb\n";
+
+    #[test]
+    fn a_key_edit_changes_its_fields_in_place_and_keeps_everything_else() -> TestResult {
+        let a = "a".repeat(64);
+        let b = "b".repeat(64);
+        let text = format!(
+            "# Our keys.\nkeys:\n  - name: a\n    team: t\n    sha256: {a}\n    tpm: 5\n  # b is the batch job.\n  - name: b\n    team: t\n    sha256: {b}\n"
+        );
+        let path = keys_file("edit", &text)?;
+        let attributes = Attributes {
+            budget: Some(Budget {
+                usd: 20.0,
+                per: crate::policy::Period::Month,
+            }),
+            models: Some(vec!["gpt-4o".into()]),
+            ..Attributes::default()
+        };
+        let edited = edit(&path, &a, &attributes)?.ok_or("a is there")?;
+        assert_eq!((edited.name.as_str(), edited.tpm), ("a", None));
+        let now = std::fs::read_to_string(&path)?;
+        assert!(
+            now.starts_with("# Our keys.\n") && now.contains("  # b is the batch job.\n"),
+            "{now}"
+        );
+        let entries = config::key_entries(&path, &now).map_err(|e| e.join("\n"))?;
+        assert_eq!(
+            entries[0].models.as_deref(),
+            Some(&["gpt-4o".to_string()][..])
+        );
+        assert_eq!(entries[0].budget.map(|b| b.usd), Some(20.0));
+        assert_eq!(entries[1].name, "b");
+        assert!(edit(&path, &"c".repeat(64), &attributes)?.is_none());
+        let bad = Attributes {
+            tpm: Some(0),
+            ..Attributes::default()
+        };
+        assert!(edit(&path, &a, &bad).is_err());
+        Ok(())
+    }
 
     #[test]
     fn a_key_removed_by_hand_while_a_key_is_added_stays_removed() -> TestResult {

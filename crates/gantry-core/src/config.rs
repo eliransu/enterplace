@@ -133,6 +133,8 @@ const KNOWN: &[&str] = &[
     "teams",
     "store",
     "postgres_url_env",
+    "policy_from",
+    "approval",
     "credential",
     "caller_provider_key",
     "orgs",
@@ -309,6 +311,10 @@ struct JwtFile {
 #[serde(deny_unknown_fields)]
 struct StoreFile {
     postgres_url_env: String,
+    #[serde(default)]
+    policy_from: Option<String>,
+    #[serde(default)]
+    approval: bool,
 }
 
 /// Where several gateways keep what they share while they run, as `store:` in the policy sets it.
@@ -317,6 +323,22 @@ pub struct StoreSetting {
     /// The environment variable that holds the Postgres connection string. The string never goes in the file: it
     /// carries a password.
     pub postgres_url_env: String,
+    /// Where the policy is read from while Gantry runs: the file (the default, for GitOps) or the store's live
+    /// version (edited in the console and the admin API).
+    pub policy_from: PolicyFrom,
+    /// A new policy version waits for a second admin to approve it before it goes live. Read from the live version,
+    /// so turning it off is itself a change that needs an approval.
+    pub approval: bool,
+}
+
+/// Which one is the source of the policy when the store is set. Never both: see `store.policy_from`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PolicyFrom {
+    /// The policy file decides, and the console and the admin API cannot change it.
+    #[default]
+    File,
+    /// The store's live version decides. The file names the store and is otherwise not read.
+    Store,
 }
 
 #[derive(Deserialize)]
@@ -3425,7 +3447,7 @@ fn principals(entries: Vec<KeyEntry>) -> HashMap<[u8; 32], Principal> {
 
 /// Reads and checks both files. Returns every problem found, one per line, each with its file and line.
 pub fn load(policy_path: &Path, keys_path: Option<&Path>) -> Result<Loaded, Vec<String>> {
-    let policy_text = read(policy_path, "policy file").map_err(|e| vec![e])?;
+    let policy_text = policy_text(policy_path).map_err(|e| vec![e])?;
     if names_store(&policy_text) {
         // The keys are in the store: a keys file left beside the policy is not read. `gantry check` has no
         // connection, so it checks the policy alone.
@@ -3458,6 +3480,16 @@ pub fn load(policy_path: &Path, keys_path: Option<&Path>) -> Result<Loaded, Vec<
     Ok(loaded)
 }
 
+/// The policy in force for `policy_path`: the store's live version when the policy is kept there
+/// (`store.policy_from: store`), the file otherwise. Every reader of the policy comes here, so the console, the
+/// admin API and the reload never read one while the gateway serves the other.
+pub fn policy_text(policy_path: &Path) -> Result<String, String> {
+    if let Some(live) = crate::store::policy_store(policy_path).and_then(|s| s.live_policy()) {
+        return Ok(live.text);
+    }
+    read(policy_path, "policy file")
+}
+
 /// Whether a policy text sets `store:`. A text that does not parse says no here and gets its problems from
 /// `load_texts`.
 pub fn names_store(policy_text: &str) -> bool {
@@ -3474,7 +3506,7 @@ pub fn names_store(policy_text: &str) -> bool {
 /// The providers that name a credential, with its name, from the policy file as it is now. Empty when it does not
 /// load: `gantry check` says why.
 pub fn credentials_named(policy_path: &Path) -> Vec<(String, String)> {
-    std::fs::read_to_string(policy_path)
+    policy_text(policy_path)
         .ok()
         .and_then(|text| load_texts(policy_path, &text, policy_path, "").ok())
         .map(|loaded| {
@@ -3504,8 +3536,22 @@ fn store_setting(
         ));
         return None;
     }
+    let policy_from = match store.policy_from.as_deref() {
+        None | Some("file") => PolicyFrom::File,
+        Some("store") => PolicyFrom::Store,
+        Some(other) => {
+            errors.push(format!(
+                "{}:{}: policy_from is \"{other}\". It is file (the policy file decides, as in GitOps) or store (the console and the admin API edit versions kept in the store).",
+                file.display(),
+                line_of_key(text, "policy_from", 1, usize::MAX)
+            ));
+            return None;
+        }
+    };
     Some(StoreSetting {
         postgres_url_env: env.clone(),
+        policy_from,
+        approval: store.approval,
     })
 }
 
@@ -3688,7 +3734,8 @@ pub fn load_texts(
 }
 
 /// Why a running Gantry cannot change from `old` to `new` without a restart. Empty when it can.
-/// The provider keys are read from the environment once, at start, and the audit log is opened once.
+/// The audit log is opened once, MCP servers' credentials and the store's connection are read once, at start.
+/// Providers may be added, removed or pointed elsewhere: the reload builds the routes that changed.
 pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
     let mut reasons = Vec::new();
     if old.audit_path != new.audit_path {
@@ -3704,84 +3751,32 @@ pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
             "the mcp servers changed. Their credentials are read at start: restart Gantry to apply it. A rule's tools may change without one.".to_string(),
         );
     }
-    // The connection to the store is made once, at start.
-    if old.store != new.store {
+    // The connection to the store is made once, at start, and the source of the policy is chosen then. Approval
+    // may change while Gantry runs.
+    let connection = |s: &Option<StoreSetting>| {
+        s.as_ref()
+            .map(|s| (s.postgres_url_env.clone(), s.policy_from))
+    };
+    if connection(&old.store) != connection(&new.store) {
         reasons.push(
-            "the store section changed. Gantry connects to its store at start: restart Gantry to apply it.".to_string(),
+            "the store section changed. Gantry connects to its store and picks the policy's source at start: restart Gantry to apply it.".to_string(),
         );
     }
-    for provider in &old.providers {
-        let Some(now) = new.providers.iter().find(|p| p.name == provider.name) else {
-            reasons.push(format!(
-                "provider \"{}\" was removed. Adding or removing a provider needs a restart: restart Gantry to apply it.",
-                provider.name
-            ));
-            continue;
-        };
-        let changed = [
-            (
-                "kind",
-                provider.kind.word().to_string(),
-                now.kind.word().to_string(),
-            ),
-            ("url", provider.url.clone(), now.url.clone()),
-            ("key_env", provider.key_env.clone(), now.key_env.clone()),
-            (
-                "key_file",
-                provider
-                    .key_file
-                    .as_deref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-                now.key_file
-                    .as_deref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-            ),
-            (
-                "credential",
-                provider.credential.clone().unwrap_or_default(),
-                now.credential.clone().unwrap_or_default(),
-            ),
-            (
-                "api_version",
-                provider.api_version.clone().unwrap_or_default(),
-                now.api_version.clone().unwrap_or_default(),
-            ),
-            (
-                "region",
-                provider.region.clone().unwrap_or_default(),
-                now.region.clone().unwrap_or_default(),
-            ),
-            (
-                "role_arn",
-                provider.role_arn.clone().unwrap_or_default(),
-                now.role_arn.clone().unwrap_or_default(),
-            ),
-            (
-                "allow_private",
-                provider.allow_private.to_string(),
-                now.allow_private.to_string(),
-            ),
-        ];
-        for (what, was, is) in changed {
-            if was != is {
-                reasons.push(format!(
-                    "the {what} of provider \"{}\" changed from {was} to {is}. That needs a restart: restart Gantry to apply it. A provider's models may change without one.",
-                    provider.name
-                ));
-            }
-        }
-    }
-    for provider in &new.providers {
-        if !old.providers.iter().any(|p| p.name == provider.name) {
-            reasons.push(format!(
-                "provider \"{}\" was added. Adding or removing a provider needs a restart: restart Gantry to apply it, with its key in {}.",
-                provider.name, provider.key_env
-            ));
-        }
-    }
     reasons
+}
+
+/// Whether two versions of a provider reach it the same way: same kind, address, key and signing. A provider whose
+/// connection changed gets a new route at the reload; one whose only change is its models keeps its route.
+pub fn same_connection(a: &Provider, b: &Provider) -> bool {
+    a.kind == b.kind
+        && a.url == b.url
+        && a.key_env == b.key_env
+        && a.key_file == b.key_file
+        && a.credential == b.credential
+        && a.api_version == b.api_version
+        && a.region == b.region
+        && a.role_arn == b.role_arn
+        && a.allow_private == b.allow_private
 }
 
 /// A warning for each model a rule names that no provider serves. Requests for it are refused, so it is
@@ -5097,14 +5092,17 @@ rules:
             groq.key_file.as_deref(),
             Some(Path::new("secrets/groq.key"))
         );
-        // Moving the key to another file needs a restart, as changing key_env does.
+        // Moving the key to another file gives the provider a new route at the reload, with no restart.
         let moved = text.replace("secrets/groq.key", "other.key");
         let new = check("key-file-moved", &moved, None)?.map_err(|e| e.join("\n"))?;
-        let reasons = needs_restart(&loaded, &new).join("\n");
-        assert!(
-            reasons.contains("the key_file of provider \"groq\""),
-            "{reasons}"
-        );
+        assert!(!needs_restart(&loaded, &new).join("\n").contains("provider"));
+        let (Some(was), Some(now)) = (
+            loaded.providers.iter().find(|p| p.name == "groq"),
+            new.providers.iter().find(|p| p.name == "groq"),
+        ) else {
+            return Err("groq".into());
+        };
+        assert!(!same_connection(was, now));
         Ok(())
     }
 
@@ -5141,10 +5139,47 @@ rules:
             None,
         )?
         .map_err(|e| e.join("\n"))?;
+        assert!(!needs_restart(&loaded, &new).join("\n").contains("provider"));
+        let groq_now = new
+            .providers
+            .iter()
+            .find(|p| p.name == "groq")
+            .ok_or("groq")?;
+        assert!(!same_connection(groq, groq_now));
+        // The store's connection is made at start: changing it still needs a restart. Approval does not.
+        let moved = check(
+            "store-moved",
+            &stored.replace("DATABASE_URL", "OTHER_URL"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
         assert!(
-            needs_restart(&loaded, &new)
+            needs_restart(&loaded, &moved)
                 .join("\n")
-                .contains("the credential of provider \"groq\""),
+                .contains("store section")
+        );
+        let approved = check(
+            "store-approval",
+            &stored.replace(
+                "DATABASE_URL }",
+                "DATABASE_URL, policy_from: file, approval: true }",
+            ),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        assert!(
+            !needs_restart(&loaded, &approved)
+                .join("\n")
+                .contains("store section")
+        );
+        let wrong = errors(check(
+            "store-source",
+            &stored.replace("DATABASE_URL }", "DATABASE_URL, policy_from: database }"),
+            None,
+        )?)?;
+        assert!(
+            wrong.contains("policy_from") && wrong.contains("store"),
+            "{wrong}"
         );
 
         let rule = |value: &str| {

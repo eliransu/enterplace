@@ -118,6 +118,7 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `roles` | list | `[]` | [Console roles](#console-roles) beside the built-in `admin` and `read_only`. |
 | `jwt` | list | `[]` | Identity providers whose JWTs are accepted in place of a Gantry key. See [JWT sign-in](/governance/access-control/#jwts-from-your-identity-provider). |
 | `trusted_proxies` | list | `[]` | Address ranges of load balancers whose `X-Forwarded-For` names the client. See [Behind a load balancer](/governance/access-control/#behind-a-load-balancer). |
+| `store` | map | none | `{ postgres_url_env: DATABASE_URL, policy_from: file, approval: false }`. The shared Postgres store. `policy_from: store` keeps this policy in the store as versions edited in the console and the admin API; see [Policy versions](#policy-versions-in-the-store). See [Store](/operations/store/). |
 
 ### Providers
 
@@ -355,20 +356,69 @@ Save the policy file or the keys file and Gantry uses the new version within 2 s
 gantry: the change to /etc/gantry/gantry.policy.yaml or /etc/gantry/gantry.keys.yaml is not used: 1 problem above. Gantry keeps deciding with the version it has (policy 5d41402a, keys 7c211433) and uses the next save that passes `gantry check`.
 ```
 
-Rules, guardrails, budgets, rate limits, caches, prices, keys, and a provider's `models`, `deployments`, `model_ids`, `retries`, `fallback` and `accept_chat` all change without a restart. Spend already counted and the cache are kept across a reload.
+Rules, guardrails, budgets, rate limits, caches, prices, keys and providers all change without a restart. A provider may be added, removed, or given a new `url`, `kind`, `key_env`, `key_file`, `credential`, `region` or `api_version`: the reload builds a new route for it, reading its key at that moment, and requests already sent finish on the old one. A provider whose key cannot be read then (an unset `key_env`, a missing `key_file`) makes the reload fail, and the version in use is kept. Spend already counted and the cache are kept across a reload.
 
 These need a restart, and a change to one of them is rejected with that reason:
 
 - the audit log path,
-- a provider's `name`, `kind`, `url`, `key_env`, `key_file`, `credential`, `allow_private`, `region` or `api_version`,
-- adding or removing a provider,
-- a new provider key value in a `key_env` variable. A new key in a `key_file` is used without a restart: see [Provider keys](/providers/overview/#provider-keys).
+- the `mcp` servers,
+- the store's `postgres_url_env` or `policy_from`,
+- a new provider key value in a `key_env` variable of a provider that did not change. A new key in a `key_file` is used without a restart: see [Provider keys](/providers/overview/#provider-keys).
 
 `GET /healthz` names the hashes in use and those of a rejected version still on disk:
 
 ```json
 {"status":"ok","policy_sha256":"5d41...","keys_sha256":"7c21...","rejected":null}
 ```
+
+## Policy versions in the store
+
+With a store, the policy can live in Postgres instead of the file, as versions an admin edits in the [console](/operations/console-editing/) or the admin API. Each save is a new version, checked exactly as `gantry check` checks a file, recorded in the audit chain, and used by every gateway on the database within 2 seconds, without a restart.
+
+```yaml title="gantry.policy.yaml"
+store: { postgres_url_env: DATABASE_URL, policy_from: store, approval: true }
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `policy_from` | `file` or `store` | `file` | Which one is the source of the policy. Never both. |
+| `approval` | boolean | `false` | A new version waits for a second admin to approve it before it goes live. Read from the live version, so turning it off is itself a change that needs an approval. |
+
+### Which one wins
+
+One source decides, and Gantry says so out loud when the other disagrees.
+
+- **`policy_from: file`** (the default): the file decides, as it always has. The console and the admin API show the policy and export it, and refuse every change with `policy_in_file`. A GitOps team keeps this setting: the file in git is the only way to change the policy, and the console cannot drift from it.
+- **`policy_from: store`**: the store's live version decides. The first gateway on an empty store imports the file as version 1. From then on the file is read only for its `store:` section, which says where the store is. When the file differs from the live version, Gantry says so at every start and the console's Policy page shows a banner. To bring them together, export the live version (`GET /admin/policy`) into the file, or import the file as a new version (`PUT /admin/policy`).
+
+Switching from `store` back to `file` is a restart with the file as the source; switching to `store` again makes the store's live version decide, so import the file first if it changed meanwhile.
+
+### Admin API
+
+Every call takes an admin key and is recorded before anything is done.
+
+| Call | What it does |
+|---|---|
+| `GET /admin/policy` | The live policy as YAML. `ETag` is its version number, `X-Gantry-Policy-Source` is `store` or `file`. This is the export. |
+| `PUT /admin/policy` | A new version from the YAML body (the import). `If-Match` names the version it started from (`none` for the first); a version saved meanwhile makes it `409 version_conflict`. `X-Gantry-Note` says why. |
+| `GET /admin/policy/versions` | The history, newest first, with state, who saved it and who approved it. |
+| `GET /admin/policy/versions/<n>` | One version, its text and its diff from the version it was drafted on. |
+| `POST /admin/policy/versions/<n>/approve` | Puts a pending version live. Refused with `own_version` for the admin who saved it, and with `version_conflict` when another version went live after it was drafted. |
+| `POST /admin/policy/versions/<n>/reject` | Rejects a pending version. |
+| `POST /admin/policy/versions/<n>/rollback` | Saves the text of version `n` as a new version. It goes live, or waits for approval, as any change does. |
+| `POST /admin/policy/dry-run?hours=24` | Replays the last 1 to 720 hours of this gateway's request records against the YAML body and lists the requests it would now refuse, now allow, or allow by another rule. Nothing is saved. |
+
+```bash
+curl -s -D - -H "Authorization: Bearer $GANTRY_ADMIN_KEY" http://127.0.0.1:8080/admin/policy -o gantry.policy.yaml
+curl -s -X PUT -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H 'If-Match: "3"' \
+  -H "X-Gantry-Note: give interns gpt-4o-mini" --data-binary @gantry.policy.yaml http://127.0.0.1:8080/admin/policy
+```
+
+A draft that `gantry check` refuses comes back as `400 invalid_policy` with every problem on its line. A draft that would need a restart (a new audit path, new MCP servers, another store) is refused the same way, so no version goes live that a gateway would then reject.
+
+### In the audit chain
+
+Each call is an `admin` record (`propose_policy`, `approve_policy`, `reject_policy`, `rollback_policy`, `dry_run_policy`) that carries a saved draft's whole text, so a pending or refused draft is on file too. Each gateway then writes a `config_loaded` record with `trigger: store` and `policy_version` when it starts using a new version. The policy holds no secrets: provider keys stay in the environment, in key files or in [sealed credentials](/governance/provider-credentials/).
 
 ## gantry check
 

@@ -78,7 +78,7 @@ The two common clouds:
 
 A Postgres inside your Kubernetes cluster, on a private address and without TLS, needs `sslmode=disable`. Use it only on a network you trust: key hashes, kill switches and spend then cross it in plain text.
 
-Changing the `store:` section needs a restart. The rest of the policy still reloads within 2 seconds.
+Changing the store's `postgres_url_env` or `policy_from` needs a restart. The rest of the policy still reloads within 2 seconds. With `policy_from: store` the policy itself is kept in the store as versions: see [Policy versions](/governance/policy/#policy-versions-in-the-store).
 
 ### Moving an existing keys file in
 

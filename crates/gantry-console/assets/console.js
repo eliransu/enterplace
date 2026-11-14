@@ -86,3 +86,12 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 });
+
+// The policy editor's file field: the file's text replaces the editor's, so importing is a save like any other.
+document.addEventListener("change", function (event) {
+  var input = event.target;
+  if (!input.matches || !input.matches("[data-load-into]") || !input.files || !input.files[0]) return;
+  var into = document.getElementById(input.getAttribute("data-load-into"));
+  if (!into) return;
+  input.files[0].text().then(function (text) { into.value = text; into.focus(); });
+});

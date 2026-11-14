@@ -5,6 +5,7 @@
 //! reads the policy, keys and audit files when it is asked for.
 
 pub mod cli;
+mod edit;
 pub mod html;
 mod pages;
 mod sso;
@@ -380,9 +381,12 @@ async fn record(
         record.insert("error".into(), error.into());
     }
     // The files as they are on disk now, which is what the action read and changed.
+    // The policy in force: the store's live version when it is kept there.
     record.insert(
         "policy_sha256".into(),
-        hash(&console.config().policy).into(),
+        config::policy_text(&console.config().policy)
+            .map_or_else(|_| String::new(), |text| id::sha256_hex(text.as_bytes()))
+            .into(),
     );
     record.insert("keys_sha256".into(), hash(&console.config().keys).into());
     let (tell, written) = tokio::sync::oneshot::channel();
@@ -463,6 +467,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .route("/credentials", get(credentials_page))
         .route("/credentials/{action}", post(credential_change))
         .route("/policy", get(policy_page))
+        .merge(edit::routes())
         .route("/spend", get(spend_page))
         .route("/assets/{file}", get(asset))
         .route("/assets/fonts/{file}", get(font))
@@ -731,8 +736,7 @@ impl Console {
 
     fn sso_config(&self) -> Result<Option<config::Sso>, String> {
         let c = self.config();
-        let text = std::fs::read_to_string(&c.policy)
-            .map_err(|err| format!("{} cannot be read: {err}", c.policy.display()))?;
+        let text = config::policy_text(&c.policy)?;
         let keys = config::read_keys(&c.keys)?.unwrap_or_default();
         config::load_texts(&c.policy, &text, &c.keys, &keys)
             .map(|loaded| loaded.sso)
@@ -1809,7 +1813,7 @@ async fn audit_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
     let config = console.config();
     // ponytail: the whole audit log is read and parsed on every request. Fine for today's logs; an index or a tail read when they reach many megabytes.
     let log = log_for(&admin, read(&config.audit));
-    let policy = read(&config.policy).ok().flatten();
+    let policy = config::policy_text(&config.policy).ok();
     let loaded = config::load(&config.policy, Some(&config.keys)).ok();
     let body = pages::audit(&pages::AuditView {
         admin: &admin.label(),
@@ -1874,7 +1878,7 @@ fn people_body(console: &Console, admin: &Admin, query: &Form, dialog: pages::Di
         admin: &admin.label(),
         query,
         keys_path: &config.keys,
-        keys: keys_for(admin, &config.keys, read(&config.keys)),
+        keys: keys_for(admin, &config.keys, config::read_keys(&config.keys)),
         log: log_for(admin, read(&config.audit)).ok().flatten(),
         dialog,
         read_only: admin.read_only,
@@ -2029,7 +2033,7 @@ async fn revoke(State(console): State<Console>, headers: HeaderMap, body: String
     let sha256 = form.get("sha256").to_string();
     let typed = form.get("confirm").trim().to_string();
     let keys = console.config().keys.clone();
-    let entry = read(&keys)
+    let entry = config::read_keys(&keys)
         .ok()
         .flatten()
         .and_then(|text| config::key_entries(&keys, &text).ok())
@@ -2087,7 +2091,7 @@ async fn revoked(console: &Console, admin: &Admin, entry: &config::KeyEntry) -> 
     let keys = console.config().keys.clone();
     // ponytail: checked here and not inside the file change, so two admins revoking the last two admin keys at the
     // same moment could both pass. The keys file can always be edited by hand to add one back.
-    let admins = read(&keys)
+    let admins = config::read_keys(&keys)
         .ok()
         .flatten()
         .and_then(|text| config::key_entries(&keys, &text).ok())
@@ -2282,7 +2286,7 @@ async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Ur
         return redirect("/console/sign-in");
     };
     let config = console.config();
-    let text = read(&config.policy);
+    let text = config::policy_text(&config.policy).map(Some);
     let loaded = config::load(&config.policy, Some(&config.keys));
     let body = pages::policy(
         &admin.label(),
@@ -2290,6 +2294,7 @@ async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Ur
         &config.policy,
         &text,
         &loaded,
+        &edit::policy_source(&console, &admin),
     );
     page(StatusCode::OK, body)
 }

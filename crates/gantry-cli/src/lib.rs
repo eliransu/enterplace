@@ -878,8 +878,8 @@ fn guardrail_test(
     corpus: Option<&Path>,
     since: Option<&str>,
 ) -> Result<(), String> {
-    let text = std::fs::read_to_string(policy)
-        .map_err(|err| format!("{}: cannot be read: {err}", policy.display()))?;
+    // The policy in force: the store's live version when it is kept there.
+    let text = config::policy_text(policy)?;
     let defined = gantry_core::guard::defined_in(&text)
         .map_err(|errors| format!("{}: {}", policy.display(), errors.join(" ")))?;
     let guard = defined.iter().find(|g| g.name == name).ok_or_else(|| {

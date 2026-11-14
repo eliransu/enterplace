@@ -124,7 +124,7 @@ To rotate a key without a restart, use `key_file` instead of `key_env`:
     models: [gpt-4o]
 ```
 
-Gantry reads the file at start, and refuses to start while it is missing or empty. It then checks the file once a second: a new key in it is used within 2 seconds, without a restart and without a new policy version. A request already sent keeps the key it was sent with. A file that becomes missing or empty is reported, and the key in use is kept. Write the file by renaming a new one over it, so Gantry never reads half a key. Changing the `key_file` path itself needs a restart.
+Gantry reads the file at start, and refuses to start while it is missing or empty. It then checks the file once a second: a new key in it is used within 2 seconds, without a restart and without a new policy version. A request already sent keeps the key it was sent with. A file that becomes missing or empty is reported, and the key in use is kept. Write the file by renaming a new one over it, so Gantry never reads half a key. Changing the `key_file` path gives the provider a new route at the next reload.
 
 <Aside type="caution">
 Do not name a provider key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be a Gantry key.
@@ -164,7 +164,7 @@ The provider's answer, errors and streamed events included, returns unchanged ex
 
 Gantry reloads the policy within 2 seconds of a save. A provider's `models`, `deployments`, `model_ids`, `retries`, `fallback`, `accept_chat` and `accept_messages` change without a restart.
 
-A change to a provider's `name`, `kind`, `url`, `key_env`, `allow_private`, `region` or `api_version`, or adding or removing a provider, needs a restart. A reload with such a change is rejected with that reason. Rotating a provider key means changing its environment variable, which also needs a restart.
+Adding or removing a provider, or changing its `kind`, `url`, `key_env`, `key_file`, `credential`, `allow_private`, `region` or `api_version`, also needs no restart: the reload builds a new route for that provider and reads its key then. A reload whose new provider has no readable key is rejected, and the version in use is kept. Rotating a provider key in an unchanged `key_env` variable needs a restart; use `key_file` or a credential instead.
 
 <Aside type="note">
 Most provider kinds are built from the vendor's API documentation and tested against local mocks. See [Project status](/getting-started/status/).

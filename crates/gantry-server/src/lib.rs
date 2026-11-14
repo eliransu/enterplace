@@ -37,6 +37,7 @@ mod credentials;
 mod jwt;
 mod mcp;
 mod metrics;
+mod policy_api;
 mod reload;
 mod spend;
 pub mod store;
@@ -411,6 +412,46 @@ pub fn app(config: Config) -> Result<Router, ConfigError> {
 /// The gateway's router, its reloader, and the router of `GET /metrics` for a listener of its own.
 type Built = (Router, Option<Arc<Reloader>>, Router);
 
+/// The upstream a provider route becomes, checked: a Bedrock or Vertex provider needs its credentials, and the key
+/// must fit in a header.
+pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError> {
+    if route.kind == Kind::Bedrock && (route.aws.is_none() || route.region.is_none()) {
+        return Err(ConfigError(format!(
+            "provider \"{}\" is of kind bedrock and has no AWS region or credentials. Set its region, and give it credentials from `gantry_server::cloud::aws`.",
+            route.name
+        )));
+    }
+    if matches!(route.kind, Kind::Vertex | Kind::VertexAnthropic)
+        && route.key.is_none()
+        && route.google.is_none()
+    {
+        return Err(ConfigError(format!(
+            "provider \"{}\" is on Vertex AI and has no access token. Give it a key, or credentials from `gantry_server::cloud::google`.",
+            route.name
+        )));
+    }
+    Ok(Upstream {
+        name: route.name.clone(),
+        kind: route.kind,
+        url: checked_upstream(&route.url)?,
+        key: route
+            .key
+            .as_ref()
+            .map(|key| key_header(route.kind, key))
+            .transpose()?,
+        models: route.models.clone(),
+        upstream_models: route.upstream_models.clone(),
+        api_version: route.api_version.clone(),
+        region: route.region.clone(),
+        aws: route.aws.clone(),
+        google: route.google.clone(),
+        fallback: route.fallback.clone(),
+        retries: route.retries,
+        accept_chat: route.accept_chat,
+        accept_messages: route.accept_messages,
+    })
+}
+
 fn build(
     config: Config,
     make_reloader: impl FnOnce(&Live) -> Option<Arc<Reloader>>,
@@ -429,41 +470,7 @@ fn build(
         .wrap_connector(connector);
     let mut providers = Vec::new();
     for route in &config.providers {
-        if route.kind == Kind::Bedrock && (route.aws.is_none() || route.region.is_none()) {
-            return Err(ConfigError(format!(
-                "provider \"{}\" is of kind bedrock and has no AWS region or credentials. Set its region, and give it credentials from `gantry_server::cloud::aws`.",
-                route.name
-            )));
-        }
-        if matches!(route.kind, Kind::Vertex | Kind::VertexAnthropic)
-            && route.key.is_none()
-            && route.google.is_none()
-        {
-            return Err(ConfigError(format!(
-                "provider \"{}\" is on Vertex AI and has no access token. Give it a key, or credentials from `gantry_server::cloud::google`.",
-                route.name
-            )));
-        }
-        providers.push(Upstream {
-            name: route.name.clone(),
-            kind: route.kind,
-            url: checked_upstream(&route.url)?,
-            key: route
-                .key
-                .as_ref()
-                .map(|key| key_header(route.kind, key))
-                .transpose()?,
-            models: route.models.clone(),
-            upstream_models: route.upstream_models.clone(),
-            api_version: route.api_version.clone(),
-            region: route.region.clone(),
-            aws: route.aws.clone(),
-            google: route.google.clone(),
-            fallback: route.fallback.clone(),
-            retries: route.retries,
-            accept_chat: route.accept_chat,
-            accept_messages: route.accept_messages,
-        });
+        providers.push(upstream_of(route)?);
     }
     if let Some(url) = upstream {
         // The single upstream of tests and benchmarks is named after the setup that records it.
@@ -601,7 +608,9 @@ fn build(
             .route("/admin/explain", any(admin::handle))
             .route("/admin/credentials", any(admin::handle))
             .route("/admin/credentials/{name}", any(admin::handle))
-            .route("/admin/guardrails/test", any(admin::handle));
+            .route("/admin/guardrails/test", any(admin::handle))
+            .route("/admin/policy", any(policy_api::handle))
+            .route("/admin/policy/{*rest}", any(policy_api::handle));
     }
     let mcp = mcp::router(&state, config.mcp, config.mcp_setup)?;
     let router = router.fallback(handle).with_state(state);
