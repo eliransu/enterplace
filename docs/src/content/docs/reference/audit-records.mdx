@@ -14,6 +14,7 @@ The audit log is a file of JSON lines, one record per line, in one hash chain. E
 | absent | [Request decision](#request-decision) | For each request Gantry decides, allowed or refused, before anything is forwarded |
 | `usage` | [Usage](#usage) | When a forwarded request's answer ends |
 | `attempts` | [Attempts](#attempts) | After a request that was tried more than once |
+| `upstream_error` | [Upstream error](#upstream-error) | When a forwarded request got no answer from any provider |
 | `answer_guardrails` | [Answer guardrails](#answer-guardrails) | After a request whose rule checks answers |
 | `config_loaded` | [Configuration loaded](#config_loaded) | At start, and when a change to the policy or keys file is used |
 | `config_rejected` | [Configuration rejected](#config_rejected) | When a change fails the check |
@@ -76,6 +77,7 @@ Fields present only in some cases:
 | `key_rotated` | object | The key was rotated and is in its grace: `{"replaced_by": "8a41c2d0", "expires": "2026-11-16T09:14:02Z"}` |
 | `auth`, `jwt_issuer`, `jwt_subject` | string | The caller sent a [JWT](/governance/access-control/#jwts-from-your-identity-provider): `auth` is `jwt`, with the token's issuer and subject. Never the token |
 | `ip_not_allowed` | string | An `ip_not_allowed` refusal: `key` or `rule`, whichever `from` list refused it |
+| `agent` | string | The request carried a `User-Agent` header: the coding agent or SDK that sent it, cut to 200 characters |
 | `guardrails` | array or string | The rule has guardrails. One entry per guardrail and kind found; an empty list means they ran and found nothing. The string `not_run: the body is audio` for a transcription |
 
 A `guardrails` entry:
@@ -112,6 +114,8 @@ Written when a forwarded request's answer ends: its whole body sent, its stream 
 | `cost_usd` | number or null | What the answer cost at the model's price. `null` when the usage or price is unknown, never a guess. `0` for a cache hit |
 | `reserved_usd` | number or null | What the request reserved against its budget. `null` without one |
 | `charged_usd` | number | What counts against budgets (below) |
+| `latency_ms` | integer | Milliseconds from the decision to the end of the answer |
+| `body` | string | `captured` when the rule's `capture:` kept the redacted request and answer. Absent otherwise |
 | `policy_sha256`, `keys_sha256` | string | The version that decided the request |
 
 | `usage` | Meaning |
@@ -138,6 +142,22 @@ Follows a request record, with the same `id`, when the request was tried more th
 | `event` | string | `attempts` |
 | `id` | string | The decision ID of the request |
 | `attempts` | array | Every try in order, each `{"provider", "outcome"}`. `outcome` is the HTTP status, or the code when the provider gave none, such as `upstream_timeout`. For an alias, `provider` names the deployment |
+
+## Upstream error
+
+Follows a request record, with the same `id`, when the request was forwarded and no provider answered: a timeout, a refused connection, or every retry and fallback failed. Without it a failed request would have a decision and nothing after it.
+
+```json
+{"n":4,"event":"upstream_error","id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-13T00:53:41.020Z","status":504,"code":"upstream_timeout","latency_ms":30002,"prev":"...","hash":"..."}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event` | string | `upstream_error` |
+| `id` | string | The decision ID of the request |
+| `status` | integer | The HTTP status Gantry answered with |
+| `code` | string | The refusal code Gantry answered with, such as `upstream_timeout` |
+| `latency_ms` | integer | Milliseconds from the request's arrival to the failure |
 
 ## Answer guardrails
 
@@ -221,6 +241,7 @@ One per admin API call and console action, allowed or refused, written before th
 | `issue_key`, `revoke_key` | The console's People page |
 | `self_issue_key` | `gantry login` |
 | `console_sign_in`, `console_sign_out` | The console sign-in and sign-out |
+| `view_body` | Reading a kept body on the console's Requests page. `target` holds `id` and `rule`. Refused with `not_a_viewer` for someone the rule does not name, or `no_body` when none is kept |
 | `console_sso_starts` | 100 or more single sign-on starts in a minute. `target` holds `starts` and `within_seconds` |
 | `console_sso_refusals` | Refused sign-ins from one address past the first 100 in a minute. `target` holds `client`, `refusals`, `codes` and `within_seconds` |
 

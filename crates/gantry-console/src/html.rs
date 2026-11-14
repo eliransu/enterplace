@@ -301,7 +301,7 @@ tokio::task_local! {
     pub(crate) static EXTRA: std::sync::Arc<Extra>;
 }
 
-const NAV: [(&str, &str); 7] = [
+const NAV: [(&str, &str); 9] = [
     ("/console/audit", "Audit log"),
     ("/console/policy", "Policy"),
     ("/console/models", "Models"),
@@ -309,6 +309,8 @@ const NAV: [(&str, &str); 7] = [
     ("/console/teams", "Teams"),
     ("/console/credentials", "Provider credentials"),
     ("/console/spend", "Spend"),
+    ("/console/requests", "Requests"),
+    ("/console/analytics", "Analytics"),
 ];
 
 fn nav_links(current: &str, class: &str, extra: &str) -> String {

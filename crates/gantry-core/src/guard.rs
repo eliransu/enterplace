@@ -1543,6 +1543,24 @@ fn check_side(body: Value, guards: &[Guardrail], side: Side) -> Verdict {
 /// The action a guardrail in its shadow period records: it would have acted, and did not.
 pub const SHADOW: &str = "shadow";
 
+/// `text` with everything the built-in secrets and PII detectors find replaced by `[MASKED kind]`, whatever the
+/// rule's guardrails are. For bodies kept for investigation: raw text (JSON or an event stream), read whole.
+/// `Err` when the detectors cannot run, and then nothing may be kept.
+pub fn redact(text: &str) -> Result<String, String> {
+    let parts = [TextPart {
+        path: String::new(),
+        role: String::new(),
+        text: text.to_string(),
+    }];
+    let found = scan(&parts)?;
+    let mut body = Value::String(text.to_string());
+    apply_masks(&mut body, &found);
+    Ok(match body {
+        Value::String(text) => text,
+        _ => String::new(),
+    })
+}
+
 /// Replaces each finding's span with `[MASKED kind]`. Only those spans change; the JSON stays valid
 /// because each string is rebuilt whole and written back as a string.
 fn apply_masks(body: &mut Value, masks: &[Finding]) {
@@ -2020,6 +2038,25 @@ pub fn since_seconds(text: &str) -> Result<u64, String> {
 
 /// Why `--since` has nothing to read: the audit log holds no text by design, and this build keeps no request bodies.
 pub const NO_CAPTURE: &str = "a backtest over recent traffic reads captured request bodies, and this Gantry keeps none: the audit log holds no prompt text by design. Pass a corpus of examples instead (--corpus <file.jsonl>, or \"corpus\" in the admin API).";
+
+#[cfg(test)]
+mod redact_tests {
+    #[test]
+    fn redact_masks_secrets_and_pii_anywhere_in_raw_text() -> Result<(), String> {
+        let raw = r#"{"messages":[{"role":"user","content":"key AKIAIOSFODNN7EXAMPLE mail maya@example.com"}]}"#;
+        let out = super::redact(raw)?;
+        assert!(
+            !out.contains("AKIAIOSFODNN7EXAMPLE") && !out.contains("maya@example.com"),
+            "{out}"
+        );
+        assert!(
+            out.contains("[MASKED aws_access_key]") && out.contains("[MASKED email_address]"),
+            "{out}"
+        );
+        assert_eq!(super::redact("nothing here")?, "nothing here");
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {

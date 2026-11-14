@@ -7,6 +7,7 @@
 pub mod cli;
 mod edit;
 pub mod html;
+mod insights;
 mod pages;
 mod sso;
 
@@ -469,6 +470,9 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .route("/policy", get(policy_page))
         .merge(edit::routes())
         .route("/spend", get(spend_page))
+        .route("/requests", get(insights::requests_page))
+        .route("/requests/body", post(insights::body_view))
+        .route("/analytics", get(insights::analytics_page))
         .route("/assets/{file}", get(asset))
         .route("/assets/fonts/{file}", get(font))
         .merge(extension.routes)
@@ -1768,7 +1772,7 @@ fn read(path: &std::path::Path) -> Result<Option<String>, String> {
 }
 
 /// The page a person without the permission a page needs gets instead of it.
-fn not_permitted(admin: &Admin, permission: Permission) -> Response {
+pub(crate) fn not_permitted(admin: &Admin, permission: Permission) -> Response {
     page(
         StatusCode::FORBIDDEN,
         pages::notice(

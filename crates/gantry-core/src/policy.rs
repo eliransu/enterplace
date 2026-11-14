@@ -613,6 +613,8 @@ pub struct Limits {
     /// Data residency: the regions an alias deployment must be labelled with. A request with no deployment in one
     /// is refused, never sent elsewhere. `None` sets no residency.
     pub regions: Option<Vec<String>>,
+    /// Keep the redacted request and answer of each request this rule allows (`capture:`).
+    pub capture: Option<Capture>,
 }
 
 /// Whose requests share a rule's cached answers.
@@ -652,6 +654,14 @@ impl Limits {
             .find(|c| c.models.is_empty())
             .map(|c| c.budget)
     }
+}
+
+/// What a rule's `capture:` keeps, for how long, and for whom.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Capture {
+    pub days: u32,
+    /// A name, `team:<team>` or `role:<console role>`.
+    pub viewers: Vec<String>,
 }
 
 /// What a rule does with a provider key the caller sends in `x-gantry-provider-key`.

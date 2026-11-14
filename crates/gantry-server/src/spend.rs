@@ -69,6 +69,8 @@ pub(crate) struct Spend {
     /// With a store: this gateway's holds on `parallel:` limits, by ID, with the hour's counter each is in now.
     holds: Mutex<HashMap<u64, (String, String)>>,
     next_hold: std::sync::atomic::AtomicU64,
+    /// Where the redacted bodies of rules with `capture:` are kept. `None` when no master key seals them.
+    pub(crate) bodies: Option<Arc<dyn gantry_core::insights::Bodies>>,
 }
 
 /// A request's place under one `parallel:` limit, given back when its answer ends.
@@ -1166,6 +1168,20 @@ pub(crate) struct Admitted {
     counted: Vec<(String, Period)>,
     /// Places held under `parallel:` limits until the answer ends.
     parallel: Vec<Hold>,
+    /// When it was admitted, for the latency on its usage record.
+    started: Instant,
+    /// What its rule's `capture:` keeps, until the answer ends.
+    capture: Option<Capture>,
+}
+
+/// A request body to keep with its answer, per its rule's `capture:`.
+struct Capture {
+    rule: String,
+    days: u32,
+    viewers: Vec<String>,
+    request: Bytes,
+    /// A streamed answer's frames, joined when the stream ends. A whole answer comes to `close` itself.
+    answer: Option<Bytes>,
 }
 
 impl Drop for Admitted {
@@ -1295,6 +1311,14 @@ pub(crate) async fn admit(
         alias: (ask.sent != ask.model).then(|| ask.sent.to_string()),
         counted: Vec::new(),
         parallel: Vec::new(),
+        started: Instant::now(),
+        capture: ask.rule.limits.capture.as_ref().map(|c| Capture {
+            rule: ask.rule.name.clone(),
+            days: c.days,
+            viewers: c.viewers.clone(),
+            request: ask.body.clone(),
+            answer: None,
+        }),
     };
     // The caller pays their provider: unless the rule says otherwise, budgets (what the organization pays) do not
     // reserve or count it. Rate and token limits still hold.
@@ -1960,6 +1984,7 @@ impl Admitted {
             let counted = if hit { Some(0) } else { used.or(Some(held)) };
             self.spend.settle_tokens(&scope, held, counted, grant);
         }
+        let captured = self.keep_body(answer.as_ref().map(|(_, b)| b), &now);
         // Every budget reserved the same most-it-could-cost, so one of them says what was reserved.
         let reserved = self.reservations.first().map(|r| r.usd);
         // The usage of an answer cut off before its final counts is only what was generated before the cut: the
@@ -2195,6 +2220,16 @@ impl Admitted {
                 if counted { "counted" } else { "not_counted" }.into(),
             );
         }
+        record.insert(
+            "latency_ms".into(),
+            u64::try_from(self.started.elapsed().as_millis())
+                .unwrap_or(u64::MAX)
+                .into(),
+        );
+        if captured {
+            // The chain says a body was kept, and the console offers it only then.
+            record.insert("body".into(), "captured".into());
+        }
         record.insert("policy_sha256".into(), self.version.0.as_str().into());
         record.insert("keys_sha256".into(), self.version.1.as_str().into());
         Some(record)
@@ -2202,6 +2237,40 @@ impl Admitted {
 }
 
 impl Admitted {
+    /// Keeps the request and its answer, redacted, when its rule captures them. Returns whether it did. Nothing is
+    /// kept when the detectors cannot run: a body is never kept unredacted.
+    fn keep_body(&mut self, answer: Option<&Bytes>, now: &str) -> bool {
+        let (Some(capture), Some(bodies)) = (self.capture.take(), self.spend.bodies.as_ref())
+        else {
+            return false;
+        };
+        let answer = answer.cloned().or(capture.answer).unwrap_or_default();
+        let redact = |bytes: &Bytes| {
+            gantry_core::guard::redact(&String::from_utf8_lossy(bytes))
+                .map(|text| gantry_core::insights::cut_body(&text))
+        };
+        let (request, answer) = match (redact(&capture.request), redact(&answer)) {
+            (Ok(request), Ok(answer)) => (request, answer),
+            (Err(err), _) | (_, Err(err)) => {
+                eprintln!(
+                    "gantry: the body of decision {} was not kept: {err}",
+                    self.decision
+                );
+                return false;
+            }
+        };
+        bodies.keep(gantry_core::insights::Body {
+            id: self.decision.clone(),
+            time: now.to_string(),
+            rule: capture.rule,
+            expires: gantry_core::insights::now_secs() + u64::from(capture.days) * 86_400,
+            viewers: capture.viewers,
+            request,
+            answer,
+        });
+        true
+    }
+
     /// The most a request without a budget could have cost, for the charge of one cut off or without usage.
     fn estimate(&self) -> Option<f64> {
         let ((body, route), price) = self.estimate_from.as_ref().zip(self.price.as_ref())?;
@@ -2253,14 +2322,16 @@ impl Metered {
             .as_ref()
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.starts_with("text/event-stream"));
+        let keep = !stream || admitted.capture.is_some();
         response.map(|inner| {
             Body::new(Metered {
                 inner,
                 admitted: Some(admitted),
                 status,
                 content_type,
+                // A captured stream is kept too, for its body.
+                frames: keep.then(Vec::new),
                 scanner: stream.then(UsageScanner::new),
-                frames: (!stream).then(Vec::new),
                 kept: 0,
                 ended: false,
             })
@@ -2274,8 +2345,11 @@ impl Metered {
         let complete = self.ended || self.inner.is_end_stream();
         let (status, content_type) = (self.status, self.content_type.take());
         match (self.scanner.take(), self.frames.take()) {
-            (Some(scanner), _) => {
+            (Some(scanner), frames) => {
                 let mut admitted = admitted;
+                if let (Some(capture), Some(frames)) = (admitted.capture.as_mut(), frames) {
+                    capture.answer = Some(Bytes::from(frames.concat()));
+                }
                 admitted.streamed = scanner.streamed_output();
                 let (usage, done) = scanner.finish_final();
                 let ended = match (complete, done) {

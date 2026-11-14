@@ -34,6 +34,7 @@ mod admin;
 mod alias;
 pub mod cloud;
 mod credentials;
+pub mod insights;
 mod jwt;
 mod mcp;
 mod metrics;
@@ -252,6 +253,8 @@ pub struct Config {
     pub mcp_setup: McpSetup,
     /// What several gateways share (`store:` in the policy). `None` keeps keys, switches and spend to this process.
     pub store: Option<Arc<dyn gantry_core::store::Store>>,
+    /// Where rules with `capture:` keep redacted bodies, sealed. `None` keeps none.
+    pub bodies: Option<Arc<dyn gantry_core::insights::Bodies>>,
     /// What a binary that embeds the gateway adds to it.
     pub extension: Extension,
 }
@@ -514,6 +517,7 @@ fn build(
     let reloader = make_reloader(&live);
     let mut spend = spend::Spend::default();
     spend.store = config.store.clone();
+    spend.bodies = config.bodies.clone();
     let spend = Arc::new(spend);
     // Holds on parallel limits still in flight at the turn of the hour move to the new hour's counter, also on a
     // gateway that admits nothing meanwhile.
@@ -2420,7 +2424,10 @@ async fn handle(State(state): State<AppState>, mut request: Request) -> Response
         Ok(Next::Forward(parts, bytes, _memory)) => {
             match send(&state, &version, parts, bytes, arrived, &decision).await {
                 Ok(response) => response,
-                Err(failure) => failure.respond(&decision, anthropic),
+                Err(failure) => {
+                    upstream_failed(&state, &version, &decision, &failure, arrived);
+                    failure.respond(&decision, anthropic)
+                }
             }
         }
         Err(refusal) => refusal.respond(&decision, anthropic),
@@ -2438,6 +2445,38 @@ async fn handle(State(state): State<AppState>, mut request: Request) -> Response
         tracer.answered(&decision, response.status().as_u16());
     }
     response
+}
+
+/// Records a request that was decided and forwarded, and got no answer from any provider, so the request log counts
+/// it as an error. Does not wait: the caller has its answer already.
+fn upstream_failed(
+    state: &AppState,
+    version: &Snapshot,
+    decision: &str,
+    failure: &Refusal,
+    arrived: Instant,
+) {
+    let (Some(audit), Some(_)) = (&state.audit, &version.policy) else {
+        return;
+    };
+    let mut record = serde_json::Map::new();
+    record.insert("event".into(), "upstream_error".into());
+    record.insert("id".into(), decision.into());
+    record.insert("time".into(), gantry_core::audit::timestamp().into());
+    record.insert("status".into(), failure.status.as_u16().into());
+    record.insert("code".into(), failure.code.into());
+    record.insert(
+        "latency_ms".into(),
+        u64::try_from(arrived.elapsed().as_millis())
+            .unwrap_or(u64::MAX)
+            .into(),
+    );
+    let decision = decision.to_string();
+    audit.log.append_record_then(&record, move |result| {
+        if let Err(err) = result {
+            eprintln!("gantry: the upstream error record of decision {decision} could not be written: {err}");
+        }
+    });
 }
 
 async fn unchecked(state: &AppState, request: Request) -> Result<Next, Refusal> {
@@ -2478,6 +2517,13 @@ async fn decide(
     let path = request.uri().path().to_string();
     // Holds the person a JWT names, for as long as the record of this request needs it.
     let minted = std::sync::OnceLock::new();
+    // The coding agent or SDK that sent it, for the request log. Cut like any caller-chosen string.
+    let agent: Option<String> = request
+        .headers()
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.chars().take(200).collect());
     let mut seen = Seen::default();
     let mut outcome = check(
         state, version, policy, request, &mut seen, &minted, client_ip,
@@ -2596,6 +2642,9 @@ async fn decide(
         };
         // The record is written before anything is forwarded. A request that cannot be recorded does not happen.
         let mut record = gantry_core::audit::record(&entry);
+        if let Some(agent) = &agent {
+            record.insert("agent".into(), agent.as_str().into());
+        }
         if let Some(found) = &found {
             record.insert(
                 "guardrails".into(),
