@@ -59,7 +59,7 @@ The audit log shows what reached Gantry. It cannot show a tool that calls a prov
 
 The report is built from audit data alone. The device agent in Gantry Enterprise (`gantry device`) inspects each machine's tool settings and could tell "configured for Gantry" from "configured for a provider directly", but it reports only to the hosted Gantry app. The self-hosted gateway lacks:
 
-- The `GET /device/profile` and `POST /device/report` endpoints the agent calls.
+- The `GET /device/profile` and `POST /device/report` endpoints the agent calls. The agent runs on macOS, Linux and Windows, and each report lists the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed, and whether each goes through Gantry's MCP gateway (`deploy/mdm/README.md`).
 - Enrolment tokens and storage for device reports.
 - A "configured for a provider directly" state in the agent's report. It reports `installed`, `configured` (pointed at Gantry) and `drift`, for Claude Code, Codex, Cursor and VS Code only.
 

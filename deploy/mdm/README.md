@@ -1,6 +1,6 @@
 # MDM packaging for the Gantry device agent (plan 6.4, levels 1 and 2)
 
-The agent (`gantry device`) runs as a root LaunchDaemon. Every 5 minutes it reads the org's device
+On macOS the agent (`gantry device`) runs as a root LaunchDaemon; Linux and Windows are below. Every 5 minutes it reads the org's device
 profile from the control plane and, for the person signed in at the screen, points Claude Code (managed settings in
 `/Library/Application Support/ClaudeCode/managed-settings.json`), Codex (`~/.codex/config.toml`) and the shell
 (`~/.config/gantry/env`) at the gateway. It puts them back if someone changes them and reports coverage, which owners
@@ -38,6 +38,46 @@ read at `/o/<org>/devices/coverage` in the app.
 
 Try it by hand first: `GANTRY_DEVICE_TOKEN=gantry_dev_... gantry device --control-plane <url> --dry-run`
 prints what it would change and the report it would send, and writes nothing.
+
+## Linux
+
+`gantry-device.service` runs the agent as root under systemd. Replace `CONTROL_PLANE_URL`, put the token in
+`/etc/gantry/device-token` (mode 0600), and `systemctl enable --now gantry-device`. As root it finds the signed-in
+person with `who` and works in `/home/<user>`; Claude Code's managed settings go to
+`/etc/claude-code/managed-settings.json`. Run as a user (a user unit, or by hand) it writes that user's own
+`~/.claude/settings.json`. Cursor and VS Code count as installed when `cursor` or `code` is on `PATH`.
+
+## Windows
+
+The agent runs as the signed-in user, from a scheduled task at logon, so it writes `%USERPROFILE%\.claude\settings.json`,
+`%USERPROFILE%\.codex\config.toml` and `%USERPROFILE%\.config\gantry\env`. The token is read from
+`C:\ProgramData\Gantry\device-token`, which Intune or Group Policy can deliver. Create the task with:
+
+```bat
+schtasks /Create /TN "Gantry device agent" /SC ONLOGON /RL LIMITED ^
+  /TR "\"C:\Program Files\Gantry\gantry.exe\" device --control-plane https://gantry-control.example.com"
+```
+
+Cursor and VS Code count as installed when `%LOCALAPPDATA%\Programs\cursor` or `%LOCALAPPDATA%\Programs\Microsoft VS Code`
+exists. The shell env file is not read by Windows shells: set `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` with your
+device management tool there. Not run on a Windows machine yet: the paths follow each tool's documentation.
+
+## MCP inventory
+
+Every report also lists the MCP servers configured in each tool, with `tool`, `file`, `server`, `transport` (`http` or
+`stdio`), `target` (the URL without its query or login, or the command's file name) and `via_gantry` (whether the URL is
+the gateway's `/mcp` or a bundle under it). Arguments, environment variables and headers are never reported.
+
+| Tool | macOS | Linux | Windows | Key |
+|---|---|---|---|---|
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | `~/.config/Claude/claude_desktop_config.json` | `%APPDATA%\Claude\claude_desktop_config.json` | `mcpServers` |
+| Claude Code | `~/.claude.json` (and each project under `projects`), managed `managed-mcp.json` | same | same (`C:\Program Files\ClaudeCode\managed-mcp.json`) | `mcpServers` |
+| Cursor | `~/.cursor/mcp.json` | same | `%USERPROFILE%\.cursor\mcp.json` | `mcpServers` |
+| VS Code | `~/Library/Application Support/Code/User/mcp.json` | `~/.config/Code/User/mcp.json` | `%APPDATA%\Code\User\mcp.json` | `servers` |
+| Zed | `~/.config/zed/settings.json` | `~/.config/zed/settings.json` | `%APPDATA%\Zed\settings.json` | `context_servers` |
+
+VS Code's and Zed's files may hold comments and trailing commas; they are read as such. Project files (`.mcp.json`,
+`.cursor/mcp.json`, `.vscode/mcp.json`) are not read: the agent does not walk the disk for repositories.
 
 ## Levels
 

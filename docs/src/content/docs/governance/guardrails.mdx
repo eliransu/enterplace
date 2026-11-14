@@ -1,6 +1,6 @@
 ---
 title: Guardrails
-description: Check requests and answers for secrets, personal data, your own patterns and word lists, prompt injection and unsafe content with built-in detectors, eight vendors or your own webhook.
+description: Check requests and answers for secrets, personal data, your own patterns and word lists, prompt injection and unsafe content with built-in detectors, the Gitleaks rules, fourteen vendors or your own webhook.
 sidebar:
   order: 5
 ---
@@ -57,7 +57,7 @@ Guardrails are defined once at the top level and named by rules. A change applie
 | `action` | Effect |
 |---|---|
 | `block` | Refuse the request with `guardrail_blocked` (403). For a vendor or webhook, obey the service: refuse when it refuses, mask when it masks. |
-| `mask` | Replace each finding with `[MASKED <kind>]` and forward the changed request. Built-in, `regex` and `keywords` types and `presidio` only. |
+| `mask` | Replace each finding with `[MASKED <kind>]` and forward the changed request. Built-in, `regex` and `keywords` types, and the vendors that redact: `presidio`, `pangea`, `hiddenlayer`, `lasso`. |
 | `warn` | Forward unchanged and record what was found. Use it to see what a guardrail would catch before you enforce it. |
 
 `action` is required for `secrets`, `pii`, `regex` and `keywords`. Vendors and webhooks default to `block`.
@@ -65,6 +65,8 @@ Guardrails are defined once at the top level and named by rules. A change applie
 Every action records what was found: one entry per guardrail and kind with `guardrail`, `detector`, `kind`, `action` (`block`, `mask`, `warn`, `shadow` or `skipped`) and `count`. The matched text is never in a record, a refusal or Gantry's log. An empty list means the guardrails ran and found nothing.
 
 ### Order
+
+On a request, a rule's [transforms](/governance/transforms/) run first, then its [function tool check](/governance/tool-permissions/), then its guardrails. On an answer the same order holds. So every check reads what is really sent or returned.
 
 The built-in guardrails a rule names run first, then its vendors and webhooks in the order written. A remote guardrail sees the text after built-in masking. Once one blocks, no further remote guardrail is called. A `block` wins over a `mask`: a refused request is never changed.
 
@@ -131,6 +133,22 @@ What the corpus shows the detectors miss or over-report:
 - `api_key`, `slack_token`: a URL slug starting `sk-` and a placeholder such as `xoxb-your-token` are reported.
 
 The corpus does not cover names, postal addresses, passwords on their own, secrets with no fixed prefix, or values that are encoded, split across messages, spelled out or translated. The detectors do not find those, so no number here speaks for them.
+
+### The Gitleaks pack
+
+`pack: gitleaks` on a `secrets` guardrail reads with [Gitleaks](https://github.com/gitleaks/gitleaks)' default rule set (221 rules, MIT license, Copyright (c) 2019 Zachary Rice) in place of Gantry's own secrets kinds. Each finding's kind is the Gitleaks rule ID, such as `aws-access-token` or `github-pat`, and its detector is `gitleaks`.
+
+```yaml
+guardrails:
+  - name: gitleaks
+    type: secrets
+    pack: gitleaks
+    action: mask
+```
+
+Each rule is read as Gitleaks reads it: its keywords first, then its regex, its secret group, its entropy floor and its allowlists (regexes and stopwords, the rule's own and the global ones). Path allowlists do not apply to a prompt. Where two rules find the same text, a named rule wins over `generic-api-key`, so one secret is one finding.
+
+On the `gantry-detectors-v2` corpus, scored as one class of secrets, the pack measures 97.2% precision and 84.9% recall over the kinds Gitleaks has rules for (a CI test holds it to 97% and 84%). It does not find `gantry_key`, and its generic rule reports some hard negatives the built-in detector passes. The rules are at `crates/gantry-core/data/gitleaks-rules.json`, made by `scripts/gitleaks_import.py` from Gitleaks' `config/gitleaks.toml`; the only change is escaping literal braces for Rust's regex.
 
 ## Custom detectors: regex and keywords
 
@@ -389,7 +407,104 @@ guardrails:
 ```
 
 </TabItem>
+<TabItem label="Pangea AI Guard">
+
+Calls `POST {url}/v1/text/guard` with the messages as chat turns. Default `url` `https://ai-guard.aws.us.pangea.cloud`; use your project's region host. `key_env` required, sent as `Authorization: Bearer`. Optional `recipe` (Pangea's default when absent).
+
+`result.blocked: true` blocks. Each detector with `detected: true` is a finding, such as `prompt_injection` or `pii_entity`. With `action: mask` and `result.transformed: true`, Gantry forwards `result.prompt_messages`, which must hold one message per message sent. A detection the recipe does not block is recorded as a warning.
+
+```yaml
+guardrails:
+  - name: pangea
+    type: pangea
+    key_env: PANGEA_AI_GUARD_TOKEN
+    recipe: pangea_prompt_guard
+    on_failure: fail_closed
+```
+
+</TabItem>
+<TabItem label="NeMo Guardrails">
+
+An NVIDIA NeMo Guardrails server (0.21 or later). Calls `POST {url}/v1/chat/completions` with the messages and `guardrails: {config_id, options: {log: {activated_rails: true}}}`. `url` and `config_id` required. Optional `model`, `key_env` (sent as `Authorization: Bearer`, for a proxy that wants one).
+
+A refusal from NeMo is an ordinary answer, so Gantry reads the activated rails: a rail with `stop: true` blocks, and its name is the finding (`self check input` becomes `self_check_input`). An answer without `guardrails.log.activated_rails` is a service failure. Cannot mask.
+
+```yaml
+guardrails:
+  - name: nemo
+    type: nemo_guardrails
+    url: http://127.0.0.1:8000
+    config_id: main
+    on_failure: fail_closed
+```
+
+</TabItem>
+<TabItem label="HiddenLayer">
+
+HiddenLayer AI Detection and Response. Gets a token with `POST {url}/oauth2/token` (client credentials, HTTP Basic from `HIDDENLAYER_CLIENT_ID` and `HIDDENLAYER_CLIENT_SECRET`), then calls `POST {url}/detection/v1/interactions` with the request's messages as `input` and an answer's as `output`. Default `url` `https://api.us.hiddenlayer.ai` (`https://api.eu.hiddenlayer.ai` for the EU). Optional `model`, sent as metadata. No `key_env`.
+
+`evaluation.action` `Block` blocks, `Allow` and `Alert` allow (an alert's detections are recorded), `Redact` masks with `modified_data` under `action: mask` and blocks otherwise. Each analysis with `detected: true` is a finding. Two calls per check: give it a `timeout_ms` that covers both.
+
+<!-- not checked -->
+```yaml
+guardrails:
+  - name: hiddenlayer
+    type: hiddenlayer
+    on_failure: fail_closed
+    timeout_ms: 2000
+```
+
+</TabItem>
+<TabItem label="Lasso">
+
+Lasso Security's classify API. Calls `POST {url}/classify`, or `POST {url}/classifix` under `action: mask`, with the messages and `messageType` (`PROMPT`, or `COMPLETION` on an answer). Default `url` `https://server.lasso.security/gateway/v3`. `key_env` required, sent as `lasso-api-key`.
+
+A finding with action `BLOCK` blocks; `AUTO_MASKING` masks with the returned `messages` under `action: mask`; `WARN` is recorded. Each finding's `name` is the kind. A violation with no findings listed blocks, naming the deputies that fired. Lasso's API reference needs a login; this follows the schema published with its integrations, read on 2026-11-14.
+
+```yaml
+guardrails:
+  - name: lasso
+    type: lasso
+    key_env: LASSO_API_KEY
+    on_failure: fail_closed
+```
+
+</TabItem>
+<TabItem label="Guardrails AI">
+
+A Guardrails AI server (`guardrails-api`). Calls `POST {url}/guards/{guard_name}/validate` with `{"llmOutput": text}`, the messages joined by a blank line. `url` and `guard_name` required. Optional `key_env`, sent as `Authorization: Bearer`.
+
+`validationPassed: false` blocks, naming each validator whose `validatorStatus` is `fail` (lowercased, such as `detectpii`). An answer without `validationPassed` is a service failure. Cannot mask. Arize's guards are Guardrails AI validators: run them in this server to use them.
+
+```yaml
+guardrails:
+  - name: guardrails-ai
+    type: guardrails_ai
+    url: http://127.0.0.1:8000
+    guard_name: no-pii
+    on_failure: fail_closed
+```
+
+</TabItem>
+<TabItem label="Aporia">
+
+Calls `POST {url}/validate` with the messages and `validation_target` (`prompt`, or `response` on an answer). `url` (your project's URL) and `key_env` required; the key goes in `X-APORIA-API-KEY`.
+
+`action: block` blocks with the finding `aporia_policy`. Any other action passes, and Gantry does not take Aporia's rewritten text. Aporia's API reference is not public; this follows its integration guides, read on 2026-11-14.
+
+```yaml
+guardrails:
+  - name: aporia
+    type: aporia
+    url: https://gr-prd.aporia.com/your-project-id
+    key_env: APORIA_API_KEY
+    on_failure: fail_closed
+```
+
+</TabItem>
 </Tabs>
+
+Not built in: Prompt Security and Pillar Security publish no API reference without an account, so connect them with a [webhook](/governance/guardrail-webhooks/) that calls their API. Anthropic documents no hosted moderation endpoint: its guide classifies with Claude itself, which you can do with a `llama_guard` guardrail whose `url` is a Gantry and whose `prompt` asks for `safe` or `unsafe`.
 
 ## Requests and answers
 
@@ -400,6 +515,7 @@ guardrails:
 | `/v1/chat/completions`, `/v1/messages` | The system prompt, every text message or text block, text in tool results, text documents, search results. |
 | `/v1/responses` | `instructions`, every `input` text, the `output` of `function_call_output` items, string values of `prompt.variables`. |
 | `/v1/embeddings` | `input` strings. Token ID arrays are not text. |
+| Gemini `generateContent` bodies | `systemInstruction` and every `contents` part's `text`. |
 
 Tool definitions, tool arguments, images and files (a PDF or any base64 document) are not read. On a rule with guardrails, a body that names the same key twice in any object is refused with `unreadable_request`, because a guardrail would read one copy and the provider might act on the other.
 
@@ -419,7 +535,7 @@ guardrails:
     on: [answer]
 ```
 
-On an answer, a guardrail reads the model's text: a chat completion's `choices[].message.content` and tool call arguments, a message's `text` blocks, a Responses answer's output text. Every type works there.
+On an answer, a guardrail reads the model's text and the arguments of its tool calls: a chat completion's `choices[].message.content` and `tool_calls[].function.arguments`, a message's `text` blocks and `tool_use` input, a Responses answer's output text and `function_call` arguments, and a Gemini answer's `parts[].text` and `functionCall.args`. Arguments given as a JSON object are read as their JSON text; masked arguments must still be JSON, or the answer is withheld. Every type works there.
 
 - `block` replaces the answer with a 403 `guardrail_blocked` refusal, for example `Refused: guardrail "no-secrets-out" withheld the model's answer, which contained aws_access_key (1). ...`. The answer was produced, so its usage still counts.
 - `mask` rewrites the text in the answer. `warn` records only.
@@ -490,11 +606,25 @@ rules:
 A Responses request that names `previous_response_id`, `conversation` or a stored `prompt` makes the provider add text Gantry never sees, so guardrails do not check it. Send `store: false` and the whole conversation in `input`.
 </Aside>
 
+## Realtime sessions
+
+On a realtime session (OpenAI Realtime, Gemini Live) the rule's guardrails read each text the session carries, and the session's record lists what they found, without the text.
+
+| Text | Read as | When a guardrail blocks |
+|---|---|---|
+| The caller's text events: `conversation.item.create` text, `session.update` and `response.create` instructions; Gemini's `clientContent` turns and `realtimeInput.text` | request | The event is dropped. OpenAI gets an `error` event with `guardrail_blocked`; Gemini, which has no error event, has its session ended. A `mask` sends the event on masked. |
+| The transcript of the caller's speech: `conversation.item.input_audio_transcription.completed`, Gemini's `inputTranscription` | request | The session ends with close code 1008. |
+| What the model said: `response.output_audio_transcript.done`, `response.output_text.done`, Gemini's `outputTranscription` and model text | answer (`on: [answer]`) | The session ends with close code 1008. |
+
+A transcript is of speech already heard, so a `mask` there is recorded and not applied. Audio itself is not read. Gemini sends model text in pieces, and each piece is read alone, so a finding split across two pieces is missed. The session's `realtime_session` record has `ended_by: guardrail` and a `guardrails` list.
+
 ## Refusal codes
 
 | Code | Status | Cause |
 |---|---|---|
 | `guardrail_blocked` | 403 | A guardrail blocked the request or the answer, or a `fail_closed` service could not check it. |
+| `tool_not_allowed` | 403 | The request declares, or the answer calls, a function tool the rule's `tools:` does not allow. See [Tool permissions](/governance/tool-permissions/). |
+| `transform_failed` | 502 | A `fail_closed` transform could not rewrite the request or answer. See [Transforms](/governance/transforms/). |
 | `unreadable_request` | 400 | A body naming the same key twice on a rule with guardrails. |
 
 ## Related
