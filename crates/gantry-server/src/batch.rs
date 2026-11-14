@@ -865,6 +865,8 @@ enum Then {
     Guard(Box<GuardResults>),
     /// Served by Gantry for a file or batch it keeps for a Bedrock or Vertex AI provider.
     Cloud(Cloud),
+    /// A background response deleted before it was settled, with what the provider said of it just before.
+    DeleteBackground(String, Option<Box<Value>>),
     /// A Veo operation on Vertex AI read for a video: its object, or with `true` its content.
     Veo(String, bool),
     /// Answered by Gantry, with no provider asked: a held answer. With an ID, that object is deleted.
@@ -2281,6 +2283,21 @@ async fn prepare<'a>(
                 _ => format!("/v1/responses/{id}"),
             };
             let target = responses_target(&version.providers[provider], &path, &query);
+            // A background response deleted before Gantry saw it end is charged as the provider last reported it:
+            // read now, since once it is deleted the provider has nothing to read.
+            if matches!(op, Op::ResponseDelete(_))
+                && response.purpose == BACKGROUND
+                && !response.settled
+            {
+                let last = read_response(state, &version.providers[provider], &id).await;
+                return Ok(ready(
+                    provider,
+                    Method::DELETE,
+                    target,
+                    Bytes::new(),
+                    Then::DeleteBackground(id, last.map(Box::new)),
+                ));
+            }
             // Read whole, so a background response seen ended is charged what it used.
             let streamed = query.contains("stream=true");
             let (method, then) = match &op {
@@ -3781,31 +3798,25 @@ async fn after(
             settle(state, version, &id, &value).await;
             Ok(respond(body))
         }
+        Then::DeleteBackground(id, last) => {
+            // Deleted before Gantry saw it end: charged the usage the provider last reported, else what it could
+            // have cost (its reservation): it ran, and is billed, whether or not anyone reads it.
+            let mut last = last.map_or_else(|| json!({}), |o| *o);
+            if !ended(Item::Response, &last) {
+                last["status"] = "incomplete".into();
+            }
+            settle(state, version, &id, &last).await;
+            forget(
+                state,
+                decision,
+                &id,
+                &format!("deleted by {}", ready.person),
+            )
+            .await;
+            Ok(respond(body))
+        }
         Then::Delete(id) => {
             let deleting = state.owned.get(&id).await;
-            if let Some(response) = deleting
-                .as_ref()
-                .filter(|o| o.item == Item::Response && o.purpose == BACKGROUND && !o.settled)
-            {
-                // Deleted before Gantry saw it end: settled as the provider last said, else charged what it could
-                // have cost (it ran, and is billed, whether or not anyone reads it).
-                let last = match version
-                    .providers
-                    .iter()
-                    .find(|p| p.name == response.provider)
-                {
-                    Some(provider) => read_response(state, provider, &id).await,
-                    None => None,
-                };
-                let ended = last.filter(|o| ended(Item::Response, o));
-                settle(
-                    state,
-                    version,
-                    &id,
-                    &ended.unwrap_or_else(|| json!({"status": "incomplete"})),
-                )
-                .await;
-            }
             // A container deleted is charged for the minutes it lived until now.
             if deleting.is_some_and(|o| o.item == Item::Container) {
                 settle(

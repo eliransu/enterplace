@@ -7,6 +7,12 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Fixed: deleting a running background response
+
+- A background response deleted before Gantry saw it end is read at the provider before the delete is sent, so it is
+  charged the usage the provider last reported for it (it was read after the delete, which the provider no longer
+  answers, and always charged its reservation). With no usage reported it is still charged its reservation.
+
 ### Provider proxies everywhere
 
 - A provider's `proxy_env` now carries its realtime sessions (OpenAI Realtime, Gemini Live; `headers_env` too) and

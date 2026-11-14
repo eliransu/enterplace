@@ -2385,6 +2385,90 @@ async fn a_background_response_is_charged_its_usage_once_when_it_is_seen_done() 
     Ok(())
 }
 
+/// A background response deleted before Gantry saw it end is charged once, when it is deleted: the usage the provider
+/// last reported for it, read just before the delete, or, when it reported none, its reservation.
+#[tokio::test]
+async fn a_background_response_deleted_unfinished_is_charged_what_it_last_reported_or_its_reservation()
+-> TestResult {
+    let queued = json!({"id": "resp_del", "object": "response", "status": "queued", "background": true, "model": "gpt-4o", "output": []});
+    let deleted = json!({"id": "resp_del", "object": "response.deleted", "deleted": true});
+    let charged = |gw: &Gateway| -> Result<Vec<Value>, Box<dyn std::error::Error>> {
+        Ok(all_records(gw)?
+            .into_iter()
+            .filter(|r| r["event"] == "usage" && r["response"] == "resp_del")
+            .collect())
+    };
+    for (name, last, expected) in [
+        // Running, with what it has used so far: 1,000 input tokens at $2 and 50 output tokens at $10 per million.
+        (
+            "responses-delete-usage",
+            json!({"id": "resp_del", "object": "response", "status": "in_progress", "background": true, "model": "gpt-4o",
+                "output": [], "usage": {"input_tokens": 1000, "output_tokens": 50}}),
+            Some(0.0025),
+        ),
+        // Still queued, no usage: its reservation.
+        ("responses-delete-reserved", queued.clone(), None),
+    ] {
+        let openai = mock(vec![
+            Reply::Json(queued.clone()),
+            Reply::Json(last),
+            Reply::Json(deleted.clone()),
+        ])
+        .await?;
+        let gw = gateway(
+            name,
+            vec![route("openai", Kind::OpenAi, openai.url(""), &["gpt-4o"])],
+            budgeted(everyone(), &[("gpt-4o", priced(2.0, 10.0, 1000))]),
+        )?;
+        let (status, headers, text) = post(
+            &gw,
+            "/v1/responses",
+            &json!({"model": "gpt-4o", "input": "a long task", "background": true, "max_output_tokens": 500}),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        let (_, held) = records_of(&gw, &headers).await?;
+        assert_eq!(held["charged_usd"], 0.0);
+        // The response is its creator's once its answer is recorded: until then a delete is refused here.
+        let mut answer = (StatusCode::NOT_FOUND, HeaderMap::new(), String::new());
+        for _ in 0..100 {
+            answer = request(&gw, "DELETE", "/v1/responses/resp_del", MAYA).await?;
+            if answer.0 != StatusCode::NOT_FOUND {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(answer.0, StatusCode::OK, "{}", answer.2);
+        let mut found = Vec::new();
+        for _ in 0..100 {
+            found = charged(&gw)?;
+            if !found.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(found.len(), 1, "charged once: {found:?}");
+        let usd = found[0]["charged_usd"].as_f64().unwrap_or(-1.0);
+        match expected {
+            Some(usd_reported) => {
+                assert_eq!(tokens(&found[0]), (Some("reported"), Some(1000), Some(50)));
+                assert!(close(usd, usd_reported), "{usd}");
+            }
+            None => {
+                // What it could have cost: its input estimate and its 500 output tokens at $10 per million.
+                assert_ne!(found[0]["usage"], "reported", "{}", found[0]);
+                assert!(usd >= 500.0 * 10.0 / 1e6, "{usd}");
+            }
+        }
+        // The provider was asked for the response before it was deleted, and once deleted it is not charged again.
+        assert_eq!(openai.hits.load(Ordering::SeqCst), 3);
+        assert_eq!(openai.nth(1)?.0, "/v1/responses/resp_del");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(charged(&gw)?.len(), 1);
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn oci_requests_are_signed_with_the_api_signing_key() -> TestResult {
     use ring::signature::{RSA_PKCS1_2048_8192_SHA256, RsaKeyPair, UnparsedPublicKey};
