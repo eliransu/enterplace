@@ -18,7 +18,8 @@ one repository. How a release is made: RELEASING.md.
   `generationConfig.maxOutputTokens`, the cache and the audit record, user agent included.
 - On those routes the Gantry key may come in `x-goog-api-key` or `?key=`. A query key is taken out before the
   request is checked: it is never forwarded, traced or recorded. Refusals there use Google's error shape. A body
-  naming another model than the path is refused with `ambiguous_model`.
+  naming another model than the path is refused with `ambiguous_model`. An alias in the path is sent as its
+  deployment, in the body too (countTokens' `generateContentRequest.model`).
 
 ### Routing resilience
 

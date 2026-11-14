@@ -18,7 +18,7 @@ use axum::{
 };
 use gantry_core::{
     audit::AuditLog,
-    config::Kind,
+    config::{Alias, Deployment, Kind},
     guard::{Action, Check, Guardrail, On},
     id::sha256_hex,
     policy::{Limits, Models, Policy, Who},
@@ -390,6 +390,55 @@ async fn count_tokens_and_embeddings_reach_their_methods() -> TestResult {
         assert_eq!(status, StatusCode::OK, "{path}: {text}");
         assert_eq!(upstream.last()?.0, path);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_alias_in_a_count_tokens_body_is_sent_as_its_deployment() -> TestResult {
+    let upstream = mock("application/json", r#"{"totalTokens":3}"#.into()).await?;
+    let app = gantry_server::app(Config {
+        providers: vec![gemini(&upstream)],
+        aliases: vec![Alias {
+            name: "fast".into(),
+            deployments: vec![Deployment {
+                provider: "gemini".into(),
+                model: "gemini-2.5-flash".into(),
+                weight: 1,
+                ..Deployment::default()
+            }],
+            ..Alias::default()
+        }],
+        policy: Some(
+            Policy::new()
+                .with_key(MAYA, "maya.cohen", "payments")
+                .with_rule("fast", Who::Any, Models::Only(vec!["fast".into()])),
+        ),
+        timeouts: Timeouts::default(),
+        ..Config::default()
+    })?;
+    let gw = Gateway {
+        app,
+        log: std::path::PathBuf::new(),
+    };
+    let (status, _, text) = send(
+        &gw,
+        "POST",
+        "/v1beta/models/fast:countTokens",
+        r#"{"generateContentRequest":{"model":"models/fast","contents":[{"parts":[{"text":"Hi"}]}]}}"#,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, _, body) = upstream.last()?;
+    assert_eq!(target, "/v1beta/models/gemini-2.5-flash:countTokens");
+    let body: Value = serde_json::from_slice(&body)?;
+    assert_eq!(
+        body["generateContentRequest"]["model"], "models/gemini-2.5-flash",
+        "the provider does not know the alias: {body}"
+    );
+    assert_eq!(
+        body["generateContentRequest"]["contents"][0]["parts"][0]["text"],
+        "Hi"
+    );
     Ok(())
 }
 

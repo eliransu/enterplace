@@ -3159,6 +3159,32 @@ fn gemini_body_model(bytes: &[u8], model: &str) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// A Gemini API body with the model it names, at the top or in countTokens' generateContentRequest, replaced by
+/// `model`. A body that names none goes as it came.
+fn gemini_with_model(bytes: &Bytes, model: &str) -> Bytes {
+    let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return bytes.clone();
+    };
+    let mut changed = false;
+    let to = serde_json::Value::from(format!("models/{model}"));
+    if body.get("model").is_some_and(serde_json::Value::is_string) {
+        body["model"] = to.clone();
+        changed = true;
+    }
+    if body["generateContentRequest"]
+        .get("model")
+        .is_some_and(serde_json::Value::is_string)
+    {
+        body["generateContentRequest"]["model"] = to;
+        changed = true;
+    }
+    if changed {
+        Bytes::from(body.to_string())
+    } else {
+        bytes.clone()
+    }
+}
+
 /// The models this caller may use on Google's Gemini API, as its `models.list` (or `models.get`, for a path that
 /// names one) answers: those of gemini and vertex providers, and aliases whose deployments are there, that the
 /// rule (and the key's own list) allows.
@@ -5688,8 +5714,13 @@ fn outbound(
     let rewritten;
     let native = gemini_native(route.split('?').next().unwrap_or_default());
     let bytes = match plan {
-        // A Gemini API body names no model: it is in the path.
-        Some(plan) if plan.model != model && native.is_none() => {
+        // A Gemini API body has its model in the path; one it also names (countTokens' generateContentRequest) was
+        // checked to be the path's, so it is sent as the same deployment.
+        Some(plan) if plan.model != model && native.is_some() => {
+            rewritten = gemini_with_model(bytes, model);
+            &rewritten
+        }
+        Some(plan) if plan.model != model => {
             let content_type = parts
                 .headers
                 .get(header::CONTENT_TYPE)
