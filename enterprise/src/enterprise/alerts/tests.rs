@@ -990,7 +990,7 @@ async fn alert_rules_are_in_the_admin_api_with_records_and_the_license_gate() ->
     let refused = lines
         .iter()
         .filter(|r| r["id"] == decision.as_str())
-        .last()
+        .next_back()
         .ok_or("no record")?;
     assert_eq!(refused["code"], "no_such_rule");
 
