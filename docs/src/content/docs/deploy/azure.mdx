@@ -17,6 +17,7 @@ The Terraform module `azure-container-apps`, which ships inside the `gantry-ente
 | Container Apps environment (Consumption workload profile) and app: one replica, single revision mode | HTTPS ingress on the app's address, probes on `/healthz` |
 | PostgreSQL Flexible Server 16, private access only, a private DNS zone, database `gantry` | The store, reached from the virtual network only, with `sslmode=require` |
 | Key Vault secret `<name>-database-url` in your vault | The app reads `DATABASE_URL`, the provider keys and the license as Key Vault references |
+| Key Vault secrets `<name>-master-key` and `<name>-export-key` in your vault | `GANTRY_MASTER_KEY`, which seals [provider credentials](/governance/provider-credentials/) kept in the store, and `GANTRY_EXPORT_KEY`, which encrypts [SIEM export](/operations/siem-export/) destination secrets. Random 64 hex characters, made on the first apply and kept on every later one. Skipped for a key you bring |
 | User-assigned identity with Key Vault Secrets User on the vault | What the app reads secrets as |
 | Storage account (ZRS) and Azure Files share `gantry-audit`, mounted at `/var/lib/gantry` | The audit log, one folder per revision |
 | A busybox init container and an EmptyDir volume | Writes the policy to `/etc/gantry/gantry.policy.yaml`: the image has no shell |
@@ -26,7 +27,7 @@ The Terraform module `azure-container-apps`, which ships inside the `gantry-ente
 
 - Terraform 1.6 or later, Docker, and the Azure CLI signed in (`az login`). Terraform uses its sign-in.
 - A subscription where you can create resource groups, networks, Container Apps, PostgreSQL Flexible Servers, storage accounts, managed identities and role assignments (Owner, or Contributor with User Access Administrator).
-- A Key Vault with RBAC authorization, outside the resource group the module creates, where you hold Key Vault Secrets Officer: the module adds `DATABASE_URL` to it.
+- A Key Vault with RBAC authorization, outside the resource group the module creates, where you hold Key Vault Secrets Officer: the module adds `DATABASE_URL`, and the master and export keys unless you bring them, to it.
 - The registry token Gantry gave you with your license, which reads `ghcr.io/ggantry/gantry-enterprise`, and the user name that goes with it.
 - Your license key, a provider key, and the image version you were given.
 
@@ -118,7 +119,7 @@ The app's address comes with a managed certificate, so the first deploy needs no
    }
    ```
 
-   `az account show --query id -o tsv` prints the subscription ID. The database password and the storage account key end up in Terraform state. Keep the state in an encrypted backend, such as an Azure Storage container.
+   `az account show --query id -o tsv` prints the subscription ID. The database password, the storage account key and the master and export keys the module makes end up in Terraform state. Keep a copy of the master key outside the vault too: a lost master key cannot be recovered. Keep the state in an encrypted backend, such as an Azure Storage container.
 
 4. Apply.
 
@@ -142,6 +143,8 @@ The app's address comes with a managed certificate, so the first deploy needs no
 | `key_vault_id` | required | The vault holding the provider keys, the license and the registry token |
 | `provider_key_secrets` | `{}` | The variable each `key_env` names, mapped to a secret name in the vault |
 | `license_secret` | `null` | Secret name of the license. Null runs the open source features only |
+| `master_key_secret` | `null` | Optional. Your own master key's secret name in the vault (`GANTRY_MASTER_KEY`). Null makes `<name>-master-key` |
+| `export_key_secret` | `null` | Optional. Your own export key's secret name in the vault (`GANTRY_EXPORT_KEY`). Null makes `<name>-export-key` |
 | `registry` | `null` | `server`, `username` and `password_secret` (a secret name in the vault), for ghcr.io |
 | `internal` | `false` | An environment reachable only inside the virtual network |
 | `allowed_cidrs` | `[]` | Address ranges that may reach the app. Empty allows all |
@@ -162,6 +165,7 @@ The app's address comes with a managed certificate, so the first deploy needs no
 | `database_fqdn` | The PostgreSQL server, reachable from the virtual network only |
 | `audit_share` | The storage account and share, as `<account>/gantry-audit` |
 | `outbound_ips` | The addresses the gateway calls providers from, for providers that allow-list callers |
+| `master_key_secret`, `export_key_secret` | The vault secrets the gateway reads `GANTRY_MASTER_KEY` and `GANTRY_EXPORT_KEY` from |
 
 ## Verify
 
@@ -216,7 +220,7 @@ The app's address comes with a managed certificate, so the first deploy needs no
 - **One chain per revision.** A deploy starts the new revision while the old one drains, so the revision suffix is a hash of its inputs and the revision writes to its own folder. Every change of image, policy, secret names, registry, CPU or memory starts a new chain; the old chains stay on the share. Verify and back up each folder.
 - **The connection to the database is encrypted, not checked.** The module connects with `sslmode=require`: TLS on, the certificate not verified. The server has no public access and is reached only from the virtual network.
 - **No metrics port.** Ingress serves one port, so `/metrics` is not exposed. Use the app's own metrics in Azure Monitor and OpenTelemetry traces.
-- **Secret state.** The database password and the storage account key are in Terraform state.
+- **Secret state.** The database password, the storage account key and the master and export keys the module makes are in Terraform state.
 
 ## Production checklist
 

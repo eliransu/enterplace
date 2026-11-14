@@ -65,6 +65,9 @@ One Compose file runs the gateway and Postgres 16 on one machine, each with a na
          DATABASE_URL: postgres://gantry:${POSTGRES_PASSWORD}@localhost:5432/gantry?sslmode=disable
          OPENAI_PROVIDER_KEY: ${OPENAI_PROVIDER_KEY:-}
          GANTRY_LICENSE: ${GANTRY_LICENSE:-}
+         # Optional, both: empty leaves the feature off. See .env.
+         GANTRY_MASTER_KEY: ${GANTRY_MASTER_KEY:-}
+         GANTRY_EXPORT_KEY: ${GANTRY_EXPORT_KEY:-}
        configs:
          - source: policy
            target: /etc/gantry/gantry.policy.yaml
@@ -107,7 +110,7 @@ One Compose file runs the gateway and Postgres 16 on one machine, each with a na
      gantry-data:
    ```
 
-2. Save the settings beside it as `.env`, and fill in the empty values.
+2. Save the settings beside it as `.env`, and fill in the empty values. `GANTRY_MASTER_KEY` and `GANTRY_EXPORT_KEY` are optional: leave them empty until you keep [provider credentials](/governance/provider-credentials/) in the store or send the audit log to a [SIEM](/operations/siem-export/) destination with a secret.
 
    ```bash title=".env"
    # Letters and digits only: it goes into a connection string unescaped. `openssl rand -hex 16` makes one.
@@ -116,6 +119,13 @@ One Compose file runs the gateway and Postgres 16 on one machine, each with a na
    OPENAI_PROVIDER_KEY=
    # Your license key, on one line. Empty runs the open source features only.
    GANTRY_LICENSE=
+   # Optional. Seals provider credentials kept in Postgres (Provider credentials in the console). 64 hex characters,
+   # made once with `openssl rand -hex 32` and kept in your secret manager: a lost one cannot be recovered.
+   # Empty: credentials are off, and providers use key_env as above.
+   GANTRY_MASTER_KEY=
+   # Optional. Encrypts the secrets of SIEM export destinations (license feature siem). 64 hex characters,
+   # `openssl rand -hex 32`. Empty: only destinations that need no secret can be saved.
+   GANTRY_EXPORT_KEY=
    # The image. Pin the version you were given, or a commit SHA, in production.
    GANTRY_IMAGE=ghcr.io/ggantry/gantry-enterprise:latest
    # Where Gantry listens on this machine.
@@ -277,7 +287,7 @@ Then run steps 3 to 6. The governed call answers `pong`. To switch to OpenAI, de
 
    For nginx, see [Deployment](/operations/deployment/#a-proxy-in-front). Callers then use `https://gantry.example.com/v1`.
 
-3. **Secrets.** `.env` holds the database password, the provider keys and the license. Keep it readable by its owner only (`chmod 600 .env`), out of version control, or write it at boot from your secret manager.
+3. **Secrets.** `.env` holds the database password, the provider keys, the license and, when set, the master key and the export key. Keep a copy of the master key in your secret manager: without it, the provider credentials in the database cannot be opened. Keep `.env` readable by its owner only (`chmod 600 .env`), out of version control, or write it at boot from your secret manager.
 
 4. **Start on boot.** Every service has `restart: unless-stopped`, so the stack comes back when Docker does.
 

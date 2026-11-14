@@ -61,6 +61,15 @@ The Helm chart ships inside the `gantry-enterprise` image, so it always matches 
 
    Letters and digits in the password keep the string valid without escaping.
 
+   Optional: the master key, which seals [provider credentials](/governance/provider-credentials/) kept in the store, and the export key, which encrypts [SIEM export](/operations/siem-export/) destination secrets. Each is 64 hex characters, the same on every replica. Keep a copy of the master key in your secret manager: a lost one cannot be recovered.
+
+   ```bash
+   kubectl create secret generic gantry-master-key --from-literal=master-key=$(openssl rand -hex 32)
+   kubectl create secret generic gantry-export-key --from-literal=export-key=$(openssl rand -hex 32)
+   ```
+
+   Then add `masterKey: { existingSecret: gantry-master-key }` and `exportKey: { existingSecret: gantry-export-key }` to the values below. The chart mounts the master key as a file named by `GANTRY_MASTER_KEY_FILE` and sets `GANTRY_EXPORT_KEY` from its Secret. Without them, provider credentials are off and only SIEM destinations that need no secret can be saved. Do not also put `GANTRY_MASTER_KEY` in `gantry-secrets`: Gantry refuses both.
+
 3. Write `gantry-values.yaml`. The policy goes in as text; `store:` is what lets more than one replica run.
 
    ```yaml title="gantry-values.yaml"

@@ -19,7 +19,8 @@ The Terraform module `gcp-cloud-run`, which ships inside the `gantry-enterprise`
 | Cloud SQL connector volume at `/cloudsql` | Gantry connects to the database over a Unix socket |
 | Filestore BASIC_HDD share `gantry`, mounted at `/var/lib/gantry` | The audit log, one folder per revision |
 | Secret Manager secrets `<name>-database-url` and `<name>-policy` | The policy is mounted as `/etc/gantry/gantry.policy.yaml` |
-| Service account `<name>-run`, with `cloudsql.client` and access to each secret | What the gateway runs as |
+| Secret Manager secrets `<name>-master-key` and `<name>-export-key` | `GANTRY_MASTER_KEY`, which seals [provider credentials](/governance/provider-credentials/) kept in the store, and `GANTRY_EXPORT_KEY`, which encrypts [SIEM export](/operations/siem-export/) destination secrets. Random 64 hex characters, made on the first apply and kept on every later one. Skipped for a key you bring |
+| Service account `<name>-run`, with `cloudsql.client`, `aiplatform.user` (when `vertex_ai = true`, the default) and access to each secret | What the gateway runs as, and what [Vertex AI](/providers/vertex/) providers sign in as. The module also enables `aiplatform.googleapis.com` |
 | `allUsers` invoker, when `public = true` | Gantry's own keys decide who may call |
 
 **Cloud SQL through the connector.** The connector authenticates with IAM, encrypts to Cloud SQL with mutual TLS, and gives the gateway a local Unix socket. Gantry connects to a socket without TLS of its own, since the traffic never leaves the instance. The database has a public IP with no authorized networks and requires client certificates, so only the connector reaches it.
@@ -59,6 +60,8 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
    printf '%s' 'sk-...' | gcloud secrets create openai-key --data-file=-
    printf '%s' 'eyJjdXN0b21lciI6...' | gcloud secrets create gantry-license --data-file=-
    ```
+
+   The master key and the export key need nothing here: the module makes both, with random values, unless you pass your own secret IDs as `master_key_secret` and `export_key_secret`. Both are optional for the gateway; with them, provider credentials and SIEM destinations with a secret work from the first start. Vertex AI needs no secret either: see [Vertex AI](#vertex-ai) below.
 
 3. Copy the module out of the image you will run, and save a starting policy beside it as `gantry.policy.yaml`. The image carries the module for its own version, so nothing is cloned.
 
@@ -125,7 +128,7 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
    }
    ```
 
-   The database password ends up in Terraform state, because it builds `DATABASE_URL`. Keep the state in an encrypted backend, such as a Cloud Storage bucket.
+   The database password ends up in Terraform state, because it builds `DATABASE_URL`, and so do the master and export keys the module makes. Keep the state in an encrypted backend, such as a Cloud Storage bucket, and a copy of the master key outside the project: a lost master key cannot be recovered.
 
 5. Apply.
 
@@ -148,6 +151,9 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
 | `policy` | required | The policy as text. A change makes a new revision |
 | `provider_key_secrets` | `{}` | The variable each `key_env` names, mapped to a secret ID in this project. The latest version is read |
 | `license_secret` | `null` | Secret ID of the license. Null runs the open source features only |
+| `vertex_ai` | `true` | Grant the service account `roles/aiplatform.user` and enable `aiplatform.googleapis.com`, so Vertex AI providers sign in as it |
+| `master_key_secret` | `null` | Optional. Your own master key secret ID (`GANTRY_MASTER_KEY`). Null makes `<name>-master-key` |
+| `export_key_secret` | `null` | Optional. Your own export key secret ID (`GANTRY_EXPORT_KEY`). Null makes `<name>-export-key` |
 | `network`, `subnetwork` | `default`, `default` | For Filestore and the service's Direct VPC egress to it |
 | `cpu`, `memory` | `1`, `1Gi` | The instance's size |
 | `public` | `true` | Let anyone reach the URL. With `false`, callers also need a Google identity token with `run.invoker` |
@@ -167,7 +173,22 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
 | `sql_connection_name` | The Cloud SQL instance's connection name |
 | `database_url_secret` | The secret holding `DATABASE_URL` |
 | `filestore_ip` | The Filestore address, to mount the audit logs for a check or a backup |
-| `service_account` | The service account the gateway runs as |
+| `service_account` | The service account the gateway runs as, and Vertex AI providers sign in as |
+| `master_key_secret`, `export_key_secret` | The secrets the gateway reads `GANTRY_MASTER_KEY` and `GANTRY_EXPORT_KEY` from |
+
+## Vertex AI
+
+The gateway signs in to Vertex AI as the service account it runs as, through the metadata server, with `roles/aiplatform.user` the module grants: no key or access token is stored. Leave `key_env` out of `vertex` and `vertex_anthropic` providers, and do not keep a Vertex access token in Secret Manager or in `provider_key_secrets`:
+
+```yaml title="gantry.policy.yaml"
+providers:
+  - name: claude-vertex
+    kind: vertex_anthropic
+    url: https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic
+    models: [claude-sonnet-4-6]
+```
+
+The role is granted on the module's project. For Vertex AI in another project, grant `roles/aiplatform.user` there to the `service_account` output. Set `vertex_ai = false` to leave the role and the API out. The provider's other fields are in [Vertex AI](/providers/vertex/).
 
 ## Verify
 
@@ -229,7 +250,7 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
 ## Production checklist
 
 - **TLS.** The service URL has a Google-managed certificate. For your own name, put a global external Application Load Balancer with a serverless network endpoint group and a Google-managed certificate in front, and set `ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"`.
-- **Secrets.** Provider keys and the license in Secret Manager, referenced by ID. `DATABASE_URL` is a secret the module writes. Keep the Terraform state encrypted: it holds the database password.
+- **Secrets.** Provider keys and the license in Secret Manager, referenced by ID. `DATABASE_URL`, and the master and export keys unless you bring them, are secrets the module writes. Keep the Terraform state encrypted: it holds the database password and those keys. Never change the master key in place: the credentials sealed with it would no longer open.
 - **Backups.** Cloud SQL keeps automated backups with point-in-time recovery. Back up the share from the console: **Filestore**, **Backups**, **Create backup**, on a schedule. Keep each revision's last hash outside the project.
 - **Monitoring.** An uptime check on `$GATEWAY/healthz` in Cloud Monitoring, and alerts on the service's 5xx count. For traces, store the collector's address in a secret and add it to the map: `provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key", OTEL_EXPORTER_OTLP_ENDPOINT = "otel-endpoint" }`. The map sets any variable from a secret.
 - **Upgrades.** Take a backup first, since a newer Gantry may update the schema and an older one refuses a database a newer one has written. Then copy the new image into Artifact Registry, change `image` and apply. The new revision starts before the old one drains, so there is no gap.
