@@ -1918,3 +1918,154 @@ limits:
     );
     Ok(())
 }
+
+/// `gantry start` with only the variables given: a provider key in the developer's own shell must not leak in.
+fn start(dir: &std::path::Path, extra: &[&str], env: &[(&str, &str)]) -> std::io::Result<Output> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_gantry"));
+    command
+        .env_clear()
+        .args([
+            "start",
+            "--dir",
+            &dir.display().to_string(),
+            "--yes",
+            "--no-serve",
+        ])
+        .args(extra);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command.output()
+}
+
+fn start_dir(name: &str) -> std::io::Result<std::path::PathBuf> {
+    let dir = std::env::temp_dir().join(format!("gantry-cli-start-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+const BOTH_KEYS: &[(&str, &str)] = &[
+    ("OPENAI_API_KEY", "sk-test-openai"),
+    ("ANTHROPIC_API_KEY", "sk-ant-test"),
+];
+
+/// Every `gantry_` key (64 hex characters after the prefix) in `text`.
+fn printed_keys(text: &str) -> Vec<&str> {
+    text.match_indices("gantry_")
+        .filter_map(|(at, _)| text.get(at..at + 7 + 64))
+        .filter(|key| key[7..].chars().all(|c| c.is_ascii_hexdigit()))
+        .collect()
+}
+
+#[test]
+fn start_writes_an_observe_policy_from_env_keys() -> TestResult {
+    let dir = start_dir("observe")?;
+    let out = start(&dir, &[], BOTH_KEYS)?;
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+
+    let policy = std::fs::read_to_string(dir.join("gantry.policy.yaml"))?;
+    for line in [
+        "mode: observe\n",
+        "key_env: OPENAI_API_KEY\n",
+        "key_env: ANTHROPIC_API_KEY\n",
+        "models: [\"*\"]\n",
+    ] {
+        assert!(policy.contains(line), "{line}: {policy}");
+    }
+    assert_eq!(policy.matches("principals:").count(), 1, "{policy}");
+
+    // The admin key is printed once and only its hash is kept.
+    let keys = printed_keys(&stdout);
+    assert_eq!(keys.len(), 1, "{stdout}");
+    let file = std::fs::read_to_string(dir.join("gantry.keys.yaml"))?;
+    assert!(!file.contains(keys[0]), "{file}");
+    assert!(file.contains("admin: true"), "{file}");
+
+    // Checked without its mode line, which a gateway without observe mode refuses as an unknown field.
+    let checked = dir.join("check.policy.yaml");
+    std::fs::write(&checked, policy.replace("mode: observe\n", ""))?;
+    let keys_file = path(&dir, "gantry.keys.yaml");
+    let out = gantry(
+        &[
+            "check",
+            &checked.display().to_string(),
+            "--keys",
+            &keys_file,
+        ],
+        BOTH_KEYS,
+    )?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    assert!(
+        String::from_utf8(out.stdout)?.contains("1 rule, 1 key, 2 providers"),
+        "check"
+    );
+    Ok(())
+}
+
+#[test]
+fn start_refuses_to_overwrite_without_force() -> TestResult {
+    let dir = start_dir("force")?;
+    assert!(start(&dir, &[], BOTH_KEYS)?.status.success());
+    let before = std::fs::read_to_string(dir.join("gantry.policy.yaml"))?;
+    std::fs::write(dir.join("gantry.policy.yaml"), "# edited\n")?;
+
+    let out = start(&dir, &[], BOTH_KEYS)?;
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(stderr.contains("--force"), "{stderr}");
+    assert!(printed_keys(&String::from_utf8(out.stdout)?).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("gantry.policy.yaml"))?,
+        "# edited\n"
+    );
+
+    let out = start(&dir, &["--force"], BOTH_KEYS)?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("gantry.policy.yaml"))?,
+        before
+    );
+    Ok(())
+}
+
+#[test]
+fn start_prints_tool_settings() -> TestResult {
+    let dir = start_dir("tools")?;
+    let out = start(&dir, &[], BOTH_KEYS)?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let stdout = String::from_utf8(out.stdout)?;
+    for text in [
+        "Claude Code",
+        "export ANTHROPIC_BASE_URL=http://127.0.0.1:8080\n",
+        "export ANTHROPIC_API_KEY=$GANTRY_KEY\n",
+        "Codex",
+        "base_url = \"http://127.0.0.1:8080/v1\"",
+        "env_key = \"GANTRY_KEY\"",
+        "Cursor",
+        "Override OpenAI Base URL:  http://127.0.0.1:8080/v1",
+    ] {
+        assert!(stdout.contains(text), "{text}: {stdout}");
+    }
+    Ok(())
+}
+
+#[test]
+fn start_without_any_provider_key_says_which_env_to_set() -> TestResult {
+    let dir = start_dir("nokey")?;
+    let out = start(&dir, &[], &[])?;
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr)?;
+    for name in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] {
+        assert!(stderr.contains(name), "{name}: {stderr}");
+    }
+    assert!(!dir.join("gantry.policy.yaml").exists());
+    assert!(!dir.join("gantry.keys.yaml").exists());
+
+    // A provider asked for by name names its own variable.
+    let out = start(&dir, &["--providers", "anthropic"], BOTH_KEYS[..1].as_ref())?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("ANTHROPIC_API_KEY"));
+    Ok(())
+}

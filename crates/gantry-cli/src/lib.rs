@@ -7,6 +7,8 @@ use std::{
     process::ExitCode,
 };
 
+mod start;
+
 use gantry_core::{
     audit, config, keyfile,
     policy::{Budget, Period},
@@ -74,6 +76,14 @@ Commands:
         the catalog (default openai, see `gantry providers`) and the models it serves (--models; openai defaults
         to gpt-4o-mini): everyone may use them. Then set
         the provider key it names and run `gantry serve`, which prints a one-time link to make the first admin.
+  start [--dir <path>] [--providers <a,b>] [--yes] [--force] [--no-serve]
+        Step 1 in one command. Reads provider keys from the environment (OPENAI_API_KEY, ANTHROPIC_API_KEY,
+        GEMINI_API_KEY, or the _PROVIDER_KEY form), writes gantry.policy.yaml in observe mode with one rule that
+        lets every key use every model, makes an admin key (printed once, its hash in gantry.keys.yaml), prints
+        the settings for Claude Code, Codex, the OpenAI SDKs and Cursor, and runs the gateway. --dir names the
+        folder (default the current one); --providers openai,anthropic picks providers in place of the ones found;
+        on a terminal it asks unless --yes. It never writes over a policy unless --force. --no-serve stops before
+        running the gateway.
   providers [--markdown]
         List the provider catalog: id, name, kind and URL. A policy provider may say `preset: <id>` in place
         of its url and kind. --markdown prints the reference page of the docs.
@@ -476,6 +486,32 @@ pub async fn run(args: &[String]) -> ExitCode {
             )),
             _ => None,
         },
+        ["start", rest @ ..] => {
+            // Flags without a value are taken out first; `options` reads `--name value` pairs.
+            let flag = |name: &str| rest.contains(&name);
+            let pairs: Vec<&str> = rest
+                .iter()
+                .copied()
+                .filter(|a| !matches!(*a, "--yes" | "--force" | "--no-serve"))
+                .collect();
+            match options(&pairs, &["--dir", "--providers"]) {
+                Some((positional, named)) if positional.is_empty() => {
+                    let options = start::Options {
+                        dir: Path::new(named.get("--dir").copied().unwrap_or(".")),
+                        providers: named.get("--providers").copied(),
+                        yes: flag("--yes"),
+                        force: flag("--force"),
+                        serve: !flag("--no-serve"),
+                    };
+                    Some(
+                        start::run(&options)
+                            .await
+                            .map_or_else(fail, |()| ExitCode::SUCCESS),
+                    )
+                }
+                _ => None,
+            }
+        }
         ["providers"] => {
             print!("{}", gantry_core::catalog::table());
             Some(ExitCode::SUCCESS)
@@ -539,6 +575,9 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["providers", ..] => Some("gantry providers [--markdown]"),
             ["guardrail", ..] => Some(
                 "gantry guardrail test <name> (--corpus <file.jsonl> | --since <7d>) [--policy <file>]",
+            ),
+            ["start", ..] => Some(
+                "gantry start [--dir <path>] [--providers <a,b>] [--yes] [--force] [--no-serve]",
             ),
             ["init", ..] => Some("gantry init [--provider <id>] [--models <a,b>] [--out <policy file>]"),
             ["login", ..] => Some("gantry login <gantry url> [--no-browser]"),
