@@ -4,6 +4,8 @@
 //!
 //! How a feature registers is written up in docs/porting.md.
 
+mod alerts;
+mod capture;
 mod members;
 mod scim;
 mod siem;
@@ -24,8 +26,11 @@ use crate::license::{self, State, Status};
 const MEMBERS: &[&str] = &[members::MIGRATION];
 /// Alters members' table, so it runs after `MEMBERS`, and only with members on.
 const SCIM: &[&str] = &[scim::MIGRATION];
-/// For siem and retention, which share their tables.
-const SIEM: &[&str] = &[siem::MIGRATION];
+/// For siem and retention, which share their tables, and for alerting, which reads the audit table they keep.
+/// Entry 2 is the captured text of audit export (`capture`).
+const SIEM: &[&str] = &[siem::MIGRATION, capture::MIGRATION];
+/// Alert channels, rules and what fired. Runs after `SIEM`: alerting reads the records it ingests.
+const ALERTS: &[&str] = &[alerts::MIGRATION];
 
 /// Before each feature had its namespace, every enterprise table was one list under `enterprise`: members, scim,
 /// siem. On a database a binary of then wrote, this records the per-feature version that list's version implies, so
@@ -71,16 +76,20 @@ pub fn extend_with(
     if !scim_on {
         scim::locked(&mut extension, status);
     }
+    let alerts_on = status.unlocked(alerts::FEATURE);
     if !siem_on && !retention_on {
         siem::locked(&mut extension, status);
     }
-    if !(members_on || siem_on || retention_on) {
+    if !alerts_on {
+        alerts::locked(&mut extension, status);
+    }
+    if !(members_on || siem_on || retention_on || alerts_on) {
         return Ok(extension);
     }
     // The license never stops traffic: a feature that cannot run says why and the gateway starts without it.
     let Some(pg) = host.postgres else {
         eprintln!(
-            "warning: the license unlocks enterprise features (members, audit export, retention) that are kept in Postgres, but the policy has no store. Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then they are off and the console signs in with admin keys only."
+            "warning: the license unlocks enterprise features (members, audit export, retention, alerts) that are kept in Postgres, but the policy has no store. Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then they are off and the console signs in with admin keys only."
         );
         return Ok(extension);
     };
@@ -91,8 +100,11 @@ pub fn extend_with(
     if scim_on {
         pg.migrate("enterprise.scim", SCIM)?;
     }
-    if siem_on || retention_on {
+    if siem_on || retention_on || alerts_on {
         pg.migrate("enterprise.siem", SIEM)?;
+    }
+    if alerts_on {
+        pg.migrate("enterprise.alerts", ALERTS)?;
     }
     let db = Arc::new(Db::new(pg.clone()));
     if members_on {
@@ -101,20 +113,31 @@ pub fn extend_with(
     if scim_on {
         scim::register(&mut extension, db.clone(), host.keys.to_path_buf());
     }
-    if siem_on || retention_on {
+    if siem_on || retention_on || alerts_on {
+        // Text is captured only for destinations that opt in; with audit export off there are none.
+        let captures = siem_on.then(|| Arc::new(capture::Captures::default()));
+        if let Some(captures) = &captures {
+            extension.capture = Some(captures.clone());
+        }
         let registered = siem::register(
             &mut extension,
             siem::Setup {
                 db,
                 log: host.audit.clone(),
                 audit_path: host.audit_path.to_path_buf(),
-                env,
+                env: env.clone(),
                 siem: siem_on,
                 retention: retention_on,
+                alerts: alerts_on,
+                captures,
             },
         );
-        if let Err(err) = registered {
-            eprintln!("warning: audit export and retention are off: {err}");
+        match registered {
+            Ok(exporter) if alerts_on => {
+                alerts::register(&mut extension, &exporter, &env);
+            }
+            Ok(_) => {}
+            Err(err) => eprintln!("warning: audit export, retention and alerts are off: {err}"),
         }
     }
     Ok(extension)
@@ -511,7 +534,7 @@ mod migration_tests {
             versions(&client).await?,
             [
                 ("enterprise.members".to_string(), 1),
-                ("enterprise.siem".to_string(), 1),
+                ("enterprise.siem".to_string(), 2),
                 ("enterprise.split".to_string(), 1),
             ]
         );
@@ -521,6 +544,24 @@ mod migration_tests {
             versions(&client)
                 .await?
                 .contains(&("enterprise.scim".to_string(), 1))
+        );
+        // Alerting keeps its tables in its own namespace, after the audit table it reads.
+        restart(
+            "mig_new",
+            &url,
+            &client,
+            &["members", "scim", "siem", "alerts"],
+        )
+        .await?;
+        assert_eq!(
+            versions(&client).await?,
+            [
+                ("enterprise.alerts".to_string(), 1),
+                ("enterprise.members".to_string(), 1),
+                ("enterprise.scim".to_string(), 1),
+                ("enterprise.siem".to_string(), 2),
+                ("enterprise.split".to_string(), 1),
+            ]
         );
         Ok(())
     }
@@ -545,7 +586,7 @@ mod migration_tests {
                 ("enterprise".to_string(), 3),
                 ("enterprise.members".to_string(), 1),
                 ("enterprise.scim".to_string(), 1),
-                ("enterprise.siem".to_string(), 1),
+                ("enterprise.siem".to_string(), 2),
                 ("enterprise.split".to_string(), 1),
             ]
         );
@@ -572,7 +613,7 @@ mod migration_tests {
             [
                 ("enterprise".to_string(), 1),
                 ("enterprise.members".to_string(), 1),
-                ("enterprise.siem".to_string(), 1),
+                ("enterprise.siem".to_string(), 2),
                 ("enterprise.split".to_string(), 1),
             ]
         );

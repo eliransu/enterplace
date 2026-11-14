@@ -33,7 +33,11 @@ const KEY: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccdde
 const TEST_RSA: &str = include_str!("test-service-account.pem");
 
 /// A gateway whose exporter never runs on its own: the tests drive it.
-fn quiet(test: &str, url: &str, features: &[&str]) -> Result<(Gateway, Arc<Exporter>), Error> {
+pub(crate) fn quiet(
+    test: &str,
+    url: &str,
+    features: &[&str],
+) -> Result<(Gateway, Arc<Exporter>), Error> {
     let gw = gateway_with(
         test,
         url,
@@ -56,35 +60,35 @@ fn quiet(test: &str, url: &str, features: &[&str]) -> Result<(Gateway, Arc<Expor
 // ---------------------------------------------------------------- a mock of every receiving end
 
 #[derive(Clone, Debug)]
-struct Hit {
-    method: String,
-    uri: String,
-    headers: HashMap<String, String>,
-    body: Vec<u8>,
+pub(crate) struct Hit {
+    pub method: String,
+    pub uri: String,
+    pub headers: HashMap<String, String>,
+    pub body: Vec<u8>,
 }
 
 impl Hit {
-    fn header(&self, name: &str) -> &str {
+    pub fn header(&self, name: &str) -> &str {
         self.headers.get(name).map_or("", String::as_str)
     }
-    fn text(&self) -> String {
+    pub fn text(&self) -> String {
         String::from_utf8_lossy(&self.body).into_owned()
     }
-    fn json(&self) -> Value {
+    pub fn json(&self) -> Value {
         serde_json::from_slice(&self.body).unwrap_or(Value::Null)
     }
 }
 
 #[derive(Clone, Default)]
-struct Sink {
+pub(crate) struct Sink {
     hits: Arc<Mutex<Vec<Hit>>>,
     /// The next this many deliveries (not credential calls) answer 503.
     fail: Arc<Mutex<usize>>,
-    base: String,
+    pub base: String,
 }
 
 impl Sink {
-    async fn start() -> Result<Self, Error> {
+    pub async fn start() -> Result<Self, Error> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let sink = Self {
             base: format!("http://{}", listener.local_addr()?),
@@ -100,20 +104,20 @@ impl Sink {
     }
 
     /// Deliveries only: no credential calls.
-    fn deliveries(&self) -> Vec<Hit> {
+    pub fn deliveries(&self) -> Vec<Hit> {
         self.hits()
             .into_iter()
             .filter(|h| h.uri.starts_with("/in"))
             .collect()
     }
 
-    fn fail_next(&self, n: usize) {
+    pub fn fail_next(&self, n: usize) {
         if let Ok(mut f) = self.fail.lock() {
             *f = n;
         }
     }
 
-    fn clear(&self) {
+    pub fn clear(&self) {
         if let Ok(mut h) = self.hits.lock() {
             h.clear();
         }
@@ -210,7 +214,7 @@ fn hash_holds(line: &str) -> bool {
 }
 
 /// The chain's lines as the log holds them.
-fn chain_lines(gw: &Gateway) -> Result<Vec<String>, Error> {
+pub(crate) fn chain_lines(gw: &Gateway) -> Result<Vec<String>, Error> {
     use std::io::BufRead;
     gw.log.flush();
     Ok(audit::chain_reader(&gw.audit)?
@@ -1279,6 +1283,9 @@ async fn delivery_retries_with_backoff_and_resumes_from_the_cursor_after_a_resta
         retention: false,
         key: ex.key,
         sinks: Arc::new(Sinks::new(env_of(&[]))),
+        captures: None,
+        alerts: OnceLock::new(),
+        alerts_on: false,
         hint: Mutex::new(None),
         backoff: Mutex::new(HashMap::new()),
         said: Mutex::new(String::new()),
@@ -1537,5 +1544,376 @@ async fn an_admin_cannot_change_legal_hold_or_the_pull_token_and_a_viewer_change
     assert!(archive.text.contains("Your role is viewer"));
     let chain = chain_lines(&gw)?.join("\n");
     assert!(chain.contains("\"code\":\"owner_only\"") && chain.contains("\"code\":\"read_only\""));
+    Ok(())
+}
+
+// ---------------------------------------------------------------- LLM observability destinations and captured text
+
+/// A decision and its usage record, chained as the log writes them.
+fn request_batch() -> Batch {
+    let mut lines = Vec::new();
+    let mut prev = "0".repeat(64);
+    let bodies = [
+        r#""id":"d1","time":"2026-11-13T09:14:02.120Z","person":"alice","team":"research","client":"10.0.0.1","key":"aaaa1111","path":"/v1/chat/completions","model":"m","verdict":"allow","rule":"all","provider":"openai""#,
+        r#""event":"usage","id":"d1","time":"2026-11-13T09:14:03.620Z","person":"alice","team":"research","key":"aaaa1111","model":"m","provider":"openai","status":200,"ended":"complete","input_tokens":100,"output_tokens":20,"cache_read_tokens":5,"cache_write_tokens":0,"cost_usd":0.0012,"charged_usd":0.0012"#,
+    ];
+    for (i, fields) in bodies.iter().enumerate() {
+        let body = format!(r#"{{"n":{},{fields},"prev":"{prev}""#, i + 1);
+        let hash = gantry_core::id::sha256_hex(format!("{body}}}").as_bytes());
+        lines.push(format!(r#"{body},"hash":"{hash}"}}"#));
+        prev = hash;
+    }
+    let mut batch = Batch::new("pod-0-abc".into(), lines);
+    let decision = batch.records[0].clone();
+    batch.joined.insert(
+        "d1".into(),
+        sinks::Joined {
+            decision,
+            text: None,
+        },
+    );
+    batch
+}
+
+fn attribute<'a>(span: &'a Value, key: &str) -> &'a Value {
+    span["attributes"]
+        .as_array()
+        .and_then(|a| a.iter().find(|x| x["key"] == key))
+        .map_or(&Value::Null, |x| &x["value"])
+}
+
+#[test]
+fn trace_destinations_get_genai_spans_with_cost_tokens_and_the_hash_range() -> Result<(), Error> {
+    let batch = request_batch();
+    let body = sinks::traces(&batch);
+    let resource = &body["resourceSpans"][0]["resource"];
+    let span = &body["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
+    assert_eq!(
+        body["resourceSpans"][0]["scopeSpans"][0]["spans"]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "one span per finished request"
+    );
+    assert_eq!(span["name"], "chat m");
+    assert_eq!(
+        attribute(span, "gen_ai.operation.name")["stringValue"],
+        "chat"
+    );
+    assert_eq!(attribute(span, "gen_ai.request.model")["stringValue"], "m");
+    assert_eq!(
+        attribute(span, "gen_ai.usage.input_tokens")["intValue"],
+        "100"
+    );
+    assert_eq!(
+        attribute(span, "gen_ai.usage.output_tokens")["intValue"],
+        "20"
+    );
+    assert_eq!(attribute(span, "gen_ai.usage.cost")["doubleValue"], 0.0012);
+    assert_eq!(attribute(span, "llm.token_count.total")["intValue"], "120");
+    assert_eq!(
+        attribute(span, "langfuse.observation.type")["stringValue"],
+        "generation"
+    );
+    assert_eq!(attribute(span, "user.id")["stringValue"], "alice");
+    assert_eq!(attribute(span, "gantry.client")["stringValue"], "10.0.0.1");
+    assert_eq!(
+        attribute(span, "gantry.hash"),
+        &json!({ "stringValue": batch.records[1]["hash"] })
+    );
+    assert!(
+        attribute(span, "gen_ai.input.messages").is_null(),
+        "no text without the opt-in"
+    );
+    let nanos = |k: &str| {
+        span[k]
+            .as_str()
+            .and_then(|s| s.parse::<u128>().ok())
+            .unwrap_or(0)
+    };
+    assert_eq!(
+        nanos("endTimeUnixNano") - nanos("startTimeUnixNano"),
+        1_500_000_000,
+        "from decision to answer's end"
+    );
+    let res = |k: &str| {
+        resource["attributes"]
+            .as_array()
+            .and_then(|a| a.iter().find(|x| x["key"] == k))
+            .map(|x| x["value"].clone())
+            .unwrap_or(Value::Null)
+    };
+    assert_eq!(
+        res("gantry.batch.first_hash")["stringValue"],
+        batch.records[0]["hash"]
+    );
+    assert_eq!(
+        res("gantry.batch.last_hash")["stringValue"],
+        batch.records[1]["hash"]
+    );
+    assert_eq!(res("gantry.batch.prev")["stringValue"], "0".repeat(64));
+
+    // Langfuse: its OTLP endpoint, Basic auth of the key pair, and the real-time ingestion header.
+    let out = sinks::request(
+        &dest(
+            Kind::Langfuse,
+            "https://cloud.langfuse.com".into(),
+            "sk-lf-1",
+            json!({ "public_key": "pk-lf-1" }),
+        ),
+        &batch,
+    );
+    assert_eq!(
+        out.url,
+        "https://cloud.langfuse.com/api/public/otel/v1/traces"
+    );
+    use base64::Engine;
+    let basic = base64::engine::general_purpose::STANDARD.encode("pk-lf-1:sk-lf-1");
+    assert!(
+        out.headers
+            .contains(&("authorization".into(), format!("Basic {basic}")))
+    );
+    assert!(
+        out.headers
+            .contains(&("x-langfuse-ingestion-version".into(), "4".into()))
+    );
+
+    // The callback: one signed entry per request, with the batch's range.
+    let out = sinks::request(
+        &dest(
+            Kind::Callback,
+            "https://example.com/cb".into(),
+            "gsig_cb",
+            json!({}),
+        ),
+        &batch,
+    );
+    let sent: Value = serde_json::from_slice(&out.body)?;
+    assert!(out.headers.contains(&(
+        "x-gantry-signature".into(),
+        format!("sha256={}", sinks::signature("gsig_cb", &out.body))
+    )));
+    assert_eq!(sent["requests"][0]["decision"], "d1");
+    assert_eq!(sent["requests"][0]["duration_ms"], 1500);
+    assert_eq!(sent["requests"][0]["cost_usd"], 0.0012);
+    assert_eq!(sent["last_hash"], batch.records[1]["hash"]);
+    assert!(sent["requests"][0].get("prompt").is_none());
+    Ok(())
+}
+
+#[test]
+fn captured_text_is_redacted_by_the_secrets_and_pii_detectors() -> Result<(), Error> {
+    let text = sinks::Text {
+        prompt: vec![(
+            "user".into(),
+            "my key is AKIAIOSFODNN7EXAMPLE, mail me at dana@example.com".into(),
+        )],
+        answer: vec!["write to dana@example.com".into()],
+    };
+    let redacted = crate::enterprise::capture::redact(&text).ok_or("not checked")?;
+    let joined = format!("{redacted:?}");
+    assert!(
+        !joined.contains("AKIAIOSFODNN7EXAMPLE") && !joined.contains("dana@example.com"),
+        "{joined}"
+    );
+    assert!(
+        redacted.prompt[0].1.contains("[MASKED aws_access_key]"),
+        "{joined}"
+    );
+    assert!(
+        redacted.answer[0].contains("[MASKED email_address]"),
+        "{joined}"
+    );
+    assert_eq!(redacted.prompt[0].0, "user");
+    Ok(())
+}
+
+#[tokio::test]
+async fn text_goes_only_to_destinations_that_opt_in_redacted_encrypted_and_for_a_limited_time()
+-> Result<(), Error> {
+    let Some(url) = database("siem_text").await? else {
+        return Ok(());
+    };
+    let sink = Sink::start().await?;
+    let (gw, ex) = quiet("siem_text", &url, &["siem"])?;
+    let mut owner = Browser::admin(&gw.app).await?;
+    // Audit destinations cannot opt in: their records hold no text.
+    let refused = owner
+        .go(
+            &gw.app,
+            "POST",
+            "/console/siem",
+            &[
+                ("action", "save"),
+                ("kind", "datadog"),
+                ("url", &format!("{}/in/dd", sink.base)),
+                ("token", "k"),
+                ("text", "on"),
+            ],
+        )
+        .await?;
+    assert!(
+        refused
+            .text
+            .contains("can only go to a trace or callback destination"),
+        "{}",
+        refused.text
+    );
+    for (kind, path, text) in [
+        ("otlp_traces", "/in/traces", true),
+        ("callback", "/in/cb", false),
+    ] {
+        let mut form = vec![
+            ("action", "save"),
+            ("kind", kind),
+            (
+                "url",
+                &*Box::leak(format!("{}{path}", sink.base).into_boxed_str()),
+            ),
+        ];
+        if text {
+            form.extend([("text", "on"), ("text_teams", "research")]);
+        }
+        let saved = owner.go(&gw.app, "POST", "/console/siem", &form).await?;
+        assert!(saved.text.contains("Saved destination"), "{}", saved.text);
+    }
+    let captures = ex.captures.clone().ok_or("no capture hook")?;
+    use gantry_server::Capture;
+    // Destinations are read on the next tick; until one opts in nothing is wanted.
+    assert!(!captures.wanted("research"));
+    ex.ship().await?;
+    assert!(captures.wanted("research") && !captures.wanted("payments"));
+
+    let id = "01TEXTDECISION";
+    let mut record = audit::record(&audit::Entry {
+        id,
+        person: Some("alice"),
+        team: Some("research"),
+        method: "POST",
+        path: "/v1/chat/completions",
+        model: Some("m"),
+        allowed: true,
+        provider: "openai",
+        ..Default::default()
+    });
+    record.insert("team".into(), "research".into());
+    gw.log.append_record(&record)?;
+    captures.take(gantry_server::Captured {
+        decision: id.into(),
+        person: "alice".into(),
+        team: "research".into(),
+        model: "m".into(),
+        provider: "openai".into(),
+        route: "/v1/chat/completions".into(),
+        request: r#"{"model":"m","messages":[{"role":"user","content":"secret AKIAIOSFODNN7EXAMPLE please"}]}"#.into(),
+        answer: Some(r#"{"choices":[{"index":0,"message":{"role":"assistant","content":"done, dana@example.com"}}]}"#.into()),
+        streamed: false,
+    });
+    let mut usage = serde_json::Map::new();
+    for (k, v) in [
+        ("event", json!("usage")),
+        ("id", json!(id)),
+        ("time", json!(audit::timestamp())),
+        ("person", json!("alice")),
+        ("team", json!("research")),
+        ("model", json!("m")),
+        ("provider", json!("openai")),
+        ("status", json!(200)),
+        ("input_tokens", json!(3)),
+        ("output_tokens", json!(2)),
+        ("cost_usd", json!(0.001)),
+        ("charged_usd", json!(0.001)),
+    ] {
+        usage.insert(k.into(), v);
+    }
+    gw.log.append_record(&usage)?;
+    while ex.ingest().await? > 0 {}
+    ex.ship().await?;
+
+    let hits = sink.deliveries();
+    let traces = hits
+        .iter()
+        .find(|h| h.uri == "/in/traces")
+        .ok_or("no traces")?
+        .json();
+    let span = &traces["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
+    let input = attribute(span, "gen_ai.input.messages")["stringValue"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        input.contains("[MASKED aws_access_key]") && input.contains("please"),
+        "{input}"
+    );
+    let output = attribute(span, "output.value")["stringValue"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(output, "done, [MASKED email_address]");
+    let callback = hits
+        .iter()
+        .find(|h| h.uri == "/in/cb")
+        .ok_or("no callback")?;
+    assert!(
+        callback.json()["requests"][0].get("prompt").is_none(),
+        "the callback did not opt in"
+    );
+    assert!(!callback.text().contains("please"));
+    // Nothing of the text is in the chain or in the clear in the database.
+    assert!(
+        !chain_lines(&gw)?
+            .iter()
+            .any(|l| l.contains("please") || l.contains("AKIA"))
+    );
+    let (client, connection) = gantry_server::store::tokio_postgres::connect(
+        &url,
+        gantry_server::store::tokio_postgres::NoTls,
+    )
+    .await?;
+    tokio::spawn(connection);
+    let sealed: String = client
+        .query_one(
+            "SELECT sealed FROM enterprise_captures WHERE decision = $1",
+            &[&id],
+        )
+        .await?
+        .try_get(0)?;
+    assert!(sealed.starts_with("v1:") && !sealed.contains("please"));
+    let hours: f64 = client
+        .query_one("SELECT extract(epoch FROM expires_at - captured_at)::float8 / 3600 FROM enterprise_captures WHERE decision = $1", &[&id])
+        .await?
+        .try_get(0)?;
+    assert!(
+        (hours - 24.0).abs() < 0.01,
+        "kept 24 hours by default: {hours}"
+    );
+    // Past its expiry it is deleted on the next tick.
+    client
+        .execute(
+            "UPDATE enterprise_captures SET expires_at = now() - interval '1 second'",
+            &[],
+        )
+        .await?;
+    ex.ship().await?;
+    assert!(
+        client
+            .query_opt("SELECT 1 FROM enterprise_captures", &[])
+            .await?
+            .is_none()
+    );
+    let set = owner
+        .go(
+            &gw.app,
+            "POST",
+            "/console/siem",
+            &[("action", "capture_hours"), ("hours", "200")],
+        )
+        .await?;
+    assert!(set.text.contains("from 1 to 168"));
+    assert!(chain_lines(&gw)?.iter().any(
+        |l| l.contains("\"action\":\"export_destination_saved\"")
+            && l.contains("\"text\":true")
+            && l.contains("\"text_teams\":\"research\"")
+    ));
     Ok(())
 }

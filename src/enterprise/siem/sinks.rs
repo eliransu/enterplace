@@ -34,9 +34,12 @@ pub enum Kind {
     S3,
     Gcs,
     AzureBlob,
+    OtlpTraces,
+    Langfuse,
+    Callback,
 }
 
-pub const KINDS: [Kind; 9] = [
+pub const KINDS: [Kind; 12] = [
     Kind::Webhook,
     Kind::SplunkHec,
     Kind::Datadog,
@@ -46,6 +49,9 @@ pub const KINDS: [Kind; 9] = [
     Kind::S3,
     Kind::Gcs,
     Kind::AzureBlob,
+    Kind::OtlpTraces,
+    Kind::Langfuse,
+    Kind::Callback,
 ];
 
 impl Kind {
@@ -60,6 +66,9 @@ impl Kind {
             Self::S3 => "s3",
             Self::Gcs => "gcs",
             Self::AzureBlob => "azure_blob",
+            Self::OtlpTraces => "otlp_traces",
+            Self::Langfuse => "langfuse",
+            Self::Callback => "callback",
         }
     }
 
@@ -74,6 +83,11 @@ impl Kind {
             Self::S3 => "Amazon S3 or S3-compatible storage",
             Self::Gcs => "Google Cloud Storage",
             Self::AzureBlob => "Azure Blob Storage",
+            Self::OtlpTraces => {
+                "LLM traces, OTLP/HTTP JSON with GenAI conventions (Arize Phoenix, Datadog, collectors)"
+            }
+            Self::Langfuse => "Langfuse traces",
+            Self::Callback => "HTTP callback (signed, one entry per request)",
         }
     }
 
@@ -85,8 +99,24 @@ impl Kind {
     pub fn needs_secret(self) -> bool {
         matches!(
             self,
-            Self::Webhook | Self::SplunkHec | Self::Datadog | Self::Elastic
+            Self::Webhook
+                | Self::SplunkHec
+                | Self::Datadog
+                | Self::Elastic
+                | Self::Langfuse
+                | Self::Callback
         )
+    }
+
+    /// Whether Gantry makes the secret (an HMAC signing secret) rather than the operator.
+    pub fn signs(self) -> bool {
+        matches!(self, Self::Webhook | Self::Callback)
+    }
+
+    /// Whether it gets one entry per request (the decision and its usage joined) rather than the records as they
+    /// are. Only these may carry prompt and answer text, and only when the destination opts in.
+    pub fn per_request(self) -> bool {
+        matches!(self, Self::OtlpTraces | Self::Langfuse | Self::Callback)
     }
 }
 
@@ -113,6 +143,23 @@ pub struct Batch {
     pub replica: String,
     pub lines: Vec<String>,
     pub records: Vec<Value>,
+    /// For per-request kinds: what each usage record's request adds, by decision ID.
+    pub joined: HashMap<String, Joined>,
+}
+
+/// The decision record of a request, and its text when the destination opted in and it was captured.
+#[derive(Clone, Debug, Default)]
+pub struct Joined {
+    pub decision: Value,
+    pub text: Option<Text>,
+}
+
+/// Prompt and answer text, redacted by Gantry's own secrets and PII detectors before it was stored.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct Text {
+    /// (role, text) for each part of the prompt.
+    pub prompt: Vec<(String, String)>,
+    pub answer: Vec<String>,
 }
 
 impl Batch {
@@ -125,7 +172,13 @@ impl Batch {
             replica,
             lines,
             records,
+            joined: HashMap::new(),
         }
+    }
+
+    /// The usage records, each a finished request.
+    pub fn usage(&self) -> impl Iterator<Item = &Value> {
+        self.records.iter().filter(|r| r["event"] == "usage")
     }
 
     fn field(&self, last: bool, name: &str) -> Value {
@@ -187,7 +240,7 @@ pub struct Out {
 }
 
 impl Out {
-    fn post(url: String, content_type: &str, body: Vec<u8>) -> Self {
+    pub(crate) fn post(url: String, content_type: &str, body: Vec<u8>) -> Self {
         Self {
             method: "POST",
             url,
@@ -196,7 +249,7 @@ impl Out {
         }
     }
 
-    fn header(mut self, name: &str, value: String) -> Self {
+    pub(crate) fn header(mut self, name: &str, value: String) -> Self {
         self.headers.push((name.into(), value));
         self
     }
@@ -412,6 +465,48 @@ pub fn request(dest: &Dest, batch: &Batch) -> Out {
                 Value::from(rows).to_string().into_bytes(),
             )
         }
+        Kind::OtlpTraces | Kind::Langfuse => {
+            let body = traces(batch).to_string().into_bytes();
+            if dest.kind == Kind::Langfuse {
+                let url = if dest.url.trim_end_matches('/').ends_with("/v1/traces") {
+                    dest.url.clone()
+                } else {
+                    format!(
+                        "{}/api/public/otel/v1/traces",
+                        dest.url.trim_end_matches('/')
+                    )
+                };
+                let basic = base64::engine::general_purpose::STANDARD.encode(format!(
+                    "{}:{}",
+                    dest.option("public_key"),
+                    dest.secret
+                ));
+                return Out::post(url, "application/json", body)
+                    .header("authorization", format!("Basic {basic}"))
+                    .header("x-langfuse-ingestion-version", "4".into());
+            }
+            let out = Out::post(dest.url.clone(), "application/json", body);
+            match (dest.option("header"), dest.secret.as_str()) {
+                (_, "") => out,
+                ("", secret) => out.header("authorization", format!("Bearer {secret}")),
+                (name, secret) => out.header(&name.to_ascii_lowercase(), secret.to_string()),
+            }
+        }
+        Kind::Callback => {
+            let mut body = range;
+            body["requests"] = Value::from(
+                batch
+                    .usage()
+                    .map(|u| request_entry(batch, u))
+                    .collect::<Vec<_>>(),
+            );
+            let body = body.to_string().into_bytes();
+            let signed = format!("sha256={}", signature(&dest.secret, &body));
+            Out::post(dest.url.clone(), "application/json", body)
+                .header("x-gantry-signature", signed)
+                .header("x-gantry-first-hash", first)
+                .header("x-gantry-last-hash", last)
+        }
         Kind::S3 | Kind::Gcs | Kind::AzureBlob => {
             let body = batch.ndjson().into_bytes();
             let (url, method) = match dest.kind {
@@ -429,6 +524,227 @@ pub fn request(dest: &Dest, batch: &Batch) -> Out {
             }
         }
     }
+}
+
+/// When a request started: its decision record's time, else its usage record's.
+fn started(batch: &Batch, usage: &Value) -> Value {
+    let id = usage["id"].as_str().unwrap_or_default();
+    batch
+        .joined
+        .get(id)
+        .map(|j| j.decision["time"].clone())
+        .filter(Value::is_string)
+        .unwrap_or_else(|| usage["time"].clone())
+}
+
+fn millis(time: &Value) -> u128 {
+    time.as_str()
+        .and_then(parse_time)
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis())
+}
+
+/// One finished request as the callback sends it: the usage record's figures, what its decision adds, and its
+/// text only when the destination opted in.
+fn request_entry(batch: &Batch, usage: &Value) -> Value {
+    let id = usage["id"].as_str().unwrap_or_default();
+    let joined = batch.joined.get(id).cloned().unwrap_or_default();
+    let d = &joined.decision;
+    let start = started(batch, usage);
+    let mut entry = json!({
+        "decision": id,
+        "start": start,
+        "end": usage["time"],
+        "duration_ms": u64::try_from(millis(&usage["time"]).saturating_sub(millis(&start))).unwrap_or(u64::MAX),
+        "person": usage["person"],
+        "team": usage["team"],
+        "key": usage["key"],
+        "client": d["client"],
+        "path": d["path"],
+        "rule": d["rule"],
+        "model": usage["model"],
+        "provider": usage["provider"],
+        "status": usage["status"],
+        "ended": usage["ended"],
+        "input_tokens": usage["input_tokens"],
+        "output_tokens": usage["output_tokens"],
+        "cache_read_tokens": usage["cache_read_tokens"],
+        "cache_write_tokens": usage["cache_write_tokens"],
+        "cost_usd": usage["cost_usd"],
+        "charged_usd": usage["charged_usd"],
+        "n": usage["n"],
+        "hash": usage["hash"],
+        "prev": usage["prev"],
+    });
+    if let Some(text) = joined.text {
+        entry["prompt"] = Value::from(
+            text.prompt
+                .iter()
+                .map(|(role, text)| json!({ "role": role, "text": text }))
+                .collect::<Vec<_>>(),
+        );
+        entry["answer"] = json!(text.answer);
+    }
+    entry
+}
+
+/// The batch's finished requests as OTLP/HTTP JSON spans, one per request, with the OpenTelemetry GenAI semantic
+/// conventions, the OpenInference names Arize Phoenix reads and the `langfuse.*` names Langfuse prefers. The batch's
+/// hash range is on the resource, and each span carries its usage record's place in the chain.
+pub fn traces(batch: &Batch) -> Value {
+    let range = batch.range();
+    let attr = |key: &str, value: &Value| -> Option<Value> {
+        let value = match value {
+            Value::Null => return None,
+            Value::Bool(b) => json!({ "boolValue": b }),
+            Value::Number(n) if n.is_i64() || n.is_u64() => json!({ "intValue": n.to_string() }),
+            Value::Number(n) => json!({ "doubleValue": n.as_f64() }),
+            Value::String(s) => json!({ "stringValue": s }),
+            other => json!({ "stringValue": other.to_string() }),
+        };
+        Some(json!({ "key": key, "value": value }))
+    };
+    let spans: Vec<Value> = batch
+        .usage()
+        .map(|u| {
+            let id = u["id"].as_str().unwrap_or_default();
+            let joined = batch.joined.get(id).cloned().unwrap_or_default();
+            let d = &joined.decision;
+            let ids = sha256_hex(format!("{}/{id}", batch.replica).as_bytes());
+            let start = started(batch, u);
+            let operation = match d["path"].as_str().unwrap_or_default() {
+                p if p.contains("embeddings") => "embeddings",
+                p if p.ends_with("/completions") && !p.contains("chat") => "text_completion",
+                _ => "chat",
+            };
+            let model = u["model"].as_str().unwrap_or_default();
+            let tokens = |name: &str| u[name].as_u64().unwrap_or(0);
+            let total = tokens("input_tokens") + tokens("output_tokens");
+            let failed = u["status"].as_u64().is_some_and(|s| s >= 400);
+            let usage_details = json!({
+                "input": u["input_tokens"], "output": u["output_tokens"],
+                "cache_read": u["cache_read_tokens"], "cache_write": u["cache_write_tokens"],
+            });
+            let mut pairs: Vec<(&str, Value)> = vec![
+                ("gen_ai.operation.name", operation.into()),
+                ("gen_ai.provider.name", u["provider"].clone()),
+                ("gen_ai.system", u["provider"].clone()),
+                ("gen_ai.request.model", model.into()),
+                ("gen_ai.response.model", model.into()),
+                ("gen_ai.usage.input_tokens", u["input_tokens"].clone()),
+                ("gen_ai.usage.output_tokens", u["output_tokens"].clone()),
+                (
+                    "gen_ai.usage.cache_read.input_tokens",
+                    u["cache_read_tokens"].clone(),
+                ),
+                (
+                    "gen_ai.usage.cache_creation.input_tokens",
+                    u["cache_write_tokens"].clone(),
+                ),
+                ("gen_ai.usage.cost", u["cost_usd"].clone()),
+                ("user.id", u["person"].clone()),
+                ("openinference.span.kind", "LLM".into()),
+                ("llm.model_name", model.into()),
+                ("llm.provider", u["provider"].clone()),
+                ("llm.token_count.prompt", u["input_tokens"].clone()),
+                ("llm.token_count.completion", u["output_tokens"].clone()),
+                ("llm.token_count.total", total.into()),
+                ("langfuse.observation.type", "generation".into()),
+                ("langfuse.user.id", u["person"].clone()),
+                (
+                    "langfuse.trace.name",
+                    format!("gantry {operation} {model}").into(),
+                ),
+                (
+                    "langfuse.observation.usage_details",
+                    usage_details.to_string().into(),
+                ),
+                (
+                    "langfuse.observation.cost_details",
+                    json!({ "total": u["cost_usd"] }).to_string().into(),
+                ),
+                ("gantry.decision", id.into()),
+                ("gantry.team", u["team"].clone()),
+                ("gantry.key", u["key"].clone()),
+                ("gantry.rule", d["rule"].clone()),
+                ("gantry.client", d["client"].clone()),
+                ("gantry.status", u["status"].clone()),
+                ("gantry.ended", u["ended"].clone()),
+                ("gantry.charged_usd", u["charged_usd"].clone()),
+                ("gantry.n", u["n"].clone()),
+                ("gantry.hash", u["hash"].clone()),
+                ("gantry.prev", u["prev"].clone()),
+            ];
+            if let Some(text) = &joined.text {
+                let input: Vec<Value> = text
+                    .prompt
+                    .iter()
+                    .map(|(role, t)| json!({ "role": role, "parts": [{ "type": "text", "content": t }] }))
+                    .collect();
+                let output: Vec<Value> = text
+                    .answer
+                    .iter()
+                    .map(|t| json!({ "role": "assistant", "parts": [{ "type": "text", "content": t }] }))
+                    .collect();
+                let plain_in = text
+                    .prompt
+                    .iter()
+                    .map(|(_, t)| t.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let plain_out = text.answer.join("\n");
+                let langfuse_in: Vec<Value> = text
+                    .prompt
+                    .iter()
+                    .map(|(role, t)| json!({ "role": role, "content": t }))
+                    .collect();
+                pairs.extend([
+                    ("gen_ai.input.messages", Value::from(input).to_string().into()),
+                    (
+                        "gen_ai.output.messages",
+                        Value::from(output).to_string().into(),
+                    ),
+                    ("input.value", plain_in.into()),
+                    ("output.value", plain_out.clone().into()),
+                    (
+                        "langfuse.observation.input",
+                        Value::from(langfuse_in).to_string().into(),
+                    ),
+                    (
+                        "langfuse.observation.output",
+                        Value::from(plain_out).to_string().into(),
+                    ),
+                ]);
+            }
+            let nanos = |t: &Value| (millis(t) * 1_000_000).to_string();
+            json!({
+                "traceId": &ids[..32],
+                "spanId": &ids[32..48],
+                "name": format!("{operation} {model}"),
+                "kind": 3,
+                "startTimeUnixNano": nanos(&start),
+                "endTimeUnixNano": nanos(&u["time"]),
+                "attributes": pairs.iter().filter_map(|(k, v)| attr(k, v)).collect::<Vec<_>>(),
+                "status": { "code": if failed { 2 } else { 1 } },
+            })
+        })
+        .collect();
+    let resource: Vec<Value> = [
+        ("service.name", Value::from("gantry")),
+        ("gantry.replica", Value::from(batch.replica.clone())),
+        ("gantry.batch.first_n", range["first_n"].clone()),
+        ("gantry.batch.last_n", range["last_n"].clone()),
+        ("gantry.batch.prev", range["prev"].clone()),
+        ("gantry.batch.first_hash", range["first_hash"].clone()),
+        ("gantry.batch.last_hash", range["last_hash"].clone()),
+    ]
+    .iter()
+    .filter_map(|(k, v)| attr(k, v))
+    .collect();
+    json!({ "resourceSpans": [{
+        "resource": { "attributes": resource },
+        "scopeSpans": [{ "scope": { "name": "gantry.export" }, "spans": spans }],
+    }]})
 }
 
 /// `https://storage.googleapis.com/<bucket>/<prefix>` to the JSON API's media upload for `name` under the prefix.
@@ -511,6 +827,11 @@ impl Sinks {
 
     /// Sends `batch`. Blocking: run it off the async threads. The error names what failed and how to fix it.
     pub fn deliver(&self, dest: &Dest, batch: &Batch) -> Result<(), String> {
+        // A trace tool has nowhere to put a batch without a finished request; the cursor moves past it all the same.
+        if matches!(dest.kind, Kind::OtlpTraces | Kind::Langfuse) && batch.usage().next().is_none()
+        {
+            return Ok(());
+        }
         let mut out = request(dest, batch);
         match dest.kind {
             Kind::S3 => self.sign_s3(dest, &mut out)?,
@@ -573,7 +894,7 @@ impl Sinks {
     }
 
     /// Sends a request and returns the status and up to 64 KiB of the answer. Errors are transport errors only.
-    fn call(&self, out: &Out) -> Result<(u16, String), String> {
+    pub(crate) fn call(&self, out: &Out) -> Result<(u16, String), String> {
         let mut request = self.agent.request(out.method, &out.url);
         for (name, value) in &out.headers {
             request = request.set(name, value);

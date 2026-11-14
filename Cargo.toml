@@ -29,6 +29,10 @@ gantry-console = { path = "../gantry/crates/gantry-console" }
 # The audit archive streams pages of rows as the response body; already in the build through axum.
 futures-util = { version = "0.3", default-features = false }
 
+# Email alerts speak SMTP over TLS; both are already in the build through ureq, so no new code is compiled in.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
+
 [dev-dependencies]
 # The feature tests drive the gateway's router in process; both are already in the build through gantry-server.
 tower = { version = "0.5", features = ["util"] }
