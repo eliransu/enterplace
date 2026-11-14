@@ -31,6 +31,8 @@ pub enum Trigger {
     /// The once-a-second check, or a change made through the admin API.
     FileChange,
     Signal,
+    /// A new live version in the store, when the policy is kept there.
+    Store,
 }
 
 impl Trigger {
@@ -39,6 +41,7 @@ impl Trigger {
             Trigger::Start => "start",
             Trigger::FileChange => "file_change",
             Trigger::Signal => "signal",
+            Trigger::Store => "store",
         }
     }
 }
@@ -133,7 +136,16 @@ fn config_record(
     record
 }
 
+/// The number of the store's live version, when the policy is kept in the store and `text` is that version.
+fn live_version(policy_path: &Path, text: &str) -> Option<i64> {
+    store::policy_store(policy_path)
+        .and_then(|s| s.live_policy())
+        .filter(|v| v.text == text)
+        .map(|v| v.id)
+}
+
 fn loaded_record(
+    policy_path: &Path,
     trigger: Trigger,
     before: (Option<&str>, Option<&str>),
     old_keys: &BTreeSet<(String, String, String)>,
@@ -145,6 +157,10 @@ fn loaded_record(
     record.insert("keys_sha256".into(), new.keys_sha256.clone().into());
     // The policy text holds no secrets, so each version is kept whole: the log is its history.
     record.insert("policy".into(), new.policy_text.clone().into());
+    // Kept in the store: which version this is, so the chain names it as the versions page does.
+    if let Some(id) = live_version(policy_path, &new.policy_text) {
+        record.insert("policy_version".into(), id.into());
+    }
     record.insert("keys_added".into(), key_list(new_keys.difference(old_keys)));
     record.insert(
         "keys_removed".into(),
@@ -247,7 +263,52 @@ fn open_postgres(
     }
     let shared: Arc<dyn Store> = opened.clone();
     store::attach(keys_path, &shared);
+    if setting.policy_from == config::PolicyFrom::Store {
+        keep_policy_in_store(policy_path, &text, &shared)?;
+    }
     Ok(Some(opened))
+}
+
+/// Serves the policy from the store's live version. The first gateway on an empty store imports the file as
+/// version 1. A file that differs from the live version is not used, and Gantry says so at every start, so the two
+/// never disagree in silence.
+fn keep_policy_in_store(
+    policy_path: &Path,
+    file_text: &str,
+    shared: &Arc<dyn Store>,
+) -> Result<(), String> {
+    if shared.live_policy().is_none() {
+        let imported = shared.add_policy_version(&store::NewVersion {
+            text: file_text.to_string(),
+            base: None,
+            note: format!("Imported from {} at first start", policy_path.display()),
+            by: "gantry".into(),
+            pending: false,
+        });
+        match imported {
+            Ok(v) => println!(
+                "gantry: the policy is kept in the store from now on: {} is version {}. Edit it in the console or with PUT /admin/policy.",
+                policy_path.display(),
+                v.id
+            ),
+            // Another gateway imported its file first: that one is version 1.
+            Err(store::VersionError::Conflict(_)) => {}
+            Err(store::VersionError::Store(err)) => return Err(err),
+        }
+    }
+    store::attach_policy(policy_path, shared);
+    match shared.live_policy() {
+        Some(live) if live.text != file_text => eprintln!(
+            "gantry: the policy is kept in the store (store.policy_from: store) and version {} is live there. {} differs from it and only its store: section is read. Export the live version with GET /admin/policy to update the file, or import the file as a new version with PUT /admin/policy.",
+            live.id,
+            policy_path.display()
+        ),
+        Some(_) => {}
+        None => {
+            return Err("the store holds no live policy version, and the file could not be imported. Check the database and start again.".into());
+        }
+    }
+    Ok(())
 }
 
 /// Starts serving from the files: checks them, opens and verifies the audit log, records the version Gantry starts
@@ -259,6 +320,95 @@ pub fn governed(
 ) -> Result<Governed, String> {
     governed_with(policy_path, keys_path, provider_key, &|_| {
         Ok(crate::Extension::default())
+    })
+}
+
+/// The route to one provider: its address, and the key or the signing it is sent with, read now. `env` gives
+/// environment variables, so tests need not set any.
+fn route(
+    provider: &config::Provider,
+    provider_key: &dyn Fn(&str) -> Option<String>,
+    shared: Option<&Arc<dyn Store>>,
+    policy_path: &Path,
+    policy_text: &str,
+) -> Result<ProviderRoute, String> {
+    let set = |variable: &str| provider_key(variable).filter(|value| !value.trim().is_empty());
+    let (key, aws, google) = if provider.kind == Kind::Bedrock {
+        // The AWS default chain, as the SDKs read it, and never through the aws command.
+        let region = provider.region.as_deref().unwrap_or_default();
+        let aws = crate::cloud::aws(
+            &provider.name,
+            region,
+            provider.role_arn.as_deref(),
+            provider_key,
+        )?;
+        println!(
+            "gantry: provider \"{}\" signs with AWS credentials from {}.",
+            provider.name,
+            aws.source()
+        );
+        (None, Some(aws), None)
+    } else if let Some(path) = &provider.key_file {
+        (Some(read_key_file(&provider.name, path)?), None, None)
+    } else if let Some(name) = &provider.credential {
+        let store =
+            shared.ok_or("a provider names a credential and the policy has no store: section")?;
+        let value = store
+            .credential_value(name)
+            .map_err(|err| {
+                format!(
+                    "provider \"{}\" takes its key from credential \"{name}\", and {err}",
+                    provider.name
+                )
+            })?
+            .ok_or_else(|| {
+                crate::credentials::unknown(
+                    policy_path,
+                    policy_text,
+                    &provider.name,
+                    name,
+                    &store.credentials().unwrap_or_default(),
+                )
+            })?;
+        (Some(Secret::new(value)), None, None)
+    } else if provider.key_env.is_empty()
+        && matches!(provider.kind, Kind::Vertex | Kind::VertexAnthropic)
+    {
+        let google = crate::cloud::google(&provider.name, provider_key)?;
+        println!(
+            "gantry: provider \"{}\" signs in to Google Cloud with {}.",
+            provider.name,
+            google.source()
+        );
+        (None, None, Some(google))
+    } else if provider.key_env.is_empty() {
+        // `gantry check` allows this only for a model server on this machine or a private network.
+        (None, None, None)
+    } else {
+        let variable = &provider.key_env;
+        let key = set(variable).ok_or_else(|| {
+            format!(
+                "the key for provider \"{}\" is not set. The policy file says it is in the environment variable {variable}: set it (`export {variable}=...`) and start again.",
+                provider.name
+            )
+        })?;
+        (Some(Secret::new(key.trim())), None, None)
+    };
+    Ok(ProviderRoute {
+        name: provider.name.clone(),
+        kind: provider.kind,
+        url: provider.url.clone(),
+        key,
+        models: provider.models.clone(),
+        upstream_models: provider.upstream_models.clone(),
+        api_version: provider.api_version.clone(),
+        region: provider.region.clone(),
+        aws,
+        google,
+        fallback: provider.fallback.clone(),
+        retries: provider.retries,
+        accept_chat: provider.accept_chat,
+        accept_messages: provider.accept_messages,
     })
 }
 
@@ -295,85 +445,13 @@ pub fn governed_with(
     }
     let mut providers = Vec::new();
     for provider in &loaded.providers {
-        let set = |variable: &str| provider_key(variable).filter(|value| !value.trim().is_empty());
-        let (key, aws, google) = if provider.kind == Kind::Bedrock {
-            // The AWS default chain, as the SDKs read it, and never through the aws command.
-            let region = provider.region.as_deref().unwrap_or_default();
-            let aws = crate::cloud::aws(
-                &provider.name,
-                region,
-                provider.role_arn.as_deref(),
-                provider_key,
-            )?;
-            println!(
-                "gantry: provider \"{}\" signs with AWS credentials from {}.",
-                provider.name,
-                aws.source()
-            );
-            (None, Some(aws), None)
-        } else if let Some(path) = &provider.key_file {
-            (Some(read_key_file(&provider.name, path)?), None, None)
-        } else if let Some(name) = &provider.credential {
-            let store = shared
-                .as_ref()
-                .ok_or("a provider names a credential and the policy has no store: section")?;
-            let value = store
-                .credential_value(name)
-                .map_err(|err| {
-                    format!(
-                        "provider \"{}\" takes its key from credential \"{name}\", and {err}",
-                        provider.name
-                    )
-                })?
-                .ok_or_else(|| {
-                    crate::credentials::unknown(
-                        policy_path,
-                        &loaded.policy_text,
-                        &provider.name,
-                        name,
-                        &store.credentials().unwrap_or_default(),
-                    )
-                })?;
-            (Some(Secret::new(value)), None, None)
-        } else if provider.key_env.is_empty()
-            && matches!(provider.kind, Kind::Vertex | Kind::VertexAnthropic)
-        {
-            let google = crate::cloud::google(&provider.name, provider_key)?;
-            println!(
-                "gantry: provider \"{}\" signs in to Google Cloud with {}.",
-                provider.name,
-                google.source()
-            );
-            (None, None, Some(google))
-        } else if provider.key_env.is_empty() {
-            // `gantry check` allows this only for a model server on this machine or a private network.
-            (None, None, None)
-        } else {
-            let variable = &provider.key_env;
-            let key = set(variable).ok_or_else(|| {
-                format!(
-                    "the key for provider \"{}\" is not set. The policy file says it is in the environment variable {variable}: set it (`export {variable}=...`) and start again.",
-                    provider.name
-                )
-            })?;
-            (Some(Secret::new(key.trim())), None, None)
-        };
-        providers.push(ProviderRoute {
-            name: provider.name.clone(),
-            kind: provider.kind,
-            url: provider.url.clone(),
-            key,
-            models: provider.models.clone(),
-            upstream_models: provider.upstream_models.clone(),
-            api_version: provider.api_version.clone(),
-            region: provider.region.clone(),
-            aws,
-            google,
-            fallback: provider.fallback.clone(),
-            retries: provider.retries,
-            accept_chat: provider.accept_chat,
-            accept_messages: provider.accept_messages,
-        });
+        providers.push(route(
+            provider,
+            provider_key,
+            shared.as_ref(),
+            policy_path,
+            &loaded.policy_text,
+        )?);
     }
     let mut mcp = Vec::new();
     for server in &loaded.mcp {
@@ -416,7 +494,7 @@ pub fn governed_with(
         ),
         None => ((None, None), BTreeSet::new()),
     };
-    log.append_record(&loaded_record(Trigger::Start, before, &old_keys, &loaded))
+    log.append_record(&loaded_record(policy_path, Trigger::Start, before, &old_keys, &loaded))
         .map_err(|err| {
             format!(
                 "the audit log at {} cannot be written: {err}. Gantry does not start without recording the version it starts with.",
@@ -537,6 +615,10 @@ impl Reloader {
         &self.keys_path
     }
 
+    pub(crate) fn policy_path(&self) -> &Path {
+        &self.policy_path
+    }
+
     /// The hashes of the files on disk, if they were rejected and are still there.
     pub fn rejected(&self) -> Option<(Option<String>, Option<String>)> {
         self.shown.lock().ok().and_then(|shown| shown.clone())
@@ -566,7 +648,16 @@ impl Reloader {
             Some(store) => Ok(Some(store.keys_text().into_bytes())),
             None => read(&self.keys_path),
         };
-        let policy = read(&self.policy_path);
+        let kept = store::policy_store(&self.policy_path);
+        let policy = match &kept {
+            // From memory, as the keys are: a version saved on any gateway shows here within the store's poll.
+            Some(store) => Ok(store.live_policy().map(|v| v.text.into_bytes())),
+            None => read(&self.policy_path),
+        };
+        let trigger = match (&kept, trigger) {
+            (Some(_), Trigger::FileChange) => Trigger::Store,
+            (_, trigger) => trigger,
+        };
         let print = |file: &Result<Option<Vec<u8>>, String>| match file {
             Ok(bytes) => bytes.as_deref().map(sha256_hex),
             // Unreadable is a state of its own, never the same as a file Gantry read.
@@ -652,40 +743,56 @@ impl Reloader {
             Ok(version) => version.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         };
-        // The providers keep their URLs and keys, which do not change without a restart, and take the new models.
+        // A provider reached as before keeps its route (and its key and signing) and takes the new models and routing.
+        // A new provider, or one whose address or key changed, gets a route built now. Requests already sent keep
+        // the route they were sent on.
         let mut providers = Vec::new();
         for provider in &new.providers {
-            match old_version
+            let kept = current
+                .loaded
                 .providers
                 .iter()
                 .find(|p| p.name == provider.name)
-            {
+                .filter(|p| config::same_connection(p, provider))
+                .and_then(|_| {
+                    old_version
+                        .providers
+                        .iter()
+                        .find(|p| p.name == provider.name)
+                });
+            let upstream = match kept {
                 Some(old) => {
                     let mut upstream = old.clone();
                     upstream.models = provider.models.clone();
-                    // Routing follows the file at once. The URL, the key and what signs it wait for a restart.
                     upstream.upstream_models = provider.upstream_models.clone();
                     upstream.fallback = provider.fallback.clone();
                     upstream.retries = provider.retries;
                     upstream.accept_chat = provider.accept_chat;
                     upstream.accept_messages = provider.accept_messages;
-                    providers.push(upstream);
+                    upstream
                 }
                 None => {
-                    return self.reject(
-                        current,
-                        trigger,
-                        prints,
-                        vec![format!(
-                            "provider \"{}\" is new. Restart Gantry to add it.",
-                            provider.name
-                        )],
-                    );
+                    let built = route(
+                        provider,
+                        &|variable| std::env::var(variable).ok(),
+                        self.store.as_ref(),
+                        &self.policy_path,
+                        &new.policy_text,
+                    )
+                    .and_then(|r| crate::upstream_of(&r).map_err(|err| err.to_string()));
+                    match built {
+                        Ok(upstream) => upstream,
+                        Err(err) => {
+                            return self.reject(current, trigger, prints, vec![err]);
+                        }
+                    }
                 }
-            }
+            };
+            providers.push(upstream);
         }
         let old = &current.loaded;
         let record = loaded_record(
+            &self.policy_path,
             trigger,
             (Some(&old.policy_sha256), Some(&old.keys_sha256)),
             &key_set(&old.policy),
@@ -718,6 +825,8 @@ impl Reloader {
             gantry_core::count(new.policy.rules(), "rule"),
             gantry_core::count(new.policy.keys(), "key"),
         );
+        current.key_prints = key_prints(&new);
+        current.credential_prints = credential_prints(self.store.as_ref(), &new);
         current.loaded = new;
         current.prints = prints;
         current.rejected.clear();

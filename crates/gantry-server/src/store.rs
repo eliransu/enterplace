@@ -31,7 +31,10 @@ use gantry_core::{
     keyfile::{self, Revoked},
     kill::Kill,
     policy::{Budget, Period},
-    store::{Bucket, Change, Credential, LEASE, Lease, Pending, Reserve, Store},
+    store::{
+        self as core_store, Bucket, Change, Credential, LEASE, Lease, NewVersion, Pending,
+        PolicyVersion, Reserve, Store, VersionError,
+    },
 };
 
 use crate::credentials::{MasterKey, NO_MASTER};
@@ -123,6 +126,31 @@ INSERT INTO gantry_versions VALUES ('credentials', 0);
 ",
 ];
 
+/// The policy versions' table, in a namespace of its own (`gantry_migrations`), so it never competes with the
+/// numbering of the core schema above. Never edit an entry that has shipped: add one.
+const POLICY_MIGRATIONS: &[&str] = &["
+CREATE TABLE gantry_policy_versions (
+    id bigserial PRIMARY KEY,
+    text text NOT NULL,
+    sha256 text NOT NULL,
+    base bigint,
+    note text NOT NULL,
+    created_by text NOT NULL,
+    created_at text NOT NULL,
+    state text NOT NULL,
+    decided_by text,
+    decided_at text
+);
+INSERT INTO gantry_versions VALUES ('policy', 0) ON CONFLICT (name) DO NOTHING;
+"];
+
+/// The columns of a policy version, in the order `version_of` reads them.
+const VERSION_COLUMNS: &str =
+    "id, text, sha256, base, note, created_by, created_at, state, decided_by, decided_at";
+
+/// Serializes changes to the policy versions across every gateway on the database.
+const POLICY_LOCK: i64 = 7_349_127_342;
+
 /// What the master key seals once per database, so a gateway with another master key is refused at start rather
 /// than at the first credential it cannot open.
 const MASTER_CHECK: (&str, &[u8]) = ("gantry master key check", b"gantry");
@@ -178,6 +206,9 @@ struct Inner {
     credentials: RwLock<Arc<Vec<Sealed>>>,
     /// Set once, at start, after it opened the database's check value.
     master: std::sync::OnceLock<MasterKey>,
+    /// Every policy version, newest first, and the version of the list last read.
+    policies: RwLock<Arc<Vec<PolicyVersion>>>,
+    policies_seen: Mutex<Option<i64>>,
     /// Set while the database cannot be reached, so the outage is reported once and its end once.
     down: AtomicBool,
 }
@@ -227,6 +258,8 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         returns: Mutex::default(),
         credentials: RwLock::new(Arc::new(Vec::new())),
         master: std::sync::OnceLock::new(),
+        policies: RwLock::default(),
+        policies_seen: Mutex::new(None),
         down: AtomicBool::new(false),
     });
     let store = PgStore {
@@ -241,6 +274,7 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
             .await
             .map_err(|err| unreachable(&first.env, &err))?;
         migrate(&mut client).await?;
+        migrate_namespace(&mut client, "gantry_policy", POLICY_MIGRATIONS).await?;
         write(&first.client, Some(Arc::new(client)));
         first.refresh().await.map_err(|err| {
             format!("the store's keys and kill switches could not be read: {err}. Check the database and start again.")
@@ -744,7 +778,68 @@ impl Inner {
             .seen
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(now);
+        let policy = version("policy");
+        let seen = *self
+            .policies_seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if seen != Some(policy) {
+            // ponytail: every version's whole text is held in memory and read again on each change. Fine for
+            // hundreds of versions; page the list when someone keeps thousands.
+            let rows = client
+                .query(
+                    &format!(
+                        "SELECT {VERSION_COLUMNS} FROM gantry_policy_versions ORDER BY id DESC"
+                    ),
+                    &[],
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+            let all: Result<Vec<_>, String> = rows.iter().map(version_of).collect();
+            write(&self.policies, Arc::new(all?));
+            *self
+                .policies_seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(policy);
+        }
         Ok(())
+    }
+
+    /// Runs `work` in a transaction of its own connection, under the policy lock, then reads the versions again so
+    /// this gateway sees the change at once.
+    async fn policy_change<T: Send + 'static>(
+        &self,
+        work: impl for<'t> FnOnce(
+            &'t tokio_postgres::Transaction<'t>,
+        )
+            -> Pin<Box<dyn Future<Output = Result<T, VersionError>> + Send + 't>>
+        + Send,
+    ) -> Result<T, VersionError> {
+        let down = |err: String| {
+            VersionError::Store(format!(
+                "the policy version could not be written to the store: {err}. Nothing was changed. Check that Postgres is up and {} is right, then try again.",
+                self.env
+            ))
+        };
+        let mut client = self.connect().await.map_err(|err| down(err.to_string()))?;
+        let tx = client
+            .transaction()
+            .await
+            .map_err(|err| down(err.to_string()))?;
+        tx.execute("SELECT pg_advisory_xact_lock($1)", &[&POLICY_LOCK])
+            .await
+            .map_err(|err| down(err.to_string()))?;
+        let done = work(&tx).await?;
+        tx.execute(
+            "UPDATE gantry_versions SET version = version + 1 WHERE name = 'policy'",
+            &[],
+        )
+        .await
+        .map_err(|err| down(err.to_string()))?;
+        tx.commit().await.map_err(|err| down(err.to_string()))?;
+        // Written. If reading it back fails, the poll picks it up within half a second.
+        let _ = self.refresh().await;
+        Ok(done)
     }
 
     async fn read_keys(&self, client: &Client) -> Result<Vec<KeyEntry>, String> {
@@ -973,6 +1068,40 @@ impl Inner {
     }
 }
 
+fn version_of(row: &tokio_postgres::Row) -> Result<PolicyVersion, String> {
+    let f = |err: tokio_postgres::Error| err.to_string();
+    Ok(PolicyVersion {
+        id: row.try_get(0).map_err(f)?,
+        text: row.try_get(1).map_err(f)?,
+        sha256: row.try_get(2).map_err(f)?,
+        base: row.try_get(3).map_err(f)?,
+        note: row.try_get(4).map_err(f)?,
+        created_by: row.try_get(5).map_err(f)?,
+        created_at: row.try_get(6).map_err(f)?,
+        state: row.try_get(7).map_err(f)?,
+        decided_by: row.try_get(8).map_err(f)?,
+        decided_at: row.try_get(9).map_err(f)?,
+    })
+}
+
+fn sql(err: tokio_postgres::Error) -> VersionError {
+    VersionError::Store(format!(
+        "the store refused the policy change: {err}. Nothing was changed. Try again; if it repeats, check the database."
+    ))
+}
+
+/// The live version's id inside a policy change.
+async fn live_id(tx: &tokio_postgres::Transaction<'_>) -> Result<Option<i64>, VersionError> {
+    let row = tx
+        .query_opt(
+            "SELECT id FROM gantry_policy_versions WHERE state = 'live'",
+            &[],
+        )
+        .await
+        .map_err(sql)?;
+    row.map(|r| r.try_get(0)).transpose().map_err(sql)
+}
+
 fn credential_of(row: &tokio_postgres::Row) -> Result<Credential, String> {
     let field = |err: tokio_postgres::Error| err.to_string();
     Ok(Credential {
@@ -1173,6 +1302,26 @@ impl PgStore {
         });
         told.recv()
             .map_err(|_| "the store stopped before it answered".to_string())?
+    }
+
+    /// [`wait`](Self::wait) for a policy change, whose refusals keep their kind.
+    fn wait_version<T: Send + 'static>(
+        &self,
+        work: impl Future<Output = Result<T, VersionError>> + Send + 'static,
+    ) -> Result<T, VersionError> {
+        let (tell, told) = std::sync::mpsc::sync_channel(1);
+        self.handle.spawn(async move {
+            let done = tokio::time::timeout(WAIT, work).await.unwrap_or_else(|_| {
+                Err(VersionError::Store(format!(
+                    "the store gave no answer within {} seconds. Nothing may have been changed: reload the versions page and check.",
+                    WAIT.as_secs()
+                )))
+            });
+            let _ = tell.send(done);
+        });
+        told.recv().map_err(|_| {
+            VersionError::Store("the store stopped before it answered. Try again.".into())
+        })?
     }
 
     /// Runs `work` on the store's runtime, given up after [`WAIT`], for a caller on the request path to await.
@@ -1433,6 +1582,155 @@ impl Store for PgStore {
             "DELETE FROM gantry_credentials WHERE name = $1".into(),
             vec![Box::new(name.to_string())],
         )
+    }
+
+    fn refresh_policy(&self) -> Result<(), String> {
+        let inner = self.inner.clone();
+        self.wait(async move { inner.refresh().await })
+    }
+
+    fn policy_versions(&self) -> Result<Arc<Vec<PolicyVersion>>, String> {
+        Ok(read(&self.inner.policies))
+    }
+
+    fn add_policy_version(&self, new: &NewVersion) -> Result<PolicyVersion, VersionError> {
+        let (inner, new) = (self.inner.clone(), new.clone());
+        self.wait_version(async move {
+            inner
+                .policy_change(move |tx| {
+                    Box::pin(async move {
+                        let live = live_id(tx).await?;
+                        if live != new.base {
+                            let word = |v: Option<i64>| {
+                                v.map_or_else(|| "none".to_string(), |v| format!("version {v}"))
+                            };
+                            return Err(VersionError::Conflict(format!(
+                                "the draft started from {} and {} is live now: someone saved a change meanwhile. Open the live version, make the change again on it, and save.",
+                                word(new.base),
+                                word(live)
+                            )));
+                        }
+                        if !new.pending {
+                            tx.execute(
+                                "UPDATE gantry_policy_versions SET state = 'retired' WHERE state = 'live'",
+                                &[],
+                            )
+                            .await
+                            .map_err(sql)?;
+                        }
+                        let state = if new.pending { core_store::PENDING } else { core_store::LIVE };
+                        let row = tx
+                            .query_one(
+                                &format!(
+                                    "INSERT INTO gantry_policy_versions (text, sha256, base, note, created_by, created_at, state) \
+                                     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {VERSION_COLUMNS}"
+                                ),
+                                &[
+                                    &new.text,
+                                    &id::sha256_hex(new.text.as_bytes()),
+                                    &new.base,
+                                    &new.note,
+                                    &new.by,
+                                    &gantry_core::audit::timestamp(),
+                                    &state,
+                                ],
+                            )
+                            .await
+                            .map_err(sql)?;
+                        version_of(&row).map_err(VersionError::Store)
+                    })
+                })
+                .await
+        })
+    }
+
+    fn decide_policy_version(
+        &self,
+        version: i64,
+        approve: bool,
+        by: &str,
+    ) -> Result<PolicyVersion, VersionError> {
+        let (inner, by) = (self.inner.clone(), by.to_string());
+        self.wait_version(async move {
+            inner
+                .policy_change(move |tx| {
+                    Box::pin(async move {
+                        let row = tx
+                            .query_opt(
+                                "SELECT state, base FROM gantry_policy_versions WHERE id = $1",
+                                &[&version],
+                            )
+                            .await
+                            .map_err(sql)?
+                            .ok_or_else(|| {
+                                VersionError::Conflict(format!("there is no policy version {version}."))
+                            })?;
+                        let (state, base): (String, Option<i64>) =
+                            (row.try_get(0).map_err(sql)?, row.try_get(1).map_err(sql)?);
+                        if state != core_store::PENDING {
+                            return Err(VersionError::Conflict(format!(
+                                "version {version} is {state} now, not waiting for approval: someone decided it meanwhile."
+                            )));
+                        }
+                        if approve {
+                            if live_id(tx).await? != base {
+                                return Err(VersionError::Conflict(format!(
+                                    "version {version} was drafted on a version that is no longer live. Reject it and draft the change again on the live version."
+                                )));
+                            }
+                            tx.execute(
+                                "UPDATE gantry_policy_versions SET state = 'retired' WHERE state = 'live'",
+                                &[],
+                            )
+                            .await
+                            .map_err(sql)?;
+                        }
+                        let state = if approve { core_store::LIVE } else { core_store::REJECTED };
+                        let row = tx
+                            .query_one(
+                                &format!(
+                                    "UPDATE gantry_policy_versions SET state = $2, decided_by = $3, decided_at = $4 \
+                                     WHERE id = $1 RETURNING {VERSION_COLUMNS}"
+                                ),
+                                &[&version, &state, &by, &gantry_core::audit::timestamp()],
+                            )
+                            .await
+                            .map_err(sql)?;
+                        version_of(&row).map_err(VersionError::Store)
+                    })
+                })
+                .await
+        })
+    }
+
+    fn update_key(&self, entry: &KeyEntry) -> Result<bool, String> {
+        let entry = entry.clone();
+        self.change("key", move |client| {
+            Box::pin(async move {
+                let per = entry.budget.map(|b| b.per.word());
+                let tpm = entry.tpm.map(|t| i32::try_from(t).unwrap_or(i32::MAX));
+                let n = client
+                    .execute(
+                        "WITH changed AS (UPDATE gantry_keys SET admin = $2, expires = $3, budget_usd = $4, \
+                           budget_per = $5, models = $6, tpm = $7 WHERE sha256 = $1 RETURNING 1), \
+                         bumped AS (UPDATE gantry_versions SET version = version + 1 \
+                           WHERE name = 'keys' AND EXISTS (SELECT 1 FROM changed)) \
+                         SELECT 1 FROM changed",
+                        &[
+                            &entry.sha256,
+                            &entry.admin,
+                            &entry.expires,
+                            &entry.budget.map(|b| b.usd),
+                            &per,
+                            &entry.models,
+                            &tpm,
+                        ],
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+                Ok(n > 0)
+            })
+        })
     }
 
     fn credential_value(&self, name: &str) -> Result<Option<String>, String> {

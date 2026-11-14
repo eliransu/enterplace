@@ -1,0 +1,109 @@
+---
+title: Editing the policy in the console
+description: Add models, change prices, edit keys, save policy versions with approval, dry-run a draft against recent requests, roll back, and keep GitOps.
+sidebar:
+  order: 3
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+With the policy kept in the store, admins change providers, models, prices, rules and keys from the console, and every gateway on the database uses each change within 2 seconds, without a restart. Each change is a policy version: checked as `gantry check` checks a file, recorded in the audit chain, and one click away from being undone.
+
+## Turn it on
+
+The policy file names the store and says the store is the source:
+
+```yaml title="gantry.policy.yaml"
+store: { postgres_url_env: DATABASE_URL, policy_from: store }
+```
+
+Restart Gantry once. The first gateway imports the file as version 1, and says so:
+
+```text
+gantry: the policy is kept in the store from now on: /etc/gantry/gantry.policy.yaml is version 1. Edit it in the console or with PUT /admin/policy.
+```
+
+Without `policy_from: store` the policy stays in the file. The pages below show it and export it, and every change is refused with how to turn editing on. See [which one wins](/governance/policy/#which-one-wins).
+
+## Models
+
+`/console/models` lists each model by provider with its price per million tokens (from the policy, or the built-in table) and the aliases that reach it.
+
+- **Add a model**: pick the provider, name the model, give its input and output price, and optionally other names callers may send for it. Each name becomes an alias of the model.
+- **Price**: change what a model costs, for budgets and the Spend page.
+
+Each form saves a new version. A form edit writes the policy without its comments; the editor keeps them.
+
+## Keys
+
+On `/console/people`, **Edit** beside a key changes what it may do: admin, expiry, its own budget, the models it may use (within its rule's) and its tokens per minute. The key itself does not change and is never shown again. **Issue a key** shows the new key once; **Revoke key** removes it. The last admin key keeps its admin flag, so someone can always sign in.
+
+## Teams
+
+`/console/teams` lists each team with its people and workloads, their role (Admin may sign in here and use the admin API, Member sends requests), the rule that decides for the team and its budget. Teams come from the keys. A binary that adds a members feature shows its own roles on its own pages.
+
+## Edit the policy
+
+**Policy**, then **Edit**, opens the YAML of the live version. Change anything, or load a YAML file to import it, add a note for the history, and:
+
+- **Dry run** checks the draft and replays the last hours of requests (24 by default, up to 720) against it.
+- **Save version** checks the draft and saves it. A draft `gantry check` refuses comes back with every problem; nothing is saved.
+
+A save starts from the live version. If someone saved another version meanwhile, the save is refused and the editor says so: open the live version and make the change again, so no change is overwritten.
+
+## Approval
+
+```yaml title="gantry.policy.yaml"
+store: { postgres_url_env: DATABASE_URL, policy_from: store, approval: true }
+```
+
+With `approval: true` in the live version, a saved version waits as **Waiting for approval** and the live version stays in force. Another admin opens it under **Versions**, reads its diff and dry run, and clicks **Approve and put live** or **Reject**. The admin who saved it cannot approve it. A version drafted on a version that is no longer live cannot be approved: reject it and draft again.
+
+Approval is read from the live version, so turning it off is itself a change that needs an approval.
+
+## Dry run
+
+A dry run replays this gateway's request records from the last hours against the draft, with each key's own model list, and lists:
+
+| List | Means |
+|---|---|
+| Now refused | Allowed then; the draft would refuse it, with the code it would get. |
+| Now allowed | Refused then by the policy (`no_rule`, `model_not_allowed`, `unknown_model`); the draft would allow it. |
+| Allowed by another rule | Allowed both times, by a different rule, whose budget, limits and guardrails would apply. |
+
+Requests refused before the policy decided (an unknown key, a budget, a guardrail, a kill switch) are counted and not replayed. Each gateway keeps its own audit chain, so a dry run sees the requests this gateway served.
+
+## Versions and rollback
+
+**Policy**, then **Versions**, lists every version with its state (Live, Waiting for approval, Earlier, Rejected), who saved it and who approved it. Open one to see its diff from the version it was drafted on. **Roll back to this version** saves its text as a new version: the history keeps both, and with approval on it waits for a second admin like any change.
+
+## GitOps
+
+**Export YAML** downloads the live policy as `gantry.policy.yaml`, from the console or `GET /admin/policy`. A team that reviews every change in git has two ways to work:
+
+- Keep `policy_from: file` (the default). The file in git is the only source, CI runs `gantry check` on it, and the console is read only for the policy. Keys are still edited in the console.
+- Use the store, and treat git as a record: export after each change, or import from CI with `PUT /admin/policy` and `If-Match`, so the store and the repository hold the same text.
+
+When the file and the live version differ, Gantry prints it at every start and the Policy page shows a banner. They never disagree in silence.
+
+## What is recorded
+
+| Action | Record |
+|---|---|
+| Save a version, add a model, change a price | `propose_policy`, `add_model`, `price_model`, with the draft's whole text |
+| Approve, reject, roll back | `approve_policy`, `reject_policy`, `rollback_policy` |
+| Dry run | `dry_run_policy`, with the draft's SHA-256 and the hours replayed |
+| Edit a key | `edit_key`, with its new fields and hash prefix |
+| A version goes live on a gateway | `config_loaded` with `trigger: store` and `policy_version` |
+
+A refused change is recorded with its code: `invalid_policy`, `version_conflict`, `own_version`, `policy_in_file`.
+
+<Aside type="note">No Claude Design design exists for these pages yet. They use only the console's existing components and tokens.</Aside>
+
+## Related
+
+<CardGrid>
+  <LinkCard title="Policy file" href="/governance/policy/#policy-versions-in-the-store" description="Versions, approval and the admin API." />
+  <LinkCard title="Store" href="/operations/store/" description="The Postgres store several gateways share." />
+  <LinkCard title="Admin console" href="/operations/console/" description="Sign in, roles and the other pages." />
+</CardGrid>

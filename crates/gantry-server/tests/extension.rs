@@ -158,7 +158,11 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
         .iter()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
         .collect::<Result<_, tokio_postgres::Error>>()?;
-    assert_eq!(rows, vec![("demo".to_string(), 1)]);
+    // The gateway's policy versions keep a namespace of their own, beside the extension's.
+    assert_eq!(
+        rows,
+        vec![("demo".to_string(), 1), ("gantry_policy".to_string(), 1)]
+    );
     // The gateway's own schema version is untouched by the namespace: its three migrations (keys, shared limits and
     // sessions, credentials).
     let core: i32 = client

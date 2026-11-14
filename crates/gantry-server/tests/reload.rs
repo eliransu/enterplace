@@ -375,7 +375,7 @@ async fn a_file_replaced_by_rename_or_a_symlink_switched_to_another_file_is_noti
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_missing_file_a_changed_audit_path_or_provider_url_is_rejected_and_the_old_version_kept()
+async fn a_missing_file_a_changed_audit_path_or_an_unusable_provider_is_rejected_and_the_old_version_kept()
 -> TestResult {
     let s = setup("restart-only").await?;
     let check = || s.gw.reloader.check(Trigger::FileChange);
@@ -388,25 +388,26 @@ async fn a_missing_file_a_changed_audit_path_or_provider_url_is_rejected_and_the
     std::fs::write(&s.keys, keys())?;
     assert!(matches!(check(), Reload::Unchanged));
 
-    for (changed, reason) in [
+    // The audit log path needs a restart. A provider whose key cannot be read is not used: its route would
+    // have no key.
+    for (changed, reason, fix) in [
         (
             policy(s.port) + "audit: { path: elsewhere.jsonl }\n",
             "audit log path",
+            "restart",
         ),
         (
-            policy(s.port).replace(&format!(":{}", s.port), ":1"),
-            "url",
-        ),
-        (
-            policy(s.port).replace("MOCK_PROVIDER_KEY", "OTHER_PROVIDER_KEY"),
-            "key_env",
+            policy(s.port).replace("MOCK_PROVIDER_KEY", "GANTRY_TEST_UNSET_KEY"),
+            "GANTRY_TEST_UNSET_KEY",
+            "export",
         ),
         (
             policy(s.port).replace(
                 "rules:\n",
-                "  - name: other\n    kind: openai\n    url: https://api.openai.com\n    key_env: OTHER_KEY\n    models: [gpt-4o]\nrules:\n",
+                "  - name: other\n    kind: openai\n    url: https://api.openai.com\n    key_env: GANTRY_TEST_OTHER_KEY\n    models: [gpt-4o]\nrules:\n",
             ),
-            "provider",
+            "GANTRY_TEST_OTHER_KEY",
+            "export",
         ),
     ] {
         std::fs::write(&s.policy, &changed)?;
@@ -415,7 +416,7 @@ async fn a_missing_file_a_changed_audit_path_or_provider_url_is_rejected_and_the
         };
         let text = problems.join("\n");
         assert!(text.contains(reason), "{reason}: {text}");
-        assert!(text.contains("restart"), "{reason}: {text}");
+        assert!(text.contains(fix), "{reason}: {text}");
         assert_eq!(
             answer(&s.gw.router, chat(MAYA, "model-b", false)?).await?.0,
             StatusCode::OK,
@@ -424,7 +425,7 @@ async fn a_missing_file_a_changed_audit_path_or_provider_url_is_rejected_and_the
     }
     let all = records(&s.audit)?;
     let rejected = events(&all, "config_rejected");
-    assert_eq!(rejected.len(), 5, "one per distinct pair of files");
+    assert_eq!(rejected.len(), 4, "one per distinct pair of files");
     assert!(rejected[0]["problems"].to_string().contains("missing"));
 
     // A provider's models list may change without a restart.
@@ -438,6 +439,68 @@ async fn a_missing_file_a_changed_audit_path_or_provider_url_is_rejected_and_the
     assert!(
         matches!(check(), Reload::Loaded),
         "a models change was refused"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_provider_added_or_moved_is_used_at_the_next_reload_without_a_restart() -> TestResult {
+    let s = setup("provider-change").await?;
+    let check = || s.gw.reloader.check(Trigger::FileChange);
+    // A model server on this machine needs no key, so its route can be built from the file alone.
+    let local = |port: u16| {
+        policy(s.port)
+            .replace(
+                "rules:\n",
+                &format!("  - name: local\n    kind: openai\n    url: http://127.0.0.1:{port}\n    allow_private: true\n    models: [model-z]\nrules:\n"),
+            )
+            + "  - name: everyone\n    principals: { any: true }\n    models: [model-z]\n"
+    };
+    assert_ne!(
+        answer(&s.gw.router, chat(ADMIN, "model-z", false)?)
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    std::fs::write(&s.policy, local(s.port))?;
+    assert!(
+        matches!(check(), Reload::Loaded),
+        "a new provider was refused"
+    );
+    // The admin's team has no rule of its own, so the new `everyone` rule lets it use the new provider.
+    assert_eq!(
+        answer(&s.gw.router, chat(ADMIN, "model-z", false)?)
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    // Moved to a port nobody listens on: the next request goes there and fails, with no restart.
+    std::fs::write(&s.policy, local(1))?;
+    assert!(
+        matches!(check(), Reload::Loaded),
+        "a moved provider was refused"
+    );
+    assert_ne!(
+        answer(&s.gw.router, chat(ADMIN, "model-z", false)?)
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    // Removed: its model is no longer served.
+    std::fs::write(&s.policy, policy(s.port))?;
+    assert!(
+        matches!(check(), Reload::Loaded),
+        "removing a provider was refused"
+    );
+    assert_ne!(
+        answer(&s.gw.router, chat(ADMIN, "model-z", false)?)
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        answer(&s.gw.router, chat(MAYA, "model-b", false)?).await?.0,
+        StatusCode::OK
     );
     Ok(())
 }

@@ -19,6 +19,7 @@ pub mod store;
 pub mod translate;
 pub mod usage;
 pub mod vendors;
+pub mod versions;
 
 /// Version of the gateway, shared by the server and the CLI.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

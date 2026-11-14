@@ -177,11 +177,11 @@ fn matches_nothing(
 
 /// What is known about a call, for its record.
 #[derive(Default)]
-struct Call {
-    action: Option<&'static str>,
-    person: Option<Principal>,
-    key: Option<String>,
-    target: Option<Value>,
+pub(crate) struct Call {
+    pub(crate) action: Option<&'static str>,
+    pub(crate) person: Option<Principal>,
+    pub(crate) key: Option<String>,
+    pub(crate) target: Option<Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -220,7 +220,11 @@ pub(crate) async fn handle(State(state): State<AppState>, request: Request) -> R
     response
 }
 
-fn refused(status: StatusCode, code: &'static str, message: impl Into<String>) -> Refusal {
+pub(crate) fn refused(
+    status: StatusCode,
+    code: &'static str,
+    message: impl Into<String>,
+) -> Refusal {
     Refusal::new(status, code, message)
 }
 
@@ -627,7 +631,7 @@ async fn allow(
 }
 
 /// Writes the record of an admin call and waits for it. A call that cannot be recorded does not happen.
-async fn record(
+pub(crate) async fn record(
     state: &AppState,
     decision: &str,
     version: &Snapshot,
@@ -685,7 +689,7 @@ async fn record(
     ))
 }
 
-fn json_response(status: StatusCode, body: &Value) -> Response {
+pub(crate) fn json_response(status: StatusCode, body: &Value) -> Response {
     (
         status,
         [(header::CONTENT_TYPE, "application/json")],
@@ -694,7 +698,7 @@ fn json_response(status: StatusCode, body: &Value) -> Response {
         .into_response()
 }
 
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, Refusal> {
     tokio::task::spawn_blocking(work).await.map_err(|_| {

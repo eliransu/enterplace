@@ -7,6 +7,20 @@ same version. How a release is made: RELEASING.md in the gantry-enterprise repos
 
 ## [Unreleased]
 
+### Added
+
+- The policy kept in the store as versions (`store.policy_from: store`): the console and `PUT /admin/policy` save a
+  new version, checked as `gantry check` checks a file, live on every gateway within 2 seconds. Optional approval by a
+  second admin (`store.approval: true`), a dry run against recent requests, one-click rollback, export and import as
+  YAML, and every change in the audit chain. The file stays the source by default, for GitOps.
+- Console pages: Models (add a model with its price and aliases, change a price), Teams, key editing on People and
+  workloads, and Policy versions with the editor, diffs, approval, dry run and rollback.
+
+### Changed
+
+- Adding, removing or repointing a provider no longer needs a restart: the reload builds its route.
+- The console's People page reads keys from the store when there is one.
+
 ## [0.1.0] - Unreleased
 
 The first tagged release: a governed AI gateway in one static binary. Every request carries a person's or workload's

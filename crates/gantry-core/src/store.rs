@@ -1,5 +1,6 @@
 //! The store: what several gateways share while they run (keys, kill switches, spend, rate limits, deployment
-//! cooldowns and console sessions), so two or more processes act as one gateway. The policy stays a file, reviewed in git. Postgres is the one backend today; the interface
+//! cooldowns and console sessions), so two or more processes act as one gateway. The policy stays a file, reviewed in
+//! git, unless `store.policy_from: store` keeps it here as versions the console and the admin API edit. Postgres is the one backend today; the interface
 //! names no database, so another (D1 or Durable Objects on Cloudflare) can be added behind it.
 
 use std::{
@@ -76,6 +77,63 @@ pub struct Credential {
 /// What a store that keeps no credentials answers.
 pub const NO_CREDENTIALS: &str = "this store keeps no provider credentials. Keep the provider key in an environment variable with key_env, or use the Postgres store.";
 
+/// What a store that keeps no policy versions answers.
+pub const NO_VERSIONS: &str = "this store keeps no policy versions. Use the Postgres store with `store: { postgres_url_env: DATABASE_URL, policy_from: store }`.";
+
+/// One version of the policy kept in the store. The text holds no secrets: provider keys stay in the environment,
+/// in key files or in sealed credentials.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PolicyVersion {
+    pub id: i64,
+    pub text: String,
+    pub sha256: String,
+    /// The live version it was drafted on, `None` for the first.
+    pub base: Option<i64>,
+    pub note: String,
+    pub created_by: String,
+    pub created_at: String,
+    /// [`PENDING`], [`LIVE`], [`RETIRED`] (was live, replaced) or [`REJECTED`].
+    pub state: String,
+    /// Who approved or rejected it. A version that went live without approval has none.
+    pub decided_by: Option<String>,
+    pub decided_at: Option<String>,
+}
+
+pub const PENDING: &str = "pending";
+pub const LIVE: &str = "live";
+pub const RETIRED: &str = "retired";
+pub const REJECTED: &str = "rejected";
+
+/// A version to add.
+#[derive(Clone, Debug)]
+pub struct NewVersion {
+    pub text: String,
+    /// The live version the draft started from: it is added only while that one is still live.
+    pub base: Option<i64>,
+    pub note: String,
+    pub by: String,
+    /// Waits for an approval instead of going live.
+    pub pending: bool,
+}
+
+/// Why a version change was not made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VersionError {
+    /// The versions moved on since the caller read them, or the change does not apply to this version: try again
+    /// from what is live now.
+    Conflict(String),
+    /// The store could not be reached or keeps no versions.
+    Store(String),
+}
+
+impl std::fmt::Display for VersionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Conflict(m) | Self::Store(m) => f.write_str(m),
+        }
+    }
+}
+
 /// Shared state. Reads come from memory, refreshed in the background, so a request never waits on the database
 /// for a key or a kill switch, and a database that is down leaves the last state in force.
 pub trait Store: Send + Sync + std::fmt::Debug {
@@ -84,6 +142,11 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     fn kills(&self) -> Arc<Vec<Kill>>;
     /// Adds a key's entry. Returns whether the name already had a key. Blocks until the database answers.
     fn add_key(&self, entry: &KeyEntry) -> Result<bool, String>;
+    /// Replaces the attributes (admin, expiry, budget, models, tpm) of the key with `entry`'s hash, keeping its name
+    /// and team. `Ok(false)` when no key has that hash. Blocks until the database answers.
+    fn update_key(&self, _entry: &KeyEntry) -> Result<bool, String> {
+        Err("this store cannot change a key in place. Revoke it and issue a new one.".into())
+    }
     /// Removes the one key whose hash starts with `prefix`. `Ok(None)` when no key has it.
     fn revoke(&self, prefix: &str) -> Result<Option<Revoked>, String>;
     /// Turns a switch on, or replaces the reason of the same switch. Returns the switch it replaced.
@@ -140,6 +203,38 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     fn remove_credential(&self, _name: &str) -> Result<Option<Credential>, String> {
         Err(NO_CREDENTIALS.into())
     }
+    /// Every policy version, newest first, from memory: refreshed by the poll, so every gateway sees a change
+    /// within a second. `Err` when this store keeps none.
+    fn policy_versions(&self) -> Result<Arc<Vec<PolicyVersion>>, String> {
+        Err(NO_VERSIONS.into())
+    }
+    /// Reads the policy versions from the database now instead of at the next poll: for a version another gateway
+    /// saved a moment ago. Blocks until the database answers.
+    fn refresh_policy(&self) -> Result<(), String> {
+        Ok(())
+    }
+    /// The live policy version, from memory. `None` before the first one is added.
+    fn live_policy(&self) -> Option<PolicyVersion> {
+        self.policy_versions()
+            .ok()?
+            .iter()
+            .find(|v| v.state == LIVE)
+            .cloned()
+    }
+    /// Adds a version, live at once or pending, only while `base` is still the live version. Blocks until written.
+    fn add_policy_version(&self, _new: &NewVersion) -> Result<PolicyVersion, VersionError> {
+        Err(VersionError::Store(NO_VERSIONS.into()))
+    }
+    /// Puts a pending version live (`approve`), only while the version it was drafted on is still live, or rejects
+    /// it. Blocks until written.
+    fn decide_policy_version(
+        &self,
+        _id: i64,
+        _approve: bool,
+        _by: &str,
+    ) -> Result<PolicyVersion, VersionError> {
+        Err(VersionError::Store(NO_VERSIONS.into()))
+    }
     /// The value of a credential, opened with the master key, for the gateway to send. `Ok(None)` when there is
     /// no such credential.
     fn credential_value(&self, _name: &str) -> Result<Option<String>, String> {
@@ -184,6 +279,30 @@ pub fn attach(keys: &Path, store: &Arc<dyn Store>) {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     attached.retain(|(path, store)| path != keys && store.strong_count() > 0);
     attached.push((keys.to_path_buf(), Arc::downgrade(store)));
+}
+
+// The policy files whose policy is kept in a store (`store.policy_from: store`), so `config::policy_text` reads the
+// live version for every reader that names the file.
+static POLICIES: Mutex<Vec<(PathBuf, Weak<dyn Store>)>> = Mutex::new(Vec::new());
+
+/// Serves the policy named by `policy` from `store`'s live version, for as long as the store lives.
+pub fn attach_policy(policy: &Path, store: &Arc<dyn Store>) {
+    let mut attached = POLICIES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    attached.retain(|(path, store)| path != policy && store.strong_count() > 0);
+    attached.push((policy.to_path_buf(), Arc::downgrade(store)));
+}
+
+/// The store that keeps the policy named by `policy`, if one does.
+pub fn policy_store(policy: &Path) -> Option<Arc<dyn Store>> {
+    POLICIES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .rev()
+        .find(|(path, _)| path == policy)
+        .and_then(|(_, store)| store.upgrade())
 }
 
 /// The store that serves the keys file at `keys`, if one does.

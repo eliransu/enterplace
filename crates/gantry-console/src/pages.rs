@@ -64,7 +64,7 @@ fn short_time(time: &str, today: &str) -> String {
 }
 
 /// "13 Nov 2026, 01:03:03.467 UTC", as the record sheet shows a time.
-fn long_time(time: &str) -> String {
+pub(crate) fn long_time(time: &str) -> String {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
@@ -125,7 +125,7 @@ pub(crate) fn tool_page(
 // ---------------------------------------------------------------- sign in
 
 /// A flame-edged Banner that is read out when the page opens. `text` is markup.
-fn alert(text: &str) -> String {
+pub(crate) fn alert(text: &str) -> String {
     format!(
         r#"<div class="g-banner" role="alert" style="border-color: var(--flame)"><span class="t-body">{text}</span></div>"#
     )
@@ -1645,41 +1645,10 @@ fn repair_story(record: &Value) -> Story {
 
 /// The lines that differ between two versions of the policy, with one line around each change.
 // ponytail: a longest-common-subsequence table, lines squared. Policy files are a few hundred lines at most.
-fn diff(old: &str, new: &str) -> Vec<(usize, String, &'static str)> {
-    let (a, b): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
-    let mut same = vec![vec![0u32; b.len() + 1]; a.len() + 1];
-    for i in (0..a.len()).rev() {
-        for j in (0..b.len()).rev() {
-            same[i][j] = if a[i] == b[j] {
-                same[i + 1][j + 1] + 1
-            } else {
-                same[i + 1][j].max(same[i][j + 1])
-            };
-        }
-    }
-    let mut all = Vec::new();
-    let (mut i, mut j) = (0, 0);
-    while i < a.len() || j < b.len() {
-        if i < a.len() && j < b.len() && a[i] == b[j] {
-            all.push((j + 1, a[i], ""));
-            (i, j) = (i + 1, j + 1);
-        } else if i < a.len() && (j == b.len() || same[i + 1][j] >= same[i][j + 1]) {
-            // A removed line comes before the line that replaces it, as a code diff reads.
-            all.push((i + 1, a[i], "del"));
-            i += 1;
-        } else {
-            all.push((j + 1, b[j], "add"));
-            j += 1;
-        }
-    }
-    let near = |k: usize| {
-        all[k.saturating_sub(1)..(k + 2).min(all.len())]
-            .iter()
-            .any(|(_, _, kind)| !kind.is_empty())
-    };
-    (0..all.len())
-        .filter(|&k| near(k))
-        .map(|k| (all[k].0, yaml_line(all[k].1), all[k].2))
+pub(crate) fn diff(old: &str, new: &str) -> Vec<(usize, String, &'static str)> {
+    gantry_core::versions::diff(old, new)
+        .into_iter()
+        .map(|(n, line, kind)| (n, yaml_line(&line), kind))
         .collect()
 }
 
@@ -2710,6 +2679,11 @@ pub fn people(view: &PeopleView<'_>) -> String {
                 String::new()
             } else {
                 link(
+                    "Edit",
+                    "quiet",
+                    &format!("/console/people/edit?sha256={}", enc(&entry.sha256)),
+                    true,
+                ) + &link(
                     "Revoke key",
                     "quiet",
                     &format!("/console/people?revoke={}", enc(&entry.sha256)),
@@ -3043,12 +3017,23 @@ pub fn credentials(view: &CredentialsView<'_>) -> String {
 
 // ---------------------------------------------------------------- policy
 
+/// Where the policy page's policy comes from: the file, or a live version in the store.
+pub struct PolicySource {
+    /// The live version's number, when the policy is kept in the store.
+    pub version: Option<i64>,
+    /// Links in the page head: edit, versions, export.
+    pub actions: String,
+    /// A warning above the policy, as markup: the file differs from the live version.
+    pub banner: String,
+}
+
 pub fn policy(
     admin: &str,
     query: &Form,
     path: &Path,
     text: &Result<Option<String>, String>,
     loaded: &Result<Loaded, Vec<String>>,
+    source: &PolicySource,
 ) -> String {
     let title = "Policy";
     let file = esc(&path.file_name().map_or_else(
@@ -3181,11 +3166,18 @@ pub fn policy(
                 })
                 .collect();
             (
-                format!(
-                    "One file decides every request: {} and {}, read in order, the first that names the caller decides. Read only here: change the file and run <span class=\"t-mono\">gantry check</span>.",
-                    gantry_core::count(loaded.policy.rules(), "rule"),
-                    gantry_core::count(loaded.providers.len(), "provider")
-                ),
+                match source.version {
+                    Some(v) => format!(
+                        "Version {v} in the store decides every request: {} and {}, read in order, the first that names the caller decides. Edit it here: each save is a new version, checked as <span class=\"t-mono\">gantry check</span> checks a file.",
+                        gantry_core::count(loaded.policy.rules(), "rule"),
+                        gantry_core::count(loaded.providers.len(), "provider")
+                    ),
+                    None => format!(
+                        "One file decides every request: {} and {}, read in order, the first that names the caller decides. Read only here: change the file and run <span class=\"t-mono\">gantry check</span>.",
+                        gantry_core::count(loaded.policy.rules(), "rule"),
+                        gantry_core::count(loaded.providers.len(), "provider")
+                    ),
+                },
                 format!(
                     r#"<aside class="g-stack" aria-label="About this file">
 <div class="g-panel g-stack"><h2 class="t-md" style="margin: 0">Rules</h2><div class="g-list">{rules}</div></div>
@@ -3203,7 +3195,7 @@ pub fn policy(
         ),
     };
     let banner = if elsewhere.is_empty() {
-        String::new()
+        source.banner.clone()
     } else {
         format!(
             r#"<div class="g-banner" role="alert" style="border-color: var(--flame)"><span class="t-body">{}</span></div>"#,
@@ -3221,14 +3213,23 @@ pub fn policy(
 <div class="g-panel g-stack g-split__wide">
 <div class="g-pager"><span class="t-mono-lg">{file}</span>{}</div>
 {}
-<p class="t-small g-muted" style="margin: 0">Read from {} when this page was opened.</p>
+<p class="t-small g-muted" style="margin: 0">{}</p>
 </div>
 {side}
 </div>"#,
-        head(title, &lead, ""),
-        tag("", "Read only", ""),
+        head(title, &lead, &source.actions),
+        match source.version {
+            Some(v) => tag("allow", &format!("Version {v}, live"), ""),
+            None => tag("", "Read only", ""),
+        },
         code(&lines),
-        esc(&path.display().to_string())
+        match source.version {
+            Some(v) => format!("Live version {v} in the store, when this page was opened."),
+            None => format!(
+                "Read from {} when this page was opened.",
+                esc(&path.display().to_string())
+            ),
+        }
     );
     tool_page(title, admin, "/console/policy", query, &main, "")
 }
@@ -3259,7 +3260,7 @@ const MONTHS: [&str; 12] = [
 ];
 
 /// Dollars as the design writes them: "3,912", "1,604.12", and four places below a cent so a small spend is not 0.
-fn money(usd: f64) -> String {
+pub(crate) fn money(usd: f64) -> String {
     if usd > 0.0 && usd < 0.01 {
         return format!("{usd:.4}");
     }

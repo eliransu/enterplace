@@ -58,8 +58,10 @@ There is no default role: a person whose claim holds neither value is refused wi
 | Page | Path | Shows |
 |---|---|---|
 | Audit log | `/console/audit` | Every record, newest first, filtered by All, Blocked, Refused, Masked, Warned or Changes, and searchable by person, team, key or decision ID. Each record opens on a sheet that explains the decision: the rule, the limit or kill switch that refused it, guardrail findings, and the usage and cost of its answer. A banner shows every kill switch that is on. **Verify** runs the same check as `gantry audit verify` |
-| People and workloads | `/console/people` | Every key by name, team and hash prefix, with admin flag, expiry, its own budget and what it spent this month and today. Issue and revoke keys here |
-| Policy | `/console/policy` | The policy file as it is on disk, with each problem `gantry check` finds placed under its line |
+| People and workloads | `/console/people` | Every key by name, team and hash prefix, with admin flag, expiry, its own budget and what it spent this month and today. Issue, edit and revoke keys here |
+| Teams | `/console/teams` | Each team, its people and workloads with their role (Admin or Member), the rule that decides for it and its budget |
+| Models | `/console/models` | Each model by provider, its price per million tokens and its aliases. Add a model and change a price when the policy is kept in the store |
+| Policy | `/console/policy` | The policy in force (the file, or the store's live version), with each problem `gantry check` finds placed under its line. Edit, versions and export when it is kept in the store: see [Editing the policy](/operations/console-editing/) |
 | Spend | `/console/spend` | Spend this month (UTC) from the usage records, by model and person, against every budget in the policy |
 
 `/console` redirects to the audit log, or to the sign-in page without a session.
