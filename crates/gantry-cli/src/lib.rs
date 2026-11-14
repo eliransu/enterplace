@@ -594,7 +594,7 @@ fn check(policy: &Path, keys: Option<&Path>) -> ExitCode {
             // change, and serving refuses such a key (recorded) either way.
             for warning in expired_keys(&loaded)
                 .into_iter()
-                .chain(config::unserved_models(policy, &loaded))
+                .chain(config::warnings(policy, &loaded))
             {
                 eprintln!("{warning}");
             }

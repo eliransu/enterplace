@@ -1232,7 +1232,8 @@ impl Meter {
 pub(crate) enum Admit {
     /// The cache holds the answer: it never reaches the provider.
     Hit(Response, Box<Admitted>, Hit),
-    Go(Meter, Option<&'static str>),
+    /// Sent on, with what observe mode or a shadow period let through: each refusal and why it was not enforced.
+    Go(Meter, Option<&'static str>, Vec<(Refusal, &'static str)>),
 }
 
 /// The request as the limits see it.
@@ -1353,6 +1354,7 @@ pub(crate) async fn admit(
         Hints::default()
     };
     let mut cache_word = None;
+    let mut observed: Vec<(Refusal, &'static str)> = Vec::new();
     if let Some(ttl) = limits.cache_ttl_seconds {
         if cacheable(&ask, &hints) {
             let scope = scope_of(&ask);
@@ -1432,7 +1434,10 @@ pub(crate) async fn admit(
                 applied,
                 serde_json::json!({ "kind": "rpm", "of": applied.of, "value": rpm }),
             )));
-            return Err(refusal);
+            match applied.shadow {
+                Some(by) => observed.push((refusal, by)),
+                None => return Err(refusal),
+            }
         }
     }
     if tpm && !ask.free {
@@ -1495,7 +1500,14 @@ pub(crate) async fn admit(
                         applied,
                         serde_json::json!({ "kind": "tpm", "of": applied.of, "value": limit, "request_could_use": most }),
                     )));
-                    return Err(refusal);
+                    // Observed: nothing is held, so the request takes none of the minute's tokens from others.
+                    match applied.shadow {
+                        Some(by) => {
+                            observed.push((refusal, by));
+                            continue;
+                        }
+                        None => return Err(refusal),
+                    }
                 }
             };
             // With a store, the scope is the lease's, so what is given back finds it.
@@ -1526,7 +1538,10 @@ pub(crate) async fn admit(
                 );
                 refusal.retry_after = Some(1);
                 refusal.record = Some(Box::new(limit_record(applied, Value::Null)));
-                return Err(refusal);
+                match applied.shadow {
+                    Some(by) => observed.push((refusal, by)),
+                    None => return Err(refusal),
+                }
             }
         }
     }
@@ -1613,14 +1628,22 @@ pub(crate) async fn admit(
             Some(each) => each * hints.n.unwrap_or(1) as f64,
             None => most_cost(price, ask.body.len(), context, output),
         };
-        let (reservations, counted) =
-            reserve_budgets(spend, &budgets, ask.rule, most, "This request").await?;
+        let (reservations, counted) = reserve_budgets(
+            spend,
+            &budgets,
+            ask.rule,
+            most,
+            "This request",
+            Some(&mut observed),
+        )
+        .await?;
         admitted.reservations = reservations;
         admitted.counted = counted;
     }
     Ok(Admit::Go(
         Meter(Arc::new(Mutex::new(Some(admitted)))),
         cache_word,
+        observed,
     ))
 }
 
@@ -1790,6 +1813,7 @@ pub(crate) async fn reserve_budgets(
     rule: &Rule,
     most: f64,
     what: &str,
+    mut observed: Option<&mut Vec<(Refusal, &'static str)>>,
 ) -> Result<(Vec<Reservation>, Vec<(String, Period)>), Refusal> {
     let mut reservations = Vec::new();
     let mut counted = Vec::new();
@@ -1809,6 +1833,23 @@ pub(crate) async fn reserve_budgets(
         {
             Ok(reservation) => {
                 reservations.push(reservation);
+                counted.push((applied.scope.clone(), budget.per));
+            }
+            // Observed: the request goes on and its cost still counts here, so the numbers are real when the budget
+            // is enforced. A reservation of nothing makes the store settle this counter with the rest.
+            Err(Ok(over)) if applied.shadow.is_some() && observed.is_some() => {
+                let mut refusal =
+                    over_budget(&over, code, &applied.whose, budget, &under, most, what);
+                refusal.record = Some(Box::new(limit_record(applied, Value::Null)));
+                if let (Some(list), Some(by)) = (observed.as_deref_mut(), applied.shadow) {
+                    list.push((refusal, by));
+                }
+                reservations.push(Reservation {
+                    scope: applied.scope.clone(),
+                    per: budget.per,
+                    period: period_of(&now, budget.per),
+                    usd: 0.0,
+                });
                 counted.push((applied.scope.clone(), budget.per));
             }
             Err(over) => {

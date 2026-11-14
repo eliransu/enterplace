@@ -257,12 +257,7 @@ impl Guardrail {
 
     /// Whether it is still in its shadow period, read from the clock at each check.
     pub fn shadowing(&self) -> bool {
-        self.shadow_until.as_deref().is_some_and(|until| {
-            !crate::policy::expiry_passed(
-                until,
-                &crate::audit::rfc3339(std::time::SystemTime::now()),
-            )
-        })
+        crate::policy::shadowing(self.shadow_until.as_deref())
     }
 
     /// What it finds in these text parts, for a guardrail that runs inside Gantry. `builtin` is `scan` of the same
@@ -2913,6 +2908,7 @@ rules:
             tags: Vec::new(),
             customers: Vec::new(),
             overrides: Vec::new(),
+            shadow_until: None,
         };
         let missing = unset_webhook_env(std::slice::from_ref(&rule), &|_| false).join("\n");
         assert!(
@@ -3062,6 +3058,7 @@ rules:
                 tags: Vec::new(),
                 customers: Vec::new(),
                 overrides: Vec::new(),
+                shadow_until: None,
             })
         };
         let missing = unset_webhook_env(&[rule(ok[0].0)?, rule(ok[2].0)?], &|_| false).join("\n");

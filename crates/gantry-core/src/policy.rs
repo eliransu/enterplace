@@ -600,6 +600,8 @@ pub struct Cap {
     pub models: Vec<String>,
     /// The access profile it came from, when the rule took it from one.
     pub from: Option<String>,
+    /// Until this UTC date or time the budget only records what it would refuse (`would_refuse`).
+    pub shadow_until: Option<String>,
 }
 
 impl Cap {
@@ -736,6 +738,9 @@ pub struct Rule {
     pub customers: Vec<String>,
     /// What the rule set over a profile it includes, for the explanation: `rate.tpm 100000 of profile "standard"`.
     pub overrides: Vec<String>,
+    /// Until this UTC date or time what the rule would refuse (its models, rate, tpm, parallel, regions and budgets)
+    /// is recorded as `would_refuse` and forwarded.
+    pub shadow_until: Option<String>,
 }
 
 /// One provider and the path prefixes of its own API a rule may reach as sent.
@@ -858,6 +863,8 @@ pub struct ScopeLimit {
     pub rpm: Option<u32>,
     pub tpm: Option<u32>,
     pub parallel: Option<u32>,
+    /// Until this UTC date or time the entry's limits only record what they would refuse (`would_refuse`).
+    pub shadow_until: Option<String>,
 }
 
 impl ScopeLimit {
@@ -909,6 +916,9 @@ pub struct Applied {
     pub source: String,
     /// The entries of the same kind that set this limit too, less specific, and so did not apply.
     pub overrides: Vec<String>,
+    /// Set when the limit records what it would refuse and refuses nothing: `observe` for the policy's mode,
+    /// `shadow_until` for its own shadow period.
+    pub shadow: Option<&'static str>,
 }
 
 /// What of a request picks the limits it counts against, besides its key and rule.
@@ -1048,6 +1058,7 @@ pub struct Policy {
     trusted_proxies: Vec<Cidr>,
     /// `cors:`: the browser origins that may call the gateway's routes. None, the default, answers no origin.
     cors: Option<Cors>,
+    mode: Mode,
 }
 
 /// `cors:` in the policy: pages served from these origins may call Gantry from the browser.
@@ -1071,9 +1082,71 @@ impl Cors {
     }
 }
 
+/// Whether the policy refuses what it decides against (`enforce`, the default) or forwards it and records it as
+/// `would_refuse` (`observe`). Observing never opens the gateway: a missing, bad or revoked key, an unknown model and
+/// a kill switch are refused in both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Enforce,
+    Observe,
+}
+
+/// Whether a shadow period that ends at `until` (a UTC date or time) is still running, read from the clock.
+pub fn shadowing(until: Option<&str>) -> bool {
+    until.is_some_and(|until| {
+        !expiry_passed(until, &crate::audit::rfc3339(std::time::SystemTime::now()))
+    })
+}
+
+/// Why a decision against a request is recorded and not enforced, if it is: `observe` or `shadow_until`.
+fn shadow_by(observe: bool, until: Option<&str>) -> Option<&'static str> {
+    if observe {
+        Some("observe")
+    } else if shadowing(until) {
+        Some("shadow_until")
+    } else {
+        None
+    }
+}
+
+/// The rule a caller no rule names is forwarded under in observe mode: every model, no limits.
+pub static OBSERVED: std::sync::LazyLock<Rule> = std::sync::LazyLock::new(|| Rule {
+    name: "(observe mode: no rule names this caller)".into(),
+    line: 0,
+    who: Who::Any,
+    models: Models::Any,
+    guardrails: Vec::new(),
+    limits: Limits::default(),
+    passthrough: Vec::new(),
+    tools: Vec::new(),
+    mcp: crate::mcp::McpRule::default(),
+    org: None,
+    profiles: Vec::new(),
+    tags: Vec::new(),
+    customers: Vec::new(),
+    overrides: Vec::new(),
+    shadow_until: None,
+});
+
 impl Policy {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_mode(mut self, mode: Mode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// Why a decision against a request is recorded as `would_refuse` and forwarded rather than refused: `observe`
+    /// in observe mode, `shadow_until` while the feature's own shadow period runs. `None` enforces it.
+    pub fn observing(&self, shadow_until: Option<&str>) -> Option<&'static str> {
+        shadow_by(self.mode == Mode::Observe, shadow_until)
     }
 
     pub fn from_parts(keys: HashMap<[u8; 32], Principal>, rules: Vec<Rule>) -> Self {
@@ -1236,6 +1309,7 @@ impl Policy {
             tags: Vec::new(),
             customers: Vec::new(),
             overrides: Vec::new(),
+            shadow_until: None,
         });
         self
     }
@@ -1337,6 +1411,7 @@ fn resolve(
     scope: &str,
     whose: &str,
     mut entries: Vec<(u8, String, &ScopeLimit)>,
+    observe: bool,
     out: &mut Vec<Applied>,
 ) {
     if entries.is_empty() {
@@ -1345,6 +1420,13 @@ fn resolve(
     entries.sort_by_key(|(rank, _, _)| *rank);
     let mut fields: Vec<(Limit, &String)> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
+    let shadow_of = |source: &String| {
+        let until = entries
+            .iter()
+            .find(|(_, s, _)| s == source)
+            .and_then(|(_, _, e)| e.shadow_until.as_deref());
+        shadow_by(observe, until)
+    };
     for (_, source, entry) in &entries {
         for budget in &entry.budgets {
             fields.push((Limit::Budget(*budget), source));
@@ -1382,6 +1464,7 @@ fn resolve(
             limit: *limit,
             source: (*source).clone(),
             overrides,
+            shadow: shadow_of(source),
         });
     }
 }
@@ -1413,6 +1496,8 @@ impl Policy {
             ),
             _ => (who.person_scope(), format!("\"{}\"", who.within(&who.name))),
         };
+        let observe = self.mode == Mode::Observe;
+        let rule_shadow = shadow_by(observe, rule.shadow_until.as_deref());
         let under = rule.label();
         let from = |profile: Option<&String>| match profile {
             Some(profile) => format!("profile \"{profile}\" via {under}"),
@@ -1434,6 +1519,7 @@ impl Policy {
                 limit: Limit::Budget(cap.budget),
                 source: from(cap.from.as_ref()),
                 overrides: Vec::new(),
+                shadow: rule_shadow.or_else(|| shadow_by(false, cap.shadow_until.as_deref())),
             });
         }
         let inherited = |field: &str| {
@@ -1467,6 +1553,7 @@ impl Policy {
                     limit,
                     source: from(inherited(field)),
                     overrides: Vec::new(),
+                    shadow: rule_shadow,
                 });
             }
         }
@@ -1480,6 +1567,7 @@ impl Policy {
             rpm: who.options.rpm,
             tpm: who.tpm,
             parallel: who.parallel,
+            shadow_until: None,
         };
         let key_whose = format!("the key {} of \"{}\"", who.key, who.name);
         let mut keyed = Vec::new();
@@ -1496,6 +1584,7 @@ impl Policy {
                 &format!("key:{}", who.key),
                 &key_whose,
                 keyed,
+                observe,
                 &mut out,
             );
             return out;
@@ -1540,6 +1629,7 @@ impl Policy {
             &format!("key:{}", who.key),
             &key_whose,
             keyed,
+            observe,
             &mut out,
         );
         let global: Vec<_> = self
@@ -1548,7 +1638,14 @@ impl Policy {
             .filter(|e| e.kind == ScopeKind::Global)
             .map(|e| (0, e.label(), e))
             .collect();
-        resolve("global", "global", "the whole install", global, &mut out);
+        resolve(
+            "global",
+            "global",
+            "the whole install",
+            global,
+            observe,
+            &mut out,
+        );
         if !who.org.is_empty() {
             // An org entry's own name is its org: `{ org: acme }` alone, or `{ org: "*" }` for each.
             let orgs: Vec<_> = self
@@ -1562,7 +1659,14 @@ impl Policy {
                 })
                 .collect();
             let whose = format!("organization \"{}\"", who.org);
-            resolve("org", &format!("org:{}", who.org), &whose, orgs, &mut out);
+            resolve(
+                "org",
+                &format!("org:{}", who.org),
+                &whose,
+                orgs,
+                observe,
+                &mut out,
+            );
         }
         let team_whose = format!("team \"{}\"", who.within(&who.team));
         resolve(
@@ -1570,6 +1674,7 @@ impl Policy {
             &who.team_scope(),
             &team_whose,
             of_kind(ScopeKind::Team, &[&who.team]),
+            observe,
             &mut out,
         );
         resolve(
@@ -1577,6 +1682,7 @@ impl Policy {
             &who.person_scope(),
             &person_whose,
             of_kind(ScopeKind::Person, &[&who.name]),
+            observe,
             &mut out,
         );
         if let Some(customer) = ctx.customer {
@@ -1587,6 +1693,7 @@ impl Policy {
                 &scope,
                 &whose,
                 of_kind(ScopeKind::Customer, &[customer]),
+                observe,
                 &mut out,
             );
         }
@@ -1598,6 +1705,7 @@ impl Policy {
                 &scope,
                 &whose,
                 of_kind(ScopeKind::Tag, &[tag]),
+                observe,
                 &mut out,
             );
         }
@@ -1614,7 +1722,7 @@ impl Policy {
                 .collect();
             let scope = format!("model:{}", who.within(name));
             let whose = format!("model \"{name}\"");
-            resolve("model", &scope, &whose, entries, &mut out);
+            resolve("model", &scope, &whose, entries, observe, &mut out);
         }
         out
     }
@@ -1706,6 +1814,10 @@ pub fn applied_json(a: &Applied) -> serde_json::Value {
         "overrides": a.overrides,
     });
     if let Some(fields) = v.as_object_mut() {
+        // Only when set, so explanations of enforced limits keep their shape.
+        if let Some(by) = a.shadow {
+            fields.insert("shadow".into(), by.into());
+        }
         match a.limit {
             Limit::Budget(b) => {
                 fields.insert("usd".into(), b.usd.into());
@@ -1979,6 +2091,7 @@ mod tests {
             rpm: None,
             tpm: None,
             parallel: None,
+            shadow_until: None,
         }
     }
 

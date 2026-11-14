@@ -105,6 +105,7 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `version` | integer | required | Must be `1`. |
+| `mode` | string | `enforce` | `observe` forwards what the policy would refuse and records it as `would_refuse`. See [Observe mode](#observe-mode). |
 | `providers` | list | required | At least one provider. |
 | `rules` | list | required | Read in order. An empty list refuses everyone with `no_rule`. |
 | `guardrails` | list | `[]` | Guardrails that rules may name. See [Guardrails](/governance/guardrails/). |
@@ -168,9 +169,49 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `from` | list | `[]` | Address ranges the rule's callers may send from. See [Source address ranges](/governance/access-control/#source-address-ranges). |
 | `regions` | list | none | Residency: the regions an alias deployment must be labelled with. Anything else is refused, never sent elsewhere. See [Residency](/routing/strategies/#residency-regions). |
 | `tags` | list | `[]` | Tags callers may send in `x-gantry-tags`. Any other is refused with `tag_not_allowed`. |
+| `shadow_until` | string | none | A UTC date or time, such as `2026-12-31` or `2026-12-31T18:00:00Z`. Until then what the rule would refuse (its models, `rate`, `parallel`, `regions` and budgets) is forwarded and recorded as `would_refuse`. See [Observe mode](#observe-mode). |
 | `caller_provider_key` | string | `refused` | Whether a caller may send their own provider key in `x-gantry-provider-key`: `refused`, `allowed` (sent in place of Gantry's, spend recorded as caller-paid and not counted against budgets) or `allowed_budgeted` (counted). See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key). |
 
 Every model a budgeted rule reaches must have a price, built in or under `prices:`. For `models: ["*"]` that is every model every provider serves. `gantry check` refuses a file that breaks this.
+
+## Observe mode
+
+`mode: observe` turns the policy into a dry run. Every request a valid key sends for a model Gantry serves is forwarded, and each decision that would have refused it goes on its record as [`would_refuse`](/reference/audit-records/#would_refuse), in the same audit chain. Use it for a first rollout, or before you enforce a new rule, budget or guardrail.
+
+```yaml
+version: 1
+mode: observe
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com/v1
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini, gpt-4o]
+rules:
+  - name: payments-team
+    principals: { team: payments }
+    models: [gpt-4o-mini]
+    budget: { usd: 200, per: month }
+```
+
+What observe mode lets through, and records:
+
+- a model the rule does not allow, a caller no rule names, and a key's own `models:` list
+- budgets, `rate` (`rpm`, `tpm`) and `parallel`, from rules, keys and the `limits:` list
+- guardrails: they record what they find, as in their [shadow period](/governance/guardrails/#shadow-mode), and neither block nor mask
+- `regions`
+
+What it still refuses, because forwarding would open the gateway:
+
+- a missing, unknown, expired or revoked key
+- a model no provider serves (`unknown_model`)
+- a [kill switch](/governance/kill-switches/): a stop button always works
+
+Spend still counts. A request a budget would refuse is charged to that budget's counter, so the numbers are real when you switch to enforce. `gantry check` warns while observe mode is on, and the console's audit log shows "Observe mode: nothing is blocked". Remove the line, or write `mode: enforce`, and the next request after the [reload](#reloading) is enforced.
+
+To try one feature while the rest is enforced, give it a `shadow_until` date instead: a rule, each budget, and each `limits:` entry take one, as guardrails do. Until that date it records what it would refuse; after it, it enforces. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#trying-a-limit-first).
+
+Observe mode covers the model routes (chat, messages, responses, embeddings and the rest). Batches, realtime sessions, passthrough calls and MCP tools are enforced as before.
 
 ## Organizations
 

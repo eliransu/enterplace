@@ -1389,6 +1389,8 @@ async fn reserve(
         rule,
         estimate * BATCH_SHARE,
         "This batch",
+        // A batch is enforced: its lines have no decision record of their own to carry would_refuse.
+        None,
     )
     .await?;
     Ok(held.iter().map(spend::Reservation::to_json).collect())

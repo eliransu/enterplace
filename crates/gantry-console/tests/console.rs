@@ -2309,3 +2309,19 @@ async fn a_custom_role_sees_only_the_pages_it_may_and_an_org_role_only_its_keys(
     assert!(std::fs::read_to_string(s.keys())?.contains(&bot));
     Ok(())
 }
+
+#[tokio::test]
+async fn the_audit_log_says_when_observe_mode_lets_everything_through() -> TestResult {
+    let s = setup("observe-banner")?;
+    let cookie = sign_in(&s.app).await?;
+    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    assert!(!page.contains("Observe mode"), "enforcing shows no banner");
+    std::fs::write(
+        s.dir.join("gantry.policy.yaml"),
+        format!("mode: observe\n{POLICY}"),
+    )?;
+    let (status, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("Observe mode: nothing is blocked."), "{page}");
+    Ok(())
+}
