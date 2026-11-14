@@ -30,15 +30,36 @@ Override OpenAI Base URL:  https://gantry.example.com/v1
 Model name:                gpt-4o-mini
 ```
 
+## Try it from your laptop with a tunnel
+
+Cursor cannot reach `127.0.0.1`, so a Gantry on your laptop needs a public address. A Cloudflare quick tunnel gives one, with no account, for as long as the command runs:
+
+<Steps>
+
+1. Start Gantry: `gantry serve gantry.policy.yaml --listen 127.0.0.1:8080`.
+2. In another terminal: `cloudflared tunnel --url http://127.0.0.1:8080`. It prints an address such as `https://words-words-words.trycloudflare.com`.
+3. In Cursor, set **Override OpenAI Base URL** to that address with `/v1`, and the Gantry key as the OpenAI API key.
+4. Send a chat message. Its decision is in `gantry-audit.jsonl`, with `user_agent` naming Cursor.
+
+</Steps>
+
+<Aside type="caution">
+A quick tunnel is public: anyone with the address reaches your Gantry, and only a valid Gantry key gets through. Stop it when you are done, and use a named tunnel or a real deployment for a team.
+</Aside>
+
+## What Cursor sends
+
+From Cursor's documentation: the key as the OpenAI API key, sent as a bearer token, and the base URL with `/v1`. Cursor checks the key with `GET /v1/models`, then sends chat and agent requests to `POST /v1/chat/completions`, streamed, with the model name exactly as you added it. Gantry's test `crates/gantry-server/tests/cursor.rs` sends those requests with `User-Agent: Cursor/1.0` and checks the answers and the record.
+
+<Aside type="note">
+Not run with Cursor itself: the CI has no public address for Cursor's servers to call, so this page follows Cursor's documentation and statements by Cursor staff. How Cursor shows a Gantry refusal is not documented.
+</Aside>
+
 ## Behavior
 
 - Tab completion always uses Cursor's own models and never reaches Gantry. Only chat and agent requests do.
 - With the override on, every OpenAI-family request goes to Gantry, including models picked from Cursor's built-in list. Those are refused unless the policy allows them. Cursor has no per-model base URL.
 - Cursor shows no base URL override for its Anthropic key, so Claude models reach Gantry only over chat completions. Set `accept_chat: true` on the `anthropic` provider for that; without it they are refused with `wrong_route`. See [Translation](/routing/translation/).
-
-<Aside type="note">
-This setup follows Cursor's documentation and statements by Cursor staff. How Cursor displays a Gantry refusal is not documented.
-</Aside>
 
 ## Related
 

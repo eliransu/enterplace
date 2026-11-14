@@ -1,0 +1,97 @@
+---
+title: Tool permissions
+description: Allow or deny the function tools a request declares and a model calls, and narrow a rule's MCP tools per key or per request.
+sidebar:
+  order: 5
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A rule's `tools:` list decides which tools its callers may use: MCP tools served by the [MCP gateway](/governance/mcp-gateway/), and the function tools a model request declares for the model to call. A key and a single request can narrow the MCP part further, and never widen it.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com/v1
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini]
+rules:
+  - name: agents
+    principals: { team: agents }
+    models: [gpt-4o-mini]
+    tools: [function.get_weather, function.search_docs, "!function.run_shell"]
+    tool_action: block
+```
+
+A request from team `agents` that declares `run_shell`, or any tool besides `get_weather` and `search_docs`, is refused with `tool_not_allowed`. A model answer that calls such a tool is withheld the same way.
+
+## Function tools
+
+| Entry | Means |
+|---|---|
+| `function.get_weather` | Allows the function tool `get_weather` |
+| `function.*` | Allows every function tool |
+| `!function.run_shell` | Denies `run_shell`, whatever else allows it |
+| `*` | Allows every MCP tool and every function tool; deny entries may stand beside it |
+
+A rule whose `tools:` has no `function.` entry leaves function tools alone, so a policy written for MCP tools changes nothing for model requests. With only deny entries, every function tool but those is allowed.
+
+Gantry reads the tools a request declares in every format it serves:
+
+| Format | Where the name is |
+|---|---|
+| OpenAI chat completions | `tools[].function.name`, and the older `functions[].name` |
+| OpenAI Responses | `tools[].name` of each `function` tool |
+| Anthropic messages | `tools[].name`, server tools included (`web_search`, `bash`) |
+| Gemini | `tools[].functionDeclarations[].name` |
+
+And the tool calls in an answer: `choices[].message.tool_calls[]`, `tool_use` blocks, Responses `function_call` items and Gemini `functionCall` parts. Both checks apply on the chat, messages and Responses routes and on Google's own Gemini API (`generateContent`, as Gemini CLI sends it). A streamed answer's tool calls are not checked; the request check still keeps an undeclared tool from reaching the model.
+
+### block or strip
+
+| `tool_action` | A request with a tool the list does not allow | An answer calling one |
+|---|---|---|
+| `block` (default) | Refused with `tool_not_allowed` (403), naming the tool | Withheld with `tool_not_allowed` (403); its usage still counts |
+| `strip` | The tool is taken out and the rest sent. An emptied `tools` list goes, with `tool_choice` | The call is taken out. A chat answer left with no calls ends with `finish_reason: stop`, a messages answer with `stop_reason: end_turn` |
+
+A request whose `tool_choice` forces a tool that would be stripped is refused instead, since the provider would refuse it anyway.
+
+Each tool refused or stripped is on the record, under `guardrails`, with `"guardrail": "tools"`, `"detector": "function_tools"`, the tool's name as `kind`, and `block` or `strip`. Tool arguments are never recorded. In observe mode or during the rule's `shadow_until`, a refusal is recorded as `would_refuse` and the request goes on.
+
+## MCP tools per key and per request
+
+A rule's `tools:` is the most a caller gets. Two lists narrow it for MCP tools; a tool must be allowed by the rule and by every list present.
+
+| Where | How | Example |
+|---|---|---|
+| The key | `mcp_tools:` on the key in the keys file, or through the admin API | `mcp_tools: ["docs.*", "!docs.delete"]` |
+| One request | The `x-gantry-mcp-tools` header: a comma separated list | `x-gantry-mcp-tools: github.list_issues, docs.*` |
+
+```yaml title="gantry.keys.yaml"
+keys:
+  - name: ci-bot
+    team: platform
+    sha256: 2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
+    mcp_tools: ["github.list_issues", "github.create_issue"]
+```
+
+`tools/list` shows only what all of them allow. A call to a tool the rule allows and a narrowing list leaves out is refused with `tool_not_allowed`, and the message says the key or the header left it out. A header that is not a list of tool entries is refused with `invalid_request`. Neither can name a tool the rule does not allow: `x-gantry-mcp-tools: *` changes nothing.
+
+## Refusal codes
+
+| Code | Status | Cause |
+|---|---|---|
+| `tool_not_allowed` | 403 | A declared function tool, a tool call in an answer, or an MCP tool the rule or a narrowing list does not allow |
+| `invalid_request` | 400 | An `x-gantry-mcp-tools` header that is not a list of tool entries |
+
+## Related
+
+<CardGrid>
+	<LinkCard title="MCP gateway" href="/governance/mcp-gateway/" description="Serve MCP tools from several servers under one policy." />
+	<LinkCard title="Guardrails" href="/governance/guardrails/" description="Guardrails read the arguments of tool calls in answers." />
+	<LinkCard title="Keys" href="/governance/keys/" description="mcp_tools and the other key fields." />
+</CardGrid>

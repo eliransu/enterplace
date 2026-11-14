@@ -33,7 +33,7 @@ use axum::{
     Router,
     body::{Body, Bytes},
     extract::{Path, Request, State},
-    http::{HeaderName, HeaderValue, Method, StatusCode, header, request::Parts},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
     routing::any,
 };
@@ -476,7 +476,47 @@ fn allows(item: Item, rule: &Rule, bundle: Option<&Bundle>, name: &str) -> bool 
         // A bundle serves tools only.
         (_, Some(_)) => false,
     };
-    in_bundle && tool_allowed(item.patterns(rule), name)
+    in_bundle
+        && tool_allowed(item.patterns(rule), name)
+        && (item != Item::Tool || rule.mcp.narrow.iter().all(|l| tool_allowed(l, name)))
+}
+
+/// The header a caller narrows its tools with, for one request: a comma separated list of `tools:` patterns.
+pub(crate) const NARROW_HEADER: &str = "x-gantry-mcp-tools";
+
+/// The rule as this request sees it: its tools narrowed by the key's `mcp_tools` and the `x-gantry-mcp-tools`
+/// header. Neither can allow a tool the rule does not.
+fn narrowed(rule: &Rule, person: &Principal, headers: &HeaderMap) -> Result<Rule, Refusal> {
+    let mut rule = rule.clone();
+    if !person.options.mcp_tools.is_empty() {
+        rule.mcp.narrow.push(person.options.mcp_tools.clone());
+    }
+    if let Some(value) = headers.get(NARROW_HEADER) {
+        let bad = || {
+            Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                format!(
+                    "Refused: {NARROW_HEADER} is a comma separated list of MCP tools, each <server>.<tool>, <server>.* or *, or !<server>.<tool> to leave one out, for example \"github.*, !github.delete_repo\". Fix the header or remove it."
+                ),
+            )
+        };
+        let list: Vec<String> = value
+            .to_str()
+            .map_err(|_| bad())?
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        if list.is_empty()
+            || list.len() > 64
+            || !list.iter().all(|t| gantry_core::mcp::narrowing_entry(t))
+        {
+            return Err(bad());
+        }
+        rule.mcp.narrow.push(list);
+    }
+    Ok(rule)
 }
 
 /// Checks one message and answers it. Every error is a refusal, recorded by the caller.
@@ -621,6 +661,7 @@ async fn answer(
     let rule = crate::rule_or_observed(policy, &person, no_rule, |r, by| {
         asked.would_refuse.push(crate::would_refuse_entry(r, by));
     })?;
+    let rule = &narrowed(rule, &person, &parts.headers)?;
     asked.rule = Some(rule.clone());
     // Observe mode or the rule's shadow period: every tool, prompt and resource is listed and may be used, and one
     // the rule does not allow is recorded as would_refuse.
@@ -668,6 +709,17 @@ async fn answer(
             ));
         }
         let patterns = item.patterns(rule);
+        if item == Item::Tool && tool_allowed(patterns, &name) {
+            // The rule allows it: the key's mcp_tools or the request's header left it out.
+            return Err(Refusal::new(
+                StatusCode::FORBIDDEN,
+                "tool_not_allowed",
+                format!(
+                    "Refused: tool \"{name}\" is allowed by rule \"{}\", and left out by this key's mcp_tools or the request's {NARROW_HEADER} header, which only narrow it. Remove it from the header, or ask a Gantry admin to change the key's mcp_tools.",
+                    rule.name
+                ),
+            ));
+        }
         let allowed = if patterns.is_empty() {
             format!("It allows no MCP {noun}s.")
         } else {

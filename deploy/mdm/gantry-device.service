@@ -1,0 +1,15 @@
+# The Gantry device agent on Linux, as a root systemd unit. Install with:
+#   install -m 0644 gantry-device.service /etc/systemd/system/ && systemctl enable --now gantry-device
+# Put the enrolment token in /etc/gantry/device-token (mode 0600) and the control plane URL below.
+[Unit]
+Description=Gantry device agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/gantry device --control-plane CONTROL_PLANE_URL
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

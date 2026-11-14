@@ -55,6 +55,15 @@ pub enum GuardType {
     AzurePromptShield,
     LlamaGuard,
     ModelArmor,
+    Pangea,
+    NemoGuardrails,
+    Hiddenlayer,
+    Lasso,
+    GuardrailsAi,
+    Aporia,
+    /// Not a check: a service that rewrites the whole request or answer (docs/transform-webhook). Runs before every
+    /// other guardrail of the rule, so the checks read what is really sent.
+    Transform,
 }
 
 /// Which text a guardrail reads, as written in `on:`.
@@ -168,6 +177,18 @@ pub struct GuardrailFile {
     /// model_armor: the Model Armor template that holds the filter settings.
     #[serde(default)]
     pub template_id: Option<String>,
+    /// pangea: the AI Guard recipe to apply (Pangea's default when absent).
+    #[serde(default)]
+    pub recipe: Option<String>,
+    /// nemo_guardrails: the guardrails configuration on the server.
+    #[serde(default)]
+    pub config_id: Option<String>,
+    /// guardrails_ai: the guard on the Guardrails AI server.
+    #[serde(default)]
+    pub guard_name: Option<String>,
+    /// secrets: `gitleaks` reads with Gitleaks' default rule set in place of Gantry's own secrets detector.
+    #[serde(default)]
+    pub pack: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -203,7 +224,7 @@ const RESERVED_HEADERS: &[&str] = &[
 pub fn unset_webhook_env(rules: &[crate::policy::Rule], set: &dyn Fn(&str) -> bool) -> Vec<String> {
     let mut missing = std::collections::BTreeSet::new();
     for guardrail in rules.iter().flat_map(|rule| &rule.guardrails) {
-        if let Check::Webhook(hook) = &guardrail.check {
+        if let Check::Webhook(hook) | Check::Transform(hook) = &guardrail.check {
             for (header, variable) in &hook.headers_env {
                 if !set(variable) {
                     missing.insert(format!(
@@ -230,10 +251,14 @@ pub fn unset_webhook_env(rules: &[crate::policy::Rule], set: &dyn Fn(&str) -> bo
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Check {
     Secrets,
+    /// `type: secrets` with `pack: gitleaks`: Gitleaks' default rules.
+    Gitleaks,
     Pii,
     /// A `regex` or `keywords` guardrail, compiled.
     Custom(Custom),
     Webhook(Webhook),
+    /// A `transform`: called with the whole body, answers with the body to use. The server runs these.
+    Transform(Webhook),
 }
 
 /// A checked guardrail definition.
@@ -252,7 +277,7 @@ pub struct Guardrail {
 impl Guardrail {
     /// Whether it runs inside Gantry, with no call out.
     fn local(&self) -> bool {
-        !matches!(self.check, Check::Webhook(_))
+        !matches!(self.check, Check::Webhook(_) | Check::Transform(_))
     }
 
     /// Whether it is still in its shadow period, read from the clock at each check.
@@ -272,11 +297,29 @@ impl Guardrail {
         };
         match &self.check {
             Check::Secrets => of(SECRETS),
+            Check::Gitleaks => gitleaks_findings(parts),
             Check::Pii => of(PII),
             Check::Custom(custom) => custom.scan(parts),
-            Check::Webhook(_) => Vec::new(),
+            Check::Webhook(_) | Check::Transform(_) => Vec::new(),
         }
     }
+}
+
+/// The Gitleaks pack's findings. A pack that cannot run reports nothing here: `check_side` refuses first, because it
+/// loads the pack before any guardrail reads a request.
+fn gitleaks_findings(parts: &[TextPart]) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for part in parts {
+        for (kind, span) in crate::gitleaks::scan(&part.text).unwrap_or_default() {
+            found.push(Finding {
+                detector: GITLEAKS,
+                kind: Cow::Borrowed(kind),
+                path: part.path.clone(),
+                span,
+            });
+        }
+    }
+    found
 }
 
 /// A `regex` or `keywords` guardrail: every entry in one expression, read once per text.
@@ -465,7 +508,16 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
                     errors.push(err);
                 }
                 match def.kind {
-                    GuardType::Secrets => Check::Secrets,
+                    GuardType::Secrets => match def.pack.as_deref() {
+                        None => Check::Secrets,
+                        Some("gitleaks") => Check::Gitleaks,
+                        Some(other) => {
+                            errors.push(format!(
+                                "guardrail \"{name}\": pack is \"{other}\". The one pack is gitleaks (Gitleaks' default rule set); remove pack: for Gantry's own secrets detector."
+                            ));
+                            continue;
+                        }
+                    },
                     GuardType::Pii => Check::Pii,
                     _ => match custom(def) {
                         Ok(custom) => Check::Custom(custom),
@@ -476,6 +528,13 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
                     },
                 }
             }
+            GuardType::Transform => match webhook(def) {
+                Ok(hook) => Check::Transform(hook),
+                Err(err) => {
+                    errors.push(err);
+                    continue;
+                }
+            },
             _ => match webhook(def) {
                 Ok(hook) => Check::Webhook(hook),
                 Err(err) => {
@@ -495,7 +554,16 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
                 ));
                 continue;
             }
+            (GuardType::Transform, None) => Action::Warn,
+            (GuardType::Transform, Some(_)) => {
+                errors.push(format!(
+                    "guardrail \"{name}\": a transform rewrites the request or answer and takes no action. Remove action:, and add a check after it if what it writes must be checked."
+                ));
+                continue;
+            }
             (GuardType::Presidio, Some(action)) => action,
+            // These services return the text with what they found redacted.
+            (GuardType::Pangea | GuardType::Hiddenlayer | GuardType::Lasso, Some(action)) => action,
             (
                 GuardType::Webhook | GuardType::BedrockGuardrail | GuardType::ModelArmor,
                 Some(Action::Mask),
@@ -573,6 +641,13 @@ fn type_name(kind: GuardType) -> &'static str {
         GuardType::AzurePromptShield => "azure_prompt_shield",
         GuardType::LlamaGuard => "llama_guard",
         GuardType::ModelArmor => "model_armor",
+        GuardType::Pangea => "pangea",
+        GuardType::NemoGuardrails => "nemo_guardrails",
+        GuardType::Hiddenlayer => "hiddenlayer",
+        GuardType::Lasso => "lasso",
+        GuardType::GuardrailsAi => "guardrails_ai",
+        GuardType::Aporia => "aporia",
+        GuardType::Transform => "transform",
     }
 }
 
@@ -595,6 +670,10 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         ("keywords", def.keywords.is_some()),
         ("case_sensitive", def.case_sensitive.is_some()),
         ("whole_word", def.whole_word.is_some()),
+        ("pack", def.pack.is_some()),
+        ("recipe", def.recipe.is_some()),
+        ("config_id", def.config_id.is_some()),
+        ("guard_name", def.guard_name.is_some()),
     ];
     let takes: &[&str] = match def.kind {
         GuardType::OpenaiModeration => &["key_env", "model"],
@@ -607,6 +686,13 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         GuardType::ModelArmor => &["key_env", "project_id", "region", "template_id"],
         GuardType::Regex => &["patterns"],
         GuardType::Keywords => &["keywords", "case_sensitive", "whole_word"],
+        GuardType::Secrets => &["pack"],
+        GuardType::Pangea => &["key_env", "recipe"],
+        GuardType::NemoGuardrails => &["key_env", "model", "config_id"],
+        GuardType::Hiddenlayer => &["model"],
+        GuardType::Lasso => &["key_env"],
+        GuardType::GuardrailsAi => &["key_env", "guard_name"],
+        GuardType::Aporia => &["key_env"],
         _ => &[],
     };
     if let Some((field, _)) = given.iter().find(|(f, on)| *on && !takes.contains(f)) {
@@ -634,6 +720,9 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
             | GuardType::AzureContentSafety
             | GuardType::AzurePromptShield
             | GuardType::ModelArmor
+            | GuardType::Pangea
+            | GuardType::Lasso
+            | GuardType::Aporia
     );
     if key_needed && def.key_env.is_none() {
         return Err(format!(
@@ -723,6 +812,36 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
                 prompt: def.prompt.clone(),
             }
         }
+        GuardType::Pangea => Vendor::Pangea {
+            recipe: def.recipe.clone(),
+        },
+        GuardType::NemoGuardrails => Vendor::NemoGuardrails {
+            config_id: required(
+                "config_id (the guardrails configuration on the server)",
+                &def.config_id,
+            )?,
+            model: def.model.clone(),
+        },
+        GuardType::Hiddenlayer => Vendor::Hiddenlayer {
+            model: def.model.clone(),
+        },
+        GuardType::Lasso => Vendor::Lasso,
+        GuardType::GuardrailsAi => {
+            let guard = required(
+                "guard_name (the guard on the Guardrails AI server)",
+                &def.guard_name,
+            )?;
+            if !guard
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+            {
+                return Err(format!(
+                    "guardrail \"{name}\": guard_name \"{guard}\" is not a guard name. Use letters, digits, dots, dashes and underscores only."
+                ));
+            }
+            Vendor::GuardrailsAi { guard }
+        }
+        GuardType::Aporia => Vendor::Aporia,
         _ => Vendor::Contract,
     })
 }
@@ -850,7 +969,6 @@ pub struct TextPart {
 /// The text parts of a chat completions, messages, responses or embeddings request: the system prompt or
 /// instructions, every message's text, every input text, and the text inside tool results, text documents and
 /// search results. Images, files, tool definitions, tool arguments and all other fields are not text Gantry checks.
-// ponytail: tool_use arguments are not walked. Add them when a policy needs them checked.
 pub fn text_parts(body: &Value) -> Vec<TextPart> {
     let mut parts = Vec::new();
     content(body.get("system"), "/system", "system", &mut parts);
@@ -923,6 +1041,38 @@ pub fn text_parts(body: &Value) -> Vec<TextPart> {
             }
         }
     }
+    // Gemini's generateContent: systemInstruction and contents, each a list of parts of which the text ones count.
+    let gemini = |parts: &mut Vec<TextPart>, list: &Value, at: &str, role: &str| {
+        for (j, part) in list.as_array().into_iter().flatten().enumerate() {
+            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                parts.push(TextPart {
+                    path: format!("{at}/{j}/text"),
+                    role: role.to_string(),
+                    text: text.to_string(),
+                });
+            }
+        }
+    };
+    for key in ["systemInstruction", "system_instruction"] {
+        if let Some(list) = body.get(key).and_then(|s| s.get("parts")) {
+            gemini(&mut parts, list, &format!("/{key}/parts"), "system");
+        }
+    }
+    for (i, turn) in body
+        .get("contents")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let role = match turn.get("role").and_then(Value::as_str) {
+            Some("model") => "assistant",
+            _ => "user",
+        };
+        if let Some(list) = turn.get("parts") {
+            gemini(&mut parts, list, &format!("/contents/{i}/parts"), role);
+        }
+    }
     parts
 }
 
@@ -984,6 +1134,7 @@ fn content(value: Option<&Value>, path: &str, role: &str, parts: &mut Vec<TextPa
 // ---------------------------------------------------------------------------------------------------------
 
 const SECRETS: &str = "secrets";
+const GITLEAKS: &str = "gitleaks";
 const PII: &str = "pii";
 
 struct Kind {
@@ -1417,6 +1568,7 @@ fn place(path: &str) -> String {
         ("system", _) => "the system prompt".to_string(),
         ("instructions", _) => "the instructions".to_string(),
         ("input", None) => "the input".to_string(),
+        ("contents", Some(n)) => format!("content {}", n + 1),
         _ => return format!("at {path}"),
     };
     format!("in {words} ({path})")
@@ -1457,6 +1609,16 @@ fn check_side(body: Value, guards: &[Guardrail], side: Side) -> Verdict {
         return verdict;
     }
     let parts = text_parts(&verdict.body);
+    if active.iter().any(|g| g.check == Check::Gitleaks)
+        && let Err(err) = crate::gitleaks::rule_count()
+    {
+        // A check that cannot run must not wave the request through.
+        verdict.blocked = Some(Blocked {
+            guardrail: String::new(),
+            message: err,
+        });
+        return verdict;
+    }
     let builtin = if active
         .iter()
         .any(|g| matches!(g.check, Check::Secrets | Check::Pii))
@@ -1484,6 +1646,7 @@ fn check_side(body: Value, guards: &[Guardrail], side: Side) -> Verdict {
         let detector = match &guard.check {
             Check::Custom(custom) => custom.detector,
             Check::Pii => PII,
+            Check::Gitleaks => GITLEAKS,
             _ => SECRETS,
         };
         let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
@@ -1938,8 +2101,15 @@ fn masked_span(text: &str) -> String {
 pub fn backtest(guard: &Guardrail, samples: &[Sample]) -> Result<Backtest, String> {
     let detector = match &guard.check {
         Check::Secrets => SECRETS,
+        Check::Gitleaks => GITLEAKS,
         Check::Pii => PII,
         Check::Custom(custom) => custom.detector,
+        Check::Transform(_) => {
+            return Err(format!(
+                "guardrail \"{}\" is a transform. A backtest measures what a check finds, and a transform finds nothing: it rewrites.",
+                guard.name
+            ));
+        }
         Check::Webhook(hook) => {
             return Err(format!(
                 "guardrail \"{}\" is a {} guardrail. A backtest runs Gantry's own detectors (secrets, pii, regex, keywords) and would send every example to the service; try it with action: warn or shadow_until instead.",
@@ -2033,6 +2203,60 @@ pub fn since_seconds(text: &str) -> Result<u64, String> {
 
 /// Why `--since` has nothing to read: the audit log holds no text by design, and this build keeps no request bodies.
 pub const NO_CAPTURE: &str = "a backtest over recent traffic reads captured request bodies, and this Gantry keeps none: the audit log holds no prompt text by design. Pass a corpus of examples instead (--corpus <file.jsonl>, or \"corpus\" in the admin API).";
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+
+    #[test]
+    fn the_gitleaks_pack_masks_and_records_rule_ids_and_a_wrong_pack_is_refused()
+    -> Result<(), String> {
+        let def = |pack: &str| -> Result<GuardrailFile, String> {
+            crate::config::from_yaml(&format!(
+                "name: gl\ntype: secrets\naction: mask\npack: {pack}\n"
+            ))
+            .map_err(|e| e.to_string())
+        };
+        let guards = guardrails(&[def("gitleaks")?]).map_err(|e| e.join("; "))?;
+        assert_eq!(guards[0].check, Check::Gitleaks);
+        let body = serde_json::json!({"messages": [{"role": "user", "content": "use AKIAZ4SM2TBQYXGXWB7Q now"}]});
+        let v = check(body, &guards);
+        assert_eq!(
+            v.body["messages"][0]["content"],
+            "use [MASKED aws-access-token] now"
+        );
+        assert_eq!(
+            (v.audit[0].detector.as_str(), v.audit[0].kind.as_str()),
+            ("gitleaks", "aws-access-token")
+        );
+        let wrong = guardrails(&[def("trufflehog")?]).err().unwrap_or_default();
+        assert!(wrong[0].contains("pack is \"trufflehog\""), "{wrong:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn gemini_system_instruction_and_contents_are_text_the_guardrails_read() {
+        let body = serde_json::json!({
+            "systemInstruction": {"parts": [{"text": "be brief"}]},
+            "contents": [{"role": "user", "parts": [{"text": "hi"}, {"inlineData": {}}]}, {"role": "model", "parts": [{"text": "yo"}]}]
+        });
+        let got: Vec<(String, String)> = text_parts(&body)
+            .into_iter()
+            .map(|p| (p.path, p.role))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "/systemInstruction/parts/0/text".to_string(),
+                    "system".to_string()
+                ),
+                ("/contents/0/parts/0/text".into(), "user".into()),
+                ("/contents/1/parts/0/text".into(), "assistant".into()),
+            ]
+        );
+    }
+}
 
 #[cfg(test)]
 mod redact_tests {
@@ -2902,6 +3126,7 @@ rules:
             limits: crate::policy::Limits::default(),
             passthrough: Vec::new(),
             tools: Vec::new(),
+            tool_strip: false,
             mcp: crate::mcp::McpRule::default(),
             org: None,
             profiles: Vec::new(),
@@ -3052,6 +3277,7 @@ rules:
                 limits: crate::policy::Limits::default(),
                 passthrough: Vec::new(),
                 tools: Vec::new(),
+                tool_strip: false,
                 mcp: crate::mcp::McpRule::default(),
                 org: None,
                 profiles: Vec::new(),

@@ -130,6 +130,7 @@ Besides name, team, `admin`, `expires`, `budget`, `models` and `tpm`, a key may 
 | `metadata` | map | Your own notes, such as owner or ticket: at most 32 entries, each value at most 256 characters on one line. Shown and recorded, never decided on | |
 | `routes` | list | Path prefixes the key may call, such as `/v1/messages`. A prefix matches whole path segments. Empty allows every route | `route_not_allowed` (403) |
 | `from` | list | [Address ranges](/governance/access-control/#source-address-ranges) the key may be used from | `ip_not_allowed` (403) |
+| `mcp_tools` | list | MCP tools this key may use, within its rule's `tools:`: `<server>.<tool>`, `<server>.*`, `*`, or `!<server>.<tool>` to leave one out. It only narrows the rule. Empty leaves the rule's list. See [Tool permissions](/governance/tool-permissions/#mcp-tools-per-key-and-per-request) | `tool_not_allowed` |
 | `replaced_by` | string | Set by a [rotation](#rotate-a-key): the key that replaces this one | |
 
 ```yaml title="gantry.keys.yaml"

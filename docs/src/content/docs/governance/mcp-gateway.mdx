@@ -60,7 +60,8 @@ The variables are read when Gantry starts, and Gantry does not start when one is
 |---|---|
 | `github.create_issue` | That one tool |
 | `docs.*` | Every tool of server `docs`, including tools it adds later |
-| `*` | Every tool of every server. List it alone |
+| `*` | Every tool of every server. List it alone, or beside deny entries |
+| `!github.delete_repo` | Denies that tool, whatever else allows it |
 
 `prompts:` and `resources:` take the same entries. A prompt is named `<server>.<prompt>`; a resource is allowed as `<server>.<uri>` with the server's own URI, for example `docs.file:///handbook.md`. A resource template is listed only under `<server>.*` or `*`, since one URI named exactly does not open every path a template reaches.
 
@@ -71,6 +72,8 @@ The variables are read when Gantry starts, and Gantry does not start when one is
 | `resources` | Resources the rule allows |
 | `approve_tools` | Tools, in the same entries, whose calls wait for an admin to approve them. See [Approvals](#approvals) |
 | `approval_timeout_seconds` | How long such a call waits before it is refused, from 10 to 3600. Default 300 |
+
+A key's `mcp_tools` and a request's `x-gantry-mcp-tools` header narrow these further, never widen them: see [Tool permissions](/governance/tool-permissions/#mcp-tools-per-key-and-per-request). The same `tools:` list also decides the function tools a model request declares, written `function.<name>`.
 
 A rule with no `tools:` allows no MCP tool, and the same for prompts and resources. As for models, the first rule that names the caller decides: in the example `everyone-else` can use the model and no tool.
 

@@ -64,6 +64,9 @@ pub struct KeyOptions {
     pub from: Vec<Cidr>,
     /// Set by a rotation: the hash prefix of the key that replaces this one. Every use is recorded as such.
     pub replaced_by: Option<String>,
+    /// MCP tools this key may use, within its rule's `tools:` (`<server>.<tool>`, `<server>.*`, `!` to deny). Empty
+    /// leaves the rule's list as it is: the list only narrows, never widens.
+    pub mcp_tools: Vec<String>,
 }
 
 impl KeyOptions {
@@ -817,6 +820,8 @@ pub struct Rule {
     pub passthrough: Vec<Passthrough>,
     /// MCP tools the rule allows, as `<server>.<tool>`, `<server>.*` or `*`. Empty allows none.
     pub tools: Vec<String>,
+    /// `tool_action: strip`: a function tool `tools:` does not allow is taken out of the request or answer, not refused.
+    pub tool_strip: bool,
     /// MCP prompts, resources and tools that need an admin's approval.
     pub mcp: crate::mcp::McpRule,
     /// The organization whose callers the rule applies to. `None` applies to callers of every organization.
@@ -1264,6 +1269,7 @@ pub static OBSERVED: std::sync::LazyLock<Rule> = std::sync::LazyLock::new(|| Rul
     limits: Limits::default(),
     passthrough: Vec::new(),
     tools: Vec::new(),
+    tool_strip: false,
     mcp: crate::mcp::McpRule::default(),
     org: None,
     profiles: Vec::new(),
@@ -1457,6 +1463,7 @@ impl Policy {
             limits: Limits::default(),
             passthrough: Vec::new(),
             tools: Vec::new(),
+            tool_strip: false,
             mcp: crate::mcp::McpRule::default(),
             org: None,
             profiles: Vec::new(),

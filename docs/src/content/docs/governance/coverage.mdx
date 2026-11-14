@@ -59,7 +59,7 @@ MCP calls (`/mcp`) carry `user_agent` too, so an MCP client counts under its too
 
 ## Devices: tools that bypass Gantry
 
-The device agent of Gantry Enterprise (`gantry device`, license feature `devices`) reads each coding tool's documented configuration on every enrolled machine and reports one state per tool: `not_installed`, `installed`, `gantry` (pointed at the gateway) or `direct` (pointed at a provider, or holding a provider key or login). See [Devices](/operations/devices/) for enrolment and what is read for each tool.
+The device agent of Gantry Enterprise (`gantry device`, license feature `devices`) reads each coding tool's documented configuration on every enrolled machine and reports one state per tool: `not_installed`, `installed`, `gantry` (pointed at the gateway) or `direct` (pointed at a provider, or holding a provider key or login). See [Devices](/operations/devices/) for enrolment and what is read for each tool. The agent runs on macOS, Linux and Windows, and each report also lists the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed, and whether each goes through Gantry's MCP gateway.
 
 The console's **Devices** page merges those reports with every replica's traffic (the store's request index), per person: the tools their traffic came from, their enrolled devices, and each tool going direct, as `codex on mbp-ana`. Its **Download devices.json** link gives the reports to the command line:
 

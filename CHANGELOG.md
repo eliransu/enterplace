@@ -387,6 +387,37 @@ one repository. How a release is made: RELEASING.md.
   `twilio_api_key`, `sendgrid_key`, `openai_project_key`, `anthropic_key` and `database_url`, measured on the new
   `gantry-detectors-v2` corpus. A URL's login part is no longer reported as an email address.
 - `type: model_armor`: Google Cloud Model Armor through sanitizeUserPrompt and sanitizeModelResponse.
+- Function tool permissions: `function.<name>` and `!function.<name>` entries in a rule's `tools:` decide the function
+  tools a request declares (OpenAI `tools` and `functions`, Responses, Anthropic, Gemini `functionDeclarations`) and
+  the tool calls in an answer. `tool_action: block` (default) refuses with `tool_not_allowed`; `strip` takes them out.
+  Each is recorded by tool name, never with its arguments. `!` deny entries work for MCP tools too. An MCP server can
+  no longer be named `function`.
+- MCP tools narrowed per key (`mcp_tools:` in the keys file and the admin API) and per request (the
+  `x-gantry-mcp-tools` header). Both only narrow the rule's `tools:`, never widen it.
+- Answer guardrails read tool call arguments in every format: Anthropic `tool_use` input, Responses `function_call`
+  arguments and Gemini `functionCall` args, besides chat `tool_calls`. Request guardrails read Gemini `contents` and
+  `systemInstruction` text.
+- `pack: gitleaks` on a `secrets` guardrail: Gitleaks' default rule set (221 rules, MIT, attributed in
+  `crates/gantry-core/data/GITLEAKS-LICENSE`), measured at 97.2% precision and 84.9% recall on the detector corpus.
+- Six more vendors: `pangea`, `nemo_guardrails`, `hiddenlayer`, `lasso`, `guardrails_ai` and `aporia`.
+- Transforms: `type: transform` services and the `Transform` extension hook rewrite the request before it is checked
+  and sent and the answer before it is checked and returned. Each change is recorded as a diff summary of JSON paths
+  under `transforms`. A request transform may not change `model` or `stream`; a failing one follows `on_failure`
+  (`transform_failed`).
+- Guardrails on realtime sessions: the caller's text events are dropped (or masked) when a guardrail blocks, a blocked
+  transcript of what was said ends the session, and the session record lists the findings.
+
+### Integrations
+
+- LangChain guide (Python and JavaScript) and `scripts/langchain_check.py`, which drives LangChain against a local
+  Gantry. The Cursor guide gains a quick tunnel setup and a test of the requests Cursor's docs describe; Cursor itself
+  is not run.
+
+### Device agent
+
+- `gantry device` runs on Linux (root systemd unit, `deploy/mdm/gantry-device.service`) and Windows (a logon task),
+  with each tool's paths on each OS. Each report lists the MCP servers configured in Claude Desktop, Claude Code,
+  Cursor, VS Code and Zed, and whether each goes through Gantry's MCP gateway.
 
 ### Access and budget hierarchy
 

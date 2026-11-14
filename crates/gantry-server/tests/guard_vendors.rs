@@ -107,6 +107,26 @@ fn vendor_answer(path: &str, headers: &HeaderMap, body: &Value, key: &str) -> Op
                 }
             }}))
         }
+        "/v1/text/guard" if bearer => Some(json!({"status": "Success", "result": {
+            "blocked": bad, "transformed": false,
+            "detectors": {"prompt_injection": {"detected": bad}}
+        }})),
+        "/nemo/v1/chat/completions" => Some(json!({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "guardrails": {"config_id": "main", "log": {"activated_rails": [{"type": "input", "name": "self check input", "stop": bad}]}}
+        })),
+        "/lasso/classify" if header("lasso-api-key") == key => Some(json!({
+            "violations_detected": bad,
+            "deputies": {"jailbreak": bad},
+            "findings": if bad { json!({"jailbreak": [{"name": "jailbreak", "category": "SAFETY", "action": "BLOCK"}]}) } else { json!({}) }
+        })),
+        "/guards/g1/validate" => Some(json!({
+            "callId": "1", "validationPassed": !bad,
+            "validationSummaries": [{"validatorName": "ToxicLanguage", "validatorStatus": if bad { "fail" } else { "pass" }}]
+        })),
+        "/aporia/validate" if header("x-aporia-api-key") == key => {
+            Some(json!({"action": if bad { "block" } else { "passthrough" }}))
+        }
         "/v1/chat/completions" if bearer => Some(json!({
             "choices": [{"message": {"role": "assistant", "content": if bad { "unsafe\nS1" } else { "safe" }}}]
         })),
@@ -263,6 +283,36 @@ async fn each_vendor_is_asked_in_its_own_api_and_blocks_or_allows() -> TestResul
             format!("    url: {base}/v1\n    key_env: {KEY_ENV}\n    model: llama-guard-3-8b\n"),
             "/v1/chat/completions",
             "s1",
+        ),
+        (
+            "pangea",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n"),
+            "/v1/text/guard",
+            "prompt_injection",
+        ),
+        (
+            "nemo_guardrails",
+            format!("    url: {base}/nemo\n    config_id: main\n"),
+            "/nemo/v1/chat/completions",
+            "self_check_input",
+        ),
+        (
+            "lasso",
+            format!("    url: {base}/lasso\n    key_env: {KEY_ENV}\n"),
+            "/lasso/classify",
+            "jailbreak",
+        ),
+        (
+            "guardrails_ai",
+            format!("    url: {base}\n    guard_name: g1\n"),
+            "/guards/g1/validate",
+            "toxiclanguage",
+        ),
+        (
+            "aporia",
+            format!("    url: {base}/aporia\n    key_env: {KEY_ENV}\n"),
+            "/aporia/validate",
+            "aporia_policy",
         ),
     ];
     for (kind, fields, path, finding) in cases {

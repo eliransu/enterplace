@@ -140,6 +140,10 @@ const KNOWN: &[&str] = &[
     "user",
     "fingerprint",
     "template_id",
+    "pack",
+    "recipe",
+    "config_id",
+    "guard_name",
     "case_sensitive",
     "whole_word",
     "shadow_until",
@@ -156,6 +160,7 @@ const KNOWN: &[&str] = &[
     "prompts",
     "resources",
     "approve_tools",
+    "tool_action",
     "approval_timeout_seconds",
     "user_auth",
     "user_headers",
@@ -199,6 +204,7 @@ const KNOWN: &[&str] = &[
     "regions",
     "session_affinity",
     "routes",
+    "mcp_tools",
     "replaced_by",
     "capture",
     "to",
@@ -936,6 +942,8 @@ struct RuleFile {
     #[serde(default)]
     tools: Vec<String>,
     #[serde(default)]
+    tool_action: Option<String>,
+    #[serde(default)]
     prompts: Vec<String>,
     #[serde(default)]
     resources: Vec<String>,
@@ -1522,6 +1530,8 @@ struct KeyFile {
     from: Vec<String>,
     #[serde(default)]
     replaced_by: Option<String>,
+    #[serde(default)]
+    mcp_tools: Vec<String>,
 }
 
 /// One entry of a keys file, as checked.
@@ -1579,6 +1589,16 @@ pub fn key_options_problem(options: &KeyOptions) -> Option<String> {
     }
     if options.from.len() > MAX_LIST {
         return Some(format!("from lists at most {MAX_LIST} address ranges"));
+    }
+    if options.mcp_tools.len() > MAX_LIST
+        || options
+            .mcp_tools
+            .iter()
+            .any(|t| !crate::mcp::narrowing_entry(t))
+    {
+        return Some(format!(
+            "mcp_tools lists at most {MAX_LIST} MCP tools, each <server>.<tool>, <server>.* or *, or !<server>.<tool> to deny one, for example mcp_tools: [github.*, \"!github.delete_repo\"]"
+        ));
     }
     if options.metadata.len() > MAX_LIST
         || options.metadata.iter().any(|(k, v)| {
@@ -2722,6 +2742,17 @@ fn policy_rules(
             }
         }
         crate::mcp::check_tools(&at("tools"), &tools, &parsed.mcp, errors);
+        let tool_strip = match rule.tool_action.as_deref() {
+            None | Some("block") => false,
+            Some("strip") => true,
+            Some(other) => {
+                errors.push(format!(
+                    "{}: tool_action is \"{other}\". Write block (refuse a request or answer with a function tool tools: does not allow) or strip (take the tool out and send the rest).",
+                    at("tool_action")
+                ));
+                false
+            }
+        };
         let mcp = crate::mcp::rule(
             &at,
             &crate::mcp::RuleFields {
@@ -2760,6 +2791,7 @@ fn policy_rules(
                 })
                 .collect(),
             tools,
+            tool_strip,
             mcp,
             org: rule.org.clone(),
             profiles: rule.profiles.clone(),
@@ -4918,6 +4950,7 @@ fn keys(file: &Path, text: &str, errors: &mut Vec<String>) -> Vec<KeyEntry> {
             routes: entry.routes,
             from,
             replaced_by: entry.replaced_by.map(|p| p.to_ascii_lowercase()),
+            mcp_tools: entry.mcp_tools,
         };
         if let Some(problem) = key_options_problem(&options) {
             errors.push(format!("{at}: {problem}."));

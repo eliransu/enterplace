@@ -83,6 +83,9 @@ pub struct McpRule {
     pub approve: Vec<String>,
     /// How long a call waits for that approval before it is refused.
     pub approval_timeout_seconds: u64,
+    /// Never from the policy: lists a request adds (the key's `mcp_tools`, the `x-gantry-mcp-tools` header), each of
+    /// which must also allow a tool. They only narrow what `tools` allows.
+    pub narrow: Vec<Vec<String>>,
 }
 
 pub const DEFAULT_APPROVAL_TIMEOUT: u64 = 300;
@@ -94,6 +97,7 @@ impl Default for McpRule {
             resources: Vec::new(),
             approve: Vec::new(),
             approval_timeout_seconds: DEFAULT_APPROVAL_TIMEOUT,
+            narrow: Vec::new(),
         }
     }
 }
@@ -144,15 +148,43 @@ fn server_name(name: &str) -> bool {
 
 /// Whether a rule's `tools:` list allows the tool a caller sees as `name` (`<server>.<tool>`).
 /// `*` allows every tool, `<server>.*` every tool of one server, and anything else names one tool exactly.
+/// An entry written `!<pattern>` denies what it matches, whatever else allows it.
 pub fn tool_allowed(patterns: &[String], name: &str) -> bool {
-    patterns.iter().any(|pattern| {
-        pattern == "*"
-            || pattern == name
-            || pattern
-                .strip_suffix(".*")
-                .zip(name.split_once('.'))
-                .is_some_and(|(server, (of, _))| server == of)
-    })
+    let denied = patterns
+        .iter()
+        .filter_map(|p| p.strip_prefix('!'))
+        .any(|p| pattern_matches(p, name));
+    !denied
+        && patterns
+            .iter()
+            .filter(|p| !p.starts_with('!'))
+            .any(|p| pattern_matches(p, name))
+}
+
+/// Whether `entry` is a well formed MCP tool pattern for a list that narrows (a key's `mcp_tools`, the
+/// `x-gantry-mcp-tools` header): `*`, `<server>.*`, `<server>.<tool>`, each optionally `!` to deny.
+pub fn narrowing_entry(entry: &str) -> bool {
+    let bare = entry.strip_prefix('!').unwrap_or(entry);
+    bare == "*"
+        || bare.split_once('.').is_some_and(|(server, tool)| {
+            server_name(server)
+                && !tool.is_empty()
+                && tool.len() <= 128
+                && (tool == "*" || !tool.contains('*'))
+                && !tool
+                    .chars()
+                    .any(|c| c.is_whitespace() || c.is_control() || c == ',')
+        })
+}
+
+/// One `tools:` entry against one name: `*`, `<server>.*`, or the name exactly.
+pub fn pattern_matches(pattern: &str, name: &str) -> bool {
+    pattern == "*"
+        || pattern == name
+        || pattern
+            .strip_suffix(".*")
+            .zip(name.split_once('.'))
+            .is_some_and(|(server, (of, _))| server == of)
 }
 
 /// Checks the `mcp:` list, each problem with its line.
@@ -172,6 +204,13 @@ pub(crate) fn servers(
             errors.push(format!(
                 "{}: an MCP server name uses letters, digits, dashes and underscores only, at most 64 characters, and no dot: callers see its tools as <server>.<tool>.",
                 at("name")
+            ));
+        }
+        if entry.name == crate::fntools::NAMESPACE {
+            errors.push(format!(
+                "{}: an MCP server cannot be named \"{}\": `tools:` entries written function.<name> name the function tools a request declares. Rename the server.",
+                at("name"),
+                entry.name
             ));
         }
         if list[..i].iter().any(|other| other.name == entry.name) {
@@ -343,7 +382,25 @@ pub(crate) fn check_tools(
     list: &[ServerFile],
     errors: &mut Vec<String>,
 ) {
-    check_names(at, "tool", tools, list, errors);
+    // function.<name> entries are the function tools a request declares, not MCP tools: checked on their own.
+    let mut mcp = Vec::new();
+    for tool in tools {
+        let bare = tool.strip_prefix('!').unwrap_or(tool);
+        match crate::fntools::entry_name(bare) {
+            Some(Ok(())) => {}
+            Some(Err(why)) => errors.push(format!("{at}: \"{tool}\": {why}")),
+            None => mcp.push(bare.to_string()),
+        }
+    }
+    // A deny entry next to "*" is how "everything but" is written, so only allow entries count against "*".
+    let allow = tools.iter().filter(|t| !t.starts_with('!')).count();
+    if tools.iter().any(|t| t == "*") && allow > 1 {
+        errors.push(format!(
+            "{at}: \"*\" already allows every MCP tool and function tool. List it alone, or list them by name (deny entries written !<name> may stand next to it)."
+        ));
+    }
+    let mcp: Vec<String> = mcp.into_iter().filter(|t| t != "*").collect();
+    check_names(at, "tool", &mcp, list, errors);
 }
 
 /// Checks a list of `<server>.<name>` patterns (tools, prompts or resources) against the servers.
@@ -424,6 +481,7 @@ pub(crate) fn rule(
         resources: fields.resources.to_vec(),
         approve: fields.approve_tools.to_vec(),
         approval_timeout_seconds,
+        narrow: Vec::new(),
     }
 }
 

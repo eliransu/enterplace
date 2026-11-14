@@ -1,0 +1,120 @@
+---
+title: Transforms
+description: Rewrite requests before they are checked and sent, and answers before they are checked and returned, with every change recorded.
+sidebar:
+  order: 6
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A transform rewrites the whole request before Gantry checks and sends it, or the whole answer before Gantry checks and returns it: add a system prompt, redact a codename, drop a field. It is a service you run (a `type: transform` guardrail) or code in a binary that embeds Gantry (the `Transform` extension hook). Every change is recorded as a list of the JSON paths it touched, never their values.
+
+## Example
+
+```yaml title="gantry.policy.yaml"
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com/v1
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini]
+guardrails:
+  - name: house-style
+    type: transform
+    url: https://transform.internal.example.com/rewrite
+    on: [request, answer]
+    timeout_ms: 800
+    on_failure: fail_closed
+  - name: no-secrets
+    type: secrets
+    action: block
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [gpt-4o-mini]
+    guardrails: [house-style, no-secrets]
+```
+
+## Order
+
+| On a request | On an answer |
+|---|---|
+| 1. The binary's `Transform` hook | 1. The binary's `Transform` hook |
+| 2. Each `transform` guardrail the rule names, in order | 2. Each `transform` guardrail the rule names that has `answer` in `on:` |
+| 3. The [function tool check](/governance/tool-permissions/) | 3. The function tool check on tool calls |
+| 4. The other guardrails | 4. The other `on: [answer]` guardrails |
+| 5. Cache, limits, then the provider | 5. The caller |
+
+Transforms run first wherever they are listed, so the checks read what is really sent or returned: a transform cannot slip text past a guardrail. A request transform may not change `model` or `stream`, which the request was already routed and metered by; one that does counts as a failure.
+
+## Fields
+
+A `transform` guardrail takes the fields every remote guardrail shares except `action`:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `url` | string | required | `https://`, or `http://` on this machine only |
+| `on` | list | `[request]` | `[request]`, `[answer]` or both |
+| `timeout_ms` | integer | `1000` | 1 to 30000 |
+| `on_failure` | string | required | `fail_closed` refuses with `transform_failed` (502); `fail_open` sends the body unchanged and records `skipped` |
+| `headers_env` | map | none | Headers from environment variables, for a credential |
+| `shadow_until` | string | none | Until then the service is called and its changes recorded as `shadow`, and its body is not used |
+
+## The service contract
+
+Gantry sends `POST {url}` with:
+
+```json
+{
+  "decision_id": "01J...",
+  "person": "maya.cohen",
+  "team": "payments",
+  "route": "/v1/chat/completions",
+  "side": "request",
+  "body": { "model": "gpt-4o-mini", "messages": [{ "role": "user", "content": "..." }] }
+}
+```
+
+The service answers `200` with `{"body": {...}}`: the body to use, the same one to change nothing. Any other status, an answer that is not that shape, a body that is not a JSON object, or a request body with another `model` or `stream` is a failure, and `on_failure` decides. On an answer, `body` is the provider's whole JSON answer. Streamed answers are not sent to transforms.
+
+## The extension hook
+
+A binary that embeds the gateway sets `Extension::transform` to its own `Transform`:
+
+```rust
+use gantry_server::{Transform, TransformContext};
+
+struct Codenames;
+
+impl Transform for Codenames {
+    fn request(&self, _: &TransformContext<'_>, body: &mut serde_json::Value) -> Result<(), String> {
+        if let Some(text) = body["messages"][0]["content"].as_str() {
+            body["messages"][0]["content"] = text.replace("Project Falcon", "[codename]").into();
+        }
+        Ok(())
+    }
+}
+```
+
+`request` and `answer` both default to changing nothing. An `Err` refuses the request (or withholds the answer) with `transform_failed`; its text goes to Gantry's log, not to the caller. The hook's changes are recorded under the name `extension`.
+
+## What is recorded
+
+The request record, and the answer's `answer_guardrails` record, carry a `transforms` list, one entry per transform that ran:
+
+```json
+{"transform": "house-style", "side": "request", "outcome": "changed",
+ "changes": [{"op": "add", "path": "/messages/1"}, {"op": "change", "path": "/messages/0/content"}]}
+```
+
+`outcome` is `changed`, `unchanged`, `shadow` or `skipped`. `op` is `add`, `remove` or `change`. Lists are compared by position, so a message put first shows as a change to the first message and an addition at the end. At most 32 changes are listed; `more` counts the rest. A changed answer is never cached.
+
+Transforms run on JSON request bodies on the model routes (chat completions, messages, Responses and the rest), not on MCP calls or batch files.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Guardrails" href="/governance/guardrails/" description="Checks that run after the transforms." />
+	<LinkCard title="Guardrail webhooks" href="/governance/guardrail-webhooks/" description="The contract for a service that checks rather than rewrites." />
+</CardGrid>

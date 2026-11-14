@@ -228,3 +228,70 @@ fn published_table_matches_the_measurement() -> TestResult {
     );
     Ok(())
 }
+
+/// The Gitleaks pack's lowest precision and recall on this corpus, in percent: the first measurement rounded down.
+/// Its rule IDs are not Gantry's kinds, so it is scored on secrets as one class: a finding on a line that expects a
+/// secrets kind is a true positive, one on any other line a false one. Recall counts only the kinds Gitleaks has a
+/// rule for (not `gantry_key`, nor the generic `api_key`, `jwt` or `database_url` shapes it does not claim).
+/// Measured at 97.2% and 84.9% with Gitleaks at 5f6ec56c.
+const GITLEAKS_FLOOR: (f64, f64) = (97.0, 84.0);
+const GITLEAKS_KINDS: [&str; 11] = [
+    "private_key",
+    "aws_access_key",
+    "github_token",
+    "slack_token",
+    "gcp_api_key",
+    "stripe_key",
+    "twilio_api_key",
+    "sendgrid_key",
+    "openai_project_key",
+    "anthropic_key",
+    "azure_connection_string",
+];
+
+#[test]
+fn gitleaks_pack_reaches_its_floor_on_the_corpus() -> TestResult {
+    let corpus = fs::read_to_string(root().join(format!("tests/corpus/{CORPUS}.jsonl")))?;
+    let mut s = Score::default();
+    for line in corpus
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+    {
+        let row: Value = serde_json::from_str(line)?;
+        let text = row["text"].as_str().ok_or("a corpus line has no text")?;
+        let kinds: Vec<&str> = row["expect"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let secrets = kinds
+            .iter()
+            .filter(|k| KINDS.iter().any(|(kind, d)| kind == *k && *d == "secrets"))
+            .count();
+        let claimed = kinds.iter().filter(|k| GITLEAKS_KINDS.contains(k)).count();
+        let got = gantry_core::gitleaks::scan(text)?.len();
+        let hit = got.min(secrets);
+        s.true_pos += hit;
+        s.false_pos += got - hit;
+        s.positives += claimed;
+        s.false_neg += claimed.saturating_sub(got);
+    }
+    let recall = match s.positives {
+        0 => 100.0,
+        n => 100.0 * (n - s.false_neg) as f64 / n as f64,
+    };
+    eprintln!(
+        "gitleaks pack on {CORPUS}: precision {:.1}%, recall {recall:.1}% ({} rules)",
+        s.precision(),
+        gantry_core::gitleaks::rule_count()?
+    );
+    assert!(
+        s.precision() >= GITLEAKS_FLOOR.0 && recall >= GITLEAKS_FLOOR.1,
+        "precision {:.1}% (floor {}), recall {recall:.1}% (floor {})",
+        s.precision(),
+        GITLEAKS_FLOOR.0,
+        GITLEAKS_FLOOR.1
+    );
+    Ok(())
+}
