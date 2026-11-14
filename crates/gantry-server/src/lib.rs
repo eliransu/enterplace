@@ -34,6 +34,7 @@ mod admin;
 mod alias;
 mod batch;
 pub mod cloud;
+mod cloud_batch;
 mod cors;
 mod credentials;
 pub mod insights;
@@ -241,6 +242,8 @@ pub struct ProviderRoute {
     pub accept_chat: bool,
     /// Messages requests (Claude Code) for its models are translated to the chat completions API.
     pub accept_messages: bool,
+    /// Bedrock or Vertex AI: the bucket its batch jobs read and write, for `/v1/batches`.
+    pub batch: Option<gantry_core::config::ProviderBatch>,
 }
 
 /// What the server needs to start.
@@ -484,6 +487,7 @@ struct Upstream {
     retries: u32,
     accept_chat: bool,
     accept_messages: bool,
+    batch: Option<gantry_core::config::ProviderBatch>,
 }
 
 impl Upstream {
@@ -562,6 +566,7 @@ pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError
         retries: route.retries,
         accept_chat: route.accept_chat,
         accept_messages: route.accept_messages,
+        batch: route.batch.clone(),
     })
 }
 
@@ -610,6 +615,7 @@ fn build(
             retries: 0,
             accept_chat: false,
             accept_messages: false,
+            batch: None,
         });
     }
     let console = config.console;

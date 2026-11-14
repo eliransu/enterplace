@@ -409,6 +409,7 @@ fn route(
         retries: provider.retries,
         accept_chat: provider.accept_chat,
         accept_messages: provider.accept_messages,
+        batch: provider.batch.clone(),
     })
 }
 

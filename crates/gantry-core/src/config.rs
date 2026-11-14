@@ -552,6 +552,20 @@ struct ProviderFile {
     accept_chat: Option<bool>,
     #[serde(default)]
     accept_messages: Option<bool>,
+    #[serde(default)]
+    batch: Option<ProviderBatchFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderBatchFile {
+    bucket: String,
+    #[serde(default)]
+    role_arn: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    storage_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1411,6 +1425,33 @@ pub struct Provider {
     pub accept_chat: bool,
     /// Whether messages requests (Claude Code) for its models are translated to the chat completions API.
     pub accept_messages: bool,
+    /// Where the provider's own batch jobs keep their files: Bedrock batch inference and Vertex AI batch prediction.
+    pub batch: Option<ProviderBatch>,
+}
+
+/// How a Bedrock or Vertex AI provider runs batches through `/v1/batches`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderBatch {
+    /// The bucket and prefix batch inputs and outputs are kept under: `s3://bucket/prefix/` for Bedrock,
+    /// `gs://bucket/prefix/` for Vertex AI. Always ends in `/`.
+    pub bucket: String,
+    /// Bedrock: the service role Bedrock assumes to read and write the bucket.
+    pub role_arn: Option<String>,
+    /// The provider's batch API, when it is not the one the provider's URL implies.
+    pub url: Option<String>,
+    /// The S3 or Cloud Storage endpoint, when it is not the public one (a private endpoint or a test).
+    pub storage_url: Option<String>,
+}
+
+impl ProviderBatch {
+    /// The bucket and the prefix inside it, without the scheme.
+    pub fn bucket_and_prefix(&self) -> (&str, &str) {
+        let rest = self
+            .bucket
+            .split_once("://")
+            .map_or(self.bucket.as_str(), |(_, rest)| rest);
+        rest.split_once('/').unwrap_or((rest, ""))
+    }
 }
 
 /// Everything `gantry serve` needs from the two files.
@@ -3013,6 +3054,62 @@ fn provider_options(
     if entry.role_arn.is_some() && kind != Some(Kind::Bedrock) {
         only("role_arn", "bedrock", errors);
     }
+    if let Some(batch) = &entry.batch {
+        let scheme = match kind {
+            Some(Kind::Bedrock) => Some("s3"),
+            Some(Kind::Vertex | Kind::VertexAnthropic) => Some("gs"),
+            _ => None,
+        };
+        match scheme {
+            None => errors.push(format!(
+                "{}: batch is for a provider of kind bedrock, vertex or vertex_anthropic, whose batch jobs read and write a bucket. OpenAI and Anthropic batches need no batch: section. Remove it.",
+                at("batch")
+            )),
+            Some(scheme) => {
+                let rest = batch.bucket.strip_prefix(&format!("{scheme}://"));
+                let bucket = rest.map(|r| r.split('/').next().unwrap_or_default());
+                let plain = |text: &str| {
+                    text.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-_./".contains(&b))
+                };
+                if !bucket.is_some_and(|b| !b.is_empty() && plain(b))
+                    || !rest.is_some_and(plain)
+                {
+                    errors.push(format!(
+                        "{}: batch.bucket is where batch files are kept, as {scheme}://<bucket>/<prefix>/, for example {scheme}://my-bucket/gantry-batches/, in letters, digits and -_./ only.",
+                        at("batch")
+                    ));
+                }
+                if scheme == "s3" {
+                    match &batch.role_arn {
+                        Some(role) if role.starts_with("arn:aws") && role.contains(":role/") => {}
+                        _ => errors.push(format!(
+                            "{}: a bedrock provider's batch needs role_arn, the service role Bedrock assumes to read and write the bucket, for example role_arn: arn:aws:iam::123456789012:role/bedrock-batch.",
+                            at("batch")
+                        )),
+                    }
+                } else if batch.role_arn.is_some() {
+                    errors.push(format!(
+                        "{}: batch.role_arn is for a bedrock provider. Vertex AI batch jobs run as the project's service agent. Remove it.",
+                        at("batch")
+                    ));
+                }
+                for url in [&batch.url, &batch.storage_url].into_iter().flatten() {
+                    if !(url.starts_with("https://") || url.starts_with("http://")) {
+                        errors.push(format!(
+                            "{}: batch.url and batch.storage_url are base URLs, for example https://bedrock.us-east-1.amazonaws.com. Write the scheme.",
+                            at("batch")
+                        ));
+                    } else if is_private(url) && !entry.allow_private {
+                        errors.push(format!(
+                            "{}: batch.url or batch.storage_url points at this machine or a private network. If that is intended, for example a private endpoint, add `allow_private: true` to the provider.",
+                            at("batch")
+                        ));
+                    }
+                }
+            }
+        }
+    }
     if let Some(role) = &entry.role_arn
         && !(role.starts_with("arn:aws") && role.contains(":role/"))
     {
@@ -3476,6 +3573,19 @@ fn providers(
                 retries: entry.retries.unwrap_or(0),
                 accept_chat: entry.accept_chat.unwrap_or(false),
                 accept_messages: entry.accept_messages.unwrap_or(false),
+                batch: entry.batch.as_ref().map(|b| ProviderBatch {
+                    bucket: if b.bucket.ends_with('/') {
+                        b.bucket.clone()
+                    } else {
+                        format!("{}/", b.bucket)
+                    },
+                    role_arn: b.role_arn.clone(),
+                    url: b.url.as_ref().map(|u| u.trim_end_matches('/').to_string()),
+                    storage_url: b
+                        .storage_url
+                        .as_ref()
+                        .map(|u| u.trim_end_matches('/').to_string()),
+                }),
             });
         }
     }
@@ -4015,6 +4125,7 @@ pub fn same_connection(a: &Provider, b: &Provider) -> bool {
         && a.region == b.region
         && a.role_arn == b.role_arn
         && a.allow_private == b.allow_private
+        && a.batch == b.batch
 }
 
 /// What `gantry check` warns about in a policy that loads: observe mode, and models no provider serves.
@@ -5079,6 +5190,59 @@ guardrails:
                 "{days}: {refused}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn a_provider_batch_section_loads_for_bedrock_and_vertex_only() -> TestResult {
+        let bedrock = |batch: &str| {
+            GOOD.replace(
+                "rules:\n",
+                &format!("  - name: bedrock\n    kind: bedrock\n    region: us-east-1\n    models: [claude-b]\n    model_ids: {{ claude-b: anthropic.claude-b }}\n    batch: {batch}\nrules:\n"),
+            )
+        };
+        let loaded = check(
+            "provider-batch",
+            &bedrock("{ bucket: s3://bkt/pre, role_arn: arn:aws:iam::123456789012:role/b }"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        let batch = loaded
+            .providers
+            .iter()
+            .find_map(|p| p.batch.clone())
+            .ok_or("no batch")?;
+        assert_eq!(batch.bucket, "s3://bkt/pre/");
+        assert_eq!(batch.bucket_and_prefix(), ("bkt", "pre/"));
+        for (bad, says) in [
+            ("{ bucket: s3://bkt/ }", "role_arn"),
+            (
+                "{ bucket: gs://bkt/, role_arn: arn:aws:iam::1:role/b }",
+                "s3://",
+            ),
+            (
+                "{ bucket: s3://b k/, role_arn: arn:aws:iam::1:role/b }",
+                "s3://",
+            ),
+        ] {
+            let refused = check("provider-batch-bad", &bedrock(bad), None)?
+                .err()
+                .ok_or("a bad batch section loaded")?
+                .join("\n");
+            assert!(refused.contains(says), "{bad}: {refused}");
+        }
+        let openai = GOOD.replace(
+            "    models: [gpt-4o-mini, gpt-4o]\n",
+            "    models: [gpt-4o-mini, gpt-4o]\n    batch: { bucket: s3://bkt/ }\n",
+        );
+        let refused = check("provider-batch-openai", &openai, None)?
+            .err()
+            .ok_or("an openai batch section loaded")?
+            .join("\n");
+        assert!(
+            refused.contains("bedrock, vertex or vertex_anthropic"),
+            "{refused}"
+        );
         Ok(())
     }
 
