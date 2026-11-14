@@ -1697,6 +1697,153 @@ fn import_litellm_writes_a_policy_that_checks_and_never_replaces_one() -> TestRe
     Ok(())
 }
 
+/// A LiteLLM proxy's management API as its docs describe it, on a thread: every route needs the master key.
+fn litellm_proxy(master: &'static str) -> std::io::Result<u16> {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(&stream);
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                continue;
+            }
+            let path = line
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default()
+                .to_string();
+            let mut authorized = false;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).is_err() || header.trim().is_empty() {
+                    break;
+                }
+                if header.to_ascii_lowercase().trim()
+                    == format!("authorization: bearer {master}").to_ascii_lowercase()
+                {
+                    authorized = true;
+                }
+            }
+            let (status, body) = match path.as_str() {
+                _ if !authorized => ("401 Unauthorized", r#"{"error":{"message":"Authentication Error"}}"#.to_string()),
+                "/model/info" => ("200 OK", r#"{"data":[{"model_name":"gpt-4o","litellm_params":{"model":"openai/gpt-4o","api_key":"os.environ/OPENAI_API_KEY"},"model_info":{"id":"m1"}},{"model_name":"gpt-4o-mini","litellm_params":{"model":"openai/gpt-4o-mini","api_key":"os.environ/OPENAI_API_KEY"},"model_info":{"id":"m2"}}]}"#.to_string()),
+                p if p.starts_with("/key/list") => ("200 OK", r#"{"keys":[{"token":"88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b","key_alias":"maya","team_id":"t-1","models":["gpt-4o","dall-e-3"],"max_budget":20,"budget_duration":"30d","tpm_limit":1000},{"token":"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9","user_id":"dana","team_id":"t-2","models":[]}],"total_count":2,"current_page":1,"total_pages":1}"#.to_string()),
+                "/team/list" => ("200 OK", r#"[{"team_id":"t-1","team_alias":"payments","max_budget":500,"budget_duration":"30d","models":["gpt-4o"]},{"team_id":"t-2","team_alias":"search","max_budget":10,"budget_duration":"7d"}]"#.to_string()),
+                _ => ("404 Not Found", r#"{"detail":"Not Found"}"#.to_string()),
+            };
+            let mut stream = &stream;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    Ok(port)
+}
+
+#[test]
+fn import_litellm_reads_a_running_proxy_and_reissues_its_keys() -> TestResult {
+    const MASTER: &str = "sk-litellm-master-0123456789";
+    let port = litellm_proxy(MASTER)?;
+    let dir = workdir("import-proxy")?;
+    let (out_file, keys_file) = (
+        path(&dir, "from-proxy.policy.yaml"),
+        path(&dir, "from-proxy.keys.yaml"),
+    );
+    let url = format!("http://127.0.0.1:{port}");
+    let args = [
+        "import",
+        "litellm",
+        "--url",
+        &url,
+        "--master-key-env",
+        "LITELLM_MASTER_KEY",
+        "--out",
+        &out_file,
+        "--keys-out",
+        &keys_file,
+    ];
+    let out = gantry(
+        &args,
+        &[
+            ("OPENAI_API_KEY", "sk-test"),
+            ("LITELLM_MASTER_KEY", "wrong"),
+        ],
+    )?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("HTTP 401"));
+    let out = gantry(
+        &args,
+        &[
+            ("OPENAI_API_KEY", "sk-test"),
+            ("LITELLM_MASTER_KEY", MASTER),
+        ],
+    )?;
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8(out.stderr)?
+    );
+    assert!(!stdout.contains(MASTER), "the master key is never printed");
+    assert!(
+        stdout.contains("Read 2 models from the proxy, 2 keys and 2 teams"),
+        "{stdout}"
+    );
+    let policy = std::fs::read_to_string(&out_file)?;
+    assert!(
+        policy.contains("gpt-4o-mini") && policy.contains("key_env: OPENAI_API_KEY"),
+        "{policy}"
+    );
+    assert!(
+        policy.contains("team: payments") && policy.contains("usd: 500"),
+        "{policy}"
+    );
+    assert!(
+        stdout.contains("team search: max_budget 10 per 7d has no Gantry period"),
+        "{stdout}"
+    );
+    // One Gantry key per LiteLLM key, printed beside the key it replaces, its hash in the new keys file.
+    let line = stdout
+        .lines()
+        .find(|l| l.contains("maya (token 88dc28d0f030...) -> maya (team payments): gantry_"))
+        .ok_or(format!("no mapping in {stdout}"))?;
+    let key = line.rsplit(' ').next().unwrap_or_default();
+    let keys = std::fs::read_to_string(&keys_file)?;
+    assert!(
+        keys.contains(&gantry_core::id::sha256_hex(key.as_bytes())),
+        "{keys}"
+    );
+    assert!(keys.contains("models: [\"gpt-4o\"]"), "{keys}");
+    assert!(
+        stdout.contains("dana (token a1b2c3d4e5f6...) -> dana (team search)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("is valid"), "{stdout}");
+    // Never over an existing keys file.
+    let again = gantry(
+        &[
+            "import",
+            "litellm",
+            "--url",
+            &url,
+            "--master-key-env",
+            "LITELLM_MASTER_KEY",
+            "--out",
+            &path(&dir, "other.yaml"),
+            "--keys-out",
+            &keys_file,
+        ],
+        &[("LITELLM_MASTER_KEY", MASTER)],
+    )?;
+    assert_eq!(again.status.code(), Some(2));
+    assert!(String::from_utf8(again.stderr)?.contains("never changed by an import"));
+    Ok(())
+}
+
 #[test]
 fn providers_lists_the_catalog_with_id_name_kind_and_url() -> TestResult {
     let out = gantry(&["providers"], &[])?;

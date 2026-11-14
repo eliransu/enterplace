@@ -68,6 +68,11 @@ Commands:
         Write a Gantry policy (default gantry.policy.yaml, never over an existing file) from a LiteLLM proxy
         config, check it, and list what could not be mapped. --keys-from reads an export of LiteLLM virtual
         keys: they become team rules and the `gantry key new` lines to reissue them (keys cannot move).
+  import litellm --url <proxy> --master-key-env <VAR> [<config.yaml>] [--out <policy file>] [--keys-out <keys file>]
+        Read a running LiteLLM proxy's model list, keys and teams through its management API, with the
+        master key in VAR. Writes the policy, team budgets as limits:, and a new keys file (default
+        gantry.keys.yaml, never over an existing file) with one Gantry key per LiteLLM key, printing each
+        LiteLLM key next to the Gantry key that replaces it.
   prices <model> [--policy <file>]
         Print the price Gantry charges for a model and where it came from: the policy's prices:, Gantry's
         own table, or the table generated from LiteLLM's price map (with its source and date).
@@ -271,15 +276,41 @@ pub async fn run(args: &[String]) -> ExitCode {
                 _ => None,
             }
         }
-        ["import", "litellm", rest @ ..] => match options(rest, &["--keys-from", "--out"]) {
-            Some((positional, named)) if positional.len() == 1 => Some(
-                import_litellm(
-                    Path::new(positional[0]),
-                    named.get("--keys-from").map(Path::new),
-                    Path::new(named.get("--out").copied().unwrap_or("gantry.policy.yaml")),
+        ["import", "litellm", rest @ ..] => match options(
+            rest,
+            &[
+                "--keys-from",
+                "--out",
+                "--url",
+                "--master-key-env",
+                "--keys-out",
+            ],
+        ) {
+            Some((positional, named))
+                if positional.len() <= 1
+                    && (positional.len() == 1 || named.contains_key("--url"))
+                    && named.contains_key("--url") == named.contains_key("--master-key-env") =>
+            {
+                Some(
+                    import_litellm(
+                        positional.first().map(Path::new),
+                        named.get("--keys-from").map(Path::new),
+                        Path::new(named.get("--out").copied().unwrap_or("gantry.policy.yaml")),
+                        named
+                            .get("--url")
+                            .copied()
+                            .zip(named.get("--master-key-env").copied()),
+                        Path::new(
+                            named
+                                .get("--keys-out")
+                                .copied()
+                                .unwrap_or("gantry.keys.yaml"),
+                        ),
+                    )
+                    .await
+                    .unwrap_or_else(fail),
                 )
-                .unwrap_or_else(fail),
-            ),
+            }
             _ => None,
         },
         ["guardrail", "test", rest @ ..] => {
@@ -568,7 +599,7 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["store", ..] => Some("gantry store import --keys <file> [--policy <file>]"),
             ["prices", ..] => Some("gantry prices <model> [--policy <file>]"),
             ["import", ..] => Some(
-                "gantry import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>]",
+                "gantry import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>], or gantry import litellm --url <proxy> --master-key-env <VAR> [--out <policy file>] [--keys-out <keys file>]",
             ),
             ["key", ..] => Some(
                 "gantry key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]",
@@ -898,36 +929,216 @@ fn key_new(
     Ok(())
 }
 
-fn import_litellm(config: &Path, keys: Option<&Path>, out: &Path) -> Result<ExitCode, String> {
+/// What a running LiteLLM proxy's management API answers, read with its master key: the model list, every key
+/// (page by page), every team. A route the proxy does not serve is reported, not fatal.
+async fn read_proxy(
+    url: &str,
+    master: &str,
+    report: &mut Vec<String>,
+) -> Result<gantry_core::litellm::FromProxy, String> {
+    use gantry_core::litellm::listed;
+    let url = gantry_console::cli::gateway(url).map_err(|_| {
+        format!("{url} is not an address the master key may be sent to. Give the proxy's https address, or http://127.0.0.1 or localhost through a port forward.")
+    })?;
+    let get = |path: String| {
+        let (url, master) = (url.clone(), master.to_string());
+        async move { gantry_console::cli::call("GET", &format!("{url}{path}"), &master, None).await }
+    };
+    let (status, models) = get("/model/info".into()).await?;
+    if status != 200 {
+        return Err(format!(
+            "the proxy answered GET /model/info with HTTP {status}{}. Check the URL and that the variable holds its master key.",
+            models["error"]["message"]
+                .as_str()
+                .map(|m| format!(" ({m})"))
+                .unwrap_or_default()
+        ));
+    }
+    let mut keys = Vec::new();
+    for page in 1u64..=1000 {
+        let (status, answer) = get(format!(
+            "/key/list?return_full_object=true&page={page}&size=100"
+        ))
+        .await?;
+        if status != 200 {
+            report.push(format!("the proxy answered GET /key/list with HTTP {status}: no keys were read. Export them and pass --keys-from instead."));
+            break;
+        }
+        let listed = listed(&answer, &["keys", "data"]);
+        let count = listed.len();
+        for key in listed {
+            // Without full objects a proxy lists token hashes: each is read with /key/info.
+            match key.as_str() {
+                Some(token) => {
+                    let (status, info) = get(format!("/key/info?key={token}")).await?;
+                    if status == 200 {
+                        let mut info = info["info"].clone();
+                        info["token"] = token.into();
+                        keys.push(info);
+                    } else {
+                        report.push(format!(
+                            "key {}...: GET /key/info answered HTTP {status}; not imported.",
+                            token.get(..12).unwrap_or(token)
+                        ));
+                    }
+                }
+                None => keys.push(key),
+            }
+        }
+        let pages = answer["total_pages"].as_u64().unwrap_or(0);
+        if count < 100 || (pages > 0 && page >= pages) {
+            break;
+        }
+    }
+    let (status, answer) = get("/team/list".into()).await?;
+    let teams = if status == 200 {
+        listed(&answer, &["teams", "data"])
+    } else {
+        report.push(format!(
+            "the proxy answered GET /team/list with HTTP {status}: team budgets were not read."
+        ));
+        Vec::new()
+    };
+    println!(
+        "Read {} from the proxy, {} and {}.",
+        gantry_core::count(listed(&models, &["data"]).len(), "model"),
+        gantry_core::count(keys.len(), "key"),
+        gantry_core::count(teams.len(), "team")
+    );
+    Ok(gantry_core::litellm::from_proxy(&models, &keys, &teams))
+}
+
+async fn import_litellm(
+    config: Option<&Path>,
+    keys: Option<&Path>,
+    out: &Path,
+    proxy: Option<(&str, &str)>,
+    keys_out: &Path,
+) -> Result<ExitCode, String> {
     let read = |p: &Path| {
         std::fs::read_to_string(p).map_err(|err| format!("{} cannot be read: {err}.", p.display()))
     };
-    let export = keys.map(read).transpose()?;
-    let imported = gantry_core::litellm::import(&read(config)?, export.as_deref())?;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    let mut file = options.open(out).map_err(|err| {
-        format!(
-            "{} cannot be written: {err}. Name another file with --out; an existing policy is never replaced.",
-            out.display()
-        )
-    })?;
-    std::io::Write::write_all(&mut file, imported.policy.as_bytes())
-        .map_err(|err| format!("{} cannot be written: {err}.", out.display()))?;
+    let mut report = Vec::new();
+    let live = match proxy {
+        Some((url, variable)) => {
+            let master = std::env::var(variable)
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .ok_or_else(|| format!("{variable} is not set. Set it to the LiteLLM proxy's master key; it is read from the environment so it stays out of your shell history."))?;
+            Some(read_proxy(url, master.trim(), &mut report).await?)
+        }
+        None => None,
+    };
+    let config_text =
+        match (config, &live) {
+            (Some(path), _) => read(path)?,
+            (None, Some(live)) => live.config.clone(),
+            (None, None) => return Err(
+                "name a LiteLLM config.yaml, or a running proxy with --url and --master-key-env."
+                    .into(),
+            ),
+        };
+    let export = match (keys, &live) {
+        (Some(path), _) => Some(read(path)?),
+        (None, Some(live)) => Some(live.export.clone()),
+        (None, None) => None,
+    };
+    let imported = gantry_core::litellm::import(&config_text, export.as_deref())?;
+    let mut policy = imported.policy.clone();
+    if let Some(live) = &live {
+        report.extend(live.report.iter().cloned());
+        if !live.limits.is_empty() {
+            let mut limits = match gantry_core::versions::section(&policy, "limits")? {
+                serde_json::Value::Array(list) => list,
+                _ => Vec::new(),
+            };
+            limits.extend(live.limits.iter().cloned());
+            policy = gantry_core::versions::set_section(&policy, "limits", Some(limits.into()))?;
+        }
+    }
+    let write_new = |path: &Path, text: &str| -> Result<(), String> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        let mut file = options.open(path).map_err(|err| {
+            format!(
+                "{} cannot be written: {err}. Name another file; an existing one is never replaced.",
+                path.display()
+            )
+        })?;
+        std::io::Write::write_all(&mut file, text.as_bytes())
+            .map_err(|err| format!("{} cannot be written: {err}.", path.display()))
+    };
+    // The keys of a running proxy are issued again here, into a keys file of their own.
+    let reissued = match &live {
+        Some(_) if keys_out.exists() => {
+            return Err(format!(
+                "{} exists. Name a new keys file with --keys-out; an existing one is never changed by an import.",
+                keys_out.display()
+            ));
+        }
+        Some(live) => {
+            let served: Vec<String> = gantry_core::litellm::listed(
+                &serde_json::from_str(&config_text).unwrap_or(serde_json::Value::Null),
+                &["model_list"],
+            )
+            .iter()
+            .filter_map(|m| m["model_name"].as_str().map(str::to_string))
+            .chain(
+                gantry_core::litellm::listed(
+                    &serde_json::from_str(&live.config).unwrap_or_default(),
+                    &["model_list"],
+                )
+                .iter()
+                .filter_map(|m| m["model_name"].as_str().map(str::to_string)),
+            )
+            .collect();
+            let (keys, more) =
+                gantry_core::litellm::reissue(export.as_deref().unwrap_or("[]"), &served)?;
+            report.extend(more);
+            Some(keys)
+        }
+        None => None,
+    };
+    write_new(out, &policy)?;
     println!("Wrote {}.", out.display());
-    if imported.report.is_empty() {
-        println!("Everything in {} was mapped.", config.display());
+    if let Some(keys) = &reissued {
+        if keys.is_empty() {
+            write_new(keys_out, "keys: []\n")?;
+        }
+        println!(
+            "Issued {} in {} for the LiteLLM keys. Each is shown once: hand it to its owner.",
+            gantry_core::count(keys.len(), "key"),
+            keys_out.display()
+        );
+        for key in keys {
+            let issued =
+                gantry_core::keyfile::issue_with(&key.name, &key.team, &key.attributes, keys_out)?;
+            println!(
+                "  {} -> {} (team {}): {}",
+                key.was, key.name, key.team, issued.key
+            );
+        }
+    }
+    let report: Vec<&String> = imported
+        .report
+        .iter()
+        .filter(|line| reissued.is_none() || !line.contains("reissue with `gantry key new"))
+        .chain(report.iter())
+        .collect();
+    let source = config.map_or_else(|| "the proxy".to_string(), |c| c.display().to_string());
+    if report.is_empty() {
+        println!("Everything in {source} was mapped.");
     } else {
         println!(
             "Not mapped, or needs a hand ({}):",
-            gantry_core::count(imported.report.len(), "item")
+            gantry_core::count(report.len(), "item")
         );
-        for line in &imported.report {
+        for line in &report {
             println!("  - {line}");
         }
     }
     println!("See https://gantry-docs.eliran.me/migrate/from-litellm/. Checking it now:");
-    Ok(check(out, None))
+    Ok(check(out, reissued.is_some().then_some(keys_out)))
 }
 
 /// `gantry guardrail test`: a backtest of one defined guardrail, printed for a person.
