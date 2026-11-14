@@ -55,6 +55,12 @@ pub enum GuardType {
     AzurePromptShield,
     LlamaGuard,
     ModelArmor,
+    Pangea,
+    NemoGuardrails,
+    Hiddenlayer,
+    Lasso,
+    GuardrailsAi,
+    Aporia,
 }
 
 /// Which text a guardrail reads, as written in `on:`.
@@ -168,6 +174,15 @@ pub struct GuardrailFile {
     /// model_armor: the Model Armor template that holds the filter settings.
     #[serde(default)]
     pub template_id: Option<String>,
+    /// pangea: the AI Guard recipe to apply (Pangea's default when absent).
+    #[serde(default)]
+    pub recipe: Option<String>,
+    /// nemo_guardrails: the guardrails configuration on the server.
+    #[serde(default)]
+    pub config_id: Option<String>,
+    /// guardrails_ai: the guard on the Guardrails AI server.
+    #[serde(default)]
+    pub guard_name: Option<String>,
     /// secrets: `gitleaks` reads with Gitleaks' default rule set in place of Gantry's own secrets detector.
     #[serde(default)]
     pub pack: Option<String>,
@@ -528,6 +543,8 @@ pub fn guardrails(defs: &[GuardrailFile]) -> Result<Vec<Guardrail>, Vec<String>>
                 continue;
             }
             (GuardType::Presidio, Some(action)) => action,
+            // These services return the text with what they found redacted.
+            (GuardType::Pangea | GuardType::Hiddenlayer | GuardType::Lasso, Some(action)) => action,
             (
                 GuardType::Webhook | GuardType::BedrockGuardrail | GuardType::ModelArmor,
                 Some(Action::Mask),
@@ -605,6 +622,12 @@ fn type_name(kind: GuardType) -> &'static str {
         GuardType::AzurePromptShield => "azure_prompt_shield",
         GuardType::LlamaGuard => "llama_guard",
         GuardType::ModelArmor => "model_armor",
+        GuardType::Pangea => "pangea",
+        GuardType::NemoGuardrails => "nemo_guardrails",
+        GuardType::Hiddenlayer => "hiddenlayer",
+        GuardType::Lasso => "lasso",
+        GuardType::GuardrailsAi => "guardrails_ai",
+        GuardType::Aporia => "aporia",
     }
 }
 
@@ -628,6 +651,9 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         ("case_sensitive", def.case_sensitive.is_some()),
         ("whole_word", def.whole_word.is_some()),
         ("pack", def.pack.is_some()),
+        ("recipe", def.recipe.is_some()),
+        ("config_id", def.config_id.is_some()),
+        ("guard_name", def.guard_name.is_some()),
     ];
     let takes: &[&str] = match def.kind {
         GuardType::OpenaiModeration => &["key_env", "model"],
@@ -641,6 +667,12 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         GuardType::Regex => &["patterns"],
         GuardType::Keywords => &["keywords", "case_sensitive", "whole_word"],
         GuardType::Secrets => &["pack"],
+        GuardType::Pangea => &["key_env", "recipe"],
+        GuardType::NemoGuardrails => &["key_env", "model", "config_id"],
+        GuardType::Hiddenlayer => &["model"],
+        GuardType::Lasso => &["key_env"],
+        GuardType::GuardrailsAi => &["key_env", "guard_name"],
+        GuardType::Aporia => &["key_env"],
         _ => &[],
     };
     if let Some((field, _)) = given.iter().find(|(f, on)| *on && !takes.contains(f)) {
@@ -668,6 +700,9 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
             | GuardType::AzureContentSafety
             | GuardType::AzurePromptShield
             | GuardType::ModelArmor
+            | GuardType::Pangea
+            | GuardType::Lasso
+            | GuardType::Aporia
     );
     if key_needed && def.key_env.is_none() {
         return Err(format!(
@@ -757,6 +792,36 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
                 prompt: def.prompt.clone(),
             }
         }
+        GuardType::Pangea => Vendor::Pangea {
+            recipe: def.recipe.clone(),
+        },
+        GuardType::NemoGuardrails => Vendor::NemoGuardrails {
+            config_id: required(
+                "config_id (the guardrails configuration on the server)",
+                &def.config_id,
+            )?,
+            model: def.model.clone(),
+        },
+        GuardType::Hiddenlayer => Vendor::Hiddenlayer {
+            model: def.model.clone(),
+        },
+        GuardType::Lasso => Vendor::Lasso,
+        GuardType::GuardrailsAi => {
+            let guard = required(
+                "guard_name (the guard on the Guardrails AI server)",
+                &def.guard_name,
+            )?;
+            if !guard
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+            {
+                return Err(format!(
+                    "guardrail \"{name}\": guard_name \"{guard}\" is not a guard name. Use letters, digits, dots, dashes and underscores only."
+                ));
+            }
+            Vendor::GuardrailsAi { guard }
+        }
+        GuardType::Aporia => Vendor::Aporia,
         _ => Vendor::Contract,
     })
 }
@@ -2114,8 +2179,34 @@ pub fn since_seconds(text: &str) -> Result<u64, String> {
 pub const NO_CAPTURE: &str = "a backtest over recent traffic reads captured request bodies, and this Gantry keeps none: the audit log holds no prompt text by design. Pass a corpus of examples instead (--corpus <file.jsonl>, or \"corpus\" in the admin API).";
 
 #[cfg(test)]
-mod gemini_tests {
+mod more_tests {
     use super::*;
+
+    #[test]
+    fn the_gitleaks_pack_masks_and_records_rule_ids_and_a_wrong_pack_is_refused()
+    -> Result<(), String> {
+        let def = |pack: &str| -> Result<GuardrailFile, String> {
+            crate::config::from_yaml(&format!(
+                "name: gl\ntype: secrets\naction: mask\npack: {pack}\n"
+            ))
+            .map_err(|e| e.to_string())
+        };
+        let guards = guardrails(&[def("gitleaks")?]).map_err(|e| e.join("; "))?;
+        assert_eq!(guards[0].check, Check::Gitleaks);
+        let body = serde_json::json!({"messages": [{"role": "user", "content": "use AKIAZ4SM2TBQYXGXWB7Q now"}]});
+        let v = check(body, &guards);
+        assert_eq!(
+            v.body["messages"][0]["content"],
+            "use [MASKED aws-access-token] now"
+        );
+        assert_eq!(
+            (v.audit[0].detector.as_str(), v.audit[0].kind.as_str()),
+            ("gitleaks", "aws-access-token")
+        );
+        let wrong = guardrails(&[def("trufflehog")?]).err().unwrap_or_default();
+        assert!(wrong[0].contains("pack is \"trufflehog\""), "{wrong:?}");
+        Ok(())
+    }
 
     #[test]
     fn gemini_system_instruction_and_contents_are_text_the_guardrails_read() {

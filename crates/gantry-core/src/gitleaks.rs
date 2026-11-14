@@ -76,12 +76,18 @@ fn compile(pattern: &str) -> Result<Regex, String> {
         .size_limit(32 << 20)
         .dfa_size_limit(8 << 20)
         .build()
-        .map_err(|err| format!("a Gitleaks rule did not compile: {err:?}. This is a bug in Gantry; report it."))
+        .map_err(|err| {
+            format!("a Gitleaks rule did not compile: {err:?}. This is a bug in Gantry; report it.")
+        })
 }
 
 fn list(file: &ListFile) -> Result<List, String> {
     Ok(List {
-        regexes: file.regexes.iter().map(|r| compile(r)).collect::<Result<_, _>>()?,
+        regexes: file
+            .regexes
+            .iter()
+            .map(|r| compile(r))
+            .collect::<Result<_, _>>()?,
         stopwords: file.stopwords.clone(),
         target: match file.target.as_deref() {
             Some("match") => Target::Match,
@@ -94,8 +100,11 @@ fn list(file: &ListFile) -> Result<List, String> {
 fn pack() -> Result<&'static Pack, String> {
     static PACK: OnceLock<Result<Pack, String>> = OnceLock::new();
     PACK.get_or_init(|| {
-        let file: File = serde_json::from_str(RULES)
-            .map_err(|err| format!("the Gitleaks rule file did not load: {err}. This is a bug in Gantry; report it."))?;
+        let file: File = serde_json::from_str(RULES).map_err(|err| {
+            format!(
+                "the Gitleaks rule file did not load: {err}. This is a bug in Gantry; report it."
+            )
+        })?;
         let mut rules = Vec::new();
         for r in &file.rules {
             rules.push(Rule {
@@ -172,7 +181,10 @@ pub fn scan(text: &str) -> Result<Vec<(&'static str, Range<usize>)>, String> {
             let secret = if rule.secret_group > 0 {
                 caps.get(rule.secret_group)
             } else {
-                caps.iter().skip(1).flatten().find(|m| !m.as_bytes().is_empty())
+                caps.iter()
+                    .skip(1)
+                    .flatten()
+                    .find(|m| !m.as_bytes().is_empty())
             }
             .unwrap_or(whole);
             if rule
@@ -210,7 +222,10 @@ pub fn scan(text: &str) -> Result<Vec<(&'static str, Range<usize>)>, String> {
     out.sort_by_key(|(id, span)| (*id == "generic-api-key", std::cmp::Reverse(span.len())));
     let mut kept: Vec<(&'static str, Range<usize>)> = Vec::new();
     for (id, span) in out {
-        if !kept.iter().any(|(_, k)| k.start < span.end && span.start < k.end) {
+        if !kept
+            .iter()
+            .any(|(_, k)| k.start < span.end && span.start < k.end)
+        {
             kept.push((id, span));
         }
     }
@@ -227,7 +242,11 @@ mod tests {
         assert!(rule_count()? > 200);
         // Gitleaks' own documented example shapes, made up here.
         let aws = scan("key AKIAZ4SM2TBQYXGXWB7Q in config")?;
-        assert_eq!(aws.first().map(|f| f.0), Some("aws-access-token"), "{aws:?}");
+        assert_eq!(
+            aws.first().map(|f| f.0),
+            Some("aws-access-token"),
+            "{aws:?}"
+        );
         let gh = scan("token ghp_R4nd0mT0k3nV4lu3Abcdefghij0123456789xy")?;
         assert!(gh.iter().any(|f| f.0 == "github-pat"), "{gh:?}");
         // Allowlisted placeholders and low entropy text are not findings.
