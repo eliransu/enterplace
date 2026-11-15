@@ -33,7 +33,7 @@ A list of the AI tools and models in use and what each one costs, per key, from 
 
 In observe mode Gantry forwards every request from a key it knows. A request with a missing, wrong, expired or revoked key, or for a model your providers do not list, is still refused.
 
-Open `http://127.0.0.1:8080/console` and sign in with the admin key. The banner says **Observe mode: nothing is blocked**.
+Open `http://127.0.0.1:8080/console` and sign in with the admin key. The banner says **Observe mode: nothing is blocked**. On an empty install the console asks what you want to start with; pick **Coding agents** (or **Our own apps and agents**) and **Start here** gives you the checklist for this step: make a key on the page, paste the lines it shows, send one prompt. The step turns done by itself when the request arrives, and the first rows show on Start here.
 
 - **Analytics** (`/console/analytics`): rank by coding agent, model or key to see requests, tokens and cost for each.
 - **Requests** (`/console/requests`): one row per request, with its model and cost. Filter by coding agent to see one tool.

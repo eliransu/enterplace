@@ -301,7 +301,8 @@ tokio::task_local! {
     pub(crate) static EXTRA: std::sync::Arc<Extra>;
 }
 
-const NAV: [(&str, &str); 9] = [
+const NAV: [(&str, &str); 10] = [
+    ("/console/start", "Start here"),
     ("/console/audit", "Audit log"),
     ("/console/policy", "Policy"),
     ("/console/models", "Models"),
@@ -375,7 +376,7 @@ pub fn shell(
         r##"<a class="g-btn g-btn--sm t-small g-skip" href="#main">Skip to the page</a>
 <div class="g-shell">
 <nav class="g-nav g-nav--side" aria-label="App">
-<a class="g-nav__brand" href="/console/audit"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
+<a class="g-nav__brand" href="/console/start"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
 {}
 <div class="g-nav__foot">{}</div>
 <a class="g-nav__menu g-btn g-btn--quiet g-btn--sm t-small" href="{here}?menu=1">{}Menu</a>

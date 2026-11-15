@@ -145,11 +145,101 @@ pub fn register(
         .layer(Ext(watch.clone()));
     extension.routes = std::mem::take(&mut extension.routes).merge(receiver);
     let console = &mut extension.console;
+    console.nav.push(("/console/watch".into(), NAV.into()));
+    // Start here makes and counts watch tokens through the same checks and records as the API.
+    let (made, counted) = (watch.clone(), watch.clone());
+    console.watch = Some(gantry_console::Watch {
+        token: Arc::new(move |console: Console, admin: Admin, team: String| {
+            let w = made.clone();
+            Box::pin(async move {
+                let label = format!(
+                    "claude-team-{}",
+                    if team.is_empty() { "all" } else { &team }
+                );
+                w.create(&console, &admin, &json!({ "label": label, "team": team }))
+                    .await
+                    .map(|(_, token, _)| token)
+                    .map_err(|(_, _, message)| message)
+            })
+        }),
+        tokens: Arc::new(move |admin: Admin| {
+            let w = counted.clone();
+            Box::pin(async move { w.tokens(&admin).await.map(|t| t.len()) })
+        }),
+    });
     console.routes = std::mem::take(&mut console.routes)
+        .route("/watch", get(page))
         .route("/watch/tokens", get(list_tokens).post(create_token))
         .route("/watch/tokens/{id}", delete(revoke_token))
         .route("/watch/summary.json", get(summary))
         .layer(Ext(watch));
+}
+
+const NAV: &str = "Watch";
+
+/// The Watch page: each watched person over the last 30 days, or what fills it.
+async fn page(
+    State(console): State<Console>,
+    Ext(w): Ext<Watch>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    let Some(admin) = console.signed_in(&headers).await else {
+        return gantry_console::redirect("/console/sign-in");
+    };
+    let head = gantry_console::html::head(
+        NAV,
+        "Claude Code on Claude Team and Enterprise seats, from its own telemetry. Nothing is routed: costs are Claude Code's estimates at list price.",
+        "",
+    );
+    let main = match w.summary(&admin, 30).await {
+        Err(err) => format!(
+            "{head}{}",
+            gantry_console::html::empty(
+                "",
+                "Watch did not load",
+                &gantry_console::html::esc(&format!(
+                    "{err}. Check the store, then open the page again."
+                )),
+                "",
+            )
+        ),
+        Ok(summary) => {
+            let people = summary["people"].as_array().cloned().unwrap_or_default();
+            if people.is_empty() {
+                format!(
+                    "{head}{}",
+                    gantry_console::empty_page(
+                        NAV,
+                        &gantry_console::request_base(),
+                        role_of(&admin) != Role::Viewer
+                    )
+                )
+            } else {
+                let esc = gantry_console::html::esc;
+                let rows: String = people
+                    .iter()
+                    .map(|p| {
+                        let m = &p["metrics"];
+                        let n = |k: &str| m[k].as_f64().unwrap_or(0.0);
+                        format!(
+                            r#"<tr><td class="t-mono-sm">{}</td><td class="t-mono-sm g-table__wide">{}</td><td class="t-mono-sm g-table__num">{}</td><td class="t-mono-sm g-table__num g-table__wide">{}</td><td class="t-mono-sm g-table__num">${:.2}</td><td class="t-mono-sm g-table__wide">{}</td></tr>"#,
+                            esc(p["person"].as_str().unwrap_or("")),
+                            esc(p["team"].as_str().unwrap_or("")),
+                            n("sessions"),
+                            n("tokens_input") + n("tokens_output"),
+                            n("cost_usd"),
+                            esc(p["last_day"].as_str().unwrap_or("")),
+                        )
+                    })
+                    .collect();
+                format!(
+                    r#"{head}<section class="g-panel"><div class="g-table-wrap"><table class="g-table g-table--stack"><thead><tr><th class="t-tag">Person</th><th class="t-tag g-table__wide">Team</th><th class="t-tag g-table__num">Sessions</th><th class="t-tag g-table__num g-table__wide">Tokens</th><th class="t-tag g-table__num">Estimated cost</th><th class="t-tag g-table__wide">Last day</th></tr></thead><tbody>{rows}</tbody></table></div></section>"#
+                )
+            }
+        }
+    };
+    console.page(StatusCode::OK, &admin, NAV, &uri, &main)
 }
 
 /// Without the feature the receiver and the API say why.

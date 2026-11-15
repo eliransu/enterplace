@@ -402,7 +402,20 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     fn credential_value(&self, _name: &str) -> Result<Option<String>, String> {
         Err(NO_CREDENTIALS.into())
     }
+    /// Whether this store keeps the console's small settings. Without, the console keeps them in a file.
+    fn keeps_settings(&self) -> bool {
+        false
+    }
+    /// A setting the console keeps for every gateway on the store, such as the first-run choice.
+    fn setting(&self, _name: &str) -> Result<Option<String>, String> {
+        Err(NO_SETTINGS.into())
+    }
+    fn set_setting(&self, _name: &str, _value: &str) -> Result<(), String> {
+        Err(NO_SETTINGS.into())
+    }
 }
+
+const NO_SETTINGS: &str = "this store keeps no console settings";
 
 /// `...` and the last 4 characters of a credential's value: enough to tell keys apart, far too little to use one.
 pub fn fingerprint(value: &str) -> String {

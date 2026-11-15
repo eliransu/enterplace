@@ -11,6 +11,8 @@ mod insights;
 mod pages;
 mod saml;
 mod sso;
+mod start;
+pub use start::{empty_page, origin as gateway_origin};
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -49,6 +51,8 @@ pub struct ConsoleConfig {
 }
 
 const COOKIE: &str = "gantry_console";
+/// Where a signed-in person lands: Start here, the console home.
+pub const HOME: &str = "/console/start";
 const SESSION: Duration = Duration::from_secs(8 * 60 * 60);
 
 const SSO_COOKIE: &str = "gantry_sso";
@@ -101,6 +105,21 @@ pub struct Extension {
     pub sign_in: Option<(String, String)>,
     /// Answers for sessions opened with [`Console::sign_in_account`].
     pub accounts: Option<Accounts>,
+    /// Watch mode, when the binary has it licensed and its store answers: Start here makes watch tokens with it.
+    pub watch: Option<Watch>,
+}
+
+/// A future an extension hook answers with.
+pub type Boxed<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+
+/// What Start here asks of watch mode. Both are the binary's own flows, checked and recorded as its API does.
+#[derive(Clone)]
+pub struct Watch {
+    /// Makes a watch token for a team, for the person signed in. `Ok` is the token, shown once.
+    #[allow(clippy::type_complexity)]
+    pub token: Arc<dyn Fn(Console, Admin, String) -> Boxed<Result<String, String>> + Send + Sync>,
+    /// How many watch tokens the person can see.
+    pub tokens: Arc<dyn Fn(Admin) -> Boxed<Result<usize, String>> + Send + Sync>,
 }
 
 impl std::fmt::Debug for Extension {
@@ -109,6 +128,7 @@ impl std::fmt::Debug for Extension {
             .field("nav", &self.nav)
             .field("sign_in", &self.sign_in)
             .field("accounts", &self.accounts.is_some())
+            .field("watch", &self.watch.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -185,6 +205,7 @@ struct Inner {
     /// The one-time setup link's token, and whether it was used.
     setup: Mutex<Option<(String, bool)>>,
     accounts: Option<Accounts>,
+    watch: Option<Watch>,
     /// Nav entries and the sign-in link an extension added, set on every request for the pages to draw.
     extra: Arc<html::Extra>,
 }
@@ -234,9 +255,34 @@ async fn with_client(
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
     let extra = console.0.extra.clone();
+    let tls: Tls = request
+        .extensions()
+        .get::<axum::http::uri::Scheme>()
+        .cloned()
+        .map(axum::Extension);
+    let base = start::origin(request.headers(), request.uri(), &tls);
     CLIENT
-        .scope(client, html::EXTRA.scope(extra, next.run(request)))
+        .scope(
+            client,
+            BASE.scope(base, html::EXTRA.scope(extra, next.run(request))),
+        )
         .await
+}
+
+tokio::task_local! {
+    /// The gateway's address as the browser reached it, for the lines a page gives to paste.
+    static BASE: String;
+}
+
+/// The gateway's address as the browser of this request reached it, for an extension's pages.
+pub fn request_base() -> String {
+    base()
+}
+
+/// The gateway's address as the browser of this request reached it.
+pub(crate) fn base() -> String {
+    BASE.try_with(Clone::clone)
+        .unwrap_or_else(|_| "http://127.0.0.1:8080".into())
 }
 
 fn client() -> Option<IpAddr> {
@@ -482,6 +528,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         codes: Mutex::default(),
         setup: Mutex::new(setup.map(|token| (token, false))),
         accounts: extension.accounts,
+        watch: extension.watch,
         extra: Arc::new(html::Extra {
             nav: extension.nav,
             sign_in: extension.sign_in,
@@ -518,6 +565,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .route("/credentials/{action}", post(credential_change))
         .route("/policy", get(policy_page))
         .merge(edit::routes())
+        .merge(start::routes())
         .route("/spend", get(spend_page))
         .route("/requests", get(insights::requests_page))
         .route("/requests/body", post(insights::body_view))
@@ -530,9 +578,9 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
                 StatusCode::NOT_FOUND,
                 pages::notice(
                     "No console page here",
-                    "This address is not a page of the console. The audit log is where it starts.",
-                    "/console/audit",
-                    "Open the audit log",
+                    "This address is not a page of the console. Start here is where it starts.",
+                    HOME,
+                    "Open Start here",
                 ),
             )
         })
@@ -1019,7 +1067,7 @@ impl Console {
                 );
             }
         };
-        let mut response = redirect("/console/audit");
+        let mut response = redirect(HOME);
         set_cookie(&mut response, &session_cookie(&session, headers, uri, tls));
         response
     }
@@ -1040,14 +1088,14 @@ fn admin_entry(keys: &std::path::Path, sha256: &str) -> Option<config::KeyEntry>
 
 async fn root(State(console): State<Console>, headers: HeaderMap) -> Response {
     match console.admin(&headers).await {
-        Some(_) => redirect("/console/audit"),
+        Some(_) => redirect(HOME),
         None => redirect("/console/sign-in"),
     }
 }
 
 async fn sign_in_page(State(console): State<Console>, headers: HeaderMap) -> Response {
     if console.admin(&headers).await.is_some() {
-        return redirect("/console/audit");
+        return redirect(HOME);
     }
     page(StatusCode::OK, pages::sign_in("", "", console.sso_on()))
 }
@@ -1116,7 +1164,7 @@ async fn sign_in(
             );
         }
     };
-    let mut response = redirect("/console/audit");
+    let mut response = redirect(HOME);
     set_cookie(
         &mut response,
         &session_cookie(&session, &headers, &uri, &tls),
@@ -2815,6 +2863,22 @@ async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Ur
     {
         // A store that cannot be read leaves the panel out: the policy is still worth showing.
         source.replicas = store.replicas().await.unwrap_or_default();
+    }
+    // The policy first start writes, one rule that lets everyone in: the page says what to add next.
+    let first = loaded.as_ref().is_ok_and(|l| {
+        let rules = l.policy.rule_list();
+        rules.len() == 1
+            && rules[0].guardrails.is_empty()
+            && rules[0].limits.budgets.is_empty()
+            && l.policy.scope_limits().is_empty()
+            && l.policy_text.contains(r#"models: ["*"]"#)
+    });
+    if first {
+        source.banner.push_str(&empty_page(
+            "Policy",
+            &base(),
+            admin.may(Permission::EditPolicy),
+        ));
     }
     let body = pages::policy(
         &admin.label(),

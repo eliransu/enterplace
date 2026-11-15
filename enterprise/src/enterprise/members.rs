@@ -1189,7 +1189,7 @@ fn sign_in_form(status: StatusCode, error: &str, email: &str) -> Response {
 
 async fn sign_in_page(State(console): State<Console>, headers: HeaderMap) -> Response {
     if console.signed_in(&headers).await.is_some() {
-        return redirect("/console/audit");
+        return redirect(gantry_console::HOME);
     }
     sign_in_form(StatusCode::OK, "", "")
 }

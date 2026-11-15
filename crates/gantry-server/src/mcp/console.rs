@@ -336,6 +336,32 @@ pub(super) fn extension(mcp: Shared) -> gantry_console::Extension {
     }
 }
 
+/// Without MCP servers in the policy, MCP approvals says what fills it and opens the Start here step for it.
+pub(crate) fn empty_extension() -> gantry_console::Extension {
+    let routes = Router::new().route(
+        "/mcp/approvals",
+        get(
+            |State(console): State<Console>, headers: HeaderMap, uri: Uri| async move {
+                let Some(admin) = console.signed_in(&headers).await else {
+                    return gantry_console::redirect("/console/sign-in");
+                };
+                let base = gantry_console::gateway_origin(&headers, &uri, &None);
+                let main = format!(
+                    "{}{}",
+                    html::head(APPROVALS, "", ""),
+                    gantry_console::empty_page(APPROVALS, &base, !admin.read_only)
+                );
+                console.page(StatusCode::OK, &admin, APPROVALS, &uri, &main)
+            },
+        ),
+    );
+    gantry_console::Extension {
+        nav: vec![("/console/mcp/approvals".into(), APPROVALS.into())],
+        routes,
+        ..gantry_console::Extension::default()
+    }
+}
+
 pub(super) fn form(action: &str, fields: &[(&str, &str)], label: &str, kind: &str) -> String {
     let hidden: String = fields
         .iter()

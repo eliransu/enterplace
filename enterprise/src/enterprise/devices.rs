@@ -1714,6 +1714,9 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     if !notice.is_empty() {
         out += &banner(notice, error);
     }
+    if devices.is_empty() {
+        out += &gantry_console::empty_page("Devices", &gantry_console::request_base(), can_edit);
+    }
     out += &section("Coverage", &people(&traffic, &devices));
     out += &section(
         "MCP servers: approve or block what devices are configured with",
@@ -1748,6 +1751,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     }
     list += "</section>";
     if can_edit {
+        list += r#"<span id="add-token"></span>"#;
         list += &form(
             "token_create",
             &format!(

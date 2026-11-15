@@ -101,6 +101,7 @@ fn setup(name: &str) -> Result<Setup, Box<dyn std::error::Error>> {
             let ok = id == "acct-1" && still.load(Ordering::SeqCst);
             Box::pin(async move { ok.then(ada) })
         })),
+        watch: None,
     };
     let config = ConsoleConfig {
         policy: dir.join("gantry.policy.yaml"),

@@ -2795,6 +2795,9 @@ async fn main(
         out += &banner(notice, error);
     }
     out += once;
+    if rules.is_empty() && channels.is_empty() {
+        out += &gantry_console::empty_page("Alerts", &gantry_console::request_base(), can_edit);
+    }
 
     // Channels.
     let client = engine.db.client().await?;
@@ -2893,6 +2896,7 @@ async fn main(
             .iter()
             .map(|k| (k.word(), k.label()))
             .collect();
+        out += r#"<span id="add-channel"></span>"#;
         out += &section(
             "Add a channel",
             &form_for(

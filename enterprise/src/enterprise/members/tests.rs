@@ -151,7 +151,7 @@ async fn invite_accept_roles_and_the_last_owner() -> Result<(), Error> {
         )
         .await?;
     assert_eq!(joined.status, StatusCode::SEE_OTHER, "{}", joined.text);
-    assert_eq!(joined.location, "/console/audit");
+    assert_eq!(joined.location, "/console/start");
     assert!(!second.cookie.is_empty(), "the new member is not signed in");
     let used = Browser::default()
         .go(&gw.app, "GET", &format!("/console/invite/{token}"), &[])
@@ -424,7 +424,7 @@ async fn invited_people_sign_in_with_their_password() -> Result<(), Error> {
         )
         .await?;
     assert_eq!(signed.status, StatusCode::SEE_OTHER);
-    assert_eq!(signed.location, "/console/audit");
+    assert_eq!(signed.location, "/console/start");
     // A viewer may look and may not issue keys.
     let audit = ada.go(&gw.app, "GET", "/console/audit", &[]).await?;
     assert_eq!(audit.status, StatusCode::OK);

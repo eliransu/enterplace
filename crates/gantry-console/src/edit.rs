@@ -64,7 +64,7 @@ fn sentence(text: &str) -> String {
 }
 
 /// The live version, when the policy is kept in the store.
-fn live(console: &Console) -> Option<PolicyVersion> {
+pub(crate) fn live(console: &Console) -> Option<PolicyVersion> {
     store::policy_store(&console.config().policy).and_then(|s| s.live_policy())
 }
 
@@ -645,13 +645,12 @@ async fn teams_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
     } else {
         link("Issue a key", "", "/console/people?issue=1", false)
     };
-    let table = if rows.is_empty() {
-        empty(
-            &motif(&["", ""], &["empty"], (2, 1), true, true),
-            "No teams yet",
-            "A team appears here with its first key.",
-            &actions,
-        )
+    // Only admin keys and no team the policy lists: a team comes with the first key that is not an admin's.
+    let only_admins = teams
+        .values()
+        .all(|people| !people.is_empty() && people.iter().all(|(_, admin)| *admin));
+    let table = if rows.is_empty() || only_admins {
+        crate::empty_page("Teams", &crate::base(), admin.may(Permission::IssueKeys))
     } else {
         format!(
             r#"<div class="g-panel g-stack"><div class="g-table-wrap"><table class="g-table g-table--stack g-table--prose t-mono-sm">
@@ -670,7 +669,7 @@ async fn teams_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
 
 /// Whether the person may change the policy: `edit_policy`, and not kept to one organization, since the policy
 /// governs every one.
-fn edits_policy(admin: &Admin) -> bool {
+pub(crate) fn edits_policy(admin: &Admin) -> bool {
     admin.may(Permission::EditPolicy) && !admin.confined()
 }
 
@@ -1264,15 +1263,24 @@ async fn editor_page(State(console): State<Console>, headers: HeaderMap, uri: Ur
     if !edits_policy(&admin) {
         return redirect("/console/policy");
     }
+    let query = Form::of(&uri);
+    // A Start here step opens the editor with its lines already in: a draft, saved only as any edit is.
+    let (text, note) = match crate::start::change(query.get("add")) {
+        Some(change) => (
+            crate::start::apply(&live.text, &change).0,
+            "Added from Start here",
+        ),
+        None => (live.text.clone(), ""),
+    };
     page(
         StatusCode::OK,
         editor_body(
             &console,
             &admin,
-            &Form::of(&uri),
-            &live.text,
+            &query,
+            &text,
             Some(live.id),
-            "",
+            note,
             "",
             None,
         ),

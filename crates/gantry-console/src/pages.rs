@@ -274,7 +274,7 @@ fn notice_with(title: &str, body: &str, action: &str) -> String {
         r#"<div class="g-shell">
 <main class="g-shell__main">
 <div class="g-stack" style="gap: var(--space-10); padding: var(--space-4)">
-<a class="g-nav__brand" href="/console/audit" style="padding: 0"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
+<a class="g-nav__brand" href="/console/start" style="padding: 0"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
 {}
 </div>
 </main>
@@ -295,18 +295,18 @@ pub fn signed_in_sso() -> String {
         r#"<div class="g-shell">
 <main class="g-shell__main">
 <div class="g-stack g-measure" style="gap: var(--space-6); padding: var(--space-4)">
-<a class="g-nav__brand" href="/console/audit" style="padding: 0"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
+<a class="g-nav__brand" href="/console/start" style="padding: 0"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
 <h1 class="t-lg" style="margin: 0">Signed in</h1>
 <p class="t-lead g-muted" style="margin: 0">Opening the console.</p>
 <div class="g-head__actions">{}</div>
 </div>
 </main>
 </div>"#,
-        link("Open the console", "", "/console/audit", false)
+        link("Open the console", "", "/console/start", false)
     );
     crate::html::document_with(
         "Signed in",
-        r#"<meta http-equiv="refresh" content="0; url=/console/audit">"#,
+        r#"<meta http-equiv="refresh" content="0; url=/console/start">"#,
         &body,
     )
 }
@@ -1963,12 +1963,7 @@ pub fn audit(view: &AuditView<'_>) -> String {
     };
     let records = fold_answers(records);
     if records.is_empty() {
-        let none = empty(
-            &motif(&["", "", "", ""], &["empty", "empty"], (2, 1), false, true),
-            "No requests yet",
-            "Point a tool at this gateway and its first request appears here when the page is opened again.",
-            "",
-        );
+        let none = crate::empty_page("Audit log", &crate::base(), true);
         let main = format!("{}\n{none}", head("Audit log", lead, &verify));
         return tool_page("Audit log", view.admin, "/console/audit", query, &main, "");
     }
@@ -2197,8 +2192,14 @@ pub fn audit(view: &AuditView<'_>) -> String {
     };
     let banner = kills_banner(view.kills) + observe + &banner;
     let main = format!(
-        "{banner}{}\n{chain}\n\n{stats}\n\n{toolbar}\n\n{list}",
-        head("Audit log", lead, &verify)
+        "{banner}{}\n{}{chain}\n\n{stats}\n\n{toolbar}\n\n{list}",
+        head("Audit log", lead, &verify),
+        // Sign-ins and setup only, no request yet: the page says what fills it above those records.
+        if records.iter().all(|r| r.get("event").is_some()) {
+            crate::empty_page("Audit log", &crate::base(), true)
+        } else {
+            String::new()
+        }
     );
     tool_page(
         "Audit log",
@@ -2641,12 +2642,16 @@ pub fn people(view: &PeopleView<'_>) -> String {
         ),
     };
     if entries.is_empty() {
-        let none = empty(
-            &motif(&["", "", "", ""], &["empty", "empty"], (2, 1), true, true),
-            "No keys yet",
-            "Every request through Gantry carries a key that names a person or a workload. Issue the first one.",
-            &issue,
-        );
+        let none = if view.read_only {
+            empty(
+                &motif(&["", "", "", ""], &["empty", "empty"], (2, 1), true, true),
+                "No keys yet",
+                "Every request through Gantry carries a key that names a person or a workload. An admin issues them.",
+                "",
+            )
+        } else {
+            crate::empty_page("People and workloads", &crate::base(), true)
+        };
         let main = format!(
             "{}\n{read_only}{none}",
             head(title, &format!("The keys in {keys_name}."), "")
@@ -2789,10 +2794,16 @@ pub fn people(view: &PeopleView<'_>) -> String {
 <div class="g-search">{}<input class="g-input t-body" type="search" name="q" value="{}" aria-label="Search people and workloads" placeholder="Name or team"></div>
 </form>
 
-{table}"#,
+{}{table}"#,
         head(title, &lead, &issue),
         icon("search"),
-        esc(q)
+        esc(q),
+        // Only admin keys so far: the page says what fills it before the list of those keys.
+        if entries.iter().all(|e| e.admin) {
+            crate::empty_page("People and workloads", &crate::base(), !view.read_only)
+        } else {
+            String::new()
+        }
     );
     tool_page(
         title,
@@ -3616,14 +3627,8 @@ pub fn spend(view: &SpendView<'_>) -> String {
     }
 
     if total == 0.0 && stopped == 0 && meters.is_empty() {
-        let none = empty(
-            &motif(&["", "", ""], &["empty", "empty"], (3, 1), false, true),
-            "No spend yet",
-            &format!(
-                "Gantry writes a usage record as each answer ends, with its tokens and its cost. There is none for {name} yet."
-            ),
-            &link("Open the audit log", "", "/console/audit", false),
-        );
+        let none = crate::empty_page("Spend", &crate::base(), true);
+        let _ = name;
         let main = format!("{}\n{none}", head("Spend", lead_none, ""));
         return tool_page("Spend", view.admin, "/console/spend", view.query, &main, "");
     }

@@ -30,7 +30,7 @@ use crate::{
 const PER_PAGE: usize = 50;
 
 /// Keeps a person whose role is kept to an organization, teams or customers to their requests.
-fn scoped(admin: &Admin, query: &mut Query) {
+pub(crate) fn scoped(admin: &Admin, query: &mut Query) {
     if let Some(org) = &admin.org {
         query.labels.push(("org".into(), org.clone()));
     }
@@ -44,7 +44,7 @@ fn scoped(admin: &Admin, query: &mut Query) {
     }
 }
 
-fn money(usd: f64) -> String {
+pub(crate) fn money(usd: f64) -> String {
     if usd > 0.0 && usd < 0.01 {
         return format!("{usd:.4}");
     }
@@ -54,6 +54,11 @@ fn money(usd: f64) -> String {
         thousands(usize::try_from(cents / 100).unwrap_or(usize::MAX)),
         cents % 100
     )
+}
+
+/// A list on its first page: an empty one there means nothing at all.
+fn offset_zero(form: &Form) -> bool {
+    matches!(form.get("page"), "" | "1")
 }
 
 fn ms(v: Option<u64>) -> String {
@@ -69,7 +74,7 @@ fn count(v: u64) -> String {
 }
 
 /// The rows a query asks for: from the index of every gateway on the store, or from the local chain.
-async fn rows(console: &Console, query: &Query) -> Result<Vec<Row>, String> {
+pub(crate) async fn rows(console: &Console, query: &Query) -> Result<Vec<Row>, String> {
     let audit = console.config().audit.clone();
     if let Some(index) = insights::attached(&audit).index {
         return index.rows(query).await;
@@ -327,7 +332,9 @@ pub(crate) async fn requests_page(
             esc(&open),
         );
     }
-    let list = if shown.is_empty() {
+    let list = if shown.is_empty() && query.pairs().is_empty() && offset_zero(&form) {
+        crate::empty_page("Requests", &crate::base(), admin.may(Permission::IssueKeys))
+    } else if shown.is_empty() {
         empty(
             &motif(&["", "", ""], &["empty"], (3, 1), false, true),
             "No request matches",
@@ -747,6 +754,18 @@ pub(crate) async fn analytics_page(
         }
     };
     let all = summed.totals.clone();
+    if all.requests == 0 && query.pairs().iter().all(|(k, _)| k == "from") {
+        let main = format!(
+            "{}\n{}",
+            head("Analytics", "", ""),
+            crate::empty_page(
+                "Analytics",
+                &crate::base(),
+                admin.may(Permission::IssueKeys)
+            )
+        );
+        return console.page(StatusCode::OK, &admin, "Analytics", &uri, &main);
+    }
     let pct = |s: &Stats, p: f64| ms(s.percentile(p));
     let stats = format!(
         r#"<div class="g-panel g-stats">{}{}{}{}{}{}{}{}</div>"#,
