@@ -30,7 +30,7 @@ use crate::{
 const PER_PAGE: usize = 50;
 
 /// Keeps a person whose role is kept to an organization, teams or customers to their requests.
-fn scoped(admin: &Admin, query: &mut Query) {
+pub(crate) fn scoped(admin: &Admin, query: &mut Query) {
     if let Some(org) = &admin.org {
         query.labels.push(("org".into(), org.clone()));
     }
@@ -44,7 +44,7 @@ fn scoped(admin: &Admin, query: &mut Query) {
     }
 }
 
-fn money(usd: f64) -> String {
+pub(crate) fn money(usd: f64) -> String {
     if usd > 0.0 && usd < 0.01 {
         return format!("{usd:.4}");
     }
@@ -69,7 +69,7 @@ fn count(v: u64) -> String {
 }
 
 /// The rows a query asks for: from the index of every gateway on the store, or from the local chain.
-async fn rows(console: &Console, query: &Query) -> Result<Vec<Row>, String> {
+pub(crate) async fn rows(console: &Console, query: &Query) -> Result<Vec<Row>, String> {
     let audit = console.config().audit.clone();
     if let Some(index) = insights::attached(&audit).index {
         return index.rows(query).await;

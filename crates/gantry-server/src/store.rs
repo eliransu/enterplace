@@ -139,6 +139,10 @@ ALTER TABLE gantry_keys ADD COLUMN options text;
     "
 CREATE TABLE gantry_writer (id integer PRIMARY KEY CHECK (id = 1), version text NOT NULL);
 ",
+    // Migration 7: small settings the console keeps for every gateway on the store, such as the first-run choice.
+    "
+CREATE TABLE gantry_settings (name text PRIMARY KEY, value text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+",
 ];
 
 /// Whether a Gantry of version `own` may use a database whose schema a Gantry of version `writer` moved ahead of it.
@@ -1994,6 +1998,41 @@ impl PgStore {
 }
 
 impl Store for PgStore {
+    fn keeps_settings(&self) -> bool {
+        true
+    }
+
+    fn setting(&self, name: &str) -> Result<Option<String>, String> {
+        let (inner, name) = (self.inner.clone(), name.to_string());
+        self.wait(async move {
+            let client = inner.ensure().await?;
+            let row = client
+                .query_opt(
+                    "SELECT value FROM gantry_settings WHERE name = $1",
+                    &[&name],
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+            Ok(row.and_then(|r| r.try_get::<_, String>(0).ok()))
+        })
+    }
+
+    fn set_setting(&self, name: &str, value: &str) -> Result<(), String> {
+        let (inner, name, value) = (self.inner.clone(), name.to_string(), value.to_string());
+        self.wait(async move {
+            let client = inner.ensure().await?;
+            client
+                .execute(
+                    "INSERT INTO gantry_settings (name, value) VALUES ($1, $2) \
+                     ON CONFLICT (name) DO UPDATE SET value = excluded.value, updated_at = now()",
+                    &[&name, &value],
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+            Ok(())
+        })
+    }
+
     fn keys_text(&self) -> String {
         read(&self.inner.keys)
     }

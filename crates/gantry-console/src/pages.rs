@@ -274,7 +274,7 @@ fn notice_with(title: &str, body: &str, action: &str) -> String {
         r#"<div class="g-shell">
 <main class="g-shell__main">
 <div class="g-stack" style="gap: var(--space-10); padding: var(--space-4)">
-<a class="g-nav__brand" href="/console/audit" style="padding: 0"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
+<a class="g-nav__brand" href="/console/start" style="padding: 0"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
 {}
 </div>
 </main>
@@ -295,18 +295,18 @@ pub fn signed_in_sso() -> String {
         r#"<div class="g-shell">
 <main class="g-shell__main">
 <div class="g-stack g-measure" style="gap: var(--space-6); padding: var(--space-4)">
-<a class="g-nav__brand" href="/console/audit" style="padding: 0"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
+<a class="g-nav__brand" href="/console/start" style="padding: 0"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Gantry</span></a>
 <h1 class="t-lg" style="margin: 0">Signed in</h1>
 <p class="t-lead g-muted" style="margin: 0">Opening the console.</p>
 <div class="g-head__actions">{}</div>
 </div>
 </main>
 </div>"#,
-        link("Open the console", "", "/console/audit", false)
+        link("Open the console", "", "/console/start", false)
     );
     crate::html::document_with(
         "Signed in",
-        r#"<meta http-equiv="refresh" content="0; url=/console/audit">"#,
+        r#"<meta http-equiv="refresh" content="0; url=/console/start">"#,
         &body,
     )
 }

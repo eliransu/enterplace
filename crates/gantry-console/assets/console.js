@@ -95,3 +95,34 @@ document.addEventListener("change", function (event) {
   if (!into) return;
   input.files[0].text().then(function (text) { into.value = text; into.focus(); });
 });
+
+// Start here: a listening step polls the checklist's state every 2 seconds while the tab is visible, and opens
+// Start here again when it changes. Without a script the step's Check now link does the same.
+document.addEventListener("DOMContentLoaded", function () {
+  var box = document.querySelector("[data-start-poll]");
+  var start = document.querySelector("[data-start-button]");
+  if (start) {
+    document.querySelectorAll('input[name="choice"]').forEach(function (input) {
+      input.addEventListener("change", function () {
+        var label = input.closest("label").querySelector(".t-body-strong").textContent;
+        start.textContent = "Start with " + (input.getAttribute("data-button") || label);
+      });
+    });
+  }
+  if (!box || !window.fetch) return;
+  var seen = box.getAttribute("data-start-poll");
+  var track = new URLSearchParams(location.search).get("track");
+  var url = "/console/start/state.json" + (track ? "?track=" + encodeURIComponent(track) : "");
+  var timer = null;
+  function tick() {
+    if (document.hidden) { timer = null; return; }
+    fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (state) {
+        if (state && state.signature !== seen) { location.href = "/console/start" + (track ? "?track=" + encodeURIComponent(track) : ""); return; }
+        timer = setTimeout(tick, 2000);
+      })
+      .catch(function () { timer = setTimeout(tick, 2000); });
+  }
+  document.addEventListener("visibilitychange", function () { if (!document.hidden && !timer) tick(); });
+  timer = setTimeout(tick, 2000);
+});

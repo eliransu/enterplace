@@ -45,3 +45,73 @@ a{color:inherit}a:hover{color:inherit}
 .g-skip{position:absolute;top:var(--space-4);left:var(--space-4)}
 .g-skip:not(:focus){clip-path:inset(50%);width:1px;height:1px;overflow:hidden;white-space:nowrap}
 .g-shell__main:focus{outline:none}
+/* First run (the approved First run design): Start here's new components. Tokens only. */
+.g-setup{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--space-6) var(--space-4);margin:0;padding:0;list-style:none}
+.g-setup>.g-step{grid-row:1;align-content:start}
+.g-setup__next{grid-row:2;grid-column:1/-1;min-width:0}
+.g-setup__cols{display:flex;flex-wrap:wrap;gap:var(--space-8) var(--space-16)}
+.g-setup__cols>*{flex:1 1 var(--col-sm);min-width:0}
+.g-setup__cols>:first-child{flex:2 1 var(--col-md)}
+.g-setup__cols p,.g-setup__cols h2{margin:0}
+.g-setup__why{max-width:var(--measure)}
+.g-setup__actions{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-3) var(--space-6)}
+.g-link{display:inline-flex;align-items:center;color:var(--text);text-decoration:underline;text-underline-offset:var(--space-1)}
+.g-step__label .g-link{color:inherit}
+.g-points dd .g-tag{margin-right:var(--space-2)}
+/* Tabs that are links pick a variant by address, so they work without a script. */
+a.g-tab{display:inline-flex;align-items:center;text-decoration:none}
+.g-tab[aria-current="true"]{border-color:var(--text);color:var(--text)}
+/* Pick: the one starting choice. The checked row gets an ink edge; no fill. */
+.g-pick{display:grid;gap:var(--space-2);margin:0;padding:0;border:0;min-width:0}
+.g-pick__opt.g-choice{display:flex;align-items:flex-start;gap:var(--space-4);padding:var(--space-4) var(--space-6);border:var(--hairline) solid var(--line);border-radius:var(--radius-lg);background:var(--surface)}
+.g-pick__opt input{margin-top:var(--space-1)}
+.g-pick__opt:has(input:checked){border-color:var(--text)}
+.g-pick__opt input:focus-visible{outline:var(--focus-ring) solid var(--focus);outline-offset:var(--focus-ring)}
+.g-pick__text{display:grid;gap:var(--space-1);flex:1;min-width:0}
+.g-pick__head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2) var(--space-3)}
+.g-pick__meta{color:var(--text-muted)}
+/* Checklist: the marker carries the state. Dashed disc not yet, ink ring now, pulsing disc listening, check done. */
+.g-check{display:grid;gap:var(--space-2);margin:0;padding:0;list-style:none}
+.g-check__item{display:grid;grid-template-columns:var(--space-6) minmax(0,1fr);gap:var(--space-3) var(--space-4);padding:var(--space-4) var(--space-6);border-radius:var(--radius-lg)}
+.g-check__item[data-state="now"],.g-check__item[data-state="listening"]{padding-block:var(--space-6);background:var(--surface)}
+.g-check__mark{display:grid;place-items:center;width:var(--space-6);height:var(--space-6);border-radius:var(--radius-pill);box-sizing:border-box}
+[data-state="ahead"]>.g-check__mark{border:var(--hairline) dashed var(--line-strong)}
+[data-state="now"]>.g-check__mark,[data-state="listening"]>.g-check__mark{border:var(--focus-ring) solid var(--text)}
+[data-state="done"]>.g-check__mark{background:var(--inverse);color:var(--on-inverse)}
+.g-check__pulse{width:var(--space-2);height:var(--space-2);border-radius:var(--radius-pill);background:var(--text);animation:g-pulse var(--dur-slow) var(--ease-standard) infinite alternate}
+.g-check__head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--space-1) var(--space-4);min-width:0}
+.g-check__title{display:inline-flex;flex-wrap:wrap;align-items:center;gap:var(--space-2) var(--space-3)}
+[data-state="ahead"] .g-check__title{color:var(--text-muted)}
+.g-check__state{color:var(--text-muted)}
+.g-check__body{grid-column:2;display:grid;gap:var(--space-4);min-width:0}
+.g-check__body p{max-width:var(--measure);margin:0}
+.g-check__muted{color:var(--text-muted)}
+.g-check__form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:var(--space-3)}
+.g-check__form .g-field{flex:1 1 var(--space-24);min-width:0;max-width:var(--col-sm)}
+.g-check__bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-2) var(--space-4)}
+.g-check__listen{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2) var(--space-3)}
+.g-check__listen .g-loading{flex:none}
+.g-check__terms{display:grid;gap:var(--space-1);margin:0}
+.g-check__terms div{display:flex;flex-wrap:wrap;gap:0 var(--space-2)}
+.g-check__terms dt{color:var(--text-muted)}
+.g-check__terms dd{margin:0}
+/* The welcome: one column, left aligned, no nav. */
+.g-focus{display:grid;gap:var(--space-8);max-width:var(--col-xl);padding:var(--space-8) var(--space-12) var(--space-16)}
+.g-focus__top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-3)}
+.g-focus h1,.g-focus p{margin:0}
+@media (max-width:720px){
+  .g-setup{grid-template-columns:minmax(0,1fr);gap:0}
+  .g-setup>.g-step,.g-setup__next{grid-row:auto}
+  .g-setup>.g-step{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:0 var(--space-4);min-height:var(--control-md);padding:var(--space-2) var(--space-4);border-bottom:0;border-left:var(--bar) solid transparent}
+  .g-setup>.g-step[aria-current="step"]{border-left-color:var(--text)}
+  .g-setup__next{padding:var(--space-2) 0 var(--space-4)}
+  .g-link{min-height:var(--control-md)}
+  .g-check__item{padding:var(--space-4)}
+  .g-check__item[data-state="now"],.g-check__item[data-state="listening"]{padding-block:var(--space-4)}
+  .g-check__body{grid-column:1/-1}
+  .g-check__form .g-field{flex-basis:100%;max-width:none}
+  .g-check__form .g-btn{width:100%}
+  .g-pick__opt.g-choice{padding:var(--space-4)}
+  .g-focus{padding:var(--space-4) var(--space-4) var(--space-10);gap:var(--space-6)}
+}
+@media (prefers-reduced-motion:reduce){.g-check__pulse{animation:none}}
