@@ -20,6 +20,8 @@ export default defineConfig({
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/eliransu/gantry' }],
 			editLink: { baseUrl: 'https://github.com/eliransu/gantry/edit/main/docs/' },
 			customCss: ['./src/styles/gantry.css'],
+			// Copy page and Open in Claude or ChatGPT under each title; the Markdown twins come from scripts/agent-docs.mjs.
+			head: [{ tag: 'script', attrs: { src: '/agent-tools.js', defer: true } }],
 			lastUpdated: true,
 			sidebar: [
 				{

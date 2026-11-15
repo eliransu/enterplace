@@ -1,19 +1,24 @@
 ---
 title: Claude Team and Enterprise
-description: Watch mode in a self-hosted Gantry. See who uses Claude Code on your Claude subscriptions, what it costs and which tools ran, from Claude Code's own telemetry, without routing anything.
+description: Claude Code on Claude Team and Enterprise seats. Route it through Gantry with the seats' own logins, or watch its telemetry without routing anything.
 sidebar:
   order: 1
 ---
 
 import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
 
-When your developers use Claude Code on Claude Team or Enterprise seats, their requests cannot go through a gateway. Watch mode works with them as they are: Claude Code sends its own usage telemetry (OpenTelemetry) to your Gantry gateway, and Gantry records who used it, with which models, how many tokens, at what estimated cost, and which tools ran or were rejected.
+Claude Code on Claude Team or Enterprise seats comes under Gantry in one of two ways:
+
+- **Through Gantry, on the seats' own logins** (recommended). Claude Code keeps its Claude login, sends its requests to your gateway, and Gantry passes the login on to Anthropic unchanged. Rules, guardrails, kill switches and token limits apply; nobody needs an API key. See [Claude Code](/integrations/claude-code/#claude-subscriptions) and [Subscriptions](/governance/subscriptions/).
+- **Watch mode**, below, when nothing may be routed. Claude Code sends its own usage telemetry (OpenTelemetry) to your Gantry gateway, and Gantry records who used it, with which models, how many tokens, at what estimated cost, and which tools ran or were rejected. It enforces nothing.
+
+Both can run at once: the same managed settings block can hold the two lines of subscription passthrough and the telemetry lines.
 
 Watch mode is part of Gantry Enterprise (license feature `watch`) and runs in your own gateway. It needs a [store](/operations/store/). Nothing is sent to Gantry the company, and Claude Code sends this telemetry only to the address you set.
 
 ## What watch mode can and cannot do
 
-| | Watch mode | Requests through Gantry |
+| | Watch mode | Requests through Gantry (subscription or API key) |
 |---|---|---|
 | Who used Claude Code, when, on which model | Yes | Yes |
 | Tokens by type and estimated cost, per person, team and model | Yes, as Claude Code reports them | Yes, from the provider's answer |
@@ -21,11 +26,11 @@ Watch mode is part of Gantry Enterprise (license feature `watch`) and runs in yo
 | Lines changed, commits, pull requests, sessions, active time | Yes | No |
 | The request log, analytics, `/admin/usage`, coverage, alerts, SIEM export, retention | Yes, as source `watch` | Yes |
 | Block a model, a person or a request | No | Yes |
-| Budgets, rate limits, kill switches | No | Yes |
+| Budgets, rate limits, kill switches | No | Yes. On subscriptions, limits are in tokens and requests ([Subscriptions](/governance/subscriptions/)) |
 | Guardrails on prompts and answers | No | Yes |
 | Prompt and answer text | Never kept | Only with `capture:` |
 
-Watch mode observes. Claude Code talks to Anthropic directly, so Gantry cannot refuse or change anything. In the [five steps](/start/plan/), See, Know and Prove work on watch data; Limit and Protect need API traffic through Gantry. To enforce policy, give those developers an API key or cloud provider access and [route Claude Code through Gantry](/integrations/claude-code/).
+Watch mode observes. Claude Code talks to Anthropic directly, so Gantry cannot refuse or change anything. In the [five steps](/start/plan/), See, Know and Prove work on watch data; Limit and Protect need API traffic through Gantry. To enforce policy, [route Claude Code through Gantry](/integrations/claude-code/#claude-subscriptions) on the same seats: no API key is needed.
 
 <Aside type="note">
 Costs in watch mode are Claude Code's own estimates at list price. Usage within Team or Enterprise seats is not billed per dollar, so read them as relative usage, not an invoice.

@@ -58,6 +58,8 @@ Admin key, shown once (Gantry keeps only its hash). Use it for the command line 
 
 The link is the sign-in: it works once, only from a browser on the same machine, for 10 minutes, and the sign-in is recorded in the audit log. On a terminal with a display, Gantry opens it for you; `--no-open` skips that. Keep the admin key in your password manager: it signs in to the console too, and the command line and the admin API use it.
 
+**Claude subscriptions.** The policy also has a provider named `claude-subscriptions` with `auth: passthrough`: Claude Code on a Claude Pro, Max, Team or Enterprise login goes through Gantry with no Anthropic key at all. See [Subscriptions](/governance/subscriptions/).
+
 **Provider keys.** None is needed to start. A key in the environment is picked up (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or the `*_PROVIDER_KEY` form), so `OPENAI_API_KEY=sk-... gantry start` works too. A key pasted in the dashboard's **Connect a model** is sealed with `gantry-master.key` (AES-256-GCM) and kept in `gantry-credentials.json`, which holds only sealed bytes: keep the master key with the policy, and out of version control. To send a provider's requests through a proxy, set `GANTRY_OPENAI_BASE_URL` (or `GANTRY_ANTHROPIC_BASE_URL`, `GANTRY_GEMINI_BASE_URL`) before `gantry start`.
 
 **The demo model.** The policy always has a provider named `demo` with the model `gantry-demo`. Gantry answers it itself with a short sample text (chat completions, responses and messages, streaming too), sends nothing anywhere and prices it at zero, so the first request works before any key is set. Its requests are recorded under the provider `demo`.
@@ -86,6 +88,8 @@ The console opens on one question, **What do you want to start with?**, with fiv
 
 1. **Connect a model**: pick OpenAI, Anthropic or Google Gemini and paste its key, or choose **Try without a key** for the demo model.
 2. **Send your first request**: a ready-to-copy curl (with Python and Node tabs) holding the gateway's address and a key: `$GANTRY_KEY`, or a key the step makes for it, shown once. The step turns done by itself when the request arrives, even if the provider refuses it: the request shows in Requests with the provider's answer.
+
+**Coding agents** first asks how your team pays for Claude Code. With **Claude subscriptions (Pro, Max, Team, Enterprise)**, the default, there is no model to connect and no API key: `gantry start` already wrote the `claude-subscriptions` provider, and the checklist mints a free person token and shows the two lines for Claude Code (`ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS`). Every step has **Copy for your agent**, a ready prompt that has Claude Code, Codex or Cursor do the step for you. See [Subscriptions](/governance/subscriptions/).
 
 The steps that follow are the choice's own: a key per person, the lines for Claude Code, Codex, Cursor or an SDK, a budget, an MCP server. Each says what **turns it done** and what you **then see**, and Gantry checks its own records for it. Once the checklist is done, Start here shows the five steps of a rollout (See, Know, Limit, Protect, Prove, the same as the [Start here](/start/why/) pages).
 
@@ -132,7 +136,7 @@ This binary is the open source edition (Apache 2.0). The image runs the enterpri
 
 ## Next steps
 
-- [Connect Claude Code](/integrations/claude-code/) and route your team's coding sessions through Gantry.
+- [Connect Claude Code](/integrations/claude-code/) on your developers' own Claude subscriptions, with no API key.
 - [Policy file](/governance/policy/): rules per team and model, budgets, rate limits and guardrails, then `mode: enforce`.
 - [Keys and identity](/governance/keys/): a key per person and workload, and self-service keys with `gantry login`.
 - [One-click deploys](/deploy/one-click/): Gantry and Postgres in your cloud in a few clicks.

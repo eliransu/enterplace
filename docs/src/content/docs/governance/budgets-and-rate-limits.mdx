@@ -305,6 +305,22 @@ limits:
 
 A request over one is refused with `rate_limited` (429) and a `Retry-After` of the seconds until the hour or the day turns. With a [store](/operations/store/#budget-leases) every replica counts in one counter and a restart forgets nothing. Without one, the counts are in memory and start again when the gateway does.
 
+## Tokens per day
+
+`tpd` limits tokens (prompt and answer) per calendar day, in UTC. In a rule it counts where the budget does: per team for a team rule, per person otherwise. In a `limits:` entry it counts the scope. It is the natural limit for [subscription traffic](/governance/subscriptions/), which is not billed per request.
+
+```yaml
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+    rate: { tpd: 5000000 }
+limits:
+  - { team: payments, rate: { tpd: 20000000 } }
+```
+
+A request is admitted while the day's tokens are under the limit, and counted with what its answer used; the next one past it is refused with `rate_limited` and a `Retry-After` of the seconds until midnight UTC.
+
 ## Model groups
 
 `model_groups:` names a set of models. Write `group:<name>` wherever a list of models goes: a rule's `models`, a key's `models`, a budget's `models` and `key_bounds.models`. A `limits:` entry with `model_group:` gives the whole group one budget or rate.

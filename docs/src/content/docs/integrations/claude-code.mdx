@@ -1,15 +1,144 @@
 ---
 title: Claude Code
-description: Route every Claude Code session through Gantry so each request is identified, decided by policy and recorded before it reaches a model.
+description: Route Claude Code through Gantry on your developers' own Claude subscriptions, with no API key, or with API keys. Every request identified and recorded.
 sidebar:
   order: 1
 ---
 
 import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Claude Code talks to Anthropic's messages API. Point it at Gantry with a Gantry key in place of a provider key, and every request it sends is identified, decided by policy and recorded before it is forwarded.
+Most teams pay for Claude Code with Claude subscriptions (Pro, Max, Team or Enterprise seats), not with Anthropic API keys. Gantry routes those sessions as they are: Claude Code keeps its own Claude login, Gantry sends that login to Anthropic unchanged, and a free Gantry person token says who sent each request. Nobody creates an API key.
 
-## Setup
+Three ways to bring Claude Code under Gantry, in order of preference:
+
+| | Claude subscriptions through Gantry | Watch mode | Anthropic API keys through Gantry |
+|---|---|---|---|
+| Who pays Anthropic | Each person's Claude seat | Each person's Claude seat | Per request, on an API key |
+| Requests go through Gantry | Yes | No, telemetry only | Yes |
+| Rules, guardrails, kill switches | Yes | No | Yes |
+| Limits | Tokens and requests per person, team and day | No | Dollars, tokens and requests |
+| Cost shown | API-equivalent estimate | Claude Code's estimate | What was billed |
+| Setup per developer | Two environment variables | Managed settings | Two environment variables and a key |
+
+## Claude subscriptions
+
+<Steps>
+
+1. **Turn on subscription passthrough.** `gantry start` writes this provider, so a new install has it already. Otherwise use the console's **Start here**, **Coding agents** (one click), or add it to the policy:
+
+    ```yaml title="gantry.policy.yaml"
+    version: 1
+    providers:
+      - name: claude-subscriptions
+        kind: anthropic
+        url: https://api.anthropic.com
+        auth: passthrough
+        identity: optional
+        models: ["claude-*"]
+    rules:
+      - name: everyone
+        principals: { any: true }
+        models: ["*"]
+    ```
+
+    The provider holds no key. Each request carries the person's own Claude login, which Gantry sends on unchanged and never keeps. See [Subscriptions](/governance/subscriptions/) for what Gantry can and cannot do with that traffic.
+
+2. **Get a person token.** It names the person to Gantry and reaches no model on its own, so it costs nothing.
+
+    <Tabs syncKey="keysource">
+    <TabItem label="From the console">
+
+    **Start here**, **Coding agents**, **Point Claude Code at Gantry**: enter a name and a team and press **Make person token**. The token is shown once, in the lines below.
+
+    </TabItem>
+    <TabItem label="Single sign-on">
+
+    ```bash
+    gantry login https://gantry.example.com
+    ```
+
+    On a gateway with subscription passthrough, the file it writes (`~/.config/gantry/env`) sets the two lines below with the person's own key, and unsets `ANTHROPIC_API_KEY`. See [Single sign-on](/governance/single-sign-on/).
+
+    </TabItem>
+    <TabItem label="Issued by an admin">
+
+    ```bash
+    gantry key new maya.cohen --team payments --identity-only --url https://gantry.example.com
+    ```
+
+    Prints a `gantry_u_...` token once, with the two lines below.
+
+    </TabItem>
+    </Tabs>
+
+3. **Point Claude Code at Gantry, and keep your normal Claude login.**
+
+    ```bash
+    export ANTHROPIC_BASE_URL=https://gantry.example.com
+    export ANTHROPIC_CUSTOM_HEADERS="x-gantry-user: gantry_u_..."
+    claude
+    ```
+
+    Leave `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset: with either set, Claude Code stops using the subscription. Sign in as usual with `/login` if Claude Code asks.
+
+4. **See it arrive.** The step on **Start here** turns done when the person's first request arrives. **Requests** shows it with the person, the model, tokens and the cost marked as an estimate.
+
+</Steps>
+
+### Roll it out with managed settings
+
+Claude Code reads `env` from its [managed settings file](https://code.claude.com/docs/en/settings), which your MDM (Jamf, Intune) can place on each machine, one token per person:
+
+```json title="managed-settings.json"
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://gantry.example.com",
+    "ANTHROPIC_CUSTOM_HEADERS": "x-gantry-user: gantry_u_..."
+  }
+}
+```
+
+- macOS: `/Library/Application Support/ClaudeCode/managed-settings.json`
+- Linux and WSL: `/etc/claude-code/managed-settings.json`
+- Windows: `C:\Program Files\ClaudeCode\managed-settings.json`
+
+The Gantry [device agent](/operations/devices/) sets the same two keys in each person's `~/.claude/settings.json`, from the key their `gantry login` saved.
+
+### Start with no identity
+
+With `identity: optional`, a request without `x-gantry-user` is recorded as the person `unknown` (team `unknown`), told apart by Claude Code's session ID. A company can point Claude Code at Gantry first and hand out person tokens later. With `identity: required` (the default) such a request is refused with `person_needed`. A kill switch on the person `unknown` stops every unnamed request.
+
+### What Claude Code sends
+
+| Header | What Gantry does |
+|---|---|
+| `Authorization: Bearer sk-ant-oat...` (the subscription login) | Taken off the request before any check, sent to the passthrough provider unchanged, and to nothing else: no guardrail webhook, plugin, trace, log or record sees it. Never stored, hashed into a record or cached |
+| `x-gantry-user` | Names the person and team. Removed before the request is forwarded |
+| `anthropic-beta`, `anthropic-version`, `x-app`, `X-Claude-Code-Session-Id`, user agent | Passed unchanged. The session ID groups the requests into sessions |
+
+A login is never swapped for a key of Gantry's, and a Gantry key never goes to a passthrough provider:
+
+| Request | Answer |
+|---|---|
+| A login for a model only a keyed provider serves | 403 `login_not_accepted` |
+| A Gantry key (or `ANTHROPIC_API_KEY`) for a model only a passthrough provider serves | 401 `login_needed` |
+| A person token as the only credential | 403 `person_token_only` |
+| A login and a different Gantry key at once | 400 `ambiguous_key` |
+| No `x-gantry-user` on a provider with `identity: required` | 401 `person_needed` |
+
+When a passthrough provider and a keyed provider list the same model, a request with a login goes to the passthrough one and a request with a Gantry key to the keyed one.
+
+<Aside type="caution">
+Check that routing your plan's traffic through your own gateway fits Anthropic's terms for your plan (consumer terms for Pro and Max, your commercial agreement for Team and Enterprise). Gantry does not change what Claude Code sends Anthropic; it reads it on the way.
+</Aside>
+
+## Watch mode
+
+To see usage without routing anything, send Claude Code's own telemetry to Gantry instead. It records who used Claude Code, the models, tokens and estimated cost, and enforces nothing. See [Claude Team and Enterprise](/integrations/claude-team/).
+
+## Anthropic API keys
+
+When Claude Code runs on API keys, Gantry holds the provider key and each developer gets a Gantry key in its place.
 
 <Steps>
 
@@ -31,33 +160,7 @@ Claude Code talks to Anthropic's messages API. Point it at Gantry with a Gantry 
 
     Keep the provider key in a variable of its own. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be the Gantry key.
 
-2. **Get a Gantry key.**
-
-    <Tabs syncKey="keysource">
-    <TabItem label="From the console">
-
-    In the console, **People and workloads**, **Issue a key** (or the Start here step **Make a key for the first person**). The key is shown once, with the lines below already holding it and the gateway's address, ready to copy.
-
-    </TabItem>
-    <TabItem label="Single sign-on">
-
-    ```bash
-    gantry login https://gantry.example.com
-    ```
-
-    This signs the developer in through the browser, saves a personal key named by their email, and prints the variables below with their own key. Every request then carries their name. `gantry logout` revokes it. See [Single sign-on](/governance/single-sign-on/).
-
-    </TabItem>
-    <TabItem label="Issued by an admin">
-
-    ```bash
-    gantry key new maya.cohen --team payments --url https://gantry.example.com
-    ```
-
-    The key is printed once, with the variables below. See [Keys and identity](/governance/keys/).
-
-    </TabItem>
-    </Tabs>
+2. **Get a Gantry key**: **People and workloads**, **Issue a key** in the console (or **Start here**, **Coding agents**, **Anthropic API keys**), `gantry login` on a gateway without subscription passthrough, or `gantry key new maya.cohen --team payments --url https://gantry.example.com`. See [Keys and identity](/governance/keys/).
 
 3. **Point Claude Code at Gantry.**
 
@@ -163,7 +266,7 @@ See [Refusal codes](/reference/refusal-codes/) for every code.
 
 ## Budgets
 
-A budget reserves the most a request could cost before it is sent: its body at the input price plus its `max_tokens` at the output price. Claude Code asks for a large `max_tokens` on every request (32,000 or more, depending on the model), so each request reserves far more than it usually spends. One measurement put the reserve at $1.34 per Claude Code request.
+On Claude subscriptions, dollar budgets do not count by default: see [Subscriptions](/governance/subscriptions/), and limit tokens and requests instead. On API keys, a budget reserves the most a request could cost before it is sent: its body at the input price plus its `max_tokens` at the output price. Claude Code asks for a large `max_tokens` on every request (32,000 or more, depending on the model), so each request reserves far more than it usually spends. One measurement put the reserve at $1.34 per Claude Code request.
 
 The difference is given back when the answer ends. While it is held, a small budget refuses requests that would have fitted, with `budget_exceeded` and "could cost up to ...". When budget is left, the refusal says a request with a smaller output token limit could fit.
 

@@ -64,3 +64,11 @@ h1, h2, h3, .site-title { letter-spacing: -0.02em; }
 .card .icon { color: var(--sl-color-text); }
 :root:not([data-theme='light']) .card .icon { color: var(--gantry-lime); }
 :root[data-theme='light'] .card { background: var(--sl-color-gray-7); }
+
+/* Copy page, Open in Claude, Open in ChatGPT under each title (public/agent-tools.js). */
+.gantry-agent { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+.gantry-agent button, .gantry-agent a {
+	font: inherit; font-size: var(--sl-text-sm); color: var(--sl-color-gray-2); background: transparent;
+	border: 1px solid var(--sl-color-gray-5); border-radius: 0.25rem; padding: 0.15rem 0.6rem; cursor: pointer; text-decoration: none;
+}
+.gantry-agent button:hover, .gantry-agent a:hover { color: var(--sl-color-white); border-color: var(--sl-color-gray-3); }

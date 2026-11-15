@@ -618,7 +618,7 @@ async fn connect_a_model_seals_the_key_and_adds_the_provider_or_the_demo_model_i
 
     // Try without a key: the first request names the demo model.
     let (_, headers, _) = send(&s.app, post("/console/start/demo", &cookie, "")?).await?;
-    assert_eq!(location(&headers), "/console/start#step-2");
+    assert_eq!(location(&headers), "/console/start?pay=api#step-2");
     let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
     assert!(page.contains("Using the demo model"), "{page}");
     assert!(
@@ -664,7 +664,7 @@ async fn connect_a_model_seals_the_key_and_adds_the_provider_or_the_demo_model_i
     .await?;
     assert_eq!(
         (status, location(&headers)),
-        (StatusCode::SEE_OTHER, "/console/start#step-2"),
+        (StatusCode::SEE_OTHER, "/console/start?pay=api#step-2"),
         "{page}"
     );
     assert_eq!(
@@ -883,5 +883,35 @@ async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent(
     // Anthropic API keys keep today's steps.
     let (_, _, page) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
     assert!(page.contains("Let people make their own keys"), "{page}");
+    Ok(())
+}
+
+/// Every "Copy for your agent" prompt on every choice links a docs page as Markdown, and the page exists: the docs
+/// build writes `<page>.md` for each `.mdx` under docs/src/content/docs.
+#[tokio::test]
+async fn every_agent_prompt_links_a_docs_page_that_exists() -> TestResult {
+    let s = setup("agent-docs")?;
+    let cookie = sign_in(&s.app, ADMIN_KEY).await?;
+    let docs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/src/content/docs");
+    let mut prompts = 0;
+    for track in ["coding", "coding&pay=api", "apps", "mcp", "limit", "watch"] {
+        let (_, _, page) = send(&s.app, get(&format!("/console/start?track={track}"), &cookie)?).await?;
+        for part in page.split(r#"<pre id="agent-step-"#).skip(1) {
+            let prompt = part.split("</pre>").next().unwrap_or_default();
+            prompts += 1;
+            assert!(prompt.contains(BASE), "{track}: the gateway's address: {prompt}");
+            let link = prompt
+                .split("https://gantry-docs.eliran.me/")
+                .nth(1)
+                .and_then(|rest| rest.split(".md").next())
+                .ok_or_else(|| format!("{track}: no docs link: {prompt}"))?;
+            assert!(
+                docs.join(format!("{link}.mdx")).exists(),
+                "{track}: {link}.md has no page"
+            );
+        }
+    }
+    // Only the current step of each is shown open, with its prompt.
+    assert!(prompts >= 6, "{prompts}");
     Ok(())
 }

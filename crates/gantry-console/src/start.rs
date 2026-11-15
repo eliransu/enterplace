@@ -1126,7 +1126,7 @@ fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             "3. Or, for Claude Code on Claude subscriptions, no key is needed: see the Claude Code guide.".into(),
         ],
         "The console's first step shows the provider as connected.",
-        "/start/quickstart/",
+        "/getting-started/quickstart/",
     ));
     let s2 = s2.agent(prompt(
         base,
@@ -1138,7 +1138,7 @@ fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             first_lines(&f.base, key, &model, "curl").join("\n"),
         ],
         "The command prints an answer, or a refusal that names its cause.",
-        "/start/quickstart/",
+        "/getting-started/quickstart/",
     ));
     vec![s1, s2]
 }
@@ -2941,7 +2941,7 @@ async fn connect(
             let mut kept = read_kept(&console).unwrap_or_default();
             kept.demo = false;
             let _ = write_kept(&console, &kept);
-            redirect("/console/start#step-2")
+            redirect("/console/start?pay=api#step-2")
         }
         Err(err) => {
             let mut f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
@@ -3194,7 +3194,7 @@ async fn use_demo(State(console): State<Console>, headers: HeaderMap) -> Respons
             pages::notice("Not kept", &esc(&err), crate::HOME, "Back to Start here"),
         );
     }
-    redirect("/console/start#step-2")
+    redirect("/console/start?pay=api#step-2")
 }
 
 /// Makes a key for the first request, through the People page's issue flow, and puts it in the lines, shown once.
