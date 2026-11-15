@@ -511,7 +511,7 @@ async fn session(
     let guards: Vec<Guardrail> = version
         .policy
         .as_ref()
-        .and_then(|p| crate::observed_guards(p, &open.rule.guardrails))
+        .map(|p| crate::guards_of(p, Some(&open.person), &open.rule))
         .unwrap_or_else(|| open.rule.guardrails.clone());
     let mut found: Vec<guard::AuditEntry> = Vec::new();
     // For events plugins: the turn the session is in (one per text of the caller's), and the next event's place in it.

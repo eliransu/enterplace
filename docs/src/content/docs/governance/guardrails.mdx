@@ -73,6 +73,52 @@ The built-in guardrails a rule names run first, then its vendors and webhooks in
 
 Guardrails run before the cache, the rate limit and the budget. See [Order of checks](/governance/policy/#order-of-checks).
 
+### Default guardrails and guardrails per key
+
+`default_guardrails:` at the top level of the policy lists guardrails every rule runs, before its profiles' and its own. A rule written without `guardrails:` still runs them.
+
+A key adds guardrails with `guardrails:` on its entry (or in `POST /admin/keys`). They run after its rule's, and only add: a key never runs fewer guardrails than its rule. A name the policy does not define is an error at load.
+
+```yaml title="gantry.policy.yaml"
+guardrails:
+  - name: no-secrets
+    type: secrets
+    action: block
+  - name: mask-pii
+    type: pii
+    action: mask
+default_guardrails: [no-secrets]
+```
+
+```yaml title="gantry.keys.yaml"
+keys:
+  - name: support-bot
+    team: support
+    sha256: 0d6c...(64 hex characters)
+    guardrails: [mask-pii]
+```
+
+### Check text from your application
+
+`POST /v1/guardrails/check` runs the guardrails of the caller's own rule and key on text the caller sends. No model is called and nothing is charged. Each check is a decision record with `guardrail_check` and what was found.
+
+```bash
+curl -s http://127.0.0.1:8080/v1/guardrails/check \
+  -H "Authorization: Bearer $GANTRY_KEY" -H "Content-Type: application/json" \
+  -d '{"text": "write to maya@corp.example.com"}'
+```
+
+```json
+{"blocked": false, "text": ["write to [EMAIL_ADDRESS]"], "findings": [{"guardrail": "mask-pii", "detector": "pii", "kind": "email_address", "action": "mask", "count": 1}]}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `text` | string or list of strings | The text to check. |
+| `on` | string | `request` (default): the guardrails the rule runs on requests. `answer`: the ones it runs on answers. |
+
+The answer is always 200 when the check ran: `blocked` says whether a guardrail would refuse the text, `message` why, `text` holds the text as the guardrails leave it (masked where one masks), and `findings` what each found, never the matched text. In observe mode and shadow periods nothing blocks or masks, as on a model request.
+
 ## Built-in detectors
 
 | Type | Kinds found |

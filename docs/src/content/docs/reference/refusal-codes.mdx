@@ -80,6 +80,10 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`rate_limited`](#rate_limited) | 429 | `rate_limit_error` |
 | [`budget_exceeded`](#budget_exceeded) | 429 | `rate_limit_error` |
 | [`key_budget_exceeded`](#key_budget_exceeded) | 429 | `rate_limit_error` |
+| [`session_budget_exceeded`](#session_budget_exceeded) | 429 | `rate_limit_error` |
+| [`session_requests_exceeded`](#session_requests_exceeded) | 429 | `rate_limit_error` |
+| [`required_missing`](#required_missing) | 400 | `invalid_request_error` |
+| [`key_bounds_exceeded`](#key_bounds_exceeded) | 403 | `permission_error` |
 | [`parallel_limited`](#parallel_limited) | 429 | `rate_limit_error` |
 | [`customer_not_allowed`](#customer_not_allowed) | 403 | `permission_error` |
 | [`tag_not_allowed`](#tag_not_allowed) | 403 | `permission_error` |
@@ -352,6 +356,30 @@ An [events guardrail](/governance/plugin-events/) refuses with this code too: 40
 **429.** The key has a `budget:` of its own, and its spend plus what its requests in flight reserved plus the most this request could cost would pass it. The message names the key by the first 8 hex characters of its hash.
 
 **Fix:** wait for the period to end, or ask an admin to raise the key's budget.
+
+### session_budget_exceeded
+
+**429.** The rule has `budget: { usd, per: session }`, and what the request's session spent plus the most this request could cost would pass it. The message names the session.
+
+**Fix:** start a new session (a new conversation in the tool), or ask an admin to raise the session budget. See [Session budgets](/governance/budgets-and-rate-limits/#session-budgets).
+
+### session_requests_exceeded
+
+**429.** The request's session has sent the rule's `rate.session_requests` requests.
+
+**Fix:** start a new session, or ask an admin to raise `session_requests`.
+
+### required_missing
+
+**400.** The rule's `require:` lists a header or a body field the request does not carry, or carries empty. The message names each one missing.
+
+**Fix:** send the header or the field with a value. See [Required headers and fields](/governance/policy/#required-headers-and-fields).
+
+### key_bounds_exceeded
+
+**403.** A key was asked for with a longer life, a faster budget or a model beyond what `key_bounds:` lets the issuer's role grant. On the admin API and `gantry login`.
+
+**Fix:** ask for less, or leave the field out to get the most allowed. See [Bounds on issued keys](/governance/keys/#bounds-on-issued-keys).
 
 ### parallel_limited
 

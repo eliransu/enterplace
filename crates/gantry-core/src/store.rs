@@ -146,7 +146,100 @@ pub struct DeploymentLoad {
     pub tokens: u64,
 }
 
+/// A budget raise: more room on the budgets of one scope until a time, asked for by a person and decided by an
+/// admin. It ends by itself.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Raise {
+    pub id: String,
+    /// The counter whose budgets it raises: `team:payments`, `person:maya`, `key:1a2b3c4d`.
+    pub scope: String,
+    pub usd: f64,
+    /// A UTC date or time, as a key's `expires`: from then on the raise no longer counts.
+    pub until: String,
+    pub reason: String,
+    pub requested_by: String,
+    pub requested_at: String,
+    /// [`PENDING`], `approved` or [`REJECTED`].
+    pub state: String,
+    pub decided_by: Option<String>,
+    pub decided_at: Option<String>,
+}
+
+pub const APPROVED: &str = "approved";
+
+impl Raise {
+    /// Whether the raise adds to its scope's budgets at `now` (a record timestamp).
+    pub fn active(&self, now: &str) -> bool {
+        self.state == APPROVED && !crate::policy::expiry_passed(&self.until, now)
+    }
+}
+
+/// One gateway on the store, as its heartbeat says.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Replica {
+    /// Its name on the store, new at each start.
+    pub gateway: String,
+    pub host: String,
+    pub version: String,
+    pub started: String,
+    /// When its heartbeat was last written.
+    pub seen: String,
+    /// Whether it wrote a heartbeat within the last 10 seconds.
+    pub healthy: bool,
+    /// The store schema it knows: each namespace and how many migrations of it.
+    pub schema: String,
+}
+
+/// A cached answer as the store keeps it for every gateway.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CachedAnswer {
+    pub key: [u8; 32],
+    /// The rule and the person or team it was made for: read back only in the same scope.
+    pub scope: String,
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub body: Vec<u8>,
+    /// The decision that asked the provider for it.
+    pub origin: String,
+    pub cost: f64,
+    /// How long it is served from now.
+    pub ttl: Duration,
+    /// The semantic partition and embedding, when the rule has a semantic cache.
+    pub vector: Option<([u8; 32], Vec<f32>)>,
+}
+
+/// The most embeddings of one partition a semantic lookup compares: the newest ones.
+// ponytail: a bounded scan of stored vectors, compared in the gateway. pgvector with an index when a partition
+// needs more than this.
+pub const MAX_SHARED_VECTORS: i64 = 512;
+
 pub trait Store: Send + Sync + std::fmt::Debug {
+    /// The budget raises, from memory, polled. `None` when this store keeps none.
+    fn raises(&self) -> Option<Arc<Vec<Raise>>> {
+        None
+    }
+    /// Adds a raise, or replaces the one with its id. Blocks until written.
+    fn put_raise(&self, _raise: &Raise) -> Result<(), String> {
+        Err("this store keeps no budget raises.".into())
+    }
+    /// Every gateway that wrote a heartbeat to the store in the last day, newest start first.
+    fn replicas(&self) -> Pending<Vec<Replica>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    /// Whether cached answers are kept in this store (`store.answer_cache: true`), so every gateway serves them.
+    fn shares_cache(&self) -> bool {
+        false
+    }
+    /// The answer cached under `key` for `scope`, if one is and has not run out.
+    fn cache_get(&self, _key: [u8; 32], _scope: String) -> Pending<Option<CachedAnswer>> {
+        Box::pin(async { Ok(None) })
+    }
+    /// Keeps an answer for every gateway. Does not wait.
+    fn cache_put(&self, _answer: CachedAnswer) {}
+    /// The newest embeddings of `partition` (at most [`MAX_SHARED_VECTORS`]) with the key of each one's answer.
+    fn cache_vectors(&self, _partition: [u8; 32]) -> Pending<Vec<([u8; 32], Vec<f32>)>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
     /// The keys, written as a keys file, so they are checked by the same rules as one.
     fn keys_text(&self) -> String;
     fn kills(&self) -> Arc<Vec<Kill>>;

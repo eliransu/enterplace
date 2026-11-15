@@ -1884,7 +1884,20 @@ async fn cli_token(State(console): State<Console>, body: String) -> Response {
     };
     let later =
         std::time::SystemTime::now() + Duration::from_secs(u64::from(pending.days) * 86_400);
-    let expires = format!("{}Z", &audit::rfc3339(later)[..19]);
+    let mut attributes = keyfile::Attributes {
+        expires: Some(format!("{}Z", &audit::rfc3339(later)[..19])),
+        ..keyfile::Attributes::default()
+    };
+    // A key a person gives themselves holds to the policy's key_bounds: never longer than max_days, and with the
+    // budget and models the bounds set.
+    if bound(&console, None, &mut attributes).await.is_err() {
+        // Over the bound on lifetime only, the key gets the longest one allowed; anything else is refused.
+        attributes.expires = None;
+        if let Err(problem) = bound(&console, None, &mut attributes).await {
+            return cli_refused(StatusCode::FORBIDDEN, "key_bounds_exceeded", &problem);
+        }
+    }
+    let expires = attributes.expires.clone().unwrap_or_default();
     let target = json!({
         "via": "gantry login",
         "name": pending.email,
@@ -1911,10 +1924,6 @@ async fn cli_token(State(console): State<Console>, body: String) -> Response {
         pending.team.clone(),
         key.clone(),
     );
-    let attributes = keyfile::Attributes {
-        expires: Some(expires.clone()),
-        ..keyfile::Attributes::default()
-    };
     let added = tokio::task::spawn_blocking(move || {
         keyfile::add_with(&name, &team, &k, &attributes, &keys)
     })
@@ -2452,6 +2461,40 @@ async fn issue(State(console): State<Console>, headers: HeaderMap, body: String)
     )
 }
 
+/// Holds a key about to be issued to the policy's `key_bounds:` for `role` (`None`: a key from `gantry login`).
+async fn bound(
+    console: &Console,
+    role: Option<&str>,
+    attributes: &mut keyfile::Attributes,
+) -> Result<(), String> {
+    let (policy, keys) = (
+        console.config().policy.clone(),
+        console.config().keys.clone(),
+    );
+    let loaded = tokio::task::spawn_blocking(move || config::load(&policy, Some(&keys)))
+        .await
+        .map_err(|_| {
+            "the policy could not be read to check the key's bounds. Try again.".to_string()
+        })?
+        .map_err(|problems| problems.join("\n"))?;
+    config::bound_key(
+        &loaded.policy,
+        role,
+        &mut attributes.expires,
+        &mut attributes.budget,
+        &mut attributes.models,
+    )
+    .map_err(|problem| {
+        let mut chars = problem.chars();
+        let first: String = chars
+            .next()
+            .into_iter()
+            .flat_map(char::to_uppercase)
+            .collect();
+        format!("{first}{}.", chars.as_str())
+    })
+}
+
 /// Makes a key and adds it to the keys file, recorded first: the record names the key by its hash prefix, so the
 /// key is made before the record and shown only after both.
 async fn issued(
@@ -2459,8 +2502,10 @@ async fn issued(
     admin: &Admin,
     name: &str,
     team: &str,
-    attributes: keyfile::Attributes,
+    mut attributes: keyfile::Attributes,
 ) -> Result<(String, bool), String> {
+    // What the person's role may grant (`key_bounds:`): what the key leaves unset takes the bound.
+    bound(console, Some(&admin.role), &mut attributes).await?;
     let admin_key = attributes.admin;
     let mut act = Act {
         action: "issue_key",
@@ -2763,13 +2808,21 @@ async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Ur
     let config = console.config();
     let text = config::policy_text(&config.policy).map(Some);
     let loaded = config::load(&config.policy, Some(&config.keys));
+    let mut source = edit::policy_source(&console, &admin);
+    if let Some(store) = console
+        .store()
+        .filter(|_| admin.may(Permission::SeeRecords))
+    {
+        // A store that cannot be read leaves the panel out: the policy is still worth showing.
+        source.replicas = store.replicas().await.unwrap_or_default();
+    }
     let body = pages::policy(
         &admin.label(),
         &Form::of(&uri),
         &config.policy,
         &text,
         &loaded,
-        &edit::policy_source(&console, &admin),
+        &source,
     );
     page(StatusCode::OK, body)
 }

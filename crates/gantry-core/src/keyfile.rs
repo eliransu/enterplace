@@ -294,6 +294,12 @@ fn entry_text(name: &str, team: &str, hash: &str, attributes: &Attributes) -> St
     if !o.routes.is_empty() {
         entry.push_str(&format!("    routes: {}\n", json(o.routes.clone().into())));
     }
+    if !o.guardrails.is_empty() {
+        entry.push_str(&format!(
+            "    guardrails: {}\n",
+            json(o.guardrails.clone().into())
+        ));
+    }
     if !o.mcp_tools.is_empty() {
         entry.push_str(&format!(
             "    mcp_tools: {}\n",
@@ -329,6 +335,9 @@ pub fn options_json(options: &KeyOptions) -> Option<String> {
     }
     if !options.routes.is_empty() {
         map.insert("routes".into(), options.routes.clone().into());
+    }
+    if !options.guardrails.is_empty() {
+        map.insert("guardrails".into(), options.guardrails.clone().into());
     }
     if !options.mcp_tools.is_empty() {
         map.insert("mcp_tools".into(), options.mcp_tools.clone().into());
@@ -386,6 +395,7 @@ pub fn options_from_json(text: &str) -> Result<KeyOptions, String> {
         metadata,
         routes: list("routes")?,
         mcp_tools: list("mcp_tools")?,
+        guardrails: list("guardrails")?,
         from: config::cidrs(&list("from")?)?,
         replaced_by: value
             .get("replaced_by")
@@ -1093,6 +1103,7 @@ mod tests {
             from: vec!["10.0.0.0/8".parse()?, "2001:db8::/32".parse()?],
             replaced_by: None,
             mcp_tools: vec!["github.*".into(), "!github.delete_repo".into()],
+            guardrails: vec!["no-secrets".into()],
         };
         // The hierarchy's fields are written beside the options, a tag YAML reads specially ("yes") as text.
         let attributes = Attributes {

@@ -298,6 +298,7 @@ fn open_postgres(
         )
     })?;
     let opened = crate::store::open(variable, &url)?;
+    opened.share_cache(setting.answer_cache);
     if let Some(master) = crate::MasterKey::from_env(env)? {
         opened.unlock(master)?;
     }

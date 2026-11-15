@@ -2883,8 +2883,7 @@ fn result_guards(
 ) -> Option<Box<GuardResults>> {
     let who = owner_of(policy, owned);
     let rule = policy.rule_for(&who)?;
-    let all =
-        crate::observed_guards(policy, &rule.guardrails).unwrap_or_else(|| rule.guardrails.clone());
+    let all = crate::guards_of(policy, Some(&who), rule);
     let plugins = crate::events::guards_for(state, &all);
     let guards: Vec<_> = all.into_iter().filter(|g| g.on.answer).collect();
     (!guards.is_empty() || !plugins.is_empty()).then(|| {
@@ -3091,8 +3090,7 @@ async fn check_lines(
         refusal
     };
     let observe = policy.mode() == gantry_core::policy::Mode::Observe;
-    let all =
-        crate::observed_guards(policy, &rule.guardrails).unwrap_or_else(|| rule.guardrails.clone());
+    let all = crate::guards_of(policy, Some(person), rule);
     // Events plugins see each line as the request of a turn of its own, in the batch's session.
     let plugins = crate::events::guards_for(state, &all);
     let guards: Vec<_> = all.into_iter().filter(|g| g.on.request).collect();
@@ -3970,8 +3968,7 @@ async fn guard_text(
     request: bool,
     extra: &mut Map<String, Value>,
 ) -> Result<Option<String>, Refusal> {
-    let guards: Vec<_> = crate::observed_guards(policy, &rule.guardrails)
-        .unwrap_or_else(|| rule.guardrails.clone())
+    let guards: Vec<_> = crate::guards_of(policy, seen.person, rule)
         .into_iter()
         .filter(|g| if request { g.on.request } else { g.on.answer })
         .collect();

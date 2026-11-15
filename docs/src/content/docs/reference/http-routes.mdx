@@ -26,6 +26,8 @@ Gantry serves the OpenAI and Anthropic routes your clients already call, plus a 
 | `POST` | `/v1/messages` | yes | yes | Anthropic messages (Claude Code) |
 | `POST` | `/v1/messages/count_tokens` | yes | yes | Anthropic token counting |
 | `GET` | `/v1/models` | yes | yes | The models the caller's rule allows |
+| `POST` | `/v1/guardrails/check` | yes | yes | Runs the caller's rule's guardrails on text, with no model call. See [Guardrails](/governance/guardrails/#check-text-from-your-application) |
+| `GET`, `POST` | `/v1/budget/raises` | yes | yes | Lists the caller's budget raises; asks for one. See [Budget raises](/governance/budgets-and-rate-limits/#budget-raises) |
 | `POST` | `/mcp` | yes | `tools/call` and refusals | The [MCP gateway](/governance/mcp-gateway/), when the policy lists `mcp:` servers |
 | `GET` | `/healthz` | no | no | Liveness: the process is up. 503 only once the audit log is lost |
 | `GET` | `/readyz` | no | no | Readiness: a request sent now would be served. See [Health, readiness and drain](/operations/operations/#health-readiness-and-drain) |

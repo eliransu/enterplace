@@ -74,6 +74,10 @@ The admin API exists only when Gantry serves from a keys file. Under `gantry ser
 | `GET`, `POST` | `/admin/models` | `list_models`, `add_model` | The models served with prices and aliases; adds a model to a provider |
 | `PUT` | `/admin/models/<model>/price` | `price_model` | Sets a model's price |
 | `GET`, `PUT` | `/admin/budgets` | `list_budgets`, `put_budgets` | The policy's `limits:`; replaces them |
+| `GET` | `/admin/replicas` | `list_replicas` | Every gateway on the store: `{"store": true, "replicas": [{"gateway", "host", "version", "schema", "started", "seen", "healthy"}]}`. `healthy` is false once a gateway wrote no heartbeat for 10 seconds; one gone for a day is dropped. Without a store the list is empty. Needs `see_records`. See [Several replicas with a store](/operations/store/) |
+| `GET` | `/admin/budget/raises` | `budget_raises` | [Budget raises](/governance/budgets-and-rate-limits/#budget-raises), the ones waiting first. Needs `see_spend` |
+| `POST` | `/admin/budget/raises` | `add_budget_raise` | Raises a scope's budgets at once: `{"scope": "team:payments", "usd": 500, "until": "2026-12-31", "reason": "..."}`. Needs `issue_keys` |
+| `POST` | `/admin/budget/raises/<id>/approve`, `/reject` | `approve_budget_raise`, `reject_budget_raise` | Decides a raise a person asked for. `approve` takes an optional `{"usd", "until"}` over what was asked. Needs `issue_keys` |
 | `GET` | `/admin/providers`, `/rules`, `/guardrails`, `/mcp`, `/aliases` | `list_providers`, ... | A part of the policy ([below](#the-policy-by-part)) |
 | `GET`, `PUT`, `DELETE` | `/admin/providers/<name>`, and the same for each part | `show_provider`, `put_provider`, `remove_provider`, ... | One entry: read, add or replace, remove |
 | `GET` | `/admin/alerts`, `/admin/alerts/channels`, `/admin/alerts/rules` | `list_alerts`, `list_alert_channels`, `list_alert_rules` | Enterprise: what fired, the channels (no secrets), the rules |

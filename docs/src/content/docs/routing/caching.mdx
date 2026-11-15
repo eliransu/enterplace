@@ -48,6 +48,7 @@ rules:
 | `cache.scope` | string | `person` | `person`: an answer is served only to the person it was made for. `team`: to anyone on their team under the same rule. |
 | `cache.semantic.model` | string | none | The embeddings model requests are compared with. The rule must allow it. |
 | `cache.semantic.threshold` | number | none | Above 0, at most 1. The cosine similarity at or above which a cached answer is served. |
+| `store.answer_cache` | boolean | `false` | Top level, under `store:`. Keeps cached answers in Postgres too, so every replica serves them. See [the store](/operations/store/#the-answer-cache). |
 | `prompt_cache` | string | `off` | `auto` marks the system prompt, tools and conversation of a messages request with cache breakpoints. |
 
 ## Scope

@@ -795,8 +795,7 @@ async fn answer(
     }
     mcp.check_pin(index, &conn, &own).await?;
     let observe = policy.mode() == gantry_core::policy::Mode::Observe;
-    let guards: Vec<Guardrail> =
-        crate::observed_guards(policy, &rule.guardrails).unwrap_or_else(|| rule.guardrails.clone());
+    let guards: Vec<Guardrail> = crate::guards_of(policy, Some(&person), rule);
     if let Some(params) = forwarded.as_object_mut() {
         params.insert("name".into(), own.clone().into());
         if guards.iter().any(|g| g.on.request) {

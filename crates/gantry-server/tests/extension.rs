@@ -173,13 +173,14 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
         .collect::<Result<_, tokio_postgres::Error>>()?;
     // The gateway's own namespaces, beside the extension's: ownership of files and batches, policy versions, the
     // version of the sessions events plugins ended, the session pins and latency, the request index and the MCP
-    // gateway's state.
+    // gateway's state, and what gateways share for high availability (heartbeats, the answer cache, budget raises).
     assert_eq!(
         rows,
         vec![
             ("batches".to_string(), 2),
             ("demo".to_string(), 1),
             ("gantry_events".to_string(), 1),
+            ("gantry_ha".to_string(), 1),
             ("gantry_policy".to_string(), 1),
             ("gantry_routing".to_string(), 3),
             ("insights".to_string(), 1),

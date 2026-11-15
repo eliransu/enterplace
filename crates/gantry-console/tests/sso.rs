@@ -1205,6 +1205,47 @@ async fn gantry_login_issues_a_personal_key_bound_to_the_email_with_an_expiry_an
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn gantry_login_holds_a_personal_key_to_the_policy_s_key_bounds() -> TestResult {
+    let s = setup().await?;
+    // self_issue asks for 30 days; the bounds allow 7, and give the key a budget.
+    with_policy(
+        &s,
+        "key_bounds:\n  max_days: 7\n  max_budget: { usd: 5, per: month }\n",
+        true,
+    )?;
+    let rsa = Rsa::new()?;
+    lock(&s.mock).jwks = vec![rsa.jwk("r1")];
+    let (url, server) = serve(&s).await?;
+    let (tell, opened) = tokio::sync::oneshot::channel();
+    let login = gantry_console::cli::login(&url, move |address| {
+        let _ = tell.send(address.to_string());
+    });
+    let browser = async {
+        let opened = opened.await?;
+        browse(&s, &rsa, &opened, "dana@example.com").await
+    };
+    let (got, back) = tokio::join!(login, browser);
+    server.abort();
+    let got = got?;
+    let (_, answer) = back?;
+    handoff(&s, &answer, true).await?;
+    let in_7_days =
+        gantry_core::audit::rfc3339(SystemTime::now() + std::time::Duration::from_secs(7 * 86_400));
+    assert_eq!(got.expires[..10], in_7_days[..10], "{}", got.expires);
+    let keys = std::fs::read_to_string(s.dir.join("gantry.keys.yaml"))?;
+    let hash = sha256_hex(got.key.as_bytes());
+    let entry = keys
+        .split("  - name: ")
+        .find(|e| e.contains(&hash))
+        .ok_or("the key is not in the keys file")?;
+    assert!(
+        entry.contains("usd: 5") && entry.contains("per: month"),
+        "{keys}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn gantry_login_refuses_an_email_policy_does_not_let_self_issue_and_a_wrong_verifier()
 -> TestResult {
     let s = setup().await?;

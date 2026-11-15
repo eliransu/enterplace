@@ -131,6 +131,7 @@ Besides name, team, `admin`, `expires`, `budget`, `models` and `tpm`, a key may 
 | `routes` | list | Path prefixes the key may call, such as `/v1/messages`. A prefix matches whole path segments. Empty allows every route | `route_not_allowed` (403) |
 | `from` | list | [Address ranges](/governance/access-control/#source-address-ranges) the key may be used from | `ip_not_allowed` (403) |
 | `mcp_tools` | list | MCP tools this key may use, within its rule's `tools:`: `<server>.<tool>`, `<server>.*`, `*`, or `!<server>.<tool>` to leave one out. It only narrows the rule. Empty leaves the rule's list. See [Tool permissions](/governance/tool-permissions/#mcp-tools-per-key-and-per-request) | `tool_not_allowed` |
+| `guardrails` | list | Guardrails the key adds to its rule's, by name. They only add. See [Guardrails](/governance/guardrails/#default-guardrails-and-guardrails-per-key) | `guardrail_blocked` (403) |
 | `replaced_by` | string | Set by a [rotation](#rotate-a-key): the key that replaces this one | |
 
 ```yaml title="gantry.keys.yaml"
@@ -145,6 +146,33 @@ keys:
     routes: ["/v1/chat/completions"]
     from: ["10.20.0.0/16"]
 ```
+
+## Bounds on issued keys
+
+`key_bounds:` caps what a key may be issued with: how long it works, how much it may spend and which models it may be given. At the top level it holds for every role and for keys from `gantry login`; on a role it replaces the top-level one for that role's holders.
+
+```yaml
+key_bounds:
+  max_days: 365
+roles:
+  - name: team-lead
+    permissions: [see_keys, issue_keys]
+    teams: [payments]
+    key_bounds:
+      max_days: 30
+      max_budget: { usd: 100, per: month }
+      models: ["group:small", gpt-4o]
+model_groups:
+  small: [gpt-4o-mini, claude-haiku-*]
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `max_days` | integer, 1 to 3660 | The longest a key may work. A key issued without `expires` gets this many days. |
+| `max_budget` | budget | The fastest a key may spend. A key's budget is compared by its rate, so `$5 a day` is over `$100 a month`. A key issued without a budget gets this one. |
+| `models` | list | The models a key may be given: names, patterns or `group:<name>`. A key issued without `models` gets this list. |
+
+A key over a bound is refused with `key_bounds_exceeded` (403), naming the bound and the fix. The bounds hold on `POST /admin/keys`, the console's issue form and `gantry login`, whose keys never outlive `max_days`. `gantry key new` writes the keys file or the store directly, as the operator of the machine, and is not bounded.
 
 ## Change a key
 

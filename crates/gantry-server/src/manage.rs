@@ -75,7 +75,9 @@ const fn r(
     }
 }
 
-use Permission::{Credentials, EditPolicy, IssueKeys, Kill, RevokeKeys, SeeKeys, SeeSpend};
+use Permission::{
+    Credentials, EditPolicy, IssueKeys, Kill, RevokeKeys, SeeKeys, SeeRecords, SeeSpend,
+};
 
 /// Every route of the open source admin API, with the module that serves it.
 pub(crate) const ROUTES: &[(Module, AdminRoute)] = &[
@@ -597,6 +599,56 @@ pub(crate) const ROUTES: &[(Module, AdminRoute)] = &[
         Module::Manage,
         r(
             "GET",
+            "/admin/replicas",
+            "list_replicas",
+            Some(SeeRecords),
+            "Every gateway on the store, with its version, schema and whether its heartbeat is recent",
+        ),
+    ),
+    (
+        Module::Manage,
+        r(
+            "GET",
+            "/admin/budget/raises",
+            "budget_raises",
+            Some(SeeSpend),
+            "Budget raises, the ones waiting for a decision first",
+        ),
+    ),
+    (
+        Module::Manage,
+        r(
+            "POST",
+            "/admin/budget/raises",
+            "add_budget_raise",
+            Some(IssueKeys),
+            "Raises the budgets of a scope by an amount until a time",
+        ),
+    ),
+    (
+        Module::Manage,
+        r(
+            "POST",
+            "/admin/budget/raises/{id}/approve",
+            "approve_budget_raise",
+            Some(IssueKeys),
+            "Approves a raise a person asked for, for an amount and a window",
+        ),
+    ),
+    (
+        Module::Manage,
+        r(
+            "POST",
+            "/admin/budget/raises/{id}/reject",
+            "reject_budget_raise",
+            Some(IssueKeys),
+            "Rejects a raise a person asked for",
+        ),
+    ),
+    (
+        Module::Manage,
+        r(
+            "GET",
             "/admin/aliases",
             "list_aliases",
             None,
@@ -760,6 +812,8 @@ enum Plan {
         by: String,
     },
     Extension(Arc<dyn AdminApi>, AdminCall),
+    /// A budget raise to keep: added, approved or rejected.
+    Raise(Box<gantry_core::store::Raise>),
 }
 
 async fn run(
@@ -934,6 +988,32 @@ async fn allow(
                 by,
             },
         ));
+    }
+    match route.action {
+        "list_replicas" => {
+            // Without a store this gateway is the only one: it is listed alone, healthy since it answers.
+            let replicas = match &state.spend.store {
+                Some(store) => store.replicas().await.map_err(|err| {
+                    refused(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "store_unavailable",
+                        format!("Refused: the store could not be read ({err}). Check that its Postgres is reachable and try again."),
+                    )
+                })?,
+                None => Vec::new(),
+            };
+            return Ok(Plan::Read(
+                json!({ "store": state.spend.store.is_some(), "replicas": replicas }),
+            ));
+        }
+        "budget_raises" => return Ok(Plan::Read(crate::govern::listed(&state.raises, &role))),
+        action @ ("add_budget_raise" | "approve_budget_raise" | "reject_budget_raise") => {
+            let id = params.first().map_or("", String::as_str);
+            let raise = crate::govern::decided(&state.raises, &role, action, id, &sent, &by)?;
+            call.target = serde_json::to_value(&raise).ok();
+            return Ok(Plan::Raise(Box::new(raise)));
+        }
+        _ => {}
     }
     let reloader = state.reloader.clone().ok_or_else(|| {
         refused(
@@ -1332,6 +1412,25 @@ async fn act(state: &AppState, plan: Plan) -> Result<Done, Refusal> {
             .await?;
             Ok((
                 policy_api::changed(state, done, StatusCode::CREATED).await?,
+                None,
+            ))
+        }
+        Plan::Raise(raise) => {
+            let (raises, kept) = (state.raises.clone(), raise.clone());
+            blocking(move || raises.put(&kept)).await?.map_err(|err| {
+                refused(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "store_unavailable",
+                    format!("Refused: {err}"),
+                )
+            })?;
+            let status = if raise.requested_at == raise.decided_at.clone().unwrap_or_default() {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            Ok((
+                json_response(status, &serde_json::to_value(&raise).unwrap_or_default()),
                 None,
             ))
         }
