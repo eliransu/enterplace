@@ -106,6 +106,201 @@ impl MasterKey {
     }
 }
 
+/// Provider credentials sealed under the master key in `gantry-credentials.json` beside the policy, for a gateway
+/// with no store: `gantry start` on a laptop takes a provider key in the console and keeps only sealed bytes.
+pub(crate) struct FileVault {
+    path: std::path::PathBuf,
+    master: MasterKey,
+    // One writer at a time in this process; the console is the only writer.
+    lock: std::sync::Mutex<()>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct Entry {
+    name: String,
+    provider: String,
+    /// Hex of the nonce, the sealed value and its tag.
+    sealed: String,
+    fingerprint: String,
+    created_by: String,
+    created_at: String,
+    #[serde(default)]
+    rotated_by: Option<String>,
+    #[serde(default)]
+    rotated_at: Option<String>,
+    #[serde(default)]
+    generation: i64,
+}
+
+impl Entry {
+    fn public(&self) -> gantry_core::store::Credential {
+        gantry_core::store::Credential {
+            name: self.name.clone(),
+            provider: self.provider.clone(),
+            fingerprint: self.fingerprint.clone(),
+            created_by: self.created_by.clone(),
+            created_at: self.created_at.clone(),
+            rotated_by: self.rotated_by.clone(),
+            rotated_at: self.rotated_at.clone(),
+            generation: self.generation,
+        }
+    }
+}
+
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    (text.len() % 2 == 0)
+        .then(|| {
+            (0..text.len() / 2)
+                .map(|i| u8::from_str_radix(text.get(i * 2..i * 2 + 2)?, 16).ok())
+                .collect()
+        })
+        .flatten()
+}
+
+impl FileVault {
+    pub(crate) fn new(policy: &Path, master: MasterKey) -> Self {
+        Self {
+            path: gantry_core::store::credentials_file(policy),
+            master,
+            lock: std::sync::Mutex::new(()),
+        }
+    }
+
+    fn read(&self) -> Result<Vec<Entry>, String> {
+        match std::fs::read(&self.path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|err| {
+                format!(
+                    "{} is not a credentials file Gantry wrote ({err}). Move it away and add the credentials again in the console.",
+                    self.path.display()
+                )
+            }),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(err) => Err(format!(
+                "{} cannot be read: {err}. Give Gantry read access to it.",
+                self.path.display()
+            )),
+        }
+    }
+
+    fn write(&self, entries: &[Entry]) -> Result<(), String> {
+        let text = serde_json::to_string_pretty(entries).map_err(|err| err.to_string())?;
+        let temp = self.path.with_extension("json.tmp");
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        options
+            .open(&temp)
+            .and_then(|mut file| std::io::Write::write_all(&mut file, text.as_bytes()))
+            .and_then(|()| std::fs::rename(&temp, &self.path))
+            .map_err(|err| {
+                format!(
+                    "{} cannot be written ({err}). Give Gantry write access to the policy's folder. Nothing was changed.",
+                    self.path.display()
+                )
+            })
+    }
+
+    fn change(
+        &self,
+        edit: impl FnOnce(&mut Vec<Entry>) -> Result<Option<Entry>, String>,
+    ) -> Result<Option<gantry_core::store::Credential>, String> {
+        let _held = self
+            .lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut entries = self.read()?;
+        let changed = edit(&mut entries)?;
+        if changed.is_some() {
+            self.write(&entries)?;
+        }
+        Ok(changed.map(|e| e.public()))
+    }
+}
+
+impl gantry_core::store::Credentials for FileVault {
+    fn credentials(&self) -> Result<std::sync::Arc<Vec<gantry_core::store::Credential>>, String> {
+        Ok(std::sync::Arc::new(
+            self.read()?.iter().map(Entry::public).collect(),
+        ))
+    }
+
+    fn add_credential(
+        &self,
+        name: &str,
+        provider: &str,
+        value: &str,
+        by: &str,
+    ) -> Result<Option<gantry_core::store::Credential>, String> {
+        let sealed = gantry_core::id::hex(&self.master.seal(name, value.trim().as_bytes())?);
+        self.change(|entries| {
+            if entries.iter().any(|e| e.name == name) {
+                return Ok(None);
+            }
+            let entry = Entry {
+                name: name.into(),
+                provider: provider.into(),
+                sealed,
+                fingerprint: gantry_core::store::fingerprint(value.trim()),
+                created_by: by.into(),
+                created_at: gantry_core::audit::timestamp(),
+                rotated_by: None,
+                rotated_at: None,
+                generation: 1,
+            };
+            entries.push(entry.clone());
+            Ok(Some(entry))
+        })
+    }
+
+    fn rotate_credential(
+        &self,
+        name: &str,
+        value: &str,
+        by: &str,
+    ) -> Result<Option<gantry_core::store::Credential>, String> {
+        let sealed = gantry_core::id::hex(&self.master.seal(name, value.trim().as_bytes())?);
+        self.change(|entries| {
+            let Some(entry) = entries.iter_mut().find(|e| e.name == name) else {
+                return Ok(None);
+            };
+            entry.sealed = sealed;
+            entry.fingerprint = gantry_core::store::fingerprint(value.trim());
+            entry.rotated_by = Some(by.into());
+            entry.rotated_at = Some(gantry_core::audit::timestamp());
+            entry.generation += 1;
+            Ok(Some(entry.clone()))
+        })
+    }
+
+    fn remove_credential(
+        &self,
+        name: &str,
+    ) -> Result<Option<gantry_core::store::Credential>, String> {
+        self.change(|entries| {
+            let at = entries.iter().position(|e| e.name == name);
+            Ok(at.map(|i| entries.remove(i)))
+        })
+    }
+
+    fn credential_value(&self, name: &str) -> Result<Option<String>, String> {
+        let entries = self.read()?;
+        let Some(entry) = entries.iter().find(|e| e.name == name) else {
+            return Ok(None);
+        };
+        let sealed = unhex(&entry.sealed).ok_or_else(|| {
+            format!(
+                "credential \"{name}\" in {} is damaged. Add it again in the console.",
+                self.path.display()
+            )
+        })?;
+        let value = self.master.open(name, &sealed)?;
+        String::from_utf8(value).map(Some).map_err(|_| {
+            format!("credential \"{name}\" is not text. Rotate it with the key's value.")
+        })
+    }
+}
+
 /// The providers of `loaded` that name a credential the store does not hold, one problem each, with the fix. The
 /// store is opened as `gantry serve` opens it, from the variables `env` reads. `Err` when the names could not be
 /// checked: no store to reach, or no master key to read it with.
@@ -183,6 +378,49 @@ mod tests {
             .unwrap_or_default();
         assert!(both.contains("Set one of them"), "{both}");
         assert!(MasterKey::from_env(&|_| None)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn the_file_vault_keeps_only_sealed_values_and_rotates_and_removes() -> Result<(), String> {
+        use gantry_core::store::Credentials;
+        let hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+        let dir = std::env::temp_dir().join(format!("gantry-vault-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let policy = dir.join("gantry.policy.yaml");
+        let vault = FileVault::new(&policy, MasterKey::from_hex(hex, MASTER_ENV)?);
+        assert!(
+            vault
+                .add_credential("openai", "openai", " sk-vault-secret ", "admin")?
+                .is_some()
+        );
+        assert!(
+            vault
+                .add_credential("openai", "openai", "sk-other", "admin")?
+                .is_none()
+        );
+        let text = std::fs::read_to_string(dir.join("gantry-credentials.json"))
+            .map_err(|e| e.to_string())?;
+        assert!(!text.contains("sk-vault-secret"), "{text}");
+        assert_eq!(
+            vault.credential_value("openai")?.as_deref(),
+            Some("sk-vault-secret")
+        );
+        let rotated = vault
+            .rotate_credential("openai", "sk-new", "admin")?
+            .ok_or("not rotated")?;
+        assert_eq!(rotated.generation, 2);
+        assert_eq!(vault.credential_value("openai")?.as_deref(), Some("sk-new"));
+        // Another master key reads the names but opens no value.
+        let other = FileVault::new(
+            &policy,
+            MasterKey::from_hex(&hex.replace('0', "1"), MASTER_ENV)?,
+        );
+        assert_eq!(other.credentials()?.len(), 1);
+        assert!(other.credential_value("openai").is_err());
+        assert!(vault.remove_credential("openai")?.is_some());
+        assert!(vault.credential_value("openai")?.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 }

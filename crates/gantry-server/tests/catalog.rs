@@ -74,10 +74,11 @@ fn dir(id: &str) -> std::io::Result<PathBuf> {
 /// One governed request through the preset. Returns what went wrong, if anything.
 async fn smoke(preset: &Preset, port: u16, seen: &Seen) -> Result<(), Error> {
     // watsonx.ai trades its key for an IAM token first, SageMaker signs with AWS credentials and its region, and
-    // Replicate answers with a prediction: providers_cloud.rs runs each against a mock of its own.
+    // Replicate answers with a prediction: providers_cloud.rs runs each against a mock of its own. The demo model
+    // is answered inside the gateway and sends nothing: the gantry-cli start tests and ftue_check.py cover it.
     if matches!(
         preset.kind,
-        Kind::Watsonx | Kind::Sagemaker | Kind::Replicate
+        Kind::Watsonx | Kind::Sagemaker | Kind::Replicate | Kind::Demo
     ) {
         return Ok(());
     }

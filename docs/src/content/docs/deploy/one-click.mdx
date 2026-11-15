@@ -1,6 +1,6 @@
 ---
 title: One-click deploys
-description: Deploy Gantry with Postgres to Render, Railway, Fly.io, DigitalOcean, Google Cloud Run, AWS, Azure or one machine with Docker Compose, in a few clicks or one command, then sign in to the console with the admin key from the logs.
+description: Deploy Gantry with Postgres to Render, Fly.io, DigitalOcean, Google Cloud Run, AWS, Azure or one machine with Docker Compose, in a few clicks or one command, then sign in to the console with the admin key from the logs.
 sidebar:
   label: One-click deploys
   order: 2
@@ -8,7 +8,18 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Each of these starts the public image, `ghcr.io/eliransu/gantry:latest`, with a Postgres database and the provider key you give it. Nothing to write first: the first start writes an observe-mode policy (every request is let through and recorded) and prints an admin key once in the logs. Open `<your URL>/console`, sign in with that key, and the console takes you from there.
+## Which to pick
+
+| You want | Pick |
+|---|---|
+| A 5-minute trial on your machine | [Docker](/getting-started/quickstart/) (`docker run`), or [Docker Compose](#docker-compose) with Postgres |
+| A 5-minute trial in the cloud | [Render](#render) |
+| AWS | [CloudFormation](#aws) |
+| Google Cloud | [Cloud Run](#google-cloud-run) |
+| Azure | [the Azure button](#azure) |
+| Kubernetes | [Helm](/deploy/kubernetes/) |
+
+Each of these starts the public image, `ghcr.io/eliransu/gantry:latest`, with a Postgres database. Nothing to write first, and no provider key needed: the first start writes an observe-mode policy (every request is let through and recorded) and prints, in the logs, a sign-in link and an admin key (once). The link names `http://127.0.0.1:8080`: on a hosted platform put your URL in its place (`<your URL>/console/sign-in/<code>`, once, within 10 minutes), or open `<your URL>/console` and sign in with the admin key. Then Start here connects a model, or tries the free demo model. A provider key set in the platform's environment (`OPENAI_API_KEY` and the like) is picked up. To paste provider keys in the console instead, set `GANTRY_MASTER_KEY` in the platform's environment to 64 hex characters (`openssl rand -hex 32`, kept in your password manager): it seals them in Postgres, and must stay the same across redeploys.
 
 ## What every deploy does
 
@@ -35,15 +46,6 @@ The button reads [`render.yaml`](https://github.com/eliransu/gantry/blob/main/re
 
 **Admin key:** the service's Logs tab. **Console:** `https://<service URL>/console`.
 **Cost:** the Starter instance and the Basic 256 MB database, on [render.com/pricing](https://render.com/pricing). Render's free Postgres expires 30 days after it is made ([render.com/docs/free](https://render.com/docs/free)).
-
-## Railway
-
-<a href="https://railway.com/new/template/RAILWAY_TEMPLATE_CODE"><img src="https://railway.com/button.svg" alt="Deploy on Railway" /></a>
-
-The template runs the image as service `gantry` beside a Railway PostgreSQL service, with `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `PGSSLMODE=require` and `PORT=8080`. Railway asks for `OPENAI_API_KEY`. How the template is made: [`deploy/railway/README.md`](https://github.com/eliransu/gantry/blob/main/deploy/railway/README.md).
-
-**Admin key:** the `gantry` service's Deploy Logs. **Console:** `https://<generated domain>/console`.
-**Cost:** usage-based. The Hobby plan is $5 a month and includes $5 of usage; memory is about $10 per GB a month and CPU about $20 per vCPU a month ([railway.com/pricing](https://railway.com/pricing)).
 
 ## Fly.io
 
@@ -147,6 +149,6 @@ mkdir gantry && cd gantry && curl -fsSLO https://raw.githubusercontent.com/elira
 docker compose logs gantry | grep GANTRY_KEY
 ```
 
-[`compose.yaml`](https://github.com/eliransu/gantry/blob/main/deploy/compose/compose.yaml) runs Postgres 16 and Gantry with a volume each, so here the audit log survives restarts too. Gantry shares Postgres's network, so the database has no port of its own and the connection is plain. The gateway listens on `127.0.0.1:8080`; the console is at `http://localhost:8080/console`. Put provider keys in a `.env` file beside it to keep them out of your shell history. The [Docker Compose guide](/deploy/docker/) goes further, with your own policy file.
+[`compose.yaml`](https://github.com/eliransu/gantry/blob/main/deploy/compose/compose.yaml) runs Postgres 16 and Gantry with a volume each, so here the audit log survives restarts too. Gantry shares Postgres's network, so the database has no port of its own and the connection is plain. The gateway listens on `127.0.0.1:8080`; the console is at `http://127.0.0.1:8080/console`. Put provider keys in a `.env` file beside it to keep them out of your shell history. The [Docker Compose guide](/deploy/docker/) goes further, with your own policy file.
 
 **Cost:** your machine.

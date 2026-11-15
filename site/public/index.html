@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gantry: put a name on every AI call</title>
-<meta name="description" content="Gantry is a self-hosted AI gateway. Every call from coding tools, agents, apps and MCP clients goes through it with a person&#x27;s name, a budget, guardrails and a record in a hash-chained audit log. One Docker image plus Postgres, in your cloud.">
+<meta name="description" content="Gantry is a self-hosted AI gateway. Every call from coding tools, agents, apps and MCP clients goes through it with a person&#x27;s name, a budget, guardrails and a record in a hash-chained audit log. One binary or Docker image, Postgres optional for teams.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <link rel="canonical" href="https://gantry.eliran.me/">
@@ -14,7 +14,7 @@
 <meta property="og:site_name" content="Gantry">
 <meta property="og:url" content="https://gantry.eliran.me/">
 <meta property="og:title" content="Gantry: put a name on every AI call">
-<meta property="og:description" content="Gantry is a self-hosted AI gateway. Every call from coding tools, agents, apps and MCP clients goes through it with a person&#x27;s name, a budget, guardrails and a record in a hash-chained audit log. One Docker image plus Postgres, in your cloud.">
+<meta property="og:description" content="Gantry is a self-hosted AI gateway. Every call from coding tools, agents, apps and MCP clients goes through it with a person&#x27;s name, a budget, guardrails and a record in a hash-chained audit log. One binary or Docker image, Postgres optional for teams.">
 <meta property="og:image" content="https://gantry.eliran.me/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -101,10 +101,10 @@ gantry</a>
     <h1>Put a name on every AI call.</h1>
     <p class="lead">Gantry is a self-hosted AI gateway. Coding tools, agents, apps and MCP clients call models through it, and each request gets a person's name, a budget, guardrails and a line in an audit log you can verify.</p>
     <div class="actions">
-      <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Start in two minutes</a>
       <a class="btn btn-line" href="#use-cases">Find your use case</a>
     </div>
-    <p class="muted">One Docker image plus Postgres, in your own cloud. Open source core under Apache 2.0.</p>
+    <p class="muted"><code>curl -fsSL https://gantry.eliran.me/install.sh | sh</code>, then <code>gantry start</code>: your browser opens on the dashboard. One binary or Docker image, Postgres optional for teams. Open source core under Apache 2.0.</p>
   </div>
 
 <figure class="gate" data-gate aria-label="Four callers send requests through the Gantry gate. Allowed requests pass to the provider. One request is refused because its team is over budget. Each request writes an audit record.">
@@ -222,8 +222,8 @@ gantry</a>
     <p>Prompts and answers go from your callers, through Gantry, to the providers your policy names. Gantry never stores them, and nothing calls home.</p>
   </div>
   <div class="parts">
-    <div><b>ghcr.io/ggantry/gantry</b><h3>One image</h3><p>A single static binary in an image built from scratch, running as a non-root user. It serves the gateway, the console and the admin API.</p></div>
-    <div><b>DATABASE_URL</b><h3>Postgres</h3><p>Keys, kill switches, budgets and rate limits, shared by every replica. No Redis.</p></div>
+    <div><b>ghcr.io/eliransu/gantry</b><h3>One image</h3><p>A single static binary in an image built from scratch, running as a non-root user. It serves the gateway, the console and the admin API.</p></div>
+    <div><b>DATABASE_URL</b><h3>Postgres, for teams</h3><p>Optional. Keys, kill switches, budgets and rate limits, shared by every replica. No Redis.</p></div>
     <div><b>gantry.policy.yaml</b><h3>One policy file</h3><p>Providers, rules, budgets and guardrails, kept in git. An unknown field is an error with its line number.</p></div>
   </div>
   <div class="actions" style="margin-top: 32px">

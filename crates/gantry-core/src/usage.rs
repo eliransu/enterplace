@@ -706,9 +706,19 @@ pub fn builtin_prices() -> Vec<BuiltinPrice> {
     table
 }
 
+/// The model the demo provider (`preset: demo`) serves.
+pub const DEMO_MODEL: &str = "gantry-demo";
+
 fn token_prices(checked: &'static str) -> Vec<BuiltinPrice> {
     // OpenAI charges nothing extra to write its cache on these models, so writes cost the input price.
     vec![
+        // Gantry's demo model (provider kind demo) is answered inside the gateway: it costs nothing.
+        BuiltinPrice {
+            model: DEMO_MODEL,
+            price: Price::per_mtok(0.0, 0.0, 0.0, 0.0, 0.0, 1_024),
+            source: "https://gantry-docs.eliran.me/getting-started/quickstart/",
+            checked,
+        },
         BuiltinPrice {
             model: "gpt-4o-mini",
             price: Price::per_mtok(0.15, 0.60, 0.075, 0.15, 0.15, 16_384),

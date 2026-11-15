@@ -2373,9 +2373,17 @@ fn people_dialog(view: &PeopleView<'_>, entries: &[KeyEntry]) -> String {
                 ),
                 &format!(
                     r#"<span class="g-command g-command--value"><span class="g-command__text t-mono" id="new-key">{}</span><button class="g-btn g-btn--quiet g-btn--sm t-small" type="button" data-copy="new-key">{}Copy</button></span>
+<p class="t-small g-muted">The lines for each tool, with this key and this gateway's address:</p>
+<div class="g-stack" style="gap: var(--space-2)"><div class="g-check__bar"><span></span><button class="g-btn g-btn--quiet g-btn--sm t-small" type="button" data-copy="new-key-lines">{}Copy</button></div><div class="g-terminal t-mono" id="new-key-lines">{}</div></div>
 <div class="g-dialog__actions">{}</div>"#,
                     esc(key),
                     icon("copy"),
+                    icon("copy"),
+                    tool_lines(&crate::base(), key)
+                        .iter()
+                        .map(|l| format!("<span>{}</span>", esc(l)))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
                     close_link("Done", "", "/console/people")
                 ),
             )
@@ -2576,6 +2584,24 @@ fn key_status(
         String::new()
     };
     (status, fix)
+}
+
+/// How to point Claude Code, Codex and the OpenAI SDKs at the gateway at `base` with `key`, ready to paste.
+pub(crate) fn tool_lines(base: &str, key: &str) -> Vec<String> {
+    vec![
+        "# Claude Code".into(),
+        format!("export ANTHROPIC_BASE_URL={base}"),
+        format!("export ANTHROPIC_API_KEY={key}"),
+        "claude".into(),
+        "# Codex: in ~/.codex/config.toml set model_provider = \"gantry\" and".into(),
+        format!(
+            "#   [model_providers.gantry] base_url = \"{base}/v1\", env_key = \"GANTRY_KEY\", wire_api = \"responses\""
+        ),
+        format!("export GANTRY_KEY={key}"),
+        "# OpenAI SDKs".into(),
+        format!("export OPENAI_BASE_URL={base}/v1"),
+        format!("export OPENAI_API_KEY={key}"),
+    ]
 }
 
 pub fn people(view: &PeopleView<'_>) -> String {

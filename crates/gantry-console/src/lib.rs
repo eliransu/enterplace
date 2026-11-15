@@ -538,6 +538,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .route("/setup/{token}", get(setup_page).post(setup_done))
         .route("/", get(root))
         .route("/sign-in", get(sign_in_page).post(sign_in))
+        .route("/sign-in/{code}", get(sign_in_link))
         .route("/sign-out", get(sign_out))
         .route("/sso/start", get(sso_start))
         .route("/sso/callback", get(sso_callback))
@@ -1111,7 +1112,7 @@ async fn sign_in(
         return foreign();
     }
     let form = Form::parse(&body);
-    let key = form.get("key").trim();
+    let key = pasted_key(form.get("key"));
     let keys = &console.config().keys;
     let entry = if key.is_empty() {
         None
@@ -1132,9 +1133,11 @@ async fn sign_in(
         // One message for an unknown key and a key that is not an admin's: the page does not tell which keys exist.
         let error = if key.is_empty() {
             "Paste a Gantry key. It starts with gantry_.".to_string()
+        } else if !key.starts_with("gantry_") {
+            "That is not a Gantry key: Gantry keys start with gantry_. Paste the admin key gantry start printed, or open the sign-in link it printed.".to_string()
         } else {
             format!(
-                "This key is not an admin key in {}. Paste an admin key, or ask an admin to add admin: true under your entry.",
+                "This key does not sign in here: it is not an admin key in {}. Check that you pasted the whole admin key gantry start printed, or ask an admin to add admin: true under your entry.",
                 html::esc(&keys.display().to_string())
             )
         };
@@ -1170,6 +1173,126 @@ async fn sign_in(
         &session_cookie(&session, &headers, &uri, &tls),
     );
     response
+}
+
+/// How long the sign-in link `gantry start` prints works.
+pub const START_LINK_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// The one-time sign-in link `gantry start` prints, kept as the hash of its code only.
+struct StartLink {
+    sha256: String,
+    expires: Instant,
+    /// The admin key it signs in as, by its hash.
+    admin: String,
+    /// In a container the browser's address is the container network's, never loopback.
+    any_address: bool,
+}
+
+// One per process: the gateway prints one link when it starts.
+static START_LINK: std::sync::Mutex<Option<StartLink>> = std::sync::Mutex::new(None);
+
+/// Makes the code of the one-time sign-in link for the admin key whose hash is `admin`, replacing any earlier one.
+/// It works once, for [`START_LINK_TTL`], and only from this machine unless `any_address`. `None` when the system
+/// gave no randomness.
+pub fn offer_start_link(admin: &str, any_address: bool) -> Option<String> {
+    let code = random_hex()?;
+    *START_LINK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(StartLink {
+        sha256: id::sha256_hex(code.as_bytes()),
+        expires: Instant::now() + START_LINK_TTL,
+        admin: admin.to_string(),
+        any_address,
+    });
+    Some(code)
+}
+
+/// Signs in with the one-time link `gantry start` printed: recorded as a console sign-in, then the link is spent.
+async fn sign_in_link(
+    State(console): State<Console>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+    tls: Tls,
+) -> Response {
+    let hash = id::sha256_hex(code.as_bytes());
+    let local = client().is_some_and(|ip| match ip {
+        IpAddr::V4(v4) => v4.is_loopback(),
+        IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+    });
+    let refused = |message: &str| {
+        page(
+            StatusCode::FORBIDDEN,
+            pages::notice(
+                "This sign-in link does not work",
+                message,
+                "/console/sign-in",
+                "Sign in with the admin key",
+            ),
+        )
+    };
+    let admin = {
+        let mut link = START_LINK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match link.as_ref() {
+            Some(l) if l.sha256 == hash && !(l.any_address || local) => {
+                return refused(
+                    "It works only in a browser on the machine that runs Gantry. Open it there, or sign in with the admin key gantry start printed.",
+                );
+            }
+            Some(l) if l.sha256 == hash && l.expires > Instant::now() => {
+                link.take().map(|l| l.admin)
+            }
+            Some(l) if l.sha256 == hash => {
+                *link = None;
+                None
+            }
+            _ => None,
+        }
+    };
+    let Some(entry) = admin.and_then(|sha| admin_entry(&console.config().keys, &sha)) else {
+        return refused(
+            "It was used already or is older than 10 minutes: each link signs in once. Run gantry start again for a new one, or sign in with the admin key it printed.",
+        );
+    };
+    let act = Act {
+        action: "console_sign_in",
+        by: Some((&entry.name, &entry.team)),
+        key: None,
+        target: json!({ "via": "start_link" }),
+    };
+    if record(&console, &act, None, None).await.is_err() {
+        return page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            pages::sign_in("", NOT_RECORDED, console.sso_on()),
+        );
+    }
+    let session = match console.open_session(Who::Key(entry.sha256)).await {
+        Ok(session) => session,
+        Err(err) => {
+            return page(
+                StatusCode::SERVICE_UNAVAILABLE,
+                pages::sign_in("", &err, console.sso_on()),
+            );
+        }
+    };
+    let mut response = redirect(HOME);
+    set_cookie(
+        &mut response,
+        &session_cookie(&session, &headers, &uri, &tls),
+    );
+    response
+}
+
+/// The key in what was pasted: the whole `export GANTRY_KEY=...` line `gantry start` prints is taken too.
+fn pasted_key(raw: &str) -> &str {
+    let raw = raw.trim();
+    let raw = raw.strip_prefix("export ").unwrap_or(raw).trim_start();
+    let raw = raw.strip_prefix("GANTRY_KEY=").unwrap_or(raw);
+    raw.trim_matches(|c: char| c == '"' || c == '\'' || c.is_whitespace())
 }
 
 // A session ID that could be guessed is worse than no session.
@@ -2714,7 +2837,7 @@ fn credentials_body(
     dialog: pages::CredentialDialog,
 ) -> String {
     let config = console.config();
-    let credentials = gantry_core::store::attached(&config.keys)
+    let credentials = gantry_core::store::credentials_for(&config.keys)
         .map(|store| store.credentials().map(|list| list.to_vec()));
     pages::credentials(&pages::CredentialsView {
         admin: &admin.label(),
@@ -2775,8 +2898,8 @@ async fn credential_change(
         read_only(&console, &admin, action).await;
         return back("Your role may not change credentials, which serve the whole install: ask an admin to change them.".into());
     }
-    let Some(store) = gantry_core::store::attached(&console.config().keys) else {
-        return back("Credentials need the store. Keep provider keys in key_env.".into());
+    let Some(store) = gantry_core::store::credentials_for(&console.config().keys) else {
+        return back("Credentials need a master key: set GANTRY_MASTER_KEY (or GANTRY_MASTER_KEY_FILE) and restart Gantry. gantry start makes one. Until then keep provider keys in key_env.".into());
     };
     let mut act = Act {
         action,

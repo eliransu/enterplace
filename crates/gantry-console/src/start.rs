@@ -40,6 +40,9 @@ pub(crate) fn routes() -> Router<Console> {
         .route("/start/pick", post(pick))
         .route("/start/key", post(make_key))
         .route("/start/watch-token", post(make_watch_token))
+        .route("/start/connect", post(connect))
+        .route("/start/demo", post(use_demo))
+        .route("/start/first-key", post(first_key))
 }
 
 // ---------------------------------------------------------------- the five starting choices
@@ -130,10 +133,11 @@ impl Track {
         self == Track::Watch
     }
 
+    /// Connect a model and Send your first request come first on every track.
     fn steps(self) -> usize {
         match self {
-            Track::Coding | Track::Limit => 4,
-            _ => 3,
+            Track::Coding | Track::Limit => 6,
+            _ => 5,
         }
     }
 }
@@ -146,6 +150,8 @@ pub(crate) struct Kept {
     pub choice: Option<Track>,
     pub skipped: bool,
     pub steps: bool,
+    /// The person chose the demo model over connecting a provider for now.
+    pub demo: bool,
 }
 
 const SETTING: &str = "start";
@@ -184,6 +190,7 @@ pub(crate) fn read_kept(console: &Console) -> Result<Kept, String> {
         choice: value["choice"].as_str().and_then(Track::of),
         skipped: value["skipped"].as_bool().unwrap_or(false),
         steps: value["steps"].as_bool().unwrap_or(false),
+        demo: value["demo"].as_bool().unwrap_or(false),
     })
 }
 
@@ -192,6 +199,7 @@ fn write_kept(console: &Console, kept: &Kept) -> Result<(), String> {
         "choice": kept.choice.map(Track::id),
         "skipped": kept.skipped,
         "steps": kept.steps,
+        "demo": kept.demo,
     })
     .to_string();
     if let Some(s) = kept_store(console) {
@@ -240,6 +248,16 @@ pub(crate) struct Facts {
     pub verified: bool,
     /// What could not be read, said on the page.
     pub problem: String,
+    /// Providers in the policy other than the demo model, in file order, with their first model.
+    pub connected: Vec<(String, String)>,
+    /// The demo model is in the policy.
+    pub demo_in_policy: bool,
+    /// The person chose to try the demo model first.
+    pub demo: bool,
+    /// Every model request with a key, answered or refused, newest first: the first request step counts these.
+    pub tries: Vec<Row>,
+    /// Provider keys can be pasted here: a store or the sealed file keeps them.
+    pub credentials_on: bool,
 }
 
 impl Facts {
@@ -305,8 +323,20 @@ pub(crate) async fn facts(console: &Console, admin: &Admin, base: String) -> Fac
             .is_some_and(|(_, r)| r.is_ok()),
         ..Facts::default()
     };
+    f.credentials_on = store::credentials_for(&c.keys).is_some();
+    f.demo = read_kept(console).is_ok_and(|k| k.demo);
     if let Ok(loaded) = config::load(&c.policy, Some(&c.keys)) {
         f.observe = loaded.policy.mode() == Mode::Observe;
+        for p in &loaded.providers {
+            if p.kind == config::Kind::Demo {
+                f.demo_in_policy = true;
+            } else {
+                f.connected.push((
+                    p.name.clone(),
+                    p.models.first().cloned().unwrap_or_default(),
+                ));
+            }
+        }
         f.mcp_servers = loaded.mcp.iter().map(|s| s.name.clone()).collect();
         f.budgets = loaded
             .policy
@@ -342,7 +372,8 @@ pub(crate) async fn facts(console: &Console, admin: &Admin, base: String) -> Fac
     f.people = config::key_entries(&c.keys, &text)
         .unwrap_or_default()
         .into_iter()
-        .filter(|k| !k.admin && admin.covers_entry(k))
+        // The key Send your first request makes is no person's or app's: it does not tick their steps.
+        .filter(|k| !k.admin && admin.covers_entry(k) && !first_request_key(k))
         .collect();
     // ponytail: the newest 5,000 rows are read on every load and every poll; the store's index answers that in SQL,
     // the local chain is folded whole. A count query per fact comes when logs grow large.
@@ -364,11 +395,13 @@ pub(crate) async fn facts(console: &Console, admin: &Admin, base: String) -> Fac
                         f.tool_calls.push(row);
                     }
                 } else if !row.label("person").is_empty()
-                    && row.verdict != "refused"
                     && row.path.starts_with("/v1")
                     && !row.path.ends_with("/models")
                 {
-                    f.requests.push(row);
+                    if row.verdict != "refused" {
+                        f.requests.push(row.clone());
+                    }
+                    f.tries.push(row);
                 }
             }
         }
@@ -564,6 +597,17 @@ fn value_pill(id: &str, text: &str) -> String {
 
 /// Tabs that pick which lines a step shows. Links, so they work without a script.
 fn tabs(aria: &str, step: usize, options: &[(&str, &str)], selected: &str) -> String {
+    tabs_by("tool", aria, step, options, selected)
+}
+
+/// Tabs that set `param` in the address, for a step whose tabs are not the tool's.
+fn tabs_by(
+    param: &str,
+    aria: &str,
+    step: usize,
+    options: &[(&str, &str)],
+    selected: &str,
+) -> String {
     let items: String = options
         .iter()
         .map(|(id, label)| {
@@ -573,7 +617,7 @@ fn tabs(aria: &str, step: usize, options: &[(&str, &str)], selected: &str) -> St
                 ""
             };
             format!(
-                r#"<a class="g-tab t-small" href="/console/start?tool={id}#step-{step}"{here}>{label}</a>"#
+                r#"<a class="g-tab t-small" href="/console/start?{param}={id}#step-{step}"{here}>{label}</a>"#
             )
         })
         .collect();
@@ -641,7 +685,16 @@ pub(crate) struct Made {
     name: String,
     team: String,
     key: String,
+    /// Made by Send your first request, for that request only.
+    start: bool,
 }
+
+/// Whether `k` is the key Send your first request makes.
+fn first_request_key(k: &KeyEntry) -> bool {
+    k.options.metadata.get("kind").map(String::as_str) == Some(FIRST_KIND)
+}
+
+const FIRST_KIND: &str = "first-request";
 
 struct Ctx<'a> {
     f: &'a Facts,
@@ -698,7 +751,7 @@ impl Ctx<'_> {
 
     /// The key to paste: the one just made, else a placeholder that names whose it is.
     fn key(&self, owner: Option<&KeyEntry>) -> String {
-        match (self.made, owner) {
+        match (self.made.filter(|m| !m.start), owner) {
             (Some(m), _) => m.key.clone(),
             (None, Some(k)) => format!("<key of {}>", k.name),
             (None, None) => "<a Gantry key>".into(),
@@ -815,17 +868,179 @@ fn coding_lines(c: &Ctx<'_>, owner: Option<&KeyEntry>, tool: &str) -> Vec<String
 
 fn steps(c: &Ctx<'_>) -> Vec<Step> {
     let f = c.f;
-    match c.track {
+    let mut list = first_steps(c, f);
+    list.extend(match c.track {
         Track::Coding => coding(c, f),
         Track::Apps => apps(c, f),
         Track::Mcp => mcp(c, f),
         Track::Limit => limit(c, f),
         Track::Watch => watch(c, f),
+    });
+    list
+}
+
+/// The model a first request names: the first connected provider's, else the demo model.
+fn first_model(f: &Facts) -> String {
+    match f.connected.first() {
+        Some((_, model)) if !f.demo && !model.is_empty() => model.clone(),
+        _ => gantry_core::usage::DEMO_MODEL.to_string(),
+    }
+}
+
+/// The lines of the first request, with `key` (the key made for it, or `$GANTRY_KEY`, the admin key the terminal
+/// shows).
+fn first_lines(base: &str, key: &str, model: &str, lang: &str) -> Vec<String> {
+    let env = key.starts_with('$');
+    match lang {
+        "python" => vec![
+            "# pip install openai".into(),
+            if env { "import os".into() } else { String::new() },
+            "from openai import OpenAI".into(),
+            format!(
+                "client = OpenAI(base_url=\"{base}/v1\", api_key={})",
+                if env { "os.environ[\"GANTRY_KEY\"]".to_string() } else { format!("\"{key}\"") }
+            ),
+            format!("answer = client.chat.completions.create(model=\"{model}\", messages=[{{\"role\": \"user\", \"content\": \"Say hello\"}}])"),
+            "print(answer.choices[0].message.content)".into(),
+        ]
+        .into_iter()
+        .filter(|l| !l.is_empty())
+        .collect(),
+        "node" => vec![
+            "// npm install openai".into(),
+            "import OpenAI from \"openai\";".into(),
+            format!(
+                "const client = new OpenAI({{ baseURL: \"{base}/v1\", apiKey: {} }});",
+                if env { "process.env.GANTRY_KEY".to_string() } else { format!("\"{key}\"") }
+            ),
+            format!("const answer = await client.chat.completions.create({{ model: \"{model}\", messages: [{{ role: \"user\", content: \"Say hello\" }}] }});"),
+            "console.log(answer.choices[0].message.content);".into(),
+        ],
+        _ => vec![
+            format!("curl {base}/v1/chat/completions \\"),
+            format!("  -H \"Authorization: Bearer {key}\" \\"),
+            "  -H \"Content-Type: application/json\" \\".into(),
+            format!("  -d '{{\"model\":\"{model}\",\"messages\":[{{\"role\":\"user\",\"content\":\"Say hello\"}}]}}'"),
+        ],
+    }
+}
+
+/// Connect a model, then Send your first request: the first data on every track, within a minute.
+fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
+    let may_connect = c.admin.may(Permission::Credentials) && !c.admin.confined();
+    let error = if c.error.is_empty() || c.made.is_some() {
+        String::new()
+    } else {
+        pages::alert(&esc(&c.error))
+    };
+    let providers: String = gantry_core::catalog::START_PROVIDERS
+        .iter()
+        .map(|(id, _)| format!(r#"<option value="{id}">{}</option>"#, provider_label(id)))
+        .collect();
+    let connect_form = if !may_connect {
+        r#"<p class="t-small g-check__muted">Your role cannot add provider keys. Ask an admin, or try the demo model.</p>"#.to_string()
+    } else if !f.credentials_on {
+        r#"<p class="t-small g-check__muted">Provider keys are kept sealed under a master key, and this gateway has none. Set GANTRY_MASTER_KEY (64 hex characters) or start Gantry with gantry start, which makes one. Meanwhile, try the demo model.</p>"#.to_string()
+    } else {
+        format!(
+            r#"<form class="g-check__form" method="post" action="/console/start/connect"><div class="g-field"><label class="g-field__label t-tag g-caps" for="connect-provider">Provider</label><div class="g-select-wrap"><select class="g-input g-select t-body" id="connect-provider" name="provider">{providers}</select>{}</div></div>{}<button class="g-btn t-body" type="submit">Connect</button></form>"#,
+            icon("down"),
+            field(&Field {
+                id: "connect-key",
+                name: "key",
+                label: "Provider key",
+                value: "",
+                mono: true,
+                extra: r#" type="password" placeholder="sk-..." required autocomplete="off""#,
+                hint: "Sealed with this gateway's master key. Only sealed bytes are kept.",
+                error: "",
+            })
+        )
+    };
+    let demo_form = if may_choose(c.admin) && f.demo_in_policy {
+        r#"<form method="post" action="/console/start/demo"><button class="g-btn g-btn--quiet t-body" type="submit">Try without a key</button></form>"#
+    } else {
+        ""
+    };
+    let connected: Vec<String> = f.connected.iter().map(|(n, _)| mono(n)).collect();
+    let s1 = Step::new(
+        "Connect a model",
+        !f.connected.is_empty() || f.demo,
+        format!(
+            r#"<p class="t-body">Paste a key from OpenAI, Anthropic or Gemini, and Gantry sends your requests to that provider. Or try the free demo model: Gantry answers it with a sample text, so your first request lands in seconds.</p>{error}{connect_form}{}"#,
+            acts(demo_form)
+        ),
+        "A provider is connected, or you chose the demo model.",
+        "The next step's request goes to that model.",
+    )
+    .finished(if connected.is_empty() {
+        r#"Using the demo model: answers are sample text, free. Connect a provider any time in <a class="g-link" href="/console/credentials">Provider credentials</a>, or on this step after <a class="g-link" href="/console/start?pick=1">changing what to start with</a>."#.to_string()
+    } else {
+        format!("Connected: {}. Its key is sealed; requests to its models go to it.", connected.join(", "))
+    });
+    let lang = match c.tool.as_str() {
+        "python" | "node" => c.tool.as_str(),
+        _ => "curl",
+    };
+    let made = c.made.filter(|m| m.start);
+    let key = made.map_or("$GANTRY_KEY", |m| m.key.as_str());
+    let model = first_model(f);
+    let key_note = if made.is_some() {
+        "The key made for it is in the lines below, shown once.".to_string()
+    } else if c.may_keys() {
+        r#"The lines use $GANTRY_KEY, the admin key gantry start printed in the terminal. Or make a key for this request, and it is put in the lines:"#.to_string()
+    } else {
+        "The lines use $GANTRY_KEY: set it to your Gantry key.".to_string()
+    };
+    let key_button = if made.is_none() && c.may_keys() {
+        r#"<form method="post" action="/console/start/first-key"><button class="g-btn g-btn--quiet t-body" type="submit">Make a key for this request</button></form>"#
+    } else {
+        ""
+    };
+    let first = f.tries.last();
+    let s2 = Step::new(
+        "Send your first request",
+        first.is_some(),
+        format!(
+            r#"<p class="t-body">Run this in a terminal. {key_note}</p>{}{}<p class="t-small g-check__muted">If the provider refuses it (a wrong key, a model it does not serve), the request still shows in Requests with the provider's answer, and this step turns done.</p>"#,
+            acts(key_button),
+            block(
+                "lines-first",
+                &tabs_by("tool", "Language", 2, &[("curl", "curl"), ("python", "Python"), ("node", "Node")], lang),
+                &first_lines(&f.base, key, &model, lang)
+            ),
+        ),
+        "The first request arrives, answered or refused.",
+        "Requests shows it with the person, the model, tokens and cost.",
+    )
+    .listening(
+        "Listening for the first request. This step turns done by itself.".into(),
+        ("Open Requests", "/console/requests"),
+    )
+    .finished(first.map_or_else(String::new, |r| {
+        format!(
+            "First request at {} from {}: {}, {}{}.",
+            clock(&r.time),
+            mono(r.label("person")),
+            mono(r.label("model")),
+            if r.verdict == "refused" { format!("refused ({})", esc(&r.code)) } else { "allowed".into() },
+            r.status.filter(|s| *s >= 400).map_or_else(String::new, |s| format!(", the provider answered {s}"))
+        )
+    }));
+    vec![s1, s2]
+}
+
+fn provider_label(id: &str) -> &'static str {
+    match id {
+        "openai" => "OpenAI",
+        "anthropic" => "Anthropic",
+        "gemini" => "Google Gemini",
+        _ => "Provider",
     }
 }
 
 fn made_text(c: &Ctx<'_>, k: Option<&KeyEntry>) -> String {
-    match (c.made, k) {
+    match (c.made.filter(|m| !m.start), k) {
         (Some(m), _) => format!(
             "Key made for {}, team {}. It is shown once, above and in the lines below.",
             mono(&m.name),
@@ -861,12 +1076,12 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         "Point Claude Code at Gantry and send one prompt",
         !f.sent_by_people().is_empty(),
         format!(
-            r#"<p class="t-body">Paste these lines in the terminal where Claude Code runs, then ask it anything. The key from step 1 is already in them.</p>{}{}"#,
+            r#"<p class="t-body">Paste these lines in the terminal where Claude Code runs, then ask it anything. The key from step 3 is already in them.</p>{}{}"#,
             block(
                 "lines-coding",
                 &tabs(
                     "Coding tool",
-                    2,
+                    4,
                     &[("claude", "Claude Code"), ("codex", "Codex"), ("cursor", "Cursor"), ("other", "Other tools")],
                     tool
                 ),
@@ -945,7 +1160,7 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             r#"<p class="t-body">Set these variables where the app runs. The SDKs read them, so the code stays as it is.</p>{}{}"#,
             block(
                 "lines-apps",
-                &tabs("Client", 2, &[("openai", "OpenAI SDKs"), ("anthropic", "Anthropic SDKs"), ("curl", "curl")], tool),
+                &tabs("Client", 4, &[("openai", "OpenAI SDKs"), ("anthropic", "Anthropic SDKs"), ("curl", "curl")], tool),
                 &coding_lines(c, app, tool)
             ),
             acts(&docs("Read Connect a project", "/integrations/connect-a-project/"))
@@ -1014,7 +1229,7 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
                     f.base
                 )
             ),
-            acts(&glink("No key yet? Make one", "/console/start?track=coding#step-1", true))
+            acts(&glink("No key yet? Make one", "/console/start?track=coding#step-3", true))
         ),
         &format!("The first tool call arrives at {}/mcp.", f.base),
         "The audit log shows each tool call with the person, the tool and the decision.",
@@ -1076,7 +1291,7 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             r#"<p class="t-body">Paste these lines where Claude Code runs, or point an app at the same address.</p>{}"#,
             block(
                 "lines-limit",
-                &tabs("Client", 2, &[("claude", "Claude Code"), ("codex", "Codex"), ("app", "An app")], tool),
+                &tabs("Client", 4, &[("claude", "Claude Code"), ("codex", "Codex"), ("app", "An app")], tool),
                 &coding_lines(c, first, tool)
             )
         ),
@@ -1347,7 +1562,7 @@ fn observe_banner(f: &Facts) -> String {
     if !f.observe {
         return String::new();
     }
-    r#"<div class="g-banner" role="status"><span class="t-body">Observe mode: nothing is blocked. A request the policy would refuse is recorded as <span class="t-mono">would_refuse</span>.</span></div>"#.into()
+    r#"<div class="g-banner" role="status"><span class="t-body">Nothing is blocked yet (observe mode). Gantry sends every request and records it; a request a rule would stop is marked <span class="t-mono">would_refuse</span> instead of refused.</span></div>"#.into()
 }
 
 /// The first requests on Start here, with a reading of each part.
@@ -1538,7 +1753,7 @@ fn stages(f: &Facts, track: Track) -> Vec<Stage> {
                 )
             },
             why: "A budget refuses a team's requests once it is spent, so no bill is a surprise.",
-            action: ("Add a budget", "/console/start?track=limit#step-3".into()),
+            action: ("Add a budget", "/console/start?track=limit#step-5".into()),
             guide: ("Read the Limit guide", "/start/step-3-limit/"),
             when: vec![(
                 "Every team with traffic has a budget".into(),
@@ -1783,6 +1998,7 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
         let traffic = admin.may(Permission::SeeRecords)
             && matches!(track, Track::Coding | Track::Apps | Track::Limit)
             && list.get(1).is_some_and(|s| s.done)
+            && !f.requests.is_empty()
             && !finished;
         let sig = signature(Some(track), &st, finished);
         let poll = if st.contains(&"listening") {
@@ -2050,7 +2266,12 @@ async fn make_key(
     let status;
     match result {
         Ok((key, _)) => {
-            made = Made { name, team, key };
+            made = Made {
+                name,
+                team,
+                key,
+                start: false,
+            };
             view.made = Some(&made);
             status = StatusCode::OK;
         }
@@ -2109,6 +2330,284 @@ async fn make_watch_token(
     response
 }
 
+/// Connect a model: seals the pasted provider key as a credential (recorded, as on Credentials), then adds the
+/// provider to the policy, reading its key from that credential. Gantry uses it within 2 seconds.
+async fn connect(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    uri: Uri,
+    tls: Tls,
+    body: String,
+) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    let Some(admin) = console.admin(&headers).await else {
+        return redirect("/console/sign-in");
+    };
+    let form = Form::parse(&body);
+    let id = form.get("provider").trim().to_string();
+    let value = form.get("key").trim().to_string();
+    let result = connect_provider(&console, &admin, &id, &value).await;
+    match result {
+        Ok(()) => {
+            let mut kept = read_kept(&console).unwrap_or_default();
+            kept.demo = false;
+            let _ = write_kept(&console, &kept);
+            redirect("/console/start#step-2")
+        }
+        Err(err) => {
+            let mut f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
+            let kept = match read_kept(&console) {
+                Ok(kept) => kept,
+                Err(e) => {
+                    f.problem = e;
+                    Kept::default()
+                }
+            };
+            let mut view = view_of(&kept, &Form(Vec::new()));
+            view.error = err;
+            let mut response = render(&console, &admin, &uri, &f, &view);
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            response
+        }
+    }
+}
+
+async fn connect_provider(
+    console: &Console,
+    admin: &Admin,
+    id: &str,
+    value: &str,
+) -> Result<(), String> {
+    let mut act = Act {
+        action: "add_credential",
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target: json!({ "name": id, "provider": id, "fingerprint": store::fingerprint(value), "via": "start" }),
+    };
+    if !admin.may(Permission::Credentials) || admin.confined() {
+        read_only(console, admin, "add_credential").await;
+        return Err(
+            "Your role may not add provider keys, which serve the whole install: ask an admin."
+                .into(),
+        );
+    }
+    let problem = if !gantry_core::catalog::START_PROVIDERS
+        .iter()
+        .any(|(p, _)| *p == id)
+    {
+        Some("Pick OpenAI, Anthropic or Google Gemini.".to_string())
+    } else {
+        store::credential_value_problem(value).map(|p| {
+            let mut p = p.to_string();
+            if let Some(first) = p.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            p
+        })
+    };
+    if let Some(problem) = problem {
+        let _ = record(console, &act, Some("invalid_request"), None).await;
+        return Err(problem);
+    }
+    let c = console.config();
+    let Some(vault) = store::credentials_for(&c.keys) else {
+        return Err("Provider keys need a master key: set GANTRY_MASTER_KEY (or GANTRY_MASTER_KEY_FILE) and restart Gantry. gantry start makes one.".into());
+    };
+    // A key pasted again for the same provider replaces the one before.
+    let exists = vault
+        .credentials()
+        .map(|list| list.iter().any(|cr| cr.name == id))
+        .unwrap_or(false);
+    if exists {
+        act.action = "rotate_credential";
+    }
+    record(console, &act, None, None)
+        .await
+        .map_err(|()| NOT_RECORDED.to_string())?;
+    let (n, v, by) = (id.to_string(), value.to_string(), admin.name.clone());
+    let stored = tokio::task::spawn_blocking(move || {
+        if exists {
+            vault.rotate_credential(&n, &v, &by).map(|_| ())
+        } else {
+            vault.add_credential(&n, &n, &v, &by).map(|_| ())
+        }
+    })
+    .await
+    .unwrap_or_else(|err| Err(format!("Nothing was changed: {err}. Try again.")));
+    if let Err(err) = stored {
+        let _ = record(console, &act, Some("store"), Some(&err)).await;
+        return Err(err);
+    }
+    let policy = policy_text(console);
+    let named = config::load(&c.policy, Some(&c.keys))
+        .map(|l| l.providers.iter().any(|p| p.name == id))
+        .unwrap_or(false);
+    if named {
+        // The provider is in the policy already: a rotated key is read within 2 seconds.
+        return Ok(());
+    }
+    let env = |name: &str| std::env::var(name).ok();
+    let Some(lines) = gantry_core::catalog::start_provider(id, &format!("credential: {id}"), &env)
+    else {
+        return Err("Pick OpenAI, Anthropic or Google Gemini.".into());
+    };
+    let items: Vec<String> = lines.lines().map(str::to_string).collect();
+    let (text, _) = apply(&policy, &Change::List("providers", items));
+    let act = Act {
+        action: "connect_provider",
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target: json!({ "provider": id, "sha256": gantry_core::id::sha256_hex(text.as_bytes()), "policy": text }),
+    };
+    if edit::live(console).is_some() {
+        return edit::save_version(
+            console,
+            admin,
+            "connect_provider",
+            text,
+            edit::live(console).map(|v| v.id),
+            format!("Connect provider {id}"),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| e.message());
+    }
+    record(console, &act, None, None)
+        .await
+        .map_err(|()| NOT_RECORDED.to_string())?;
+    let (path, keys) = (c.policy.clone(), c.keys.clone());
+    let written = tokio::task::spawn_blocking(move || write_policy(&path, &keys, &text))
+        .await
+        .unwrap_or_else(|err| Err(format!("Nothing was changed: {err}. Try again.")));
+    if let Err(err) = &written {
+        let _ = record(console, &act, Some("invalid_policy"), Some(err)).await;
+    }
+    written
+}
+
+/// Writes the policy file, only if the new text loads: checked beside it, then moved into place.
+fn write_policy(path: &std::path::Path, keys: &std::path::Path, text: &str) -> Result<(), String> {
+    let temp = path.with_file_name(".gantry.policy.new.yaml");
+    std::fs::write(&temp, text).map_err(|err| {
+        format!(
+            "{} cannot be written ({err}). Give Gantry write access to the policy's folder.",
+            path.display()
+        )
+    })?;
+    if let Err(errors) = config::load(&temp, Some(keys)) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!(
+            "The policy would not load with this provider, so nothing was changed: {}",
+            errors.join(" ")
+        ));
+    }
+    std::fs::rename(&temp, path).map_err(|err| {
+        let _ = std::fs::remove_file(&temp);
+        format!(
+            "{} cannot be replaced ({err}). Nothing was changed.",
+            path.display()
+        )
+    })
+}
+
+/// Try without a key: the first request goes to the demo model.
+async fn use_demo(State(console): State<Console>, headers: HeaderMap) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    let Some(admin) = console.admin(&headers).await else {
+        return redirect("/console/sign-in");
+    };
+    if !may_choose(&admin) {
+        read_only(&console, &admin, "start_choice").await;
+        return redirect(crate::HOME);
+    }
+    let mut kept = read_kept(&console).unwrap_or_default();
+    kept.demo = true;
+    let act = Act {
+        action: "start_choice",
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target: json!({ "demo": true }),
+    };
+    if record(&console, &act, None, None).await.is_err() {
+        return page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            pages::notice("Not done", NOT_RECORDED, crate::HOME, "Back to Start here"),
+        );
+    }
+    if let Err(err) = write_kept(&console, &kept) {
+        return page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            pages::notice("Not kept", &esc(&err), crate::HOME, "Back to Start here"),
+        );
+    }
+    redirect("/console/start#step-2")
+}
+
+/// Makes a key for the first request, through the People page's issue flow, and puts it in the lines, shown once.
+async fn first_key(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    uri: Uri,
+    tls: Tls,
+) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    let Some(admin) = console.admin(&headers).await else {
+        return redirect("/console/sign-in");
+    };
+    let team = admin
+        .teams
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "start".to_string());
+    let mut attributes = keyfile::Attributes {
+        org: admin.org.clone().unwrap_or_default(),
+        customer: match admin.customers.as_slice() {
+            [one] => Some(one.clone()),
+            _ => None,
+        },
+        ..keyfile::Attributes::default()
+    };
+    attributes
+        .options
+        .metadata
+        .insert("kind".into(), FIRST_KIND.into());
+    let result = if admin.may(Permission::IssueKeys) {
+        crate::issued(&console, &admin, FIRST_KIND, &team, attributes).await
+    } else {
+        read_only(&console, &admin, "issue_key").await;
+        Err("Your role cannot make keys. Use your own Gantry key in the lines.".to_string())
+    };
+    let f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
+    let kept = read_kept(&console).unwrap_or_default();
+    let mut view = view_of(&kept, &Form(Vec::new()));
+    let made;
+    let status = match result {
+        Ok((key, _)) => {
+            made = Made {
+                name: FIRST_KIND.into(),
+                team,
+                key,
+                start: true,
+            };
+            view.made = Some(&made);
+            StatusCode::OK
+        }
+        Err(err) => {
+            view.error = err;
+            StatusCode::BAD_REQUEST
+        }
+    };
+    let mut response = render(&console, &admin, &uri, &f, &view);
+    *response.status_mut() = status;
+    response
+}
+
 // ---------------------------------------------------------------- empty pages
 
 /// What fills a console page, the one action that does it (the Start here step), and its docs page.
@@ -2149,7 +2648,7 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
         "Point a tool at Gantry",
         "/console/start?track=coding#step-2",
     );
-    let key = ("Make a key", "/console/start?track=coding#step-1");
+    let key = ("Make a key", "/console/start?track=coding#step-3");
     Some(match page {
         "Requests" => Empty {
             title: "No requests yet",
@@ -2171,7 +2670,7 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
         "Spend" => Empty {
             title: "No spend and no budgets yet",
             body: "Spend counts from the first request through Gantry. Add a budget now and it counts against it from that request. Observe mode records what it would refuse.".into(),
-            action: ("Add a budget", "/console/start?track=limit#step-3"),
+            action: ("Add a budget", "/console/start?track=limit#step-5"),
             docs: "/governance/budgets-and-rate-limits/",
             extra: code(&[
                 (1, crate::html::yaml_line("limits:"), "add"),
@@ -2188,14 +2687,14 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
         "Teams" => Empty {
             title: "No teams yet",
             body: "A team is set when you make a key, such as team payments for mike.johnson. Each team shows here with its people, its rule and its budget.".into(),
-            action: ("Make a key with a team", "/console/start?track=coding#step-1"),
+            action: ("Make a key with a team", "/console/start?track=coding#step-3"),
             docs: "/governance/teams/",
             extra: String::new(),
         },
         "Policy" => Empty {
             title: "One rule lets everyone in",
             body: "This is the policy Gantry wrote at first start: every key may use every model, and observe mode blocks nothing. Add a budget or a guardrail when you are ready.".into(),
-            action: ("Edit the policy", "/console/start?track=limit#step-3"),
+            action: ("Edit the policy", "/console/start?track=limit#step-5"),
             docs: "/governance/policy/",
             extra: String::new(),
         },
@@ -2219,7 +2718,7 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
         "Watch" => Empty {
             title: "No Claude Code telemetry yet",
             body: "Make a watch token and paste the settings block into claude.ai, Organization settings, Claude Code, Managed settings. People show here within a few minutes of their next session.".into(),
-            action: ("Make a watch token", "/console/start?track=watch#step-2"),
+            action: ("Make a watch token", "/console/start?track=watch#step-4"),
             docs: "/integrations/claude-team/",
             extra: String::new(),
         },
@@ -2229,7 +2728,7 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
                 "Add a server under mcp: in the policy and point the agent at {}/mcp. A tool call that needs an admin's approval waits here.",
                 esc(base)
             ),
-            action: ("Add an MCP server", "/console/start?track=mcp#step-1"),
+            action: ("Add an MCP server", "/console/start?track=mcp#step-3"),
             docs: "/governance/mcp-gateway/",
             extra: String::new(),
         },

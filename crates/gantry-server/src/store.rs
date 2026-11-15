@@ -2196,6 +2196,82 @@ fn key32(bytes: Vec<u8>) -> Option<[u8; 32]> {
     bytes.try_into().ok()
 }
 
+impl core_store::Credentials for PgStore {
+    fn credentials(&self) -> Result<Arc<Vec<Credential>>, String> {
+        self.master()?;
+        Ok(Arc::new(
+            read(&self.inner.credentials)
+                .iter()
+                .map(|(c, _)| c.clone())
+                .collect(),
+        ))
+    }
+
+    fn add_credential(
+        &self,
+        name: &str,
+        provider: &str,
+        value: &str,
+        by: &str,
+    ) -> Result<Option<Credential>, String> {
+        let sealed = self.master()?.seal(name, value.trim().as_bytes())?;
+        self.credential_change(
+            "INSERT INTO gantry_credentials (name, provider, sealed, fingerprint, created_by, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (name) DO NOTHING"
+                .into(),
+            vec![
+                Box::new(name.to_string()),
+                Box::new(provider.to_string()),
+                Box::new(sealed),
+                Box::new(gantry_core::store::fingerprint(value.trim())),
+                Box::new(by.to_string()),
+                Box::new(gantry_core::audit::timestamp()),
+            ],
+        )
+    }
+
+    fn rotate_credential(
+        &self,
+        name: &str,
+        value: &str,
+        by: &str,
+    ) -> Result<Option<Credential>, String> {
+        let sealed = self.master()?.seal(name, value.trim().as_bytes())?;
+        self.credential_change(
+            "UPDATE gantry_credentials SET sealed = $2, fingerprint = $3, rotated_by = $4, rotated_at = $5, \
+             generation = generation + 1 WHERE name = $1"
+                .into(),
+            vec![
+                Box::new(name.to_string()),
+                Box::new(sealed),
+                Box::new(gantry_core::store::fingerprint(value.trim())),
+                Box::new(by.to_string()),
+                Box::new(gantry_core::audit::timestamp()),
+            ],
+        )
+    }
+
+    fn remove_credential(&self, name: &str) -> Result<Option<Credential>, String> {
+        self.master()?;
+        self.credential_change(
+            "DELETE FROM gantry_credentials WHERE name = $1".into(),
+            vec![Box::new(name.to_string())],
+        )
+    }
+
+    fn credential_value(&self, name: &str) -> Result<Option<String>, String> {
+        let master = self.master()?;
+        let all = read(&self.inner.credentials);
+        let Some((_, sealed)) = all.iter().find(|(c, _)| c.name == name) else {
+            return Ok(None);
+        };
+        let value = master.open(name, sealed)?;
+        String::from_utf8(value).map(Some).map_err(|_| {
+            format!("credential \"{name}\" is not text. Rotate it with the key's value.")
+        })
+    }
+}
+
 impl Store for PgStore {
     fn raises(&self) -> Option<Arc<Vec<Raise>>> {
         Some(read(&self.inner.raises))
@@ -2606,68 +2682,6 @@ impl Store for PgStore {
         self.ask(async move { inner.reserve(&bucket, usd, limit).await })
     }
 
-    fn credentials(&self) -> Result<Arc<Vec<Credential>>, String> {
-        self.master()?;
-        Ok(Arc::new(
-            read(&self.inner.credentials)
-                .iter()
-                .map(|(c, _)| c.clone())
-                .collect(),
-        ))
-    }
-
-    fn add_credential(
-        &self,
-        name: &str,
-        provider: &str,
-        value: &str,
-        by: &str,
-    ) -> Result<Option<Credential>, String> {
-        let sealed = self.master()?.seal(name, value.trim().as_bytes())?;
-        self.credential_change(
-            "INSERT INTO gantry_credentials (name, provider, sealed, fingerprint, created_by, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (name) DO NOTHING"
-                .into(),
-            vec![
-                Box::new(name.to_string()),
-                Box::new(provider.to_string()),
-                Box::new(sealed),
-                Box::new(gantry_core::store::fingerprint(value.trim())),
-                Box::new(by.to_string()),
-                Box::new(gantry_core::audit::timestamp()),
-            ],
-        )
-    }
-
-    fn rotate_credential(
-        &self,
-        name: &str,
-        value: &str,
-        by: &str,
-    ) -> Result<Option<Credential>, String> {
-        let sealed = self.master()?.seal(name, value.trim().as_bytes())?;
-        self.credential_change(
-            "UPDATE gantry_credentials SET sealed = $2, fingerprint = $3, rotated_by = $4, rotated_at = $5, \
-             generation = generation + 1 WHERE name = $1"
-                .into(),
-            vec![
-                Box::new(name.to_string()),
-                Box::new(sealed),
-                Box::new(gantry_core::store::fingerprint(value.trim())),
-                Box::new(by.to_string()),
-                Box::new(gantry_core::audit::timestamp()),
-            ],
-        )
-    }
-
-    fn remove_credential(&self, name: &str) -> Result<Option<Credential>, String> {
-        self.master()?;
-        self.credential_change(
-            "DELETE FROM gantry_credentials WHERE name = $1".into(),
-            vec![Box::new(name.to_string())],
-        )
-    }
-
     fn refresh_policy(&self) -> Result<(), String> {
         let inner = self.inner.clone();
         self.wait(async move { inner.refresh().await })
@@ -2798,18 +2812,6 @@ impl Store for PgStore {
                     })
                 })
                 .await
-        })
-    }
-
-    fn credential_value(&self, name: &str) -> Result<Option<String>, String> {
-        let master = self.master()?;
-        let all = read(&self.inner.credentials);
-        let Some((_, sealed)) = all.iter().find(|(c, _)| c.name == name) else {
-            return Ok(None);
-        };
-        let value = master.open(name, sealed)?;
-        String::from_utf8(value).map(Some).map_err(|_| {
-            format!("credential \"{name}\" is not text. Rotate it with the key's value.")
         })
     }
 

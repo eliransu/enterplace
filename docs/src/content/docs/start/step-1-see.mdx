@@ -15,15 +15,13 @@ A list of the AI tools and models in use and what each one costs, per key, from 
 
 <Steps>
 
-1. On the machine that will run Gantry, set the provider keys you already have and start it:
+1. On the machine that will run Gantry, start it (no provider key needed):
 
     ```bash
-    export OPENAI_API_KEY=sk-...
-    export ANTHROPIC_API_KEY=sk-ant-...
     gantry start
     ```
 
-    It writes `gantry.policy.yaml` in observe mode with one rule that allows everyone, prints an admin key once and the settings for the coding tools it finds on the machine, and starts the gateway.
+    It writes `gantry.policy.yaml` in observe mode with one rule that allows everyone, makes an admin key, starts the gateway, and opens the dashboard with a link that signs you in once. In the dashboard, **Connect a model** takes a provider key (kept sealed) or the free demo model, and **Send your first request** shows the first request arrive. Provider keys already in the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) are picked up.
 
 2. Give the people who try it first one key: `gantry key new pilot --team pilot` prints it once, with the lines their tool reads. The [coding tool guides](/integrations/coding-tools/) cover Claude Code, Codex, Cursor and the rest.
 
@@ -33,7 +31,7 @@ A list of the AI tools and models in use and what each one costs, per key, from 
 
 In observe mode Gantry forwards every request from a key it knows. A request with a missing, wrong, expired or revoked key, or for a model your providers do not list, is still refused.
 
-Open `http://127.0.0.1:8080/console` and sign in with the admin key. The banner says **Observe mode: nothing is blocked**. On an empty install the console asks what you want to start with; pick **Coding agents** (or **Our own apps and agents**) and **Start here** gives you the checklist for this step: make a key on the page, paste the lines it shows, send one prompt. The step turns done by itself when the request arrives, and the first rows show on Start here.
+The dashboard link `gantry start` printed opens the console (or sign in at `http://127.0.0.1:8080/console` with the admin key). The banner says nothing is blocked yet. On an empty install the console asks what you want to start with; pick **Coding agents** (or **Our own apps and agents**) and **Start here** gives you the checklist for this step: connect a model, send a first request, make a key for a person, paste the lines it shows, send one prompt. The step turns done by itself when the request arrives, and the first rows show on Start here.
 
 - **Analytics** (`/console/analytics`): rank by coding agent, model or key to see requests, tokens and cost for each.
 - **Requests** (`/console/requests`): one row per request, with its model and cost. Filter by coding agent to see one tool.
@@ -50,14 +48,18 @@ You can see tools, models and cost, with one line per key. To see people and tea
 
 ### The policy `gantry start` writes
 
-With both provider keys set, `gantry start --yes --no-serve` writes exactly this:
+With both provider keys set, `gantry start --no-serve` writes exactly this:
 
 ```yaml title="gantry.policy.yaml"
-# Written by gantry start. Step 1, See: every key may use every model, and in observe mode
-# nothing is blocked; what a rule would refuse is recorded. Reference: https://gantry-docs.eliran.me/governance/policy/
+# Written by gantry start. Every key may use every model. Observe mode: nothing is blocked, and what a
+# rule would refuse is recorded as would_refuse. Reference: https://gantry-docs.eliran.me/governance/policy/
 version: 1
 mode: observe
 providers:
+  # Answered inside Gantry with a sample text, free: a first request works before any provider key is set.
+  - name: demo
+    preset: demo
+    models: [gantry-demo]
   - name: openai
     preset: openai
     key_env: OPENAI_PROVIDER_KEY
@@ -72,7 +74,7 @@ rules:
     models: ["*"]
 ```
 
-Add a model to a provider's `models` list to serve it. The provider keys stay in the environment and never appear in the file. The policy reads them from `OPENAI_PROVIDER_KEY` and `ANTHROPIC_PROVIDER_KEY`, so the tool settings can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to your Gantry key in the same shell. `gantry start` passes a key it found under `OPENAI_API_KEY` to the gateway it runs, and prints the `export OPENAI_PROVIDER_KEY=$OPENAI_API_KEY` line for the next `gantry serve`.
+Add a model to a provider's `models` list to serve it. The provider keys stay in the environment and never appear in the file. The policy reads them from `OPENAI_PROVIDER_KEY` and `ANTHROPIC_PROVIDER_KEY`, so the tool settings can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to your Gantry key in the same shell; `gantry start` passes a key it found under `OPENAI_API_KEY` to the gateway it runs. A provider connected in the dashboard reads its key from a sealed credential instead (`credential: openai`), and the `demo` provider is answered inside Gantry.
 
 ### What observe mode does
 
@@ -87,21 +89,20 @@ Add a model to a provider's `models` list to serve it. The provider keys stay in
 
 `gantry check` warns while `mode: observe` is in the policy. Delete the line to enforce the policy from the next request.
 
-### Run it without questions
+### Flags
 
 | Flag | Does |
 |---|---|
-| `--providers openai,anthropic` | Names the providers instead of asking |
-| `--yes` | Accepts every default, for scripts and CI |
+| `--providers openai,anthropic` | Sets up only these of the provider keys found in the environment |
 | `--dir <path>` | Writes the files in that folder |
-| `--listen <host:port>` | Where the gateway listens, `127.0.0.1:8080` by default. The printed settings use it |
-| `--all-tools` | Prints the settings for every tool, not only the ones found on the machine |
-| `--force` | Overwrites an existing `gantry.policy.yaml`. Without it, `gantry start` refuses to |
+| `--listen <host:port>` | Where the gateway listens, `127.0.0.1:8080` by default |
+| `--no-open` | Prints the dashboard link without opening the browser |
+| `--force` | Writes a new policy and admin key over the ones there. Without it, `gantry start` serves the policy it finds |
 | `--no-serve` | Writes the files and does not start the gateway |
 
 ### Related
 
-- [Quickstart](/getting-started/quickstart/): the same result by hand, with each part of the policy explained.
+- [Quickstart](/getting-started/quickstart/): install, start and the dashboard, with every file `gantry start` writes.
 - [Deploy](/deploy/overview/): run Gantry as a container for the whole company.
 - [Coverage](/governance/coverage/): `gantry audit coverage` counts requests per person and tool from the terminal.
 - [Request log and analytics](/operations/request-log/): every filter on the two console pages.

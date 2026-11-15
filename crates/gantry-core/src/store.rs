@@ -213,7 +213,45 @@ pub struct CachedAnswer {
 // needs more than this.
 pub const MAX_SHARED_VECTORS: i64 = 512;
 
-pub trait Store: Send + Sync + std::fmt::Debug {
+/// Provider credentials, sealed under the master key: kept by the Postgres store, or without one by the file
+/// beside the keys file (`gantry-credentials.json`), so `gantry start` on a laptop takes a provider key from the
+/// console too.
+pub trait Credentials: Send + Sync {
+    /// The provider credentials, from memory. `Err` names why there are none to show: the feature is off.
+    fn credentials(&self) -> Result<Arc<Vec<Credential>>, String> {
+        Err(NO_CREDENTIALS.into())
+    }
+    /// Seals `value` and adds it as a new credential. `Ok(None)` when the name is taken. Blocks until written.
+    fn add_credential(
+        &self,
+        _name: &str,
+        _provider: &str,
+        _value: &str,
+        _by: &str,
+    ) -> Result<Option<Credential>, String> {
+        Err(NO_CREDENTIALS.into())
+    }
+    /// Seals `value` in place of the credential's. `Ok(None)` when there is no such credential.
+    fn rotate_credential(
+        &self,
+        _name: &str,
+        _value: &str,
+        _by: &str,
+    ) -> Result<Option<Credential>, String> {
+        Err(NO_CREDENTIALS.into())
+    }
+    /// Removes a credential. `Ok(None)` when there was none.
+    fn remove_credential(&self, _name: &str) -> Result<Option<Credential>, String> {
+        Err(NO_CREDENTIALS.into())
+    }
+    /// The value of a credential, opened with the master key, for the gateway to send. `Ok(None)` when there is
+    /// no such credential.
+    fn credential_value(&self, _name: &str) -> Result<Option<String>, String> {
+        Err(NO_CREDENTIALS.into())
+    }
+}
+
+pub trait Store: Credentials + Send + Sync + std::fmt::Debug {
     /// The budget raises, from memory, polled. `None` when this store keeps none.
     fn raises(&self) -> Option<Arc<Vec<Raise>>> {
         None
@@ -333,33 +371,6 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     fn spend(&self, _scope: String) -> Pending<Vec<(String, String, f64, f64)>> {
         Box::pin(async { Ok(Vec::new()) })
     }
-    /// The provider credentials, from memory. `Err` names why there are none to show: the feature is off.
-    fn credentials(&self) -> Result<Arc<Vec<Credential>>, String> {
-        Err(NO_CREDENTIALS.into())
-    }
-    /// Seals `value` and adds it as a new credential. `Ok(None)` when the name is taken. Blocks until written.
-    fn add_credential(
-        &self,
-        _name: &str,
-        _provider: &str,
-        _value: &str,
-        _by: &str,
-    ) -> Result<Option<Credential>, String> {
-        Err(NO_CREDENTIALS.into())
-    }
-    /// Seals `value` in place of the credential's. `Ok(None)` when there is no such credential.
-    fn rotate_credential(
-        &self,
-        _name: &str,
-        _value: &str,
-        _by: &str,
-    ) -> Result<Option<Credential>, String> {
-        Err(NO_CREDENTIALS.into())
-    }
-    /// Removes a credential. `Ok(None)` when there was none.
-    fn remove_credential(&self, _name: &str) -> Result<Option<Credential>, String> {
-        Err(NO_CREDENTIALS.into())
-    }
     /// Every policy version, newest first, from memory: refreshed by the poll, so every gateway sees a change
     /// within a second. `Err` when this store keeps none.
     fn policy_versions(&self) -> Result<Arc<Vec<PolicyVersion>>, String> {
@@ -396,11 +407,6 @@ pub trait Store: Send + Sync + std::fmt::Debug {
         _by: &str,
     ) -> Result<PolicyVersion, VersionError> {
         Err(VersionError::Store(NO_VERSIONS.into()))
-    }
-    /// The value of a credential, opened with the master key, for the gateway to send. `Ok(None)` when there is
-    /// no such credential.
-    fn credential_value(&self, _name: &str) -> Result<Option<String>, String> {
-        Err(NO_CREDENTIALS.into())
     }
     /// Whether this store keeps the console's small settings. Without, the console keeps them in a file.
     fn keeps_settings(&self) -> bool {
@@ -478,6 +484,37 @@ pub fn policy_store(policy: &Path) -> Option<Arc<dyn Store>> {
         .rev()
         .find(|(path, _)| path == policy)
         .and_then(|(_, store)| store.upgrade())
+}
+
+// Credentials kept beside a keys file that no store serves, by that file's path.
+static VAULTS: Mutex<Vec<(PathBuf, Weak<dyn Credentials>)>> = Mutex::new(Vec::new());
+
+/// Keeps the credentials of the keys file at `keys` in `vault`, for as long as it lives, when no store serves it.
+pub fn attach_credentials(keys: &Path, vault: &Arc<dyn Credentials>) {
+    let mut attached = VAULTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    attached.retain(|(path, vault)| path != keys && vault.strong_count() > 0);
+    attached.push((keys.to_path_buf(), Arc::downgrade(vault)));
+}
+
+/// Where the credentials of the keys file at `keys` are kept: its store, else the file vault, if either is open.
+pub fn credentials_for(keys: &Path) -> Option<Arc<dyn Credentials>> {
+    if let Some(store) = attached(keys) {
+        return Some(store);
+    }
+    VAULTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .rev()
+        .find(|(path, _)| path == keys)
+        .and_then(|(_, vault)| vault.upgrade())
+}
+
+/// The file beside the policy at `policy` that keeps its sealed credentials when no store does.
+pub fn credentials_file(policy: &Path) -> PathBuf {
+    policy.with_file_name("gantry-credentials.json")
 }
 
 /// The store that serves the keys file at `keys`, if one does.

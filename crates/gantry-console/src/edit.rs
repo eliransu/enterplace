@@ -118,7 +118,7 @@ pub(crate) fn policy_source(console: &Console, admin: &Admin) -> PolicySource {
 }
 
 /// Records a change, then makes it as a new policy version. `Err` holds what to tell the person.
-async fn save_version(
+pub(crate) async fn save_version(
     console: &Console,
     admin: &Admin,
     action: &'static str,

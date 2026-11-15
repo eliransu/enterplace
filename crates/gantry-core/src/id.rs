@@ -41,6 +41,14 @@ pub fn new_key() -> Result<String, String> {
 
 /// `n` random bytes as hex, for trace and span IDs. Without system randomness it falls back to a hash of a fresh
 /// decision ID: unique, not secret, which is all a trace ID needs.
+/// `n` random bytes as hex, for a secret: an error, never a weaker value, when the system gives no randomness.
+pub fn secret_hex(n: usize) -> Result<String, String> {
+    let mut bytes = vec![0u8; n];
+    getrandom::fill(&mut bytes)
+        .map_err(|e| format!("the system gave no randomness ({e}). Try again."))?;
+    Ok(hex(&bytes))
+}
+
 pub fn random_hex(n: usize) -> String {
     let mut bytes = vec![0u8; n];
     if getrandom::fill(&mut bytes).is_err() {

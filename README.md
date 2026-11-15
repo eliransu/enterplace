@@ -23,52 +23,37 @@ Gantry sits between your people, agents and workloads and the model providers th
 3. **Records** the decision in a hash-chained audit log, before anything is forwarded.
 4. **Forwards** the request with the provider's key in place of the caller's.
 
-A request that cannot be recorded is refused. Gantry is one static binary with no database: policy, keys and audit log are plain files.
+A request that cannot be recorded is refused. Gantry is one binary (or one container image): policy, keys and audit log are plain files, and Postgres is optional, for teams that share keys and budgets across gateways.
 
 Everything outside `enterprise/` is Apache 2.0. The enterprise features in `enterprise/` are under a commercial license and need a license key; see [License](#license).
 
 ## Quickstart
 
-Install the `gantry` CLI (macOS and Linux, x86_64 and arm64; the release signature and SHA256 are checked) and start it:
+Three steps, about two minutes, no provider key needed:
 
-```bash
-curl -fsSL https://gantry.eliran.me/install.sh | sh
-export OPENAI_API_KEY=sk-...
-gantry start
-```
+1. **Install** (macOS and Linux, x86_64 and arm64; the release signature and SHA256 are checked):
 
-Or `brew install eliransu/tap/gantry`. Or run the image:
+   ```bash
+   curl -fsSL https://gantry.eliran.me/install.sh | sh
+   ```
 
-```bash
-docker run --name gantry -p 8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY=sk-... ghcr.io/eliransu/gantry
-```
+   Or with Docker, which also does step 2: `docker run --pull always -d --name gantry -p 8080:8080 -v gantry-data:/var/lib/gantry ghcr.io/eliransu/gantry`, then `docker logs gantry` for the link.
 
-The image is public. The first start writes an observe-mode policy (nothing is blocked, every request is recorded) and
-an admin key to the `gantry-data` volume, prints the key once as `export GANTRY_KEY=gantry_...`, and serves on
-`http://localhost:8080`. `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` work too.
+2. **Start it:**
 
-Send a request through it:
+   ```bash
+   gantry start
+   ```
 
-```bash
-export GANTRY_KEY=gantry_...
-curl http://localhost:8080/v1/chat/completions \
-  -H "Authorization: Bearer $GANTRY_KEY" -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hello."}]}'
-```
+3. **Your browser opens:** pick what you want to start with and follow the steps. The first connects a model (paste a provider key, kept sealed) or tries the free demo model; the second sends your first request and shows it arrive.
 
-Every request is now in `/var/lib/gantry/gantry-audit.jsonl` on the volume. Prove nothing was changed:
-
-```bash
-docker exec gantry /gantry audit verify /var/lib/gantry/gantry-audit.jsonl
-```
+`gantry start` writes an observe-mode policy (nothing is blocked, every request is recorded), an admin key and a master
+key in the current folder, serves on `http://127.0.0.1:8080`, and prints a dashboard link that signs you in once. A
+provider key in the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) is picked up too. Every
+request is in `gantry-audit.jsonl`; `gantry audit verify gantry-audit.jsonl` proves nothing was changed.
 
 With Postgres, for a team: the [Docker Compose](https://gantry-docs.eliran.me/deploy/docker/) guide. From source:
-
-```bash
-git clone https://github.com/eliransu/gantry.git && cd gantry
-cargo build --release
-OPENAI_API_KEY=sk-... target/release/gantry start
-```
+`git clone https://github.com/eliransu/gantry.git && cd gantry && cargo build --release && target/release/gantry start`.
 
 Full walkthrough: [Quickstart](https://gantry-docs.eliran.me/getting-started/quickstart/).
 

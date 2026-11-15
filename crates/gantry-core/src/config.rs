@@ -2174,6 +2174,9 @@ pub enum Kind {
     /// Replicate's predictions API, keyed by a Bearer token. Chat is translated to a model's `input` and the
     /// prediction is waited for.
     Replicate,
+    /// Gantry's own demo model: answered inside the gateway with a short sample text, never sent anywhere, priced at
+    /// zero. It speaks every chat API (chat completions, responses, messages), so a first request works with no key.
+    Demo,
 }
 
 impl Kind {
@@ -2192,6 +2195,7 @@ impl Kind {
             Kind::VertexOpenAi => "vertex_openai",
             Kind::Sagemaker => "sagemaker",
             Kind::Replicate => "replicate",
+            Kind::Demo => "demo",
         }
     }
 
@@ -2211,6 +2215,7 @@ impl Kind {
             Kind::VertexOpenAi,
             Kind::Sagemaker,
             Kind::Replicate,
+            Kind::Demo,
         ]
         .into_iter()
         .find(|kind| kind.word() == word)
@@ -2233,7 +2238,8 @@ impl Kind {
             | Kind::Watsonx
             | Kind::VertexOpenAi
             | Kind::Sagemaker
-            | Kind::Replicate => Kind::OpenAi,
+            | Kind::Replicate
+            | Kind::Demo => Kind::OpenAi,
             Kind::Anthropic | Kind::Bedrock | Kind::VertexAnthropic => Kind::Anthropic,
         }
     }
@@ -2871,7 +2877,7 @@ pub(crate) fn line_of_key(text: &str, key: &str, from: usize, to: usize) -> usiz
 
 /// Whether a provider URL points at this machine or a private network, judged by what is written.
 // ponytail: a public name that resolves to a private address is not caught here. That check belongs at connect time (package 1.2).
-pub(crate) fn is_private(url: &str) -> bool {
+pub fn is_private(url: &str) -> bool {
     let authority = url
         .split("://")
         .nth(1)
@@ -4388,7 +4394,8 @@ fn map_key(kind: Kind) -> Option<&'static str> {
         | Kind::Cohere
         | Kind::Watsonx
         | Kind::VertexOpenAi
-        | Kind::Replicate => None,
+        | Kind::Replicate
+        | Kind::Demo => None,
     }
 }
 
@@ -4995,9 +5002,9 @@ fn providers(
                     "{}: credential is the name of a provider credential kept in the store, for example openai-prod: letters, digits, dots, dashes, underscores and @ only. The key itself never goes in this file.",
                     at("credential")
                 ));
-            } else if parsed.store.is_none() {
+            } else if parsed.store.is_none() && !crate::store::credentials_file(file).exists() {
                 errors.push(format!(
-                    "{}: provider \"{}\" takes its key from credential \"{name}\", and credentials are kept in the store, which this policy does not name. Add `store: {{ postgres_url_env: DATABASE_URL }}`, or keep the key in an environment variable with `key_env:`.",
+                    "{}: provider \"{}\" takes its key from credential \"{name}\", and credentials are kept in the store, which this policy does not name, or in gantry-credentials.json beside the policy, which does not exist. Add the key in the console (Start here, Connect a model), add `store: {{ postgres_url_env: DATABASE_URL }}`, or keep the key in an environment variable with `key_env:`.",
                     at("credential"),
                     entry.name
                 ));
@@ -5039,6 +5046,8 @@ fn providers(
             }
             // A model server on this machine or a private network, such as Ollama or vLLM, often takes no key.
             (None, false) if entry.allow_private && kind == Some(Kind::OpenAi) => {}
+            // The demo model is answered inside the gateway: there is no provider to send a key to.
+            (None, false) if kind == Some(Kind::Demo) => {}
             (None, false)
                 if entry.key_file.is_some()
                     || entry.credential.is_some()

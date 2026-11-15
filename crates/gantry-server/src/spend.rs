@@ -3899,6 +3899,8 @@ mod tests {
         asked: std::sync::atomic::AtomicUsize,
     }
 
+    impl gantry_core::store::Credentials for Counting {}
+
     impl Store for Counting {
         fn keys_text(&self) -> String {
             String::new()

@@ -37,6 +37,7 @@ pub mod cloud;
 mod cloud_batch;
 mod cors;
 mod credentials;
+mod demo;
 mod events;
 mod focus;
 mod govern;
@@ -859,7 +860,8 @@ fn key_header(kind: Kind, key: &Secret) -> Result<(HeaderName, HeaderValue), Con
         | Kind::VertexOpenAi
         | Kind::Cohere
         | Kind::Watsonx
-        | Kind::Replicate => (header::AUTHORIZATION, format!("Bearer {}", key.0)),
+        | Kind::Replicate
+        | Kind::Demo => (header::AUTHORIZATION, format!("Bearer {}", key.0)),
         Kind::Gemini => (HeaderName::from_static("x-goog-api-key"), key.0.clone()),
         Kind::Anthropic => (HeaderName::from_static("x-api-key"), key.0.clone()),
         Kind::Azure => (HeaderName::from_static("api-key"), key.0.clone()),
@@ -1199,6 +1201,24 @@ fn build(
             head(|| async { StatusCode::OK }).fallback(handle),
         )
         .route(ME, get(me).fallback(handle));
+    // A browser opening the gateway's own address lands on the console; an API client keeps the JSON answer.
+    if console.is_some() {
+        router = router
+            .route("/", get(root).fallback(handle))
+            // A browser on the console asks for this by itself: no person sent it, so it is no refused request.
+            .route(
+                "/favicon.ico",
+                get(|| async { StatusCode::NOT_FOUND }).fallback(handle),
+            )
+            .route(
+                "/apple-touch-icon.png",
+                get(|| async { StatusCode::NOT_FOUND }).fallback(handle),
+            )
+            .route(
+                "/apple-touch-icon-precomposed.png",
+                get(|| async { StatusCode::NOT_FOUND }).fallback(handle),
+            );
+    }
     // The admin API changes the keys file, so it exists only when Gantry serves from one.
     if reloader.is_some() {
         router = router
@@ -1265,6 +1285,18 @@ fn checked_upstream(raw: &str) -> Result<String, ConfigError> {
 /// Healthy means able to do the job. A Gantry that can no longer write its audit log refuses every
 /// request, so it says so here and a load balancer stops sending it traffic.
 /// The body names the version in use, and a version on disk that was rejected, so an admin can see both at once.
+async fn root(state: State<AppState>, request: Request) -> Response {
+    let browser = request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"));
+    if browser {
+        return axum::response::Redirect::to("/console").into_response();
+    }
+    handle(state, request).await
+}
+
 async fn healthz(State(state): State<AppState>) -> Response {
     let (status, text) = match &state.audit {
         Some(audit) if audit.log.is_broken() => (
@@ -7963,7 +7995,7 @@ fn outbound(
             gantry_core::config::join(&provider.url, route),
             bytes.clone(),
         ),
-        Kind::OpenAi | Kind::Anthropic | Kind::VertexOpenAi => (
+        Kind::OpenAi | Kind::Anthropic | Kind::VertexOpenAi | Kind::Demo => (
             gantry_core::config::join(&provider.url, route),
             bytes.clone(),
         ),
@@ -8683,6 +8715,9 @@ async fn attempt_timed(
     limits: &Limits,
 ) -> (Result<Response, Refusal>, Option<Duration>) {
     let upstream = &provider.url;
+    if upstream == demo::URL {
+        return (Ok(demo::answer(request).await), Some(Duration::ZERO));
+    }
     let started = Instant::now();
     let captured = hyper_util::client::legacy::connect::capture_connection(&mut request);
     let outcome = match &provider.proxy {
@@ -9728,6 +9763,92 @@ async fn run_connection<C: Future>(connection: C, first_request: impl Future<Out
     }
 }
 
+/// Set by `gantry start` for the `gantry serve` it runs: `open` (open the dashboard in the browser), `print`, or
+/// `container`. Its admin key, when it made one, comes in [`START_KEY_ENV`].
+pub const START_ENV: &str = "GANTRY_START";
+pub const START_KEY_ENV: &str = "GANTRY_START_ADMIN_KEY";
+
+/// The block `gantry start` prints first: Gantry is running, the dashboard link that signs in once, the admin key.
+fn start_block(mode: &str, scheme: &str, addr: SocketAddr, loaded: &gantry_core::config::Loaded) {
+    let key = std::env::var(START_KEY_ENV)
+        .ok()
+        .filter(|k| !k.trim().is_empty());
+    // The key's hash: the one just made, else the first admin key, as on a second start.
+    let admin = key
+        .as_deref()
+        .map(|k| gantry_core::id::sha256_hex(k.as_bytes()))
+        .or_else(|| {
+            loaded
+                .policy
+                .entries()
+                .find(|(_, p)| p.admin)
+                .map(|(sha, _)| gantry_core::id::hex(sha))
+        });
+    let container = mode == "container";
+    // A wildcard address is not one a browser can open: the same port on this machine.
+    let shown = if addr.ip().is_unspecified() {
+        SocketAddr::from(([127, 0, 0, 1], addr.port()))
+    } else {
+        addr
+    };
+    let code = admin
+        .as_deref()
+        .and_then(|admin| gantry_console::offer_start_link(admin, container));
+    let mut out = String::from("\nGantry is running. Open the dashboard:\n\n");
+    match &code {
+        Some(code) => {
+            let link = format!("{scheme}://{shown}/console/sign-in/{code}");
+            out.push_str(&format!("  {link}\n\n"));
+            out.push_str(if container {
+                "The link signs you in once, within 10 minutes.\n"
+            } else if mode == "open" {
+                "The link signs you in once, from this machine, within 10 minutes. Opening it in your browser now.\n"
+            } else {
+                "The link signs you in once, from this machine, within 10 minutes.\n"
+            });
+            if mode == "open" {
+                open_browser(&link);
+            }
+        }
+        None => out.push_str(&format!("  {scheme}://{shown}/console\n\n")),
+    }
+    match &key {
+        Some(key) => out.push_str(&format!(
+            "\nAdmin key, shown once (Gantry keeps only its hash). Use it for the command line and the API:\n\n  export GANTRY_KEY={key}\n"
+        )),
+        None => out.push_str("The admin key was shown at the first start; the link above signs you in without it.\n"),
+    }
+    if let Ok(master) = std::env::var(crate::credentials::MASTER_FILE_ENV) {
+        out.push_str(&format!(
+            "\nProvider keys pasted in the dashboard are sealed with the master key in {master}: keep it with the policy.\n"
+        ));
+    }
+    out.push_str("\nIn the dashboard, Start here connects a model (or tries the free demo model) and shows the exact settings for each coding tool and SDK.\n");
+    out.push_str(if container {
+        "Restart: docker restart gantry. Start over: docker rm -f gantry && docker volume rm gantry-data\n\n"
+    } else {
+        "Stop it with Ctrl-C. Start it again with gantry start in this folder.\n\n"
+    });
+    print!("{out}");
+}
+
+/// Opens `link` in the person's browser. Skipped quietly when there is none: the link is printed above.
+fn open_browser(link: &str) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(opener)
+        .arg(link)
+        // The browser gets nothing of the gateway's environment that it does not need.
+        .env_remove(START_KEY_ENV)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 /// Binds and serves until the process is asked to stop.
 pub async fn serve(addr: SocketAddr, config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let timeouts = config.timeouts.clone();
@@ -9818,6 +9939,11 @@ pub async fn serve_policy_with(
     })?;
     // The port the system gave, when --listen asked for port 0.
     let addr = listener.local_addr().unwrap_or(addr);
+    // `gantry start` asked for its short block first: the dashboard link that signs in once, then the admin key.
+    let start = std::env::var(START_ENV).ok();
+    if let Some(mode) = start.as_deref() {
+        start_block(mode, scheme, addr, loaded);
+    }
     println!("{name} listening on {scheme}://{addr}");
     if let Some(token) = &started.setup {
         // A wildcard address is not one a browser can open: show the same port on this machine.
@@ -9899,7 +10025,11 @@ pub async fn serve_policy_with(
             "warning: no keys in {keys_from}, so every request will be refused. Add one with `gantry key new <name> --team <team>`: it is used within 2 seconds.",
         );
     }
-    if !addr.ip().is_loopback() && tls.is_none() {
+    if !addr.ip().is_loopback() && tls.is_none() && start.as_deref() == Some("container") {
+        println!(
+            "Plain HTTP on {addr}: fine for a trial on this machine. For a team, put TLS in front (docs: Deploy)."
+        );
+    } else if !addr.ip().is_loopback() && tls.is_none() {
         eprintln!(
             "warning: {addr} can be reached from other machines, and Gantry keys travel to it over plain HTTP. Use --tls-cert and --tls-key, or put TLS in front of it, before real use."
         );

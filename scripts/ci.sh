@@ -50,6 +50,16 @@ step "the binary refuses to forward unchecked unless asked by name"
 if ./target/release/gantry serve 2>/dev/null; then echo "serve started without --unchecked"; exit 1; fi
 step "first run: init, serve, the setup link and a governed call, in under 60 seconds"
 python3 scripts/first_run_check.py target/release/gantry
+step "the new user's path: install, gantry start, the dashboard link in Chrome, a first request (scripts/ftue_check.py)"
+ftue_chrome=""
+for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome chromium; do
+  if command -v "$c" >/dev/null 2>&1; then ftue_chrome="$c"; break; fi
+done
+if [ -n "$ftue_chrome" ]; then
+  python3 scripts/ftue_check.py --gantry target/release/gantry --chrome "$ftue_chrome"
+else
+  echo "skipped: Chrome is not installed (google-chrome, chromium, or Google Chrome.app). Install it to run this check."
+fi
 step "the live provider matrix passes every cell against mocks and skips every cell without keys"
 python3 scripts/live_matrix.py --selftest --gantry target/release/gantry > /dev/null
 step "Cargo.toml, CHANGELOG.md and the Helm chart name one version"

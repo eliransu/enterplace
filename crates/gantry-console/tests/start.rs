@@ -187,7 +187,7 @@ async fn an_empty_install_opens_on_the_welcome_and_the_choice_is_kept() -> TestR
     );
     let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
     assert!(
-        page.contains("Our own apps and agents: 0 of 3 done"),
+        page.contains("Our own apps and agents: 1 of 5 done"),
         "{page}"
     );
     assert!(
@@ -211,6 +211,8 @@ async fn an_empty_install_opens_on_the_welcome_and_the_choice_is_kept() -> TestR
 async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> TestResult {
     let s = setup("choices")?;
     let cookie = sign_in(&s.app, ADMIN_KEY).await?;
+    // The first request is sent, so each choice's own steps are current.
+    request(&s, "01START0000000000000000000", "noa.bar", "platform")?;
     // The current step carries its lines; the steps ahead say what they bring.
     let expect: [(&str, &[&str]); 5] = [
         (
@@ -245,7 +247,6 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
             "limit",
             &[
                 "Make a key",
-                "Send requests through Gantry",
                 "Set a monthly budget for each team",
                 "Enforce the budget",
             ],
@@ -322,9 +323,16 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
         post("/console/start/pick", &cookie, "choice=coding")?,
     )
     .await?;
+    // Connect a model is done (the policy has a provider); Send your first request listens.
     let (_, _, before) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
     assert!(
-        before.contains(r#""steps":["now","ahead","ahead","ahead"]"#),
+        before.contains(r#""steps":["done","listening","ahead","ahead","ahead","ahead"]"#),
+        "{before}"
+    );
+    request(&s, "01START0000000000000000000", "noa.bar", "platform")?;
+    let (_, _, before) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    assert!(
+        before.contains(r#""steps":["done","done","now","ahead","ahead","ahead"]"#),
         "{before}"
     );
 
@@ -363,13 +371,13 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
 
     let (_, _, waiting) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
     assert!(
-        waiting.contains(r#""steps":["done","listening","ahead","ahead"]"#),
+        waiting.contains(r#""steps":["done","done","done","listening","ahead","ahead"]"#),
         "{waiting}"
     );
     request(&s, "01START0000000000000000001", "sarah.miller", "platform")?;
     let (_, _, arrived) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
     assert!(
-        arrived.contains(r#""steps":["done","done","now","ahead"]"#),
+        arrived.contains(r#""steps":["done","done","done","done","now","ahead"]"#),
         "{arrived}"
     );
     assert_ne!(
@@ -429,7 +437,7 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
         (
             "/console/requests",
             "No requests yet",
-            "/console/start?track=coding#step-1",
+            "/console/start?track=coding#step-3",
             "/integrations/coding-tools/",
         ),
         (
@@ -441,25 +449,25 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
         (
             "/console/spend",
             "No spend and no budgets yet",
-            "/console/start?track=limit#step-3",
+            "/console/start?track=limit#step-5",
             "/governance/budgets-and-rate-limits/",
         ),
         (
             "/console/people",
             "Only your admin key so far",
-            "/console/start?track=coding#step-1",
+            "/console/start?track=coding#step-3",
             "/governance/keys/",
         ),
         (
             "/console/teams",
             "No teams yet",
-            "/console/start?track=coding#step-1",
+            "/console/start?track=coding#step-3",
             "/governance/teams/",
         ),
         (
             "/console/policy",
             "One rule lets everyone in",
-            "/console/start?track=limit#step-3",
+            "/console/start?track=limit#step-5",
             "/governance/policy/",
         ),
         (
@@ -494,6 +502,7 @@ async fn a_role_sees_only_the_actions_it_may_take() -> TestResult {
         post("/console/start/pick", &admin, "choice=coding")?,
     )
     .await?;
+    request(&s, "01START0000000000000000000", "noa.bar", "platform")?;
     let viewer = sign_in(&s.app, VIEWER_KEY).await?;
     let (_, _, page) = send(&s.app, get("/console/start", &viewer)?).await?;
     assert!(page.contains("Make a key for the first person"), "{page}");
@@ -520,8 +529,200 @@ async fn a_role_sees_only_the_actions_it_may_take() -> TestResult {
     let (_, _, page) = send(&s.app, get("/console/teams", &viewer)?).await?;
     assert!(
         page.contains("No teams yet")
-            && !page.contains(r#"href="/console/start?track=coding#step-1""#),
+            && !page.contains(r#"href="/console/start?track=coding#step-3""#),
         "{page}"
     );
+    Ok(())
+}
+
+/// Credentials kept in memory, standing in for the sealed file `gantry serve` opens without a store.
+#[derive(Default)]
+struct Vault(std::sync::Mutex<Vec<(String, String)>>);
+
+impl gantry_core::store::Credentials for Vault {
+    fn credentials(&self) -> Result<Arc<Vec<gantry_core::store::Credential>>, String> {
+        let held = self.0.lock().map_err(|e| e.to_string())?;
+        Ok(Arc::new(
+            held.iter()
+                .map(|(name, _)| gantry_core::store::Credential {
+                    name: name.clone(),
+                    provider: name.clone(),
+                    fingerprint: "...test".into(),
+                    created_by: "test".into(),
+                    created_at: String::new(),
+                    rotated_by: None,
+                    rotated_at: None,
+                    generation: 1,
+                })
+                .collect(),
+        ))
+    }
+    fn add_credential(
+        &self,
+        name: &str,
+        _provider: &str,
+        value: &str,
+        _by: &str,
+    ) -> Result<Option<gantry_core::store::Credential>, String> {
+        self.0
+            .lock()
+            .map_err(|e| e.to_string())?
+            .push((name.into(), value.into()));
+        Ok(self.credentials()?.last().cloned())
+    }
+}
+
+#[tokio::test]
+async fn connect_a_model_seals_the_key_and_adds_the_provider_or_the_demo_model_is_chosen()
+-> TestResult {
+    let s = setup("connect")?;
+    // The policy as gantry start writes it with no key: the demo model only.
+    std::fs::write(
+        s.dir.join("gantry.policy.yaml"),
+        "version: 1\nmode: observe\nproviders:\n  - name: demo\n    preset: demo\n    models: [gantry-demo]\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\nroles:\n  - name: viewer\n    permissions: [see_keys]\n",
+    )?;
+    let cookie = sign_in(&s.app, ADMIN_KEY).await?;
+    send(&s.app, post("/console/start/pick", &cookie, "choice=apps")?).await?;
+    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    for part in [
+        "Connect a model",
+        "Try without a key",
+        "Send your first request",
+    ] {
+        assert!(page.contains(part), "{part}: {page}");
+    }
+    // No master key and no store: the page says how to get one, and the form is refused with the same fix.
+    assert!(page.contains("GANTRY_MASTER_KEY"), "{page}");
+    let (status, _, page) = send(
+        &s.app,
+        post(
+            "/console/start/connect",
+            &cookie,
+            "provider=anthropic&key=sk-ant-test-1234",
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(page.contains("master key"), "{page}");
+
+    // Try without a key: the first request names the demo model.
+    let (_, headers, _) = send(&s.app, post("/console/start/demo", &cookie, "")?).await?;
+    assert_eq!(location(&headers), "/console/start#step-2");
+    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    assert!(page.contains("Using the demo model"), "{page}");
+    assert!(
+        page.contains("&quot;model&quot;:&quot;gantry-demo&quot;"),
+        "{page}"
+    );
+    assert!(
+        page.contains(&format!("curl {BASE}/v1/chat/completions")),
+        "{page}"
+    );
+
+    // A key for the first request: in the lines, shown once, and no person's or app's key.
+    let (status, _, page) = send(&s.app, post("/console/start/first-key", &cookie, "")?).await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page.contains("Authorization: Bearer gantry_"), "{page}");
+    let (_, _, page) = send(&s.app, get("/console/start?tool=python", &cookie)?).await?;
+    assert!(
+        page.contains("os.environ[&quot;GANTRY_KEY&quot;]"),
+        "{page}"
+    );
+    assert!(page.contains("Make a key for the app"), "{page}");
+    let (_, _, state) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    assert!(
+        state.contains(r#""steps":["done","listening","ahead","ahead","ahead"]"#),
+        "{state}"
+    );
+
+    // With a place to keep it, the key is sealed and the provider joins the policy, reading that credential.
+    let vault: Arc<dyn gantry_core::store::Credentials> = Arc::new(Vault::default());
+    gantry_core::store::attach_credentials(&s.dir.join("gantry.keys.yaml"), &vault);
+    std::fs::write(
+        gantry_core::store::credentials_file(&s.dir.join("gantry.policy.yaml")),
+        "[]",
+    )?;
+    let (status, headers, page) = send(
+        &s.app,
+        post(
+            "/console/start/connect",
+            &cookie,
+            "provider=anthropic&key=sk-ant-test-1234",
+        )?,
+    )
+    .await?;
+    assert_eq!(
+        (status, location(&headers)),
+        (StatusCode::SEE_OTHER, "/console/start#step-2"),
+        "{page}"
+    );
+    assert_eq!(
+        vault.credential_value("anthropic").ok().flatten(),
+        None,
+        "the stand-in keeps no values to open"
+    );
+    assert_eq!(vault.credentials()?.len(), 1);
+    let policy = std::fs::read_to_string(s.dir.join("gantry.policy.yaml"))?;
+    assert!(
+        policy.contains("  - name: anthropic\n    preset: anthropic\n    credential: anthropic\n"),
+        "{policy}"
+    );
+    let audit = std::fs::read_to_string(s.dir.join("gantry-audit.jsonl"))?;
+    assert!(
+        audit.contains(r#""action":"add_credential""#)
+            && audit.contains(r#""action":"connect_provider""#),
+        "{audit}"
+    );
+    assert!(
+        !audit.contains("sk-ant-test-1234"),
+        "the key is in no record"
+    );
+    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    assert!(
+        page.contains("Connected: <span class=\"t-mono\">anthropic</span>"),
+        "{page}"
+    );
+    assert!(
+        page.contains("&quot;model&quot;:&quot;claude-sonnet-5-5&quot;"),
+        "{page}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_start_link_signs_in_once_and_only_from_this_machine_and_a_pasted_export_line_signs_in()
+-> TestResult {
+    let s = setup("link")?;
+    // Only from this machine: a request with no loopback address is refused, and the link is not spent.
+    let code = gantry_console::offer_start_link(&sha256_hex(ADMIN_KEY.as_bytes()), false)
+        .ok_or("no randomness")?;
+    let link = format!("/console/sign-in/{code}");
+    let (status, _, page) = send(&s.app, get(&link, "")?).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{page}");
+    assert!(page.contains("machine that runs Gantry"), "{page}");
+    // In a container any address may use it: the browser comes through the container's network.
+    let code = gantry_console::offer_start_link(&sha256_hex(ADMIN_KEY.as_bytes()), true)
+        .ok_or("no randomness")?;
+    let link = format!("/console/sign-in/{code}");
+    let (status, headers, _) = send(&s.app, get(&link, "")?).await?;
+    assert_eq!(
+        (status, location(&headers)),
+        (StatusCode::SEE_OTHER, "/console/start")
+    );
+    assert!(headers.get(header::SET_COOKIE).is_some());
+    let (status, _, page) = send(&s.app, get(&link, "")?).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "once: {page}");
+    let audit = std::fs::read_to_string(s.dir.join("gantry-audit.jsonl"))?;
+    assert!(audit.contains(r#""via":"start_link""#), "{audit}");
+
+    // The whole line gantry start prints, quotes and all, signs in too; a wrong key says so plainly.
+    let line = format!("key=export%20GANTRY_KEY%3D%22{ADMIN_KEY}%22%20");
+    let (status, headers, _) = send(&s.app, post("/console/sign-in", "", &line)?).await?;
+    assert_eq!(
+        (status, location(&headers)),
+        (StatusCode::SEE_OTHER, "/console/start")
+    );
+    let (_, _, page) = send(&s.app, post("/console/sign-in", "", "key=sk-not-gantry")?).await?;
+    assert!(page.contains("That is not a Gantry key"), "{page}");
     Ok(())
 }

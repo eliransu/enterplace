@@ -7,6 +7,42 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### First run in under two minutes, no provider key needed
+
+- `gantry start` needs no provider key. It writes an observe-mode policy with the demo model (`preset: demo`, model
+  `gantry-demo`: answered inside the gateway with a sample text for chat completions, responses and messages,
+  streaming included, nothing sent anywhere, priced at zero, recorded under the provider `demo`) plus every provider
+  whose key is in the environment, an admin key, and `gantry-master.key` (0600), then serves.
+- The first thing it prints is `Gantry is running. Open the dashboard:` and a link that signs in once: a random code
+  kept only as its hash, single use, 10 minutes, from a loopback address only (any address under `--container`),
+  recorded as `console_sign_in` with `via: start_link`. On a terminal with a display it opens the browser (`open` on
+  macOS, `xdg-open` on Linux); `--no-open` skips that. Then the admin key once, and one line that the dashboard shows
+  the settings for each tool. The per-tool settings and the provider-key export paragraph left the terminal.
+- `gantry start` again in the same folder (or `docker restart gantry`) serves the policy it wrote with a new sign-in
+  link and no new admin key; `--force` writes new ones and keeps the master key. `--yes` and `--all-tools` are still
+  accepted and do nothing.
+- Start here opens every checklist with **Connect a model** (paste an OpenAI, Anthropic or Gemini key, sealed as a
+  provider credential and recorded, and the provider is added to the policy; or **Try without a key**, the demo
+  model) and **Send your first request** (a curl, Python or Node snippet with the gateway's address and a key: the
+  admin key's `$GANTRY_KEY`, or a key the step makes, shown once). It turns done when the request arrives, answered
+  or refused, and the first rows show on Start here.
+- Provider credentials work without Postgres: sealed under the master key in `gantry-credentials.json` beside the
+  policy. `credential:` in a policy without `store:` loads when that file exists.
+- `GANTRY_OPENAI_BASE_URL`, `GANTRY_ANTHROPIC_BASE_URL` and `GANTRY_GEMINI_BASE_URL` point a provider that `gantry
+  start` or Connect a model sets up at another URL, such as a proxy.
+- A browser at the gateway's root (`/` with `Accept: text/html`) is sent to the console; API clients keep the JSON
+  `no_key` answer. A browser's own `/favicon.ico` and touch icon requests are no longer recorded as refused requests.
+- The console sign-in takes the whole `export GANTRY_KEY=...` line, and says plainly when what was pasted is not a
+  Gantry key. Issuing a key on People and workloads shows the Claude Code, Codex and SDK lines with that key.
+- The installer adds the install folder to the PATH in the shell's startup file (`~/.zshrc`, `~/.bashrc` or
+  `~/.bash_profile` on macOS, fish's `conf.d`, `~/.profile`), once, unless `GANTRY_NO_MODIFY_PATH=1`, and prints the
+  one line for the current terminal.
+- `scripts/ftue_check.py` walks the new-user path in CI: install from a local release, `gantry start --no-open`, the
+  sign-in link in headless Chrome, a starting choice, the demo model, the shown curl, the step turning done and the
+  request in Requests; then a provider connected through the console against a mock.
+- Docs: the quickstart and README open with three steps; the docs home and the website point at the same quickstart;
+  the one-click page starts with a "which to pick" table, and the Railway button is hidden until its template exists.
+
 ### One-command install of the CLI
 
 - `curl -fsSL https://gantry.eliran.me/install.sh | sh` installs `gantry` on macOS and Linux, x86_64 and arm64: it

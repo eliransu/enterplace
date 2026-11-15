@@ -2186,13 +2186,7 @@ fn start(dir: &std::path::Path, extra: &[&str], env: &[(&str, &str)]) -> std::io
     let mut command = Command::new(env!("CARGO_BIN_EXE_gantry"));
     command
         .env_clear()
-        .args([
-            "start",
-            "--dir",
-            &dir.display().to_string(),
-            "--yes",
-            "--no-serve",
-        ])
+        .args(["start", "--dir", &dir.display().to_string(), "--no-serve"])
         .args(extra);
     for (key, value) in env {
         command.env(key, value);
@@ -2221,7 +2215,7 @@ fn printed_keys(text: &str) -> Vec<&str> {
 }
 
 #[test]
-fn start_writes_an_observe_policy_from_env_keys() -> TestResult {
+fn start_writes_an_observe_policy_with_the_demo_model_and_the_env_keys() -> TestResult {
     let dir = start_dir("observe")?;
     let out = start(&dir, &[], BOTH_KEYS)?;
     let stdout = String::from_utf8(out.stdout)?;
@@ -2231,6 +2225,8 @@ fn start_writes_an_observe_policy_from_env_keys() -> TestResult {
     // The policy reads the provider name, so the tool lines can set OPENAI_API_KEY to the Gantry key in one shell.
     for line in [
         "mode: observe\n",
+        "preset: demo\n",
+        "models: [gantry-demo]\n",
         "key_env: OPENAI_PROVIDER_KEY\n",
         "key_env: ANTHROPIC_PROVIDER_KEY\n",
         "models: [\"*\"]\n",
@@ -2245,15 +2241,21 @@ fn start_writes_an_observe_policy_from_env_keys() -> TestResult {
     let file = std::fs::read_to_string(dir.join("gantry.keys.yaml"))?;
     assert!(!file.contains(keys[0]), "{file}");
     assert!(file.contains("admin: true"), "{file}");
+    // No paragraph about exporting provider keys: the gateway gets them, and the dashboard shows the rest.
+    assert!(!stdout.contains("_PROVIDER_KEY"), "{stdout}");
 
-    // A key found under the provider's own name is to be exported under the name the policy reads.
-    for line in [
-        "export OPENAI_PROVIDER_KEY=$OPENAI_API_KEY\n",
-        "export ANTHROPIC_PROVIDER_KEY=$ANTHROPIC_API_KEY\n",
-    ] {
-        assert!(stdout.contains(line), "{line}: {stdout}");
+    // The master key that seals provider keys pasted in the console: made once, private, named.
+    let master = dir.join("gantry-master.key");
+    assert!(stdout.contains("gantry-master.key"), "{stdout}");
+    assert_eq!(std::fs::read_to_string(&master)?.trim().len(), 64);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&master)?.permissions().mode() & 0o777,
+            0o600
+        );
     }
-    assert!(!stdout.contains("another shell"), "{stdout}");
 
     let keys_file = path(&dir, "gantry.keys.yaml");
     let out = gantry(
@@ -2270,24 +2272,60 @@ fn start_writes_an_observe_policy_from_env_keys() -> TestResult {
     )?;
     assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
     assert!(
-        String::from_utf8(out.stdout)?.contains("1 rule, 1 key, 2 providers"),
+        String::from_utf8(out.stdout)?.contains("1 rule, 1 key, 3 providers"),
         "check"
     );
     Ok(())
 }
 
 #[test]
-fn start_refuses_to_overwrite_without_force() -> TestResult {
+fn start_needs_no_provider_key() -> TestResult {
+    let dir = start_dir("nokey")?;
+    let out = start(&dir, &[], &[])?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let policy = std::fs::read_to_string(dir.join("gantry.policy.yaml"))?;
+    assert!(policy.contains("preset: demo\n"), "{policy}");
+    assert!(!policy.contains("preset: openai"), "{policy}");
+    assert_eq!(printed_keys(&String::from_utf8(out.stdout)?).len(), 1);
+    let out = gantry(&["check", &path(&dir, "gantry.policy.yaml")], &[])?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+
+    // A provider asked for by name still needs its key, and the error names its variable.
+    let dir = start_dir("nokey-named")?;
+    let out = start(&dir, &["--providers", "anthropic"], BOTH_KEYS[..1].as_ref())?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("ANTHROPIC_PROVIDER_KEY"));
+    Ok(())
+}
+
+#[test]
+fn start_points_a_provider_at_the_url_gantry_openai_base_url_names() -> TestResult {
+    let dir = start_dir("base-url")?;
+    let mut env = BOTH_KEYS[..1].to_vec();
+    env.push(("GANTRY_OPENAI_BASE_URL", "http://127.0.0.1:9/v1"));
+    let out = start(&dir, &[], &env)?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let policy = std::fs::read_to_string(dir.join("gantry.policy.yaml"))?;
+    assert!(
+        policy.contains("    url: http://127.0.0.1:9/v1\n    allow_private: true\n"),
+        "{policy}"
+    );
+    Ok(())
+}
+
+#[test]
+fn start_again_keeps_the_policy_and_makes_no_second_admin_key_unless_forced() -> TestResult {
     let dir = start_dir("force")?;
     assert!(start(&dir, &[], BOTH_KEYS)?.status.success());
     let before = std::fs::read_to_string(dir.join("gantry.policy.yaml"))?;
+    let master = std::fs::read_to_string(dir.join("gantry-master.key"))?;
     std::fs::write(dir.join("gantry.policy.yaml"), "# edited\n")?;
 
     let out = start(&dir, &[], BOTH_KEYS)?;
-    assert_eq!(out.status.code(), Some(2));
-    let stderr = String::from_utf8(out.stderr)?;
-    assert!(stderr.contains("--force"), "{stderr}");
-    assert!(printed_keys(&String::from_utf8(out.stdout)?).is_empty());
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(stdout.contains("is kept"), "{stdout}");
+    assert!(printed_keys(&stdout).is_empty(), "{stdout}");
     assert_eq!(
         std::fs::read_to_string(dir.join("gantry.policy.yaml"))?,
         "# edited\n"
@@ -2299,83 +2337,24 @@ fn start_refuses_to_overwrite_without_force() -> TestResult {
         std::fs::read_to_string(dir.join("gantry.policy.yaml"))?,
         before
     );
-    Ok(())
-}
-
-#[test]
-fn start_prints_tool_settings() -> TestResult {
-    let dir = start_dir("tools")?;
-    let out = start(&dir, &["--all-tools"], BOTH_KEYS)?;
-    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
-    let stdout = String::from_utf8(out.stdout)?;
-    for text in [
-        "Claude Code",
-        "export ANTHROPIC_BASE_URL=http://127.0.0.1:8080\n",
-        "export ANTHROPIC_API_KEY=$GANTRY_KEY\n",
-        "Codex",
-        "base_url = \"http://127.0.0.1:8080/v1\"",
-        "env_key = \"GANTRY_KEY\"",
-        "Cursor",
-        "Override OpenAI Base URL:  http://127.0.0.1:8080/v1",
-        "VS Code",
-    ] {
-        assert!(stdout.contains(text), "{text}: {stdout}");
-    }
-    Ok(())
-}
-
-#[test]
-fn start_prints_only_the_tools_found_and_the_listen_address() -> TestResult {
-    let dir = start_dir("found")?;
-    // A PATH of its own with only `claude` on it, so the test does not depend on this machine's tools.
-    let bin = dir.join("bin");
-    std::fs::create_dir_all(&bin)?;
-    std::fs::write(bin.join("claude"), "")?;
-    let path = bin.display().to_string();
-    let mut env = BOTH_KEYS.to_vec();
-    env.push(("PATH", &path));
-    let out = start(&dir, &["--listen", "127.0.0.1:9191"], &env)?;
-    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
-    let stdout = String::from_utf8(out.stdout)?;
-    for text in [
-        "Claude Code",
-        "export ANTHROPIC_BASE_URL=http://127.0.0.1:9191\n",
-        "export OPENAI_BASE_URL=http://127.0.0.1:9191/v1\n",
-        "console at http://127.0.0.1:9191/console",
-        "--listen 127.0.0.1:9191",
-    ] {
-        assert!(stdout.contains(text), "{text}: {stdout}");
-    }
-    for text in ["Codex", "Cursor", "VS Code", "8080"] {
-        assert!(!stdout.contains(text), "{text}: {stdout}");
-    }
-
-    // Nothing on PATH: no tool lines, and the flag that prints them all.
-    let dir = start_dir("none")?;
-    let out = start(&dir, &[], BOTH_KEYS)?;
-    let stdout = String::from_utf8(out.stdout)?;
-    assert!(!stdout.contains("Claude Code"), "{stdout}");
-    assert!(stdout.contains("--all-tools"), "{stdout}");
+    // The master key is never replaced: credentials sealed with it would no longer open.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("gantry-master.key"))?,
+        master
+    );
     Ok(())
 }
 
 #[test]
 fn start_in_a_container_writes_once_then_serves_what_it_wrote() -> TestResult {
-    // What the image runs with no policy mounted: the first start writes the policy and prints the admin key, with
-    // every tool's settings (the tools are on the host) and an address the host can open.
+    // What the image runs with no policy mounted: the first start writes the policy and prints the admin key.
     let dir = start_dir("container")?;
-    let out = start(&dir, &["--container"], BOTH_KEYS[..1].as_ref())?;
+    let out = start(&dir, &["--container"], &[])?;
     assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
     let stdout = String::from_utf8(out.stdout)?;
     assert_eq!(printed_keys(&stdout).len(), 1, "{stdout}");
-    for text in [
-        "export OPENAI_BASE_URL=http://localhost:8080/v1\n",
-        "Codex",
-        "console at http://localhost:8080/console",
-    ] {
-        assert!(stdout.contains(text), "{text}: {stdout}");
-    }
-    assert!(!stdout.contains("http://0.0.0.0"), "{stdout}");
+    assert!(stdout.contains("docker restart gantry"), "{stdout}");
+    assert!(!stdout.contains("--force"), "{stdout}");
     let policy = std::fs::read_to_string(dir.join("gantry.policy.yaml"))?;
     assert!(policy.contains("mode: observe\n"), "{policy}");
 
@@ -2392,26 +2371,112 @@ fn start_in_a_container_writes_once_then_serves_what_it_wrote() -> TestResult {
     Ok(())
 }
 
-#[test]
-fn start_without_any_provider_key_says_which_env_to_set() -> TestResult {
-    let dir = start_dir("nokey")?;
-    let out = start(&dir, &[], &[])?;
-    assert_eq!(out.status.code(), Some(2));
-    let stderr = String::from_utf8(out.stderr)?;
-    for name in [
-        "OPENAI_PROVIDER_KEY",
-        "ANTHROPIC_PROVIDER_KEY",
-        "OPENAI_API_KEY",
-    ] {
-        assert!(stderr.contains(name), "{name}: {stderr}");
-    }
-    assert!(!dir.join("gantry.policy.yaml").exists());
-    assert!(!dir.join("gantry.keys.yaml").exists());
+/// Sends one HTTP/1.1 request over a plain socket and returns the whole answer.
+fn http(addr: &str, request: &str) -> Option<String> {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(addr).ok()?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .ok()?;
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut text = String::new();
+    stream.read_to_string(&mut text).ok()?;
+    Some(text)
+}
 
-    // A provider asked for by name names its own variable.
-    let out = start(&dir, &["--providers", "anthropic"], BOTH_KEYS[..1].as_ref())?;
-    assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8(out.stderr)?.contains("ANTHROPIC_PROVIDER_KEY"));
+#[test]
+fn start_prints_the_dashboard_link_first_and_it_signs_in_once() -> TestResult {
+    use std::io::BufRead;
+    let dir = start_dir("link")?;
+    let port = std::net::TcpListener::bind("127.0.0.1:0")?
+        .local_addr()?
+        .port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gantry"))
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .args([
+            "start",
+            "--no-open",
+            "--dir",
+            &dir.display().to_string(),
+            "--listen",
+            &addr,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    let mut lines = std::io::BufReader::new(stdout).lines();
+    let mut head = Vec::new();
+    for line in lines.by_ref() {
+        let line = line?;
+        let done = line.contains("export GANTRY_KEY=");
+        head.push(line);
+        if done || head.len() > 20 {
+            break;
+        }
+    }
+    let first = head
+        .iter()
+        .find(|l| !l.trim().is_empty())
+        .cloned()
+        .unwrap_or_default();
+    let link = head
+        .iter()
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix(&format!("http://{addr}"))
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let key = head
+        .iter()
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("export GANTRY_KEY=")
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let get = |path: &str, extra: &str| {
+        http(
+            &addr,
+            &format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\n{extra}Connection: close\r\n\r\n"),
+        )
+        .unwrap_or_default()
+    };
+    let signed = get(&link, "");
+    // A browser at the gateway's own address lands on the console; an API client keeps the JSON answer.
+    let root_html = get("/", "Accept: text/html\r\n");
+    let root_api = get("/", "");
+    let again = get(&link, "");
+    let body = r#"{"model":"gantry-demo","messages":[{"role":"user","content":"hi"}]}"#;
+    let demo = http(
+        &addr,
+        &format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {key}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    )
+    .unwrap_or_default();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(first, "Gantry is running. Open the dashboard:", "{head:?}");
+    assert!(link.starts_with("/console/sign-in/"), "{head:?}");
+    assert!(signed.starts_with("HTTP/1.1 303"), "{signed}");
+    assert!(signed.contains("location: /console/start"), "{signed}");
+    assert!(signed.contains("gantry_console="), "{signed}");
+    assert!(
+        again.starts_with("HTTP/1.1 403"),
+        "the link works once: {again}"
+    );
+    assert!(root_html.contains("location: /console"), "{root_html}");
+    assert!(root_api.contains("no_key"), "{root_api}");
+    assert!(demo.starts_with("HTTP/1.1 200"), "{demo}");
+    assert!(demo.contains("Gantry demo model"), "{demo}");
+    let audit = std::fs::read_to_string(dir.join("gantry-audit.jsonl"))?;
+    assert!(audit.contains(r#""via":"start_link""#), "{audit}");
+    assert!(audit.contains(r#""provider":"demo""#), "{audit}");
     Ok(())
 }
 

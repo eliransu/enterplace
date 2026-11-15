@@ -4,10 +4,12 @@ Usage: python3 scripts/smoke_image.py gantry:<version>
 Passes when the image runs as a user other than root, is under 50 MB, prints the same version and source hash as
 target/release/gantry-enterprise (when that exists), answers a governed request within 60 seconds of `docker run`,
 leaving one request record in an unbroken chain, answers /healthz and /readyz, and without a license key says it runs
-the open source edition (`license show` and the license in /healthz).
+the open source edition (`license show` and the license in /healthz). Then the quickstart's `docker run` (the default
+command, no provider key): the log's first line is the dashboard link, the demo model answers with the admin key it
+printed, and the link signs in.
 SMOKE_MOCK_PORT and SMOKE_PORT pick the mock's port and the port the container is published on (both on
 127.0.0.1); unset, the system picks free ones."""
-import http.server, json, os, shutil, subprocess, sys, tempfile, threading, time, urllib.request
+import http.server, json, os, shutil, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request
 
 image = sys.argv[1]
 size = int(subprocess.check_output(["docker", "image", "inspect", image, "--format", "{{.Size}}"]).decode())
@@ -88,7 +90,37 @@ try:
     assert health.get("license", {}).get("state") == "missing", health
     shown = subprocess.check_output(["docker", "run", "--rm", image, "license", "show"]).decode()
     assert "No license: running the open source features only" in shown, shown
-    print(f"pass: {size / 1e6:.1f} MB, user {user}, first governed request {took:.1f} s after docker run, {records.splitlines()[0]}; /healthz and /readyz 200, license {health['license']['state']} (open source edition)")
+    # The quickstart's docker run: no policy, no provider key. The log opens with the dashboard link.
+    quick = subprocess.check_output(["docker", "run", "-d", "--rm", "-p", "127.0.0.1::8080", "-v", f"{volume}-quick:/var/lib/gantry", image]).decode().strip()
+    try:
+        qport = subprocess.check_output(["docker", "port", quick, "8080"]).decode().split(":")[-1].strip()
+        deadline = time.monotonic() + 30
+        log = ""
+        while "export GANTRY_KEY=" not in log and time.monotonic() < deadline:
+            time.sleep(0.3)
+            log = subprocess.run(["docker", "logs", quick], capture_output=True, text=True).stdout
+        first = next((l for l in log.splitlines() if l.strip()), "")
+        assert first == "Gantry is running. Open the dashboard:", log
+        assert "docker restart gantry" in log and "--force" not in log, log
+        qkey = next(w for w in log.split() if w.startswith("GANTRY_KEY=")).split("=", 1)[1]
+        link = next(w for w in log.split() if "/console/sign-in/" in w)
+        demo = json.dumps({"model": "gantry-demo", "messages": [{"role": "user", "content": "hi"}]}).encode()
+        request = urllib.request.Request(f"http://127.0.0.1:{qport}/v1/chat/completions", demo,
+                                         {"Authorization": f"Bearer {qkey}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=5) as answer:
+            assert b"Gantry demo model" in answer.read()
+        class Stay(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **k):
+                return None
+        try:
+            urllib.request.build_opener(Stay).open(link.replace("127.0.0.1:8080", f"127.0.0.1:{qport}"), timeout=5)
+            raise SystemExit("the sign-in link did not redirect")
+        except urllib.error.HTTPError as err:
+            assert err.code == 303 and err.headers["location"] == "/console/start", (err.code, err.headers)
+    finally:
+        subprocess.run(["docker", "rm", "-f", quick], capture_output=True)
+        subprocess.run(["docker", "volume", "rm", f"{volume}-quick"], capture_output=True)
+    print(f"pass: {size / 1e6:.1f} MB, user {user}, first governed request {took:.1f} s after docker run, {records.splitlines()[0]}; /healthz and /readyz 200, license {health['license']['state']} (open source edition); the quickstart's docker run prints the link first and the demo model answers")
 finally:
     subprocess.run(["docker", "rm", "-f", container], capture_output=True)
     subprocess.run(["docker", "volume", "rm", volume], capture_output=True)

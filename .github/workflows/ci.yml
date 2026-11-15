@@ -50,6 +50,13 @@ jobs:
       # Shared CI machines are noisy, so the bench runs at 1,000 requests a second rather than the 5,000 used locally.
       # The limit stays at the plan's target: 1,000 microseconds at p99.
       - run: scripts/ci.sh
+      # The screenshots of the new user's path (scripts/ftue_check.py, run by ci.sh with the runner's Chrome).
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ftue-screens
+          path: target/ftue-screens
+          if-no-files-found: ignore
       - name: The binary answers
         run: |
           ./target/release/gantry serve --unchecked &

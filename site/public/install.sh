@@ -12,6 +12,8 @@
 #   GANTRY_VERSION       edge, or a tag such as v0.1.0 (default: the latest stable release, else edge)
 #   GANTRY_INSTALL_DIR   where to put gantry (default ~/.local/bin); a folder you cannot write, such as
 #                        /usr/local/bin, is written with sudo
+#   GANTRY_NO_MODIFY_PATH=1  leave the shell's startup file alone (by default the install folder is added to the
+#                        PATH in ~/.zshrc, ~/.bashrc or ~/.bash_profile on macOS, fish's conf.d, or ~/.profile, once)
 #   GANTRY_REPO_URL      the repository to download from (default https://github.com/eliransu/gantry); for tests
 #   GANTRY_ALLOWED_SIGNERS  an ssh allowed_signers file to verify with in place of the release key; for tests
 set -eu
@@ -149,6 +151,35 @@ $sudo cp "$binary" "$INSTALL_DIR/.gantry.new"
 $sudo chmod 755 "$INSTALL_DIR/.gantry.new"
 $sudo mv -f "$INSTALL_DIR/.gantry.new" "$INSTALL_DIR/gantry"
 
+# add_to_path: puts INSTALL_DIR on the PATH of new terminals through the shell's startup file, once, as rustup and
+# bun do, then says the one line that does it in this terminal.
+add_to_path() {
+  line="export PATH=\"$INSTALL_DIR:\$PATH\""
+  now=$line
+  case ${SHELL##*/} in
+    zsh) rc=${ZDOTDIR:-$HOME}/.zshrc ;;
+    bash) if [ "$os" = apple-darwin ]; then rc=$HOME/.bash_profile; else rc=$HOME/.bashrc; fi ;;
+    fish)
+      rc=${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/gantry.fish
+      line="fish_add_path $INSTALL_DIR"
+      now=$line
+      ;;
+    *) rc=$HOME/.profile ;;
+  esac
+  say ""
+  if [ "${GANTRY_NO_MODIFY_PATH:-}" = 1 ]; then
+    say "$INSTALL_DIR is not on your PATH, and GANTRY_NO_MODIFY_PATH=1 leaves $rc as it is. Add this line to it:"
+  elif [ -f "$rc" ] && grep -qF "$INSTALL_DIR" "$rc"; then
+    say "$rc already adds $INSTALL_DIR to the PATH: new terminals have gantry. To use it in this terminal now, run:"
+  elif mkdir -p "$(dirname "$rc")" 2> /dev/null && printf '\n# Added by the Gantry installer (https://gantry.eliran.me)\n%s\n' "$line" >> "$rc" 2> /dev/null; then
+    say "Added $INSTALL_DIR to your PATH in $rc: new terminals have gantry. To use it in this terminal now, run:"
+  else
+    say "$rc could not be written. Add this line to your shell's startup file, and run it in this terminal:"
+  fi
+  say ""
+  say "  $now"
+}
+
 say "Installed $("$INSTALL_DIR/gantry" version 2> /dev/null || echo gantry) to $INSTALL_DIR/gantry"
 case ":$PATH:" in
   *":$INSTALL_DIR:"*)
@@ -163,14 +194,8 @@ case ":$PATH:" in
     fi
     ;;
   *)
-    gantry=$INSTALL_DIR/gantry
-    say ""
-    say "$INSTALL_DIR is not on your PATH. Add it, then open a new terminal:"
-    case ${SHELL:-} in
-      */zsh) say "  echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> ~/.zshrc" ;;
-      */fish) say "  fish_add_path $INSTALL_DIR" ;;
-      *) say "  echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> ~/.profile" ;;
-    esac
+    gantry=gantry
+    add_to_path
     ;;
 esac
 say ""

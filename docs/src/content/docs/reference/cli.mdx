@@ -40,54 +40,43 @@ Homebrew, stable releases only: `brew install eliransu/tap/gantry`. The tarballs
 
 ## start
 
-Step 1 in one command: writes a policy in observe mode, makes an admin key, prints the settings for the coding tools on this machine and runs the gateway.
+Step 1 in one command, with no provider key needed: writes a policy in observe mode with the demo model and any provider whose key is in the environment, makes an admin key and a master key, runs the gateway and prints the dashboard link that signs in once.
 
 ```text
-gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--yes] [--force] [--no-serve] [--all-tools] [--container]
+gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--no-open] [--force] [--no-serve] [--container]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--dir <path>` | the current folder | Where `gantry.policy.yaml`, `gantry.keys.yaml` and the audit log go. Made if missing |
-| `--providers <a,b>` | every provider with a key in the environment | `openai`, `anthropic` or `gemini`. Each needs its key set. For another provider use `gantry init` |
-| `--listen <host:port>` | `127.0.0.1:8080` | Where the gateway listens. Every URL `start` prints uses it |
-| `--yes` | off | Takes the defaults without asking. Without it, on a terminal, `start` asks which providers to use |
-| `--force` | off | Writes over an existing `gantry.policy.yaml`. The keys file is kept and gets one more admin key |
-| `--no-serve` | off | Stops after writing the files and printing the settings |
-| `--all-tools` | off | Prints the settings for every tool `start` knows, not only the ones found on this machine |
-| `--container` | off | The image's default command. Serves `/etc/gantry/gantry.policy.yaml` when one is mounted, else the policy an earlier start wrote in `--dir` (default `/var/lib/gantry`); only with neither does it write one, with `--yes`, `--all-tools` and `--listen 0.0.0.0:8080` |
+| `--dir <path>` | the current folder | Where `gantry.policy.yaml`, `gantry.keys.yaml`, `gantry-master.key` and the audit log go. Made if missing |
+| `--providers <a,b>` | every provider with a key in the environment | `openai`, `anthropic` or `gemini`. Each needs its key set. Others: connect them in the dashboard, or use `gantry init` |
+| `--listen <host:port>` | `127.0.0.1:8080` | Where the gateway listens. The dashboard link uses it |
+| `--no-open` | off | Prints the dashboard link without opening the browser. It is not opened anyway without a terminal or a display |
+| `--force` | off | Writes a new policy and admin key over the ones there. The master key is kept. Without it, `start` serves the policy it finds, with a new link and no new admin key |
+| `--no-serve` | off | Stops after writing the files and printing the admin key |
+| `--container` | off | The image's default command. Serves `/etc/gantry/gantry.policy.yaml` when one is mounted, else the policy an earlier start wrote in `--dir` (default `/var/lib/gantry`); only with neither does it write one, listening on `0.0.0.0:8080` and opening no browser. Its link works from any address: the browser comes through the container's network |
 
-Provider keys are read from `OPENAI_PROVIDER_KEY` or `OPENAI_API_KEY`, and the same for `ANTHROPIC` and `GEMINI` (the `_PROVIDER_KEY` form wins when both are set). The policy always reads `<PROVIDER>_PROVIDER_KEY`, so the tool lines can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to the Gantry key in the same shell. The key itself is never written. A key found under `<PROVIDER>_API_KEY` is passed to the gateway `start` runs, and `start` prints the `export <PROVIDER>_PROVIDER_KEY=$<PROVIDER>_API_KEY` line to run before a later `gantry serve`.
+Provider keys are read from `OPENAI_PROVIDER_KEY` or `OPENAI_API_KEY`, and the same for `ANTHROPIC` and `GEMINI` (the `_PROVIDER_KEY` form wins when both are set). The policy always reads `<PROVIDER>_PROVIDER_KEY`, so the tool lines can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to the Gantry key in the same shell; a key found under `<PROVIDER>_API_KEY` is passed to the gateway `start` runs. The key itself is never written. `GANTRY_OPENAI_BASE_URL` (and the same for `ANTHROPIC` and `GEMINI`) writes that provider's `url:`, for a proxy in front of it.
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-...
-gantry start
+`gantry-master.key` (64 hex characters, mode 0600) is made once, unless `GANTRY_MASTER_KEY` or `GANTRY_MASTER_KEY_FILE` is set, and passed to the gateway as `GANTRY_MASTER_KEY_FILE`. It seals the provider keys pasted in the dashboard (Start here, Connect a model, or Credentials), kept in `gantry-credentials.json` beside the policy when there is no store.
+
+The first lines the gateway prints:
+
+```text
+Gantry is running. Open the dashboard:
+
+  http://127.0.0.1:8080/console/sign-in/4be1...
+
+The link signs you in once, from this machine, within 10 minutes. Opening it in your browser now.
+
+Admin key, shown once (Gantry keeps only its hash). Use it for the command line and the API:
+
+  export GANTRY_KEY=gantry_3f9c...
 ```
 
-The policy it writes:
+The link's code is random, kept only as its hash, works once, for 10 minutes, and only from a loopback address (any address with `--container`); its sign-in is recorded as `console_sign_in` with `via: start_link`. The settings for each coding tool are on Start here in the dashboard, built from this gateway's address.
 
-```yaml title="gantry.policy.yaml"
-version: 1
-mode: observe
-providers:
-  - name: openai
-    preset: openai
-    key_env: OPENAI_PROVIDER_KEY
-    models: [gpt-5, gpt-5-mini, gpt-5-codex, gpt-4o-mini]
-  - name: anthropic
-    preset: anthropic
-    key_env: ANTHROPIC_PROVIDER_KEY
-    models: [claude-sonnet-5-5, claude-haiku-5-5]
-rules:
-  - name: everyone
-    principals: { any: true }
-    models: ["*"]
-```
-
-The admin key is printed once, as `export GANTRY_KEY=gantry_...`, and only its hash is saved in `gantry.keys.yaml`. It signs in to the console. Then come the lines for the tools found on this machine: [Claude Code](/integrations/claude-code/) when `claude` is on `PATH`, [Codex](/integrations/codex/) when `codex` is on `PATH` or `~/.codex` exists, [Cursor](/integrations/cursor/) when `cursor` is, and the VS Code extensions when `code` is. The [OpenAI SDKs](/integrations/sdks/) lines always come. Each uses `$GANTRY_KEY`. Claude Code's lines need the `anthropic` provider; the others need `openai`.
-
-Exit `2` when no provider key is set (the error names the variables), when a provider in `--providers` has no key or is not one `start` knows, and when `gantry.policy.yaml` exists without `--force`. Nothing is written in those cases.
+Exit `2` when a provider in `--providers` has no key or is not one `start` knows, or a file cannot be written.
 
 ## serve
 

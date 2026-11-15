@@ -35,6 +35,7 @@ impl Preset {
             | Kind::Cohere
             | Kind::Watsonx
             | Kind::Replicate => "Authorization: Bearer",
+            Kind::Demo => "none: answered inside Gantry",
             Kind::Sagemaker => "AWS Signature Version 4",
         }
     }
@@ -254,6 +255,13 @@ pub const PRESETS: &[Preset] = &[
         "DeepSeek",
         "https://api.deepseek.com/v1",
         "https://api-docs.deepseek.com/",
+    ),
+    native(
+        "demo",
+        "Gantry demo model (answered inside Gantry, no key, free)",
+        Kind::Demo,
+        "https://demo.gantry.invalid/v1",
+        "https://gantry-docs.eliran.me/getting-started/quickstart/",
     ),
     hosted(
         "digitalocean",
@@ -881,6 +889,46 @@ pub const PRESETS: &[Preset] = &[
 ];
 
 /// The catalog entry a policy names with `preset: <id>`.
+/// The providers `gantry start` and the console's Connect a model set up, with the models people use most from each.
+/// A policy lists exact model names, so another provider is set up with `gantry init` or in the policy.
+pub const START_PROVIDERS: &[(&str, &[&str])] = &[
+    (
+        "openai",
+        &["gpt-5", "gpt-5-mini", "gpt-5-codex", "gpt-4o-mini"],
+    ),
+    ("anthropic", &["claude-sonnet-5-5", "claude-haiku-5-5"]),
+    ("gemini", &["gemini-2.5-pro", "gemini-2.5-flash"]),
+];
+
+/// The policy lines of provider `id` (one of [`START_PROVIDERS`]) as `gantry start` and Connect a model write it,
+/// with its key given by `key_line` (`key_env: OPENAI_PROVIDER_KEY` or `credential: openai`). Its URL comes from
+/// `GANTRY_<ID>_BASE_URL` when `env` has it: a proxy in front of the provider, or a mock in a test.
+pub fn start_provider(
+    id: &str,
+    key_line: &str,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let (id, models) = START_PROVIDERS.iter().find(|(known, _)| *known == id)?;
+    let mut lines = format!(
+        "  - name: {id}\n    preset: {id}\n    {key_line}\n    models: [{}]\n",
+        models.join(", ")
+    );
+    if let Some(url) = env(&base_url_env(id)).filter(|u| !u.trim().is_empty()) {
+        let url = url.trim();
+        lines.push_str(&format!("    url: {url}\n"));
+        if crate::config::is_private(url) {
+            lines.push_str("    allow_private: true\n");
+        }
+    }
+    Some(lines)
+}
+
+/// The variable that points a provider `gantry start` sets up at another URL: `GANTRY_OPENAI_BASE_URL`. Not
+/// `OPENAI_BASE_URL`, which the console tells people to set to Gantry itself in their shell.
+pub fn base_url_env(id: &str) -> String {
+    format!("GANTRY_{}_BASE_URL", id.to_ascii_uppercase())
+}
+
 pub fn find(id: &str) -> Option<&'static Preset> {
     PRESETS.iter().find(|p| p.id == id)
 }

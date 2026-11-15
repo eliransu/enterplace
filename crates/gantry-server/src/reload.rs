@@ -89,6 +89,8 @@ pub struct Reloader {
     wake: Mutex<Option<mpsc::Sender<Trigger>>>,
     /// Where the keys come from when the policy has `store:`, in place of the keys file.
     store: Option<Arc<dyn Store>>,
+    /// The sealed credentials file without a store, held so it stays open for every reader of the keys path.
+    _vault: Option<Arc<dyn gantry_core::store::Credentials>>,
     /// The organizations whose chains are open, and what a reload that adds one opens and tells.
     orgs: Mutex<BTreeSet<String>>,
     new_org: NewOrg,
@@ -252,7 +254,10 @@ fn key_prints(loaded: &Loaded) -> Vec<Option<String>> {
 }
 
 /// The generation of each credential the providers name, in their order. -1 for one the store does not hold.
-fn credential_prints(store: Option<&Arc<dyn Store>>, loaded: &Loaded) -> Vec<i64> {
+fn credential_prints(
+    store: Option<&Arc<dyn gantry_core::store::Credentials>>,
+    loaded: &Loaded,
+) -> Vec<i64> {
     let Some(store) = store else {
         return Vec::new();
     };
@@ -371,7 +376,7 @@ pub fn governed(
 fn route(
     provider: &config::Provider,
     provider_key: &dyn Fn(&str) -> Option<String>,
-    shared: Option<&Arc<dyn Store>>,
+    shared: Option<&Arc<dyn gantry_core::store::Credentials>>,
     policy_path: &Path,
     policy_text: &str,
 ) -> Result<ProviderRoute, String> {
@@ -407,7 +412,7 @@ fn route(
         (Some(read_key_file(&provider.name, path)?), None, None)
     } else if let Some(name) = &provider.credential {
         let store =
-            shared.ok_or("a provider names a credential and the policy has no store: section")?;
+            shared.ok_or("a provider names a credential, and this gateway keeps none: the policy has no store: section and no master key is set (GANTRY_MASTER_KEY or GANTRY_MASTER_KEY_FILE). gantry start makes one; set it and start again.")?;
         let value = store
             .credential_value(name)
             .map_err(|err| {
@@ -465,7 +470,7 @@ fn route(
                 )
             })?,
             config::KeySource::Credential(name) => shared
-                .ok_or("a provider names a credential and the policy has no store: section")?
+                .ok_or("a provider names a credential, and this gateway keeps none: the policy has no store: section and no master key is set (GANTRY_MASTER_KEY or GANTRY_MASTER_KEY_FILE). gantry start makes one; set it and start again.")?
                 .credential_value(name)
                 .map_err(|err| format!("a key of provider \"{}\" is credential \"{name}\", and {err}", provider.name))?
                 .ok_or_else(|| format!("a key of provider \"{}\" is credential \"{name}\", and the store holds none by that name. Add it in the console or with the admin API, or fix the name.", provider.name))?,
@@ -490,9 +495,12 @@ fn route(
         }
         (_, key) => (key, google),
     };
+    // The demo model speaks the chat completions API, answered inside the gateway (`demo.rs`); Claude Code's
+    // messages requests are translated to it, as for any chat completions provider that accepts them.
+    let demo = provider.kind == Kind::Demo;
     Ok(ProviderRoute {
         name: provider.name.clone(),
-        kind: provider.kind,
+        kind: if demo { Kind::OpenAi } else { provider.kind },
         url: provider.url.clone(),
         key,
         models: provider.models.clone(),
@@ -504,7 +512,7 @@ fn route(
         fallback: provider.fallback.clone(),
         retries: provider.retries,
         accept_chat: provider.accept_chat,
-        accept_messages: provider.accept_messages,
+        accept_messages: provider.accept_messages || demo,
         timeouts: provider.timeouts,
         keys,
         least_used_key: provider.least_used_key,
@@ -672,6 +680,28 @@ pub fn governed_with(
     let keys_file = keys_path.map_or_else(|| config::keys_path_for(policy_path), Path::to_path_buf);
     let postgres = open_postgres(policy_path, &keys_file, provider_key)?;
     let shared = postgres.clone().map(|pg| -> Arc<dyn Store> { pg });
+    // Without a store, credentials are sealed in a file beside the policy, under the master key `gantry start` made.
+    // A master key that does not read stops the start only when a provider needs it, as for MCP credentials below.
+    let master = if postgres.is_none() {
+        match crate::MasterKey::from_env(provider_key) {
+            Ok(master) => master,
+            Err(err) if !config::credentials_named(policy_path).is_empty() => {
+                return Err(err);
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let vault = match (&postgres, master) {
+        (None, Some(master)) => {
+            let vault: Arc<dyn gantry_core::store::Credentials> =
+                Arc::new(crate::credentials::FileVault::new(policy_path, master));
+            store::attach_credentials(&keys_file, &vault);
+            Some(vault)
+        }
+        _ => None,
+    };
     let loaded = config::load(policy_path, keys_path).map_err(|errors| errors.join("\n"))?;
     let unset = guard::unset_webhook_env(loaded.policy.rule_list(), &|variable| {
         provider_key(variable).is_some_and(|value| !value.trim().is_empty())
@@ -684,7 +714,7 @@ pub fn governed_with(
         providers.push(route(
             provider,
             provider_key,
-            shared.as_ref(),
+            store::credentials_for(&keys_file).as_ref(),
             policy_path,
             &loaded.policy_text,
         )?);
@@ -883,7 +913,10 @@ pub fn governed_with(
             log: log.clone(),
             current: Mutex::new(Current {
                 key_prints: key_prints(&loaded),
-                credential_prints: credential_prints(shared.as_ref(), &loaded),
+                credential_prints: credential_prints(
+                    store::credentials_for(&loaded.keys_path).as_ref(),
+                    &loaded,
+                ),
                 secrets: gantry_core::secrets::generation(),
                 loaded: loaded.clone(),
                 prints,
@@ -892,6 +925,7 @@ pub fn governed_with(
             shown: Mutex::new(None),
             wake: Mutex::new(None),
             store: shared.clone(),
+            _vault: vault.clone(),
             orgs: Mutex::new(known_orgs.clone()),
             new_org: new_org.clone(),
             mcp_seals,
@@ -988,7 +1022,10 @@ impl Reloader {
             }
         }
         let keys_now = key_prints(&current.loaded);
-        let credentials_now = credential_prints(self.store.as_ref(), &current.loaded);
+        let credentials_now = credential_prints(
+            store::credentials_for(&self.keys_path).as_ref(),
+            &current.loaded,
+        );
         let secrets_now = gantry_core::secrets::generation();
         if keys_now != current.key_prints
             || credentials_now != current.credential_prints
@@ -1140,7 +1177,7 @@ impl Reloader {
                     let built = route(
                         provider,
                         &gantry_core::secrets::var,
-                        self.store.as_ref(),
+                        store::credentials_for(&self.keys_path).as_ref(),
                         &self.policy_path,
                         &new.policy_text,
                     )
@@ -1218,7 +1255,8 @@ impl Reloader {
             gantry_core::count(new.policy.keys(), "key"),
         );
         current.key_prints = key_prints(&new);
-        current.credential_prints = credential_prints(self.store.as_ref(), &new);
+        current.credential_prints =
+            credential_prints(store::credentials_for(&self.keys_path).as_ref(), &new);
         current.loaded = new;
         current.prints = prints;
         current.rejected.clear();
@@ -1300,7 +1338,8 @@ impl Reloader {
             let Some(provider) = loaded.providers.iter().find(|p| p.name == upstream.name) else {
                 continue;
             };
-            let (key, from) = match (&provider.key_file, &provider.credential, &self.store) {
+            let credentials = store::credentials_for(&self.keys_path);
+            let (key, from) = match (&provider.key_file, &provider.credential, &credentials) {
                 (Some(path), _, _) => (
                     read_key_file(&upstream.name, path),
                     path.display().to_string(),

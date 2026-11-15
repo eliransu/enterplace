@@ -53,7 +53,9 @@ failures=0
 run() {
   case_name=$1 repo=$2 expect=$3; shift 3
   dir=$work/bin-$case_name
-  if env "$@" GANTRY_REPO_URL="http://127.0.0.1:$port/$repo" GANTRY_INSTALL_DIR="$dir" \
+  # A home of its own, so the PATH line goes to a startup file of the test's, never this machine's.
+  mkdir -p "$work/home-$case_name"
+  if env HOME="$work/home-$case_name" SHELL=/bin/zsh "$@" GANTRY_REPO_URL="http://127.0.0.1:$port/$repo" GANTRY_INSTALL_DIR="$dir" \
     GANTRY_ALLOWED_SIGNERS="$work/allowed_signers" "${INSTALL_SH:-sh}" "$root/install.sh" > "$work/$case_name.log" 2>&1; then
     if [ "$expect" != fail ] && "$dir/gantry" version | grep -q "gantry $expect " && grep -q 'Next: .*gantry start' "$work/$case_name.log"; then
       echo "ok   $case_name"; return
@@ -92,6 +94,35 @@ if grep -q "Another gantry at $work/old/gantry" "$work/shadowed.log" && grep -q 
   echo "ok   shadowed-warning"
 else
   echo "FAIL shadowed-warning"; sed 's/^/     /' "$work/shadowed.log"; failures=$((failures + 1))
+fi
+
+# The install folder goes on the PATH of new terminals through the shell's startup file, once.
+# expect_rc NAME FILE COUNT: FILE (under the case's home) names the install folder COUNT times.
+expect_rc() {
+  n=$(grep -c "$work/bin-$1" "$work/home-$1/$2" 2> /dev/null || true)
+  if [ "${n:-0}" = "$3" ] && grep -q "export PATH=\"$work/bin-$1:\$PATH\"\|fish_add_path $work/bin-$1" "$work/$1.log"; then
+    echo "ok   $1-rc ($2: $3)"
+  else
+    echo "FAIL $1-rc: expected $3 line(s) in $2, found ${n:-0}"; sed 's/^/     /' "$work/$1.log"; failures=$((failures + 1))
+  fi
+}
+run path-zsh stable 0.1.0 SHELL=/bin/zsh
+expect_rc path-zsh .zshrc 1
+# Run again into the same home: still one line.
+run path-zsh stable 0.1.0 SHELL=/bin/zsh
+expect_rc path-zsh .zshrc 1
+if [ "$os" = apple-darwin ]; then bashrc=.bash_profile; else bashrc=.bashrc; fi
+run path-bash stable 0.1.0 SHELL=/bin/bash
+expect_rc path-bash "$bashrc" 1
+run path-fish stable 0.1.0 SHELL=/usr/bin/fish
+expect_rc path-fish .config/fish/conf.d/gantry.fish 1
+run path-sh stable 0.1.0 SHELL=/bin/sh
+expect_rc path-sh .profile 1
+run path-no-modify stable 0.1.0 GANTRY_NO_MODIFY_PATH=1
+if [ ! -e "$work/home-path-no-modify/.zshrc" ] && grep -q GANTRY_NO_MODIFY_PATH "$work/path-no-modify.log"; then
+  echo "ok   path-no-modify-rc (left alone)"
+else
+  echo "FAIL path-no-modify-rc"; sed 's/^/     /' "$work/path-no-modify.log"; failures=$((failures + 1))
 fi
 
 [ "$failures" -eq 0 ] || { echo "$failures install.sh check(s) failed"; exit 1; }

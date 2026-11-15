@@ -1,98 +1,121 @@
 ---
 title: Quickstart
-description: Start Gantry with one command (the CLI install script or Docker), send a governed request and verify the audit log in about two minutes.
+description: Install Gantry, run gantry start, and follow the dashboard to your first request in about two minutes. No provider key needed to start.
 sidebar:
   order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-One command starts Gantry with a provider key: every request gets an identity, a policy decision and a hash-chained audit record. You need a key for one provider (OpenAI in this guide), and either a Mac or Linux machine or Docker. To run it in your cloud with Postgres instead, use a [one-click deploy](/deploy/one-click/): a few clicks on Render, Railway, Fly.io, DigitalOcean, Cloud Run, AWS or Azure.
+Three steps, about two minutes, no provider key needed.
 
-## Install the CLI
+**1. Install**
+
+<Tabs syncKey="install">
+<TabItem label="macOS and Linux">
 
 ```bash
 curl -fsSL https://gantry.eliran.me/install.sh | sh
-export OPENAI_API_KEY=sk-...
+```
+
+</TabItem>
+<TabItem label="Docker">
+
+```bash
+docker run --pull always -d --name gantry -p 8080:8080 -v gantry-data:/var/lib/gantry ghcr.io/eliransu/gantry
+```
+
+The container runs step 2 itself. `docker logs gantry` prints the dashboard link: open it in your browser and go to step 3.
+
+</TabItem>
+</Tabs>
+
+**2. Start it**
+
+```bash
 gantry start
 ```
 
-Or with Homebrew: `brew install eliransu/tap/gantry`, then `gantry start`.
+**3. Your browser opens:** pick what you want to start with and follow the steps. The first step connects a model (paste a provider key) or tries the free demo model; the second sends your first request, and you see it arrive.
 
-The script picks the binary for your machine (macOS or Linux, x86_64 or arm64) from the latest GitHub Release, checks its release signature and SHA256, and installs it to `~/.local/bin`. `GANTRY_VERSION=edge` installs the build of the latest commit on main, `GANTRY_VERSION=v0.1.0` a given release, and `GANTRY_INSTALL_DIR=/usr/local/bin` another folder (with sudo when needed). `gantry start` writes an observe-mode policy and an admin key in the current folder, prints the settings for your coding tools and serves on `http://localhost:8080`. The rest of this guide uses the container; with the CLI, run the `docker exec gantry /gantry ...` commands as `gantry ...` in the same folder.
+Everything below is detail.
 
-## Or run the image
+## What gantry start does
 
-```bash
-docker run --name gantry -p 8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY=sk-... ghcr.io/eliransu/gantry
-```
-
-The image is public: no login. The first start writes a policy in observe mode (every key may use every model, nothing is blocked, every request is recorded) and an admin key to the `gantry-data` volume, then serves on `http://localhost:8080`. It prints the admin key once, with the settings for Claude Code, Codex, Cursor and the OpenAI SDKs:
+In the current folder it writes `gantry.policy.yaml` in observe mode (nothing is blocked: every request is sent and recorded, and one a rule would stop is marked `would_refuse`), an admin key (its hash in `gantry.keys.yaml`) and `gantry-master.key`, then serves on `http://127.0.0.1:8080`. The first lines it prints:
 
 ```text
-Wrote /var/lib/gantry/gantry.policy.yaml: observe mode and one rule that lets every key use every model of openai. Nothing is blocked, and every request is recorded.
+Gantry is running. Open the dashboard:
 
-Admin key, shown once and kept nowhere (only its hash is in /var/lib/gantry/gantry.keys.yaml):
+  http://127.0.0.1:8080/console/sign-in/4be1...
+
+The link signs you in once, from this machine, within 10 minutes. Opening it in your browser now.
+
+Admin key, shown once (Gantry keeps only its hash). Use it for the command line and the API:
 
   export GANTRY_KEY=gantry_3f9c...
-
-The same key signs in to the console at http://localhost:8080/console.
 ```
 
-`ANTHROPIC_API_KEY` and `GEMINI_API_KEY` work the same way, alone or together. Later starts on the same volume serve that policy and keys and print no new key.
+The link is the sign-in: it works once, only from a browser on the same machine, for 10 minutes, and the sign-in is recorded in the audit log. On a terminal with a display, Gantry opens it for you; `--no-open` skips that. Keep the admin key in your password manager: it signs in to the console too, and the command line and the admin API use it.
+
+**Provider keys.** None is needed to start. A key in the environment is picked up (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or the `*_PROVIDER_KEY` form), so `OPENAI_API_KEY=sk-... gantry start` works too. A key pasted in the dashboard's **Connect a model** is sealed with `gantry-master.key` (AES-256-GCM) and kept in `gantry-credentials.json`, which holds only sealed bytes: keep the master key with the policy, and out of version control. To send a provider's requests through a proxy, set `GANTRY_OPENAI_BASE_URL` (or `GANTRY_ANTHROPIC_BASE_URL`, `GANTRY_GEMINI_BASE_URL`) before `gantry start`.
+
+**The demo model.** The policy always has a provider named `demo` with the model `gantry-demo`. Gantry answers it itself with a short sample text (chat completions, responses and messages, streaming too), sends nothing anywhere and prices it at zero, so the first request works before any key is set. Its requests are recorded under the provider `demo`.
+
+**Restart and start over.** Stop it with Ctrl-C. `gantry start` in the same folder serves the same policy again and prints a new sign-in link (no new admin key). To start over, delete `gantry.policy.yaml`, `gantry.keys.yaml`, `gantry-credentials.json`, `gantry-master.key` and `gantry-audit.jsonl`, or run `gantry start --force` (which keeps the master key).
+
+## The install script
+
+The script picks the binary for your machine (macOS or Linux, x86_64 or arm64) from the latest GitHub Release, checks its release signature and SHA256, and installs it to `~/.local/bin`. When that folder is not on your PATH it adds it in your shell's startup file (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` on macOS, fish's `conf.d`, or `~/.profile`), once, and prints the one line that does it in the current terminal; `GANTRY_NO_MODIFY_PATH=1` leaves the file alone. `GANTRY_VERSION=edge` installs the build of the latest commit on main, `GANTRY_VERSION=v0.1.0` a given release, and `GANTRY_INSTALL_DIR=/usr/local/bin` another folder (with sudo when needed).
+
+## The Docker image
+
+The image is public: no login. `--pull always` fetches the newest `latest`, so a copy cached from an earlier day is never used. The first start writes the policy, the admin key and the master key to the `gantry-data` volume and serves on port 8080; its log starts with the same block as `gantry start`, with the link on `http://127.0.0.1:8080`. Inside a container the browser's address is the container network's, so the link works from any address there (once, within 10 minutes), as the admin key in the same log does.
+
+- Restart: `docker restart gantry`. Each start prints a new sign-in link in `docker logs gantry`, and no new admin key.
+- Start over: `docker rm -f gantry && docker volume rm gantry-data`.
+- A provider key in the environment works too (`-e OPENAI_API_KEY=sk-...`), but you can paste it in the dashboard instead.
 
 <Aside type="caution">
 The admin key stays in the container's log until the container is removed. Copy it to your password manager, then read it back with `docker logs gantry 2>&1 | grep GANTRY_KEY` only if you lost it.
 </Aside>
 
-## Send a request
+## The dashboard
 
-In a second terminal, export the key the container printed and call the OpenAI API through Gantry:
+The console opens on one question, **What do you want to start with?**, with five answers: coding agents, your own apps and agents, MCP tools, a spend limit for the team, or Claude Team seats you can only watch (Gantry Enterprise). The answer picks a short checklist on **Start here**, the console's home. Every checklist starts the same way:
 
-```bash
-export GANTRY_KEY=gantry_...
-curl http://localhost:8080/v1/chat/completions \
-  -H "Authorization: Bearer $GANTRY_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hello."}]}'
-```
+1. **Connect a model**: pick OpenAI, Anthropic or Google Gemini and paste its key, or choose **Try without a key** for the demo model.
+2. **Send your first request**: a ready-to-copy curl (with Python and Node tabs) holding the gateway's address and a key: `$GANTRY_KEY`, or a key the step makes for it, shown once. The step turns done by itself when the request arrives, even if the provider refuses it: the request shows in Requests with the provider's answer.
 
-The answer is the provider's, unchanged, with an `X-Gantry-Decision` header added. Open `http://localhost:8080/console` and sign in with the same key to see the request.
-
-## Then the console takes you through the rest
-
-Sign in to `http://localhost:8080/console` with the admin key. On an empty install the console opens on one question, **What do you want to start with?**, with five answers: coding agents, your own apps and agents, MCP tools, a spend limit for the team, or Claude Team seats you can only watch (Gantry Enterprise). The answer picks a short checklist on **Start here**, the console's home and the first entry in its nav. The choice is kept (in the store when the policy has one, else in `gantry-start.json` beside the audit log) and can be changed at any time.
-
-Each step of the checklist is one action with the exact lines to paste, built from this gateway: its address, the key you just made on the page (shown once), the variables for Claude Code, Codex, Cursor or an SDK, the policy lines for a budget or an MCP server, the `claude mcp add` command, or the managed settings for Claude Code. Each step says what **turns it done** and what you **then see**. Gantry watches its own records for that: a key that is not an admin key, the first request from that key, a second person, a budget in the policy, a first MCP tool call, the first watch export. While a step waits for traffic the page checks every 2 seconds, and the step turns done by itself when the request arrives; without JavaScript, **Check now** does the same.
-
-The first requests then show on Start here, with what each part of a row means and the next step under them. Once the checklist is done, Start here shows the five steps of a rollout (See, Know, Limit, Protect, Prove, the same as the [Start here](/start/why/) pages), with the current one's next action, and the other starting choices one click away. Every console page that has no data yet says what fills it, and its button opens the Start here step that does it.
+The steps that follow are the choice's own: a key per person, the lines for Claude Code, Codex, Cursor or an SDK, a budget, an MCP server. Each says what **turns it done** and what you **then see**, and Gantry checks its own records for it. Once the checklist is done, Start here shows the five steps of a rollout (See, Know, Limit, Protect, Prove, the same as the [Start here](/start/why/) pages).
 
 ## Verify the audit log
 
-The audit log is `/var/lib/gantry/gantry-audit.jsonl`, on the `gantry-data` volume beside the policy and the keys file. Check its chain with the image's own binary:
+The audit log is `gantry-audit.jsonl` beside the policy (in the container, `/var/lib/gantry/gantry-audit.jsonl` on the volume). Each record holds the hash of the one before it, so a removed or changed record shows:
 
 ```bash
+gantry audit verify gantry-audit.jsonl
 docker exec gantry /gantry audit verify /var/lib/gantry/gantry-audit.jsonl
 ```
 
 ```text
-/var/lib/gantry/gantry-audit.jsonl: 3 records in an unbroken chain from record 1 to record 3.
-1 request, 1 configuration record, 0 admin records, 1 usage record.
+gantry-audit.jsonl: 3 records in an unbroken chain from record 1 to record 3.
+1 request, 1 configuration record, 1 admin record, 0 usage records.
 Last hash: 9be869bf...
 ```
 
-Stop the gateway with Ctrl-C and start it again with `docker start -a gantry`. See [Audit log](/governance/audit-log/).
+See [Audit log](/governance/audit-log/).
 
 ## With Postgres: Docker Compose
 
-For a team, keys, kill switches and budgets live in Postgres, so they are shared and survive the container. The [Docker Compose](/deploy/docker/) guide holds the two files: `docker-compose.yml` (the gateway and Postgres 16) and `.env`. Save both in an empty folder, fill in `.env`, then:
+For a team, keys, kill switches, budgets and credentials live in Postgres, so they are shared and survive the container. The [Docker Compose](/deploy/docker/) guide holds the two files: `docker-compose.yml` (the gateway and Postgres 16) and `.env`. Save both in an empty folder, fill in `.env`, then:
 
 ```bash
 docker compose up -d
 docker compose logs gantry | grep 'First run'
 ```
 
-The second line prints a one-time link that makes the first admin key in the console. The guide goes on to issue keys and verify the audit log.
+The second line prints a one-time link that makes the first admin key in the console. To run it in your cloud instead, use a [one-click deploy](/deploy/one-click/).
 
 ## From source
 
@@ -102,10 +125,10 @@ You need Rust 1.88 or later. The repository pins it in `rust-toolchain.toml`, so
 git clone https://github.com/eliransu/gantry.git
 cd gantry
 cargo build --release
-OPENAI_API_KEY=sk-... target/release/gantry start
+target/release/gantry start
 ```
 
-`gantry start` does what the image does, in the current folder: it writes `gantry.policy.yaml` and `gantry.keys.yaml`, prints the admin key and serves on `http://127.0.0.1:8080`. The audit log is `gantry-audit.jsonl` beside the policy: `target/release/gantry audit verify gantry-audit.jsonl` checks it. This binary is the open source edition (Apache 2.0). The image runs the enterprise build, which without a license key is the same open source gateway.
+This binary is the open source edition (Apache 2.0). The image runs the enterprise build, which without a license key is the same open source gateway.
 
 ## Next steps
 
