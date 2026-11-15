@@ -29,7 +29,7 @@ podDisruptionBudget:
   maxUnavailable: 1
 
 image:
-  repository: ghcr.io/ggantry/gantry
+  repository: ghcr.io/eliransu/gantry
   # The newest build of main. Pin the commit SHA or version you were given for production.
   tag: "latest"
   pullPolicy: IfNotPresent

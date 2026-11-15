@@ -35,7 +35,7 @@ folder. It has no delete and refuses to overwrite a segment with other bytes.
 ## Use
 
 ```bash
-docker create --name gantry-files ghcr.io/ggantry/gantry:<version>
+docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
 docker cp gantry-files:/deploy/cloudflare ./gantry-cloudflare && docker rm gantry-files
 cd gantry-cloudflare && npm ci
 # Edit the lines marked EDIT in wrangler.jsonc, and gantry.policy.yaml.
@@ -48,7 +48,7 @@ Check the whole chain of instance `gateway-0`, R2 segments and unsealed tail tog
 
 ```bash
 curl -s -H "Authorization: Bearer $GANTRY_AUDIT_READ_TOKEN" https://gantry.example.com/_gantry/audit/gateway-0 > chain.jsonl
-docker run --rm -v "$PWD":/w:ro ghcr.io/ggantry/gantry:<version> audit verify /w/chain.jsonl
+docker run --rm -v "$PWD":/w:ro ghcr.io/eliransu/gantry:<version> audit verify /w/chain.jsonl
 ```
 
 ## Limits

@@ -29,11 +29,11 @@ never enter Terraform state), then:
 
 ```hcl
 module "gantry" {
-  # Copied out of the image: docker create --name gantry-files ghcr.io/ggantry/gantry:<version>
+  # Copied out of the image: docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
   #   && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
   source = "./gantry-deploy/terraform/aws-ecs"
 
-  image              = "ghcr.io/ggantry/gantry:0.1.0"
+  image              = "ghcr.io/eliransu/gantry:0.1.0"
   policy             = file("gantry.policy.yaml")
   vpc_id             = "vpc-..."
   private_subnet_ids = ["subnet-...", "subnet-..."]

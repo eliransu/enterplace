@@ -13,16 +13,16 @@ Every published Gantry image and Helm chart is signed, and the image carries its
 
 | Artifact | Where | Signed by |
 |---|---|---|
-| The image, `ghcr.io/ggantry/gantry:X.Y.Z` (amd64 and arm64) | ghcr.io | `.github/workflows/image.yml` on tag `vX.Y.Z` |
+| The image, `ghcr.io/eliransu/gantry:X.Y.Z` (amd64 and arm64) | ghcr.io | `.github/workflows/image.yml` on tag `vX.Y.Z` |
 | A CycloneDX SBOM of the image, as a cosign attestation (`--type cyclonedx`), and as `sbom.cdx.json` on the GitHub Release | ghcr.io, GitHub Release | the same |
 | SLSA v1 provenance of the image (commit, Cargo.lock, Dockerfile, CI run), as a cosign attestation (`--type slsaprovenance1`) | ghcr.io | the same |
-| The Helm chart, `oci://ghcr.io/ggantry/charts/gantry`, version `X.Y.Z` | ghcr.io | `.github/workflows/release.yml` on tag `vX.Y.Z` |
+| The Helm chart, `oci://ghcr.io/eliransu/charts/gantry`, version `X.Y.Z` | ghcr.io | `.github/workflows/release.yml` on tag `vX.Y.Z` |
 | The binary tarballs, `SHA256SUMS` and `provenance.json` | GitHub Release | the release SSH key (`scripts/release.sh verify`, see RELEASING.md) |
 
 Signing is keyless: the workflow trades its GitHub OIDC token for a short-lived Sigstore certificate that names the repository, the workflow file and the tag. There is no long-lived signing key to steal. A signature made by any other workflow, branch or repository fails the check.
 
 <Aside type="note">
-Keyless signatures are recorded in Sigstore's public transparency log (Rekor). The log entry names the repository and workflow (`github.com/ggantry/gantry/.github/workflows/image.yml@refs/tags/vX.Y.Z`) and the digest. It holds no image content and no source.
+Keyless signatures are recorded in Sigstore's public transparency log (Rekor). The log entry names the repository and workflow (`github.com/eliransu/gantry/.github/workflows/image.yml@refs/tags/vX.Y.Z`) and the digest. It holds no image content and no source.
 </Aside>
 
 ## Check a version
@@ -44,12 +44,12 @@ You need [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) 
    ```
 
    ```text
-   OK  image signed: ghcr.io/ggantry/gantry@sha256:4c1f...
+   OK  image signed: ghcr.io/eliransu/gantry@sha256:4c1f...
    OK  SBOM attested: 174 crates (cosign verify-attestation --type cyclonedx ... | jq to read it)
    OK  SLSA provenance attested: built from commit 9be869bf...
-   OK  chart signed: ghcr.io/ggantry/charts/gantry:0.2.0
+   OK  chart signed: ghcr.io/eliransu/charts/gantry:0.2.0
 
-   Verified Gantry 0.2.0. Pin the image by digest: ghcr.io/ggantry/gantry@sha256:4c1f...
+   Verified Gantry 0.2.0. Pin the image by digest: ghcr.io/eliransu/gantry@sha256:4c1f...
    ```
 
    Any failed check stops the script with `FAILED:` and the reason. Do not run that version.
@@ -62,15 +62,15 @@ The same checks by hand, with the identity spelled out:
 
 ```bash
 V=0.2.0
-cosign verify ghcr.io/ggantry/gantry:$V \
-  --certificate-identity https://github.com/ggantry/gantry/.github/workflows/image.yml@refs/tags/v$V \
+cosign verify ghcr.io/eliransu/gantry:$V \
+  --certificate-identity https://github.com/eliransu/gantry/.github/workflows/image.yml@refs/tags/v$V \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-cosign verify-attestation --type cyclonedx ghcr.io/ggantry/gantry:$V \
-  --certificate-identity https://github.com/ggantry/gantry/.github/workflows/image.yml@refs/tags/v$V \
+cosign verify-attestation --type cyclonedx ghcr.io/eliransu/gantry:$V \
+  --certificate-identity https://github.com/eliransu/gantry/.github/workflows/image.yml@refs/tags/v$V \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   | jq -r .payload | base64 -d | jq .predicate > sbom.cdx.json
-cosign verify ghcr.io/ggantry/charts/gantry:$V \
-  --certificate-identity https://github.com/ggantry/gantry/.github/workflows/release.yml@refs/tags/v$V \
+cosign verify ghcr.io/eliransu/charts/gantry:$V \
+  --certificate-identity https://github.com/eliransu/gantry/.github/workflows/release.yml@refs/tags/v$V \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -81,7 +81,7 @@ In a cluster, an admission controller such as Sigstore's policy-controller or Ky
 The image is built `FROM scratch`: one static binary and nothing else, so there is no package database to read. The build uses [cargo-auditable](https://github.com/rust-secure-code/cargo-auditable), which writes the binary's exact crate list (name, version, source) into the binary. syft reads it to make the SBOM, so the SBOM lists what the shipped binary contains, without the test-only crates a `Cargo.lock` holds. You can read the same list from any copy of the binary:
 
 ```bash
-syft ghcr.io/ggantry/gantry:0.2.0 -o cyclonedx-json     # the image
+syft ghcr.io/eliransu/gantry:0.2.0 -o cyclonedx-json     # the image
 cargo audit bin gantry                                  # a binary from a release tarball
 ```
 

@@ -1,7 +1,7 @@
-# Builds the image for amd64 and arm64 and pushes it to ghcr.io/ggantry/gantry, a private package, tagged
+# Builds the image for amd64 and arm64 and pushes it to ghcr.io/eliransu/gantry, a public package, tagged latest (main),
 # with the commit sha (and the version, on a v* tag). On a pull request or a branch, it builds both and pushes nothing.
 # On a v* tag it also checks that the repository names that version, and puts the image digest at the top of the
-# GitHub Release of this private repository (release.yml adds the signed tarballs). How to release: RELEASING.md.
+# GitHub Release of this repository (release.yml adds the signed tarballs). How to release: RELEASING.md.
 # Every image is scanned (scripts/scan_image.sh: fails on a high or critical vulnerability not allowed in .grype.yaml).
 # A published one is then signed with cosign, keyless (this workflow's GitHub OIDC identity, logged in Sigstore's
 # public transparency log), with its SBOM and SLSA provenance attached as signed attestations. Customers check all
@@ -165,7 +165,7 @@ jobs:
           name: sbom
           path: sbom.cdx.json
 
-  # The repository is private, so the release is too. Its notes name the image by digest, which no later push can move.
+  # Its notes name the image by digest, which no later push can move.
   # release.yml makes the same release with the signed tarballs: whichever job comes first creates it, the other adds to it.
   release:
     if: startsWith(github.ref, 'refs/tags/v')

@@ -8,7 +8,7 @@ token are all a customer needs:
 
 ```bash
 docker login ghcr.io -u <user>
-docker create --name gantry-files ghcr.io/ggantry/gantry:<version>
+docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
 docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
 kubectl create secret docker-registry ghcr --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
 kubectl create secret generic gantry-secrets \
@@ -22,7 +22,7 @@ From a release on, the chart is also an OCI artifact, signed with cosign beside 
 
 ```bash
 helm registry login ghcr.io -u <user>
-helm install gantry oci://ghcr.io/ggantry/charts/gantry --version <version> \
+helm install gantry oci://ghcr.io/eliransu/charts/gantry --version <version> \
   --set 'imagePullSecrets[0].name=ghcr'
 ```
 
@@ -75,7 +75,7 @@ helm upgrade --install gantry ./gantry-deploy/helm/gantry --reuse-values \
 | `replicaCount` | `1` | Above 1 only with `store:` in the policy |
 | `autoscaling.*` | off | HorizontalPodAutoscaler on CPU (`targetCPUUtilizationPercentage`) and an optional per-pod custom metric (`podMetric.name`, `podMetric.targetAverageValue`), `minReplicas` 2 to `maxReplicas` 10. Needs `store:` |
 | `podDisruptionBudget.enabled`, `.maxUnavailable` | `true`, `1` | Rendered only with more than one replica or autoscaling |
-| `image.repository`, `image.tag`, `image.pullPolicy` | `ghcr.io/ggantry/gantry`, appVersion, `IfNotPresent` | |
+| `image.repository`, `image.tag`, `image.pullPolicy` | `ghcr.io/eliransu/gantry`, appVersion, `IfNotPresent` | |
 | `imagePullSecrets` | empty | The registry is private |
 | `policy` | One OpenAI provider, one rule | The policy file, mounted at `/etc/gantry/gantry.policy.yaml`; reloads without a restart |
 | `existingPolicyConfigMap` | empty | Your own ConfigMap with key `gantry.policy.yaml` instead |

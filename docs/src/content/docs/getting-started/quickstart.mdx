@@ -21,7 +21,7 @@ This guide takes you from source to a governed request: one policy, one key, one
 <TabItem label="From source">
 
 ```bash
-git clone https://github.com/ggantry/gantry.git
+git clone https://github.com/eliransu/gantry.git
 cd gantry
 cargo build --release
 ```
@@ -37,7 +37,7 @@ gantry version
 <TabItem label="Docker">
 
 ```bash
-git clone https://github.com/ggantry/gantry.git
+git clone https://github.com/eliransu/gantry.git
 cd gantry
 scripts/release.sh image
 ```
@@ -50,7 +50,7 @@ To see Gantry work before writing anything, run the image with only a provider k
 docker run -p 127.0.0.1:8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY gantry:local
 ```
 
-The first start writes a policy in observe mode (every key may use every model, nothing is blocked, every request is recorded) and an admin key to the `gantry-data` volume, prints the admin key once with the settings for Claude Code, Codex, Cursor and the OpenAI SDKs, and serves on `http://localhost:8080`. `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` work the same way, alone or together. Later starts on the same volume serve that policy and keys and print no new key. The key stays in the container's log (`docker logs`) until the container is removed: copy it to your secret manager and remove the container once you have it. A published release is `ghcr.io/ggantry/gantry:<version>` in place of `gantry:local`.
+The first start writes a policy in observe mode (every key may use every model, nothing is blocked, every request is recorded) and an admin key to the `gantry-data` volume, prints the admin key once with the settings for Claude Code, Codex, Cursor and the OpenAI SDKs, and serves on `http://localhost:8080`. `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` work the same way, alone or together. Later starts on the same volume serve that policy and keys and print no new key. The key stays in the container's log (`docker logs`) until the container is removed: copy it to your secret manager and remove the container once you have it. A published release is `ghcr.io/eliransu/gantry:<version>` in place of `gantry:local`.
 
 With a policy mounted at `/etc/gantry/gantry.policy.yaml` (step 4 below), the image serves that policy instead and writes nothing.
 

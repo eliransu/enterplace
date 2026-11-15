@@ -317,7 +317,7 @@ one repository. How a release is made: RELEASING.md.
 
 - Published images are signed with cosign, keyless (the release workflow's GitHub identity, through Sigstore), and
   carry a CycloneDX SBOM and SLSA provenance as signed attestations. The Helm chart is published as a signed OCI
-  artifact, `oci://ghcr.io/ggantry/charts/gantry`. `scripts/verify_release.sh X.Y.Z` checks the image, its SBOM and
+  artifact, `oci://ghcr.io/eliransu/charts/gantry`. `scripts/verify_release.sh X.Y.Z` checks the image, its SBOM and
   provenance, and the chart, and prints the digest to pin. Docs: Operations, Verify a release.
 - The binary records its exact crate list inside itself (cargo-auditable), so `syft`, `grype` and `cargo audit bin`
   read the dependencies of the image and of any release binary.
@@ -328,7 +328,7 @@ one repository. How a release is made: RELEASING.md.
 
 ### Docker first start
 
-- `docker run -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY ghcr.io/ggantry/gantry` with no policy starts a
+- `docker run -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY ghcr.io/eliransu/gantry` with no policy starts a
   working gateway in observe mode, with an admin key printed once and the tool settings, as `gantry start` does.
   Later starts serve what the first one wrote. The image's default command is now `start --container`; a policy
   mounted at `/etc/gantry/gantry.policy.yaml` is served as before, and explicit `serve ...` commands (Compose, Helm,
@@ -507,7 +507,7 @@ one repository. How a release is made: RELEASING.md.
 - The enterprise features moved into this repository as `enterprise/`, under their own commercial license
   (`enterprise/LICENSE`); everything outside it stays Apache 2.0. The open source crates still build, test and install
   (`cargo install --path crates/gantry-cli`) on their own and never import `enterprise/`.
-- One image: **`ghcr.io/ggantry/gantry-enterprise` is renamed `ghcr.io/ggantry/gantry`**. Change the image in your
+- One image: **`ghcr.io/eliransu/gantry-enterprise` is renamed `ghcr.io/eliransu/gantry`**. Change the image in your
   Compose file, Helm values (`image.repository`), Terraform `image` variable and Cloudflare `wrangler.jsonc`. Its
   binary is `/gantry` (was `/gantry-enterprise`): update `kubectl exec ... -- /gantry-enterprise` commands. Without a
   license key it runs as the open source edition; a valid key unlocks the enterprise features, as before.
@@ -726,7 +726,7 @@ The commercial features (`enterprise/`, licensed by key), in the same image:
 
 ### Enterprise: One image
 
-- `ghcr.io/ggantry/gantry` (first published as `ghcr.io/ggantry/gantry-enterprise`) for amd64 and arm64, under 50 MB, running as a non-root user. It serves
+- `ghcr.io/eliransu/gantry` (first published as `ghcr.io/eliransu/gantry-enterprise`) for amd64 and arm64, under 50 MB, running as a non-root user. It serves
   `/etc/gantry/gantry.policy.yaml` by default and runs every open source command too (`key new`, `audit verify`,
   `check`), so no separate binary is needed.
 - The image carries the Helm chart and the Terraform modules under `/deploy`.

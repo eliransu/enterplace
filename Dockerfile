@@ -5,7 +5,7 @@
 #
 # Run with nothing but a provider key: the first start writes an observe-mode policy and an admin key (printed once)
 # on the volume, and later starts serve them (`gantry start --container`):
-#   docker run -p 127.0.0.1:8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY ghcr.io/ggantry/gantry
+#   docker run -p 127.0.0.1:8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY ghcr.io/eliransu/gantry
 # Or with your own policy, served as it is:
 #   docker run --rm -p 127.0.0.1:8080:8080 \
 #     -v "$PWD/gantry.policy.yaml:/etc/gantry/gantry.policy.yaml:ro" \

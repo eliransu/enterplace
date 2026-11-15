@@ -19,7 +19,7 @@ Hybrid gateways are part of the commercial product. They run `gantry node`, whic
 2. Pull the image with the registry token Gantry gave you with your license:
 
    ```bash
-   docker pull ghcr.io/ggantry/gantry:<version>
+   docker pull ghcr.io/eliransu/gantry:<version>
    ```
 
 3. Run it where your provider keys are:
@@ -29,7 +29,7 @@ Hybrid gateways are part of the commercial product. They run `gantry node`, whic
      -v gantry-data:/var/lib/gantry \
      -e GANTRY_NODE_TOKEN=gnode_... \
      -e OPENAI_PROVIDER_KEY=sk-... \
-     ghcr.io/ggantry/gantry:<version> \
+     ghcr.io/eliransu/gantry:<version> \
      node --control-plane https://gantry-control.eliran.me --dir /var/lib/gantry --listen 0.0.0.0:8080
    ```
 

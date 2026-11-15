@@ -14,7 +14,7 @@ Gantry Enterprise runs in your own network or cloud account. These guides take y
 
 | Part | What it is | Where it lives |
 |---|---|---|
-| The image | `ghcr.io/ggantry/gantry`: one static binary, `/gantry`, built `FROM scratch`, running as user `65532`. It serves the gateway, the console, the admin API and the enterprise features | Your registry or ghcr.io, which is private: your license comes with read access |
+| The image | `ghcr.io/eliransu/gantry`: one static binary, `/gantry`, built `FROM scratch`, running as user `65532`. It serves the gateway, the console, the admin API and the enterprise features | Your registry or ghcr.io, which is private: your license comes with read access |
 | Postgres | The store: keys, kill switches and spend, shared by every replica. The Compose stack and the Terraform modules run Postgres 16 | A managed database (RDS, Cloud SQL, Azure Database for PostgreSQL) or the Compose container |
 | A volume per replica | `/var/lib/gantry`, holding that replica's hash-chained audit log. Two replicas never share one, because each writes its own chain | A Docker volume, a PersistentVolumeClaim, EFS, Filestore or Azure Files. On Cloudflare, the container's own disk, sealed into R2 every minute |
 | The policy | One YAML file at `/etc/gantry/gantry.policy.yaml`: providers, rules, guardrails. It holds no secrets | Version control, then a ConfigMap, a parameter or a secret mount |
@@ -55,7 +55,7 @@ The image holds one binary, `/gantry`, and it runs every `gantry` command with t
 |---|---|
 | Docker Compose | `docker compose run --rm gantry audit verify /var/lib/gantry/gantry-audit.jsonl` |
 | Kubernetes | `kubectl exec gantry-0 -c gantry -- /gantry audit verify /var/lib/gantry/gantry-audit.jsonl` |
-| Any machine with Docker | `docker run --rm -v "$PWD":/w:ro ghcr.io/ggantry/gantry:<version> audit verify /w/gantry-audit.jsonl` |
+| Any machine with Docker | `docker run --rm -v "$PWD":/w:ro ghcr.io/eliransu/gantry:<version> audit verify /w/gantry-audit.jsonl` |
 
 The image also carries the Helm chart, the Terraform modules and the Cloudflare template for its version, under `/deploy`. Copy them out with `docker create --name gantry-files <image> && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files`. They are the `deploy/` folder of the Gantry repository at that version.
 

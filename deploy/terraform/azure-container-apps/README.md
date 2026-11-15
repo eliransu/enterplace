@@ -29,13 +29,13 @@ Vault Secrets Officer on it (to add `DATABASE_URL` and the keys it makes). Then:
 
 ```hcl
 module "gantry" {
-  # Copied out of the image: docker create --name gantry-files ghcr.io/ggantry/gantry:<version>
+  # Copied out of the image: docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
   #   && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
   source = "./gantry-deploy/terraform/azure-container-apps"
 
   location            = "westeurope"
   resource_group_name = "gantry"
-  image               = "ghcr.io/ggantry/gantry:0.1.0"
+  image               = "ghcr.io/eliransu/gantry:0.1.0"
   policy              = file("gantry.policy.yaml")
 
   key_vault_id         = "/subscriptions/.../providers/Microsoft.KeyVault/vaults/acme-secrets"

@@ -2,8 +2,8 @@
 
 Gantry ships under one semantic version, X.Y.Z, from this one repository: the open source crates and the enterprise
 crate in `enterprise/` share the workspace version. A release is one `vX.Y.Z` tag. Nothing is published outside the
-private repository and package: the release is a GitHub Release of ggantry/gantry, and the image goes to the private
-package `ghcr.io/ggantry/gantry` (named `ghcr.io/ggantry/gantry-enterprise` before 0.1.0).
+private repository and package: the release is a GitHub Release of eliransu/gantry, and the image goes to the private
+package `ghcr.io/eliransu/gantry` (named `ghcr.io/eliransu/gantry-enterprise` before 0.1.0).
 
 ## Versions
 
@@ -46,8 +46,8 @@ Run these at the repository root, on `main`, with nothing uncommitted.
 
 | Workflow | Result |
 |---|---|
-| `.github/workflows/release.yml` | Checks the tag against Cargo.toml and the dated CHANGELOG section. Builds the linux amd64 and arm64 tarballs twice from scratch and fails unless both builds are the same bytes. Runs the rollback check (the previous tag's binary reads this one's data) and the mixed-version check (the previous tag and this one serve from one Postgres at once, `scripts/mixed_version_check.py`). Packages the Helm chart, pushes it to `oci://ghcr.io/ggantry/charts` and signs it with cosign, keyless. Writes `SHA256SUMS` and SLSA provenance and signs both with `RELEASE_SIGNING_KEY`'s SSH key, verified against `release/allowed_signers`. Adds the tarballs, checksums, provenance and signatures to the private GitHub Release `vX.Y.Z`, creating it with the CHANGELOG section as its notes if image.yml has not yet. |
-| `.github/workflows/image.yml` | Checks the version against the tag. Builds the image for amd64 and arm64, pushes it to `ghcr.io/ggantry/gantry` tagged `X.Y.Z` and the commit SHA, scans it (`scripts/scan_image.sh`, fails on high or critical), signs it with cosign keyless and attaches its CycloneDX SBOM and SLSA provenance as signed attestations. Then puts the image and its digest at the top of the GitHub Release `vX.Y.Z` (creating it if release.yml has not yet), with `sbom.cdx.json`. |
+| `.github/workflows/release.yml` | Checks the tag against Cargo.toml and the dated CHANGELOG section. Builds the linux amd64 and arm64 tarballs twice from scratch and fails unless both builds are the same bytes. Runs the rollback check (the previous tag's binary reads this one's data) and the mixed-version check (the previous tag and this one serve from one Postgres at once, `scripts/mixed_version_check.py`). Packages the Helm chart, pushes it to `oci://ghcr.io/eliransu/charts` and signs it with cosign, keyless. Writes `SHA256SUMS` and SLSA provenance and signs both with `RELEASE_SIGNING_KEY`'s SSH key, verified against `release/allowed_signers`. Adds the tarballs, checksums, provenance and signatures to the private GitHub Release `vX.Y.Z`, creating it with the CHANGELOG section as its notes if image.yml has not yet. |
+| `.github/workflows/image.yml` | Checks the version against the tag. Builds the image for amd64 and arm64, pushes it to `ghcr.io/eliransu/gantry` tagged `X.Y.Z` and the commit SHA, scans it (`scripts/scan_image.sh`, fails on high or critical), signs it with cosign keyless and attaches its CycloneDX SBOM and SLSA provenance as signed attestations. Then puts the image and its digest at the top of the GitHub Release `vX.Y.Z` (creating it if release.yml has not yet), with `sbom.cdx.json`. |
 | `.github/workflows/codeql.yml` | Not started by the tag: CodeQL on the Rust code and the workflows on every pull request, push to main and weekly. |
 
 Pushes to main keep publishing `latest` and the commit SHA. Production pins `X.Y.Z` or, better, the digest from the
@@ -65,8 +65,8 @@ transparency log. Code scanning results from CodeQL need GitHub code security en
 Both workflows run without a tag, publishing nothing:
 
 ```bash
-gh workflow run release.yml --repo ggantry/gantry --ref <branch>
-gh workflow run image.yml --repo ggantry/gantry --ref <branch>
+gh workflow run release.yml --repo eliransu/gantry --ref <branch>
+gh workflow run image.yml --repo eliransu/gantry --ref <branch>
 ```
 
 release.yml dates the CHANGELOG in its runner only, checks it as a tag would be checked, builds, compares, signs and

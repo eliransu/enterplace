@@ -17,8 +17,8 @@ export default defineConfig({
 			description: 'The open source AI gateway built for governance: identity, policy and a tamper-evident audit log on every model request.',
 			logo: { light: './src/assets/logo-light.svg', dark: './src/assets/logo-dark.svg' },
 			favicon: '/favicon.svg',
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/ggantry/gantry' }],
-			editLink: { baseUrl: 'https://github.com/ggantry/gantry/edit/main/docs/' },
+			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/eliransu/gantry' }],
+			editLink: { baseUrl: 'https://github.com/eliransu/gantry/edit/main/docs/' },
 			customCss: ['./src/styles/gantry.css'],
 			lastUpdated: true,
 			sidebar: [

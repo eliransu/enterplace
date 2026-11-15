@@ -19,7 +19,7 @@ variable "resource_group_name" {
 }
 
 variable "image" {
-  description = "The gantry image, such as ghcr.io/ggantry/gantry:0.1.0."
+  description = "The gantry image, such as ghcr.io/eliransu/gantry:0.1.0."
   type        = string
 }
 

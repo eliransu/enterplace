@@ -6,7 +6,7 @@
 
 Every model request gets an identity, a policy decision and a tamper-evident audit record before it reaches a provider.
 
-[![CI](https://github.com/ggantry/gantry/actions/workflows/ci.yml/badge.svg)](https://github.com/ggantry/gantry/actions/workflows/ci.yml)
+[![CI](https://github.com/eliransu/gantry/actions/workflows/ci.yml/badge.svg)](https://github.com/eliransu/gantry/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-gantry--docs.eliran.me-e3ff45.svg)](https://gantry-docs.eliran.me/)
 
@@ -30,7 +30,7 @@ Everything outside `enterprise/` is Apache 2.0. The enterprise features in `ente
 ## Quickstart
 
 ```bash
-git clone https://github.com/ggantry/gantry.git && cd gantry
+git clone https://github.com/eliransu/gantry.git && cd gantry
 cargo build --release
 export PATH="$PWD/target/release:$PATH"
 ```
@@ -103,7 +103,7 @@ Full walkthrough, including Docker: [Quickstart](https://gantry-docs.eliran.me/g
 
 - **[Admin console](https://gantry-docs.eliran.me/operations/console/)** at `/console`: audit log, people and keys, policy and spend, with OIDC sign-in and admin and read-only roles.
 - **[Prometheus metrics](https://gantry-docs.eliran.me/operations/observability/)** and audit log shipping with Vector, Fluent Bit or the OpenTelemetry Collector.
-- **[Container image and Kubernetes](https://gantry-docs.eliran.me/deploy/overview/)**: one non-root image built `FROM scratch` (`ghcr.io/ggantry/gantry`), a Helm chart, Terraform for AWS, Google Cloud and Azure, Docker Compose and Cloudflare.
+- **[Container image and Kubernetes](https://gantry-docs.eliran.me/deploy/overview/)**: one non-root image built `FROM scratch` (`ghcr.io/eliransu/gantry`), a Helm chart, Terraform for AWS, Google Cloud and Azure, Docker Compose and Cloudflare.
 - **[HTTPS](https://gantry-docs.eliran.me/operations/deployment/)** with `--tls-cert` and `--tls-key`.
 - **[Migrate from LiteLLM](https://gantry-docs.eliran.me/migrate/from-litellm/)**: `gantry import litellm` turns a LiteLLM proxy config into a Gantry policy.
 

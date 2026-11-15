@@ -9,17 +9,17 @@
 # (`docker login ghcr.io` or `cosign login ghcr.io`) with a token that can read the packages.
 #
 # Environment:
-#   IMAGE    the image repository (default ghcr.io/ggantry/gantry)
-#   CHART    the chart repository (default ghcr.io/ggantry/charts/gantry); CHART=none skips the chart
+#   IMAGE    the image repository (default ghcr.io/eliransu/gantry)
+#   CHART    the chart repository (default ghcr.io/eliransu/charts/gantry); CHART=none skips the chart
 #   COSIGN_KEY   a public key file to verify with in place of the workflows' identity. Only for testing this script
 #                against an image signed locally (`cosign sign --key`); it skips the transparency log too.
 #   ALLOW_HTTP_REGISTRY=1   with COSIGN_KEY, allows a plain-HTTP local registry.
 set -euo pipefail
 version=${1:?usage: scripts/verify_release.sh X.Y.Z}
 version=${version#v}
-image=${IMAGE:-ghcr.io/ggantry/gantry}
-chart=${CHART:-ghcr.io/ggantry/charts/gantry}
-repo=https://github.com/ggantry/gantry
+image=${IMAGE:-ghcr.io/eliransu/gantry}
+chart=${CHART:-ghcr.io/eliransu/charts/gantry}
+repo=https://github.com/eliransu/gantry
 
 command -v cosign > /dev/null || { echo "error: cosign is not on PATH. Install it: https://docs.sigstore.dev/cosign/system_config/installation/" >&2; exit 1; }
 

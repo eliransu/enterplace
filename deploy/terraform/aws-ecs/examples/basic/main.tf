@@ -14,7 +14,7 @@ provider "aws" {
 module "gantry" {
   source = "../.."
 
-  image  = "ghcr.io/ggantry/gantry:0.1.0"
+  image  = "ghcr.io/eliransu/gantry:0.1.0"
   policy = file("${path.module}/../../../gantry.policy.yaml")
 
   vpc_id             = "vpc-0123456789abcdef0"

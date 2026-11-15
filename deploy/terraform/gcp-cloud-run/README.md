@@ -38,7 +38,7 @@ repository in front of ghcr.io), then:
 
 ```hcl
 module "gantry" {
-  # Copied out of the image: docker create --name gantry-files ghcr.io/ggantry/gantry:<version>
+  # Copied out of the image: docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
   #   && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
   source = "./gantry-deploy/terraform/gcp-cloud-run"
 

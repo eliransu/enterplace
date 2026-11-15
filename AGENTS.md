@@ -41,5 +41,5 @@ Each session works as one team: product, design, engineering or DevOps. A packag
 - `crates/gantry-bench`: the overhead benchmark and the CI bench gate.
 - `enterprise/`: the `gantry-enterprise` crate (commercial license). Its binary is the `gantry` shipped in the image: every open source command plus `license`, `node` and `device`; with no license key it behaves as the open source edition, a valid key unlocks the paid features (30-day grace after expiry). Test it with `cargo test -p gantry-enterprise` and `--all-features` (`issuer`, staff only).
 - `deploy/`: Helm chart, Terraform modules (aws-ecs, gcp-cloud-run, azure-container-apps), Cloudflare template, Compose test, MDM files. The image carries helm, terraform and cloudflare under `/deploy`.
-- `Dockerfile`: the one image, `ghcr.io/ggantry/gantry`. Releases: `RELEASING.md`.
+- `Dockerfile`: the one image, `ghcr.io/eliransu/gantry`. Releases: `RELEASING.md`.
 - `docs/`, `site/`, `scripts/`: the docs site, the landing page, CI and release scripts.
