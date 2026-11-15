@@ -92,7 +92,8 @@ Commands:
         writes over a policy unless --force. --no-serve stops before running the gateway. --container is the
         image's default command: it serves /etc/gantry/gantry.policy.yaml when one is mounted, else the policy an
         earlier start wrote in --dir (default /var/lib/gantry), and only with neither writes one as above, with
-        --yes, --all-tools and --listen 0.0.0.0:8080.
+        --yes, --all-tools and --listen 0.0.0.0:8080. With DATABASE_URL set it writes a policy kept in that Postgres
+        (store: with policy_from: store) and puts the admin key there, made only when the store holds none.
   providers [--markdown]
         List the provider catalog: id, name, kind and URL. A policy provider may say `preset: <id>` in place
         of its url and kind. --markdown prints the reference page of the docs.

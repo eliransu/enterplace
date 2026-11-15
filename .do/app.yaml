@@ -1,0 +1,36 @@
+# Gantry on DigitalOcean App Platform: one service from the published image and a dev Postgres database.
+# CLI: doctl apps create --spec .do/app.yaml (then set OPENAI_API_KEY in the app's settings).
+# Button: .do/deploy.template.yaml is this spec under `spec:`; keep the two the same.
+# App Platform has no volumes: keys and the policy live in Postgres, the audit log on the container's own disk
+# starts a new chain at each deploy. See https://gantry-docs.eliran.me/deploy/one-click/#digitalocean
+name: gantry
+services:
+  - name: gantry
+    image:
+      registry_type: GHCR
+      registry: eliransu
+      repository: gantry
+      tag: latest
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      http_path: /healthz
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      # Used only when DATABASE_URL names no sslmode. The dev database's certificate is signed by a DigitalOcean CA.
+      - key: PGSSLMODE
+        scope: RUN_TIME
+        value: require
+      - key: OPENAI_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: ANTHROPIC_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+databases:
+  - name: db
+    engine: PG
+    production: false

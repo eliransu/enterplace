@@ -339,3 +339,55 @@ fn check_names_a_credential_the_store_does_not_hold() -> TestResult {
     assert!(said.contains("credential names were not checked"), "{said}");
     Ok(())
 }
+
+#[test]
+fn start_in_a_container_with_database_url_keeps_its_admin_key_in_the_store_once() -> TestResult {
+    // What a one-click deploy runs: the image's default command with a provider key and the platform's DATABASE_URL,
+    // on a disk that a restart may wipe.
+    let Some(url) = database("start")? else {
+        return Ok(());
+    };
+    let dir = std::env::temp_dir().join(format!("gantry-cli-store-{}-start", std::process::id()));
+    let start = |dir: &Path| {
+        let _ = std::fs::remove_dir_all(dir);
+        std::fs::create_dir_all(dir)?;
+        let dir = dir.display().to_string();
+        ok(
+            &["start", "--container", "--no-serve", "--dir", &dir],
+            &[
+                ("DATABASE_URL", url.as_str()),
+                ("OPENAI_API_KEY", "sk-test"),
+            ],
+        )
+    };
+    let first = start(&dir)?;
+    assert_eq!(
+        first.matches("export GANTRY_KEY=gantry_").count(),
+        1,
+        "{first}"
+    );
+    assert!(first.contains("the store"), "{first}");
+    let policy = std::fs::read_to_string(dir.join("gantry.policy.yaml"))?;
+    assert!(
+        policy.contains("store: { postgres_url_env: DATABASE_URL, policy_from: store }"),
+        "{policy}"
+    );
+    let db = [("DATABASE_URL", url.as_str())];
+    let listed = ok(
+        &["key", "list", "--keys", &path(&dir, "gantry.keys.yaml")],
+        &db,
+    )?;
+    assert!(listed.contains("admin\tadmin"), "{listed}");
+
+    // The disk is wiped (a redeploy on Render, App Platform or Cloud Run): the policy is written again, the store
+    // already holds an admin key, so no second one is made or printed.
+    let again = start(&dir)?;
+    assert!(!again.contains("export GANTRY_KEY="), "{again}");
+    assert!(again.contains("gantry key new"), "{again}");
+    let listed = ok(
+        &["key", "list", "--keys", &path(&dir, "gantry.keys.yaml")],
+        &db,
+    )?;
+    assert_eq!(listed.matches("admin\tadmin").count(), 1, "{listed}");
+    Ok(())
+}

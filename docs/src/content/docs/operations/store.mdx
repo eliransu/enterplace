@@ -54,6 +54,8 @@ Gantry reads the libpq parameters `sslmode` and `sslrootcert` in the connection 
 
 `prefer` and `allow` are refused: they fall back to plain text without saying so.
 
+When the connection string names no `sslmode`, Gantry reads libpq's `PGSSLMODE` variable, then defaults to `verify-full`. It is for platforms that hand over a connection string they build and you cannot add to, such as Render's internal one: set `PGSSLMODE=require` beside it. The string's own `sslmode` always wins.
+
 The trusted roots are the Mozilla set built into the binary (no system certificates are read), plus the certificates in the PEM file `sslrootcert` names. For `verify-ca` with `sslrootcert`, the file's certificates are the only roots.
 
 Managed databases often sign with a CA of their own. Amazon RDS does: give its bundle.

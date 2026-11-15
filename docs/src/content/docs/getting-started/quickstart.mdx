@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-One command starts Gantry with a provider key: every request gets an identity, a policy decision and a hash-chained audit record. You need Docker and a key for one provider (OpenAI in this guide).
+One command starts Gantry with a provider key: every request gets an identity, a policy decision and a hash-chained audit record. You need Docker and a key for one provider (OpenAI in this guide). To run it in your cloud with Postgres instead, use a [one-click deploy](/deploy/one-click/): a few clicks on Render, Railway, Fly.io, DigitalOcean, Cloud Run, AWS or Azure.
 
 ## Run the image
 
@@ -92,4 +92,5 @@ OPENAI_API_KEY=sk-... target/release/gantry start
 - [Connect Claude Code](/integrations/claude-code/) and route your team's coding sessions through Gantry.
 - [Policy file](/governance/policy/): rules per team and model, budgets, rate limits and guardrails, then `mode: enforce`.
 - [Keys and identity](/governance/keys/): a key per person and workload, and self-service keys with `gantry login`.
+- [One-click deploys](/deploy/one-click/): Gantry and Postgres in your cloud in a few clicks.
 - [Deploy Gantry Enterprise](/deploy/overview/): Docker Compose, Kubernetes, AWS, Google Cloud or Azure, from nothing to a production gateway.
