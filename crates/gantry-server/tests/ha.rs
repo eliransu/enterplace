@@ -45,7 +45,21 @@ async fn provider() -> Result<(u16, Arc<AtomicUsize>), Error> {
     let port = listener.local_addr()?.port();
     let calls = Arc::new(AtomicUsize::new(0));
     let seen = calls.clone();
-    let app = Router::new().route(
+    let app = Router::new()
+        .route(
+            "/v1/embeddings",
+            // Two wordings of one question land close together, anything else far away.
+            post(|body: String| async move {
+                let vector = if body.contains("France") { "[1.0, 0.05]" } else { "[0.0, 1.0]" };
+                axum::response::Response::builder()
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"object":"list","data":[{{"object":"embedding","index":0,"embedding":{vector}}}],"model":"emb","usage":{{"prompt_tokens":1,"total_tokens":1}}}}"#
+                    )))
+                    .unwrap_or_default()
+            }),
+        )
+        .route(
         "/v1/chat/completions",
         post(move || {
             let seen = seen.clone();
@@ -76,7 +90,7 @@ providers:
     url: http://127.0.0.1:{port}
     allow_private: true
     key_env: MOCK_KEY
-    models: [m, free]
+    models: [m, free, emb]
 prices:
   m: {{ input: 0, output: 1000 }}
 rules:
@@ -84,6 +98,10 @@ rules:
     principals: {{ team: cached }}
     models: [free]
     cache: {{ ttl_seconds: 60 }}
+  - name: semantic
+    principals: {{ team: semantic }}
+    models: [free, emb]
+    cache: {{ ttl_seconds: 60, semantic: {{ model: emb, threshold: 0.9 }} }}
   - name: leased
     principals: {{ team: leased }}
     models: [m]
@@ -257,6 +275,56 @@ async fn an_answer_cached_on_one_gateway_is_served_by_the_other_in_its_scope_onl
     // The hit is recorded as one, naming the decision that made the answer.
     let log = std::fs::read_to_string(b.loaded.keys_path.with_file_name("gantry-audit.jsonl"))?;
     assert!(log.contains("\"cache_match\":\"exact\""), "{log}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_question_in_other_words_is_served_on_the_other_gateway_from_the_semantic_cache()
+-> TestResult {
+    let Some(url) = database("semantic").await? else {
+        return Ok(());
+    };
+    let (port, calls) = provider().await?;
+    let (a, b) = pair(
+        "semantic",
+        &url,
+        port,
+        &[
+            ("pat", "semantic", PAT, false),
+            ("lee", "semantic", LEE, false),
+        ],
+    )
+    .await?;
+    let ask = |words: &str| {
+        format!(r#"{{"model":"free","messages":[{{"role":"user","content":"{words}"}}]}}"#)
+    };
+    let (status, first, hit) = answer(
+        &a.router,
+        chat(PAT, &ask("What is the capital of France?"))?,
+    )
+    .await?;
+    assert_eq!((status, hit), (StatusCode::OK, false), "{first}");
+    let app = b.router.clone();
+    eventually(
+        Duration::from_secs(3),
+        "b serves a's answer to the reworded question",
+        || async {
+            let (status, body, hit) =
+                answer(&app, chat(PAT, &ask("Tell me France's capital"))?).await?;
+            Ok(status == StatusCode::OK && hit && body["id"] == first["id"])
+        },
+    )
+    .await?;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the provider was asked again"
+    );
+    // Scoped to the person on every gateway: lee's close question is not served pat's answer.
+    let (_, body, hit) = answer(&b.router, chat(LEE, &ask("Tell me France's capital"))?).await?;
+    assert!(!hit && body["id"] != first["id"], "{body}");
+    let log = std::fs::read_to_string(b.loaded.keys_path.with_file_name("gantry-audit.jsonl"))?;
+    assert!(log.contains("\"cache_match\":\"semantic\""), "{log}");
     Ok(())
 }
 
@@ -504,5 +572,73 @@ async fn every_gateway_on_the_store_is_listed_with_its_version_and_health() -> T
     )
     .await?;
     a.close();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_admin_api_lists_every_gateway_on_the_store() -> TestResult {
+    let Some(url) = database("replicas_api").await? else {
+        return Ok(());
+    };
+    let (port, _) = provider().await?;
+    let (a, b) = pair(
+        "replicas_api",
+        &url,
+        port,
+        &[("ops", "ops", ADMIN, true), ("pat", "daily", PAT, false)],
+    )
+    .await?;
+    let app = b.router.clone();
+    eventually(Duration::from_secs(6), "b lists both gateways", || async {
+        let (status, body, _) = answer(&app, request("GET", "/admin/replicas", ADMIN, "")?).await?;
+        Ok(status == StatusCode::OK
+            && body["store"] == true
+            && body["replicas"].as_array().is_some_and(|l| {
+                l.len() == 2
+                    && l.iter()
+                        .all(|r| r["healthy"] == true && r["version"] == gantry_core::VERSION)
+            }))
+    })
+    .await?;
+    // A caller without the right to see records is refused.
+    let (status, body, _) = answer(&a.router, request("GET", "/admin/replicas", PAT, "")?).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // The console's policy page lists them too.
+    let signed_in = a
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/console/sign-in")
+                .header(header::HOST, "gantry.test")
+                .header(header::ORIGIN, "http://gantry.test")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("key={ADMIN}")))?,
+        )
+        .await?;
+    let cookie = signed_in
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("gantry_console=") && !v.starts_with("gantry_console=;"))
+        .and_then(|v| v.split(';').next())
+        .ok_or("the sign-in set no session cookie")?
+        .to_string();
+    let page = a
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/console/policy")
+                .header(header::HOST, "gantry.test")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())?,
+        )
+        .await?;
+    let html = String::from_utf8(page.into_body().collect().await?.to_bytes().to_vec())?;
+    assert!(html.contains(">Gateways</h2>"), "{html}");
+    assert_eq!(html.matches(">Healthy</span>").count(), 2, "{html}");
     Ok(())
 }

@@ -247,11 +247,14 @@ struct NewKey {
     from: Option<Value>,
     #[serde(default)]
     mcp_tools: Option<Value>,
+    /// Guardrails the key adds to its rule's, by name.
+    #[serde(default)]
+    guardrails: Option<Value>,
 }
 
 /// The key fields `PATCH /admin/keys/<prefix>` changes. Name, team, org, role and admin are not among them: a new
 /// name or organization is a new key, and rights are given only when a key is issued.
-const UPDATABLE: &str = "expires, budget, models, tpm, rpm, parallel, customer, tags, metadata, routes, from and mcp_tools";
+const UPDATABLE: &str = "expires, budget, models, tpm, rpm, parallel, customer, tags, metadata, routes, from, mcp_tools and guardrails";
 
 /// Sets one field of `entry` from its JSON value, or says what is wrong with it. `null` clears the field.
 fn apply(
@@ -356,6 +359,7 @@ fn apply(
         }
         "routes" => entry.options.routes = list()?,
         "mcp_tools" => entry.options.mcp_tools = list()?,
+        "guardrails" => entry.options.guardrails = list()?,
         "from" => entry.options.from = config::cidrs(&list()?)?,
         "metadata" => {
             entry.options.metadata = match value {
@@ -405,6 +409,7 @@ fn key_json(entry: &config::KeyEntry) -> Value {
         "from": o.from.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "replaced_by": o.replaced_by,
         "mcp_tools": o.mcp_tools,
+        "guardrails": o.guardrails,
     })
 }
 
@@ -456,6 +461,27 @@ fn needs(action: &str) -> Permission {
         // A backtest tries a guardrail before it goes into the policy: the policy author's job, not the credential keeper's.
         "test_guardrail" => Permission::EditPolicy,
         _ => Permission::Credentials,
+    }
+}
+
+/// Refuses a key that adds a guardrail the policy does not define: it would be a key that cannot be loaded.
+fn undefined_guardrail(
+    policy: &gantry_core::policy::Policy,
+    options: &gantry_core::policy::KeyOptions,
+) -> Result<(), Refusal> {
+    match options
+        .guardrails
+        .iter()
+        .find(|name| !policy.defines_guardrail(name))
+    {
+        Some(name) => Err(refused(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            format!(
+                "Refused: guardrails names \"{name}\", which is not defined under guardrails in the policy. Define it there, or check the spelling. Nothing was changed."
+            ),
+        )),
+        None => Ok(()),
     }
 }
 
@@ -981,6 +1007,7 @@ async fn allow(
                 ("routes", &new.routes),
                 ("from", &new.from),
                 ("mcp_tools", &new.mcp_tools),
+                ("guardrails", &new.guardrails),
             ] {
                 if let Some(value) = value {
                     apply(&mut extra, field, value, &[]).map_err(|problem| {
@@ -1144,6 +1171,7 @@ async fn allow(
             call.target = Some(
                 json!({ "name": new.name, "team": new.team, "sha256_prefix": &id::sha256_hex(key.as_bytes())[..8] }),
             );
+            undefined_guardrail(policy, &extra.options)?;
             // What the issuer's role may grant: what the key leaves unset takes the bound.
             let mut budget = budget;
             config::bound_key(
@@ -1326,6 +1354,27 @@ async fn allow(
                         role.name
                     ),
                 ));
+            }
+            undefined_guardrail(policy, &after.options)?;
+            // A change holds to what the role may grant, as an issue does.
+            if ["expires", "budget", "models"]
+                .iter()
+                .any(|f| sent.contains_key(*f))
+            {
+                config::bound_key(
+                    policy,
+                    Some(&role.name),
+                    &mut after.expires,
+                    &mut after.budget,
+                    &mut after.models,
+                )
+                .map_err(|problem| {
+                    refused(
+                        StatusCode::FORBIDDEN,
+                        "key_bounds_exceeded",
+                        format!("Refused: {problem}. Nothing was changed."),
+                    )
+                })?;
             }
             // The record says what each field was and what it becomes.
             let (was, now) = (key_json(&found), key_json(&after));

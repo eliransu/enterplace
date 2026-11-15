@@ -3059,6 +3059,9 @@ pub struct PolicySource {
     pub actions: String,
     /// A warning above the policy, as markup: the file differs from the live version.
     pub banner: String,
+    /// The gateways on the store, as their heartbeats say. Empty without a store, or for a role that does not see
+    /// records.
+    pub replicas: Vec<gantry_core::store::Replica>,
 }
 
 pub fn policy(
@@ -3217,7 +3220,9 @@ pub fn policy(
                     r#"<aside class="g-stack" aria-label="About this file">
 <div class="g-panel g-stack"><h2 class="t-md" style="margin: 0">Rules</h2><div class="g-list">{rules}</div></div>
 <div class="g-panel g-stack"><h2 class="t-md" style="margin: 0">Providers</h2><div class="g-list">{providers}</div><p class="t-small g-muted" style="margin: 0">A provider key stays in its environment variable and is never shown here.</p></div>
-</aside>"#
+{}
+</aside>"#,
+                    gateways(&source.replicas)
                 ),
             )
         }
@@ -3267,6 +3272,37 @@ pub fn policy(
         }
     );
     tool_page(title, admin, "/console/policy", query, &main, "")
+}
+
+/// The policy page's Gateways panel: every gateway on the store, so an admin sees which run and which went quiet.
+fn gateways(replicas: &[gantry_core::store::Replica]) -> String {
+    if replicas.is_empty() {
+        return String::new();
+    }
+    let rows: String = replicas
+        .iter()
+        .map(|r| {
+            row(
+                &esc(&r.host),
+                &format!(
+                    "Version {}, schema {}. Started {}, last heartbeat {}.",
+                    esc(&r.version),
+                    esc(&r.schema),
+                    esc(&r.started),
+                    esc(&r.seen)
+                ),
+                &if r.healthy {
+                    tag("allow", "Healthy", "")
+                } else {
+                    tag("refused", "Silent", "")
+                },
+                true,
+            )
+        })
+        .collect();
+    format!(
+        r#"<div class="g-panel g-stack"><h2 class="t-md" style="margin: 0">Gateways</h2><div class="g-list">{rows}</div><p class="t-small g-muted" style="margin: 0">A gateway is silent when it wrote no heartbeat to the store in 10 seconds.</p></div>"#
+    )
 }
 
 // ---------------------------------------------------------------- spend

@@ -124,6 +124,14 @@ Most budgeted requests make no database call either. A replica reserves eight re
 
 Hourly, daily and session request counts (`rph`, `rpd`, `session_requests`) are counted the same way, in the same table.
 
+### Replicas
+
+Each replica writes a heartbeat to `gantry_replicas` every 2 seconds. `GET /admin/replicas` (needs `see_records`) and the Gateways panel on the console's Policy page list every replica that wrote one in the last day, with its host, version, store schema, start time and last heartbeat. A replica is healthy while its last heartbeat is under 10 seconds old; one that stopped stays listed as silent until it has been gone for a day.
+
+```bash
+curl -s http://127.0.0.1:8080/admin/replicas -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+```
+
 ### Budget raises
 
 A [budget raise](/governance/budgets-and-rate-limits/#budget-raises) asked for or decided on one replica is read by the others with the 500 ms poll, from memory, so a request never waits on the database for it. The table is `gantry_raises`, in the migration namespace `gantry_ha`.

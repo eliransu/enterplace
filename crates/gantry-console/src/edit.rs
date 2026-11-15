@@ -112,6 +112,7 @@ pub(crate) fn policy_source(console: &Console, admin: &Admin) -> PolicySource {
         version: live.map(|v| v.id),
         actions,
         banner,
+        replicas: Vec::new(),
     }
 }
 

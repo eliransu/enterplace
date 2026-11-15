@@ -154,6 +154,9 @@ const BUDGET_LEASE_REQUESTS: f64 = 8.0;
 /// what a lease costs is that a request may be refused while other gateways hold up to this much each.
 pub(crate) const BUDGET_LEASE_PART: f64 = 0.01;
 
+/// Past this many counters with a lease, the ones that hold nothing and are no longer near their limit are dropped.
+const MAX_BUDGET_LEASES: usize = 10_000;
+
 /// How long a counter that had no room for a lease is reserved from request by request.
 const EXACT_FOR: Duration = Duration::from_secs(5);
 
@@ -417,7 +420,21 @@ impl Spend {
         if usd > 0.0 {
             let at = Instant::now();
             let mut leases = locked(&self.budget_leases);
-            let lease = leases.entry(bucket.clone()).or_default();
+            // Only a counter that is leased has an entry: one that is reserved exactly (a session's few
+            // requests, a request too large for a lease) keeps nothing here.
+            if chunk > usd && leases.len() > MAX_BUDGET_LEASES {
+                leases.retain(|_, lease| {
+                    lease.asking
+                        || lease.left > 0.0
+                        || lease.exact_until.is_some_and(|until| until > at)
+                });
+            }
+            let mut none = BudgetLease::default();
+            let lease = if chunk > usd {
+                leases.entry(bucket.clone()).or_default()
+            } else {
+                leases.get_mut(&bucket).unwrap_or(&mut none)
+            };
             // Within a billionth of a dollar: eight requests of a cent are a lease of eight cents, whatever the
             // floating point sum says.
             if lease.until.is_some_and(|until| until > at) && lease.left >= usd - 1e-9 {

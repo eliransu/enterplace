@@ -19,7 +19,8 @@ one repository. How a release is made: RELEASING.md.
   A budget is never passed: near its limit each request is reserved exactly. A gateway may hold up to 1% of a budget
   unused for up to a second.
 - Each gateway writes a heartbeat to the store every 2 seconds (`gantry_replicas`): its name, host, version, store
-  schema, start time and last write. The store interface lists them (`Store::replicas`).
+  schema, start time and last write. `GET /admin/replicas` lists them with whether each is healthy (a heartbeat in
+  the last 10 seconds), and the console's Policy page shows them in a Gateways panel.
 - A new migration namespace, `gantry_ha`, holds the heartbeats, the answer cache and budget raises.
 
 ### Governance: required fields, default and per-key guardrails, key bounds, model groups, raises, sessions
@@ -27,12 +28,14 @@ one repository. How a release is made: RELEASING.md.
 - `require: { headers: [...], body: [...] }` on a rule refuses a request that lacks a listed header or body field
   with `required_missing` (400).
 - `default_guardrails:` at the top level runs guardrails on every rule, before its own. `guardrails:` on a key adds
-  guardrails to its rule's, and never removes one.
+  guardrails to its rule's, and never removes one. `POST /admin/keys` and `PATCH /admin/keys/<prefix>` take
+  `guardrails`, and refuse a name the policy does not define.
 - `POST /v1/guardrails/check` runs the caller's rule's guardrails on text the caller sends and answers with what
   they found and the masked text. No model is called, nothing is charged, and each check is recorded.
 - `key_bounds:` (top level, and per role) caps what a key may be issued with: `max_days`, `max_budget` and
   `models`. A key issued without one of them gets the bound; one over a bound is refused with
-  `key_bounds_exceeded` (403). Keys from `gantry login` hold to the top-level bounds.
+  `key_bounds_exceeded` (403). A change to a key through `PATCH /admin/keys/<prefix>` holds to the same bounds.
+  Keys from `gantry login` hold to the top-level bounds: past `max_days` they get the longest lifetime allowed.
 - `model_groups:` names sets of models: `group:<name>` in a rule's, a key's or a budget's `models`, and
   `{ model_group: <name>, budget, rate }` in `limits:` for one budget or rate over the whole group.
 - `rate: { rph, rpd }` limits requests per calendar hour and day (UTC), in a rule and in `limits:` entries, shared

@@ -1890,13 +1890,12 @@ async fn cli_token(State(console): State<Console>, body: String) -> Response {
     };
     // A key a person gives themselves holds to the policy's key_bounds: never longer than max_days, and with the
     // budget and models the bounds set.
-    if let Err(first) = bound(&console, None, &mut attributes).await {
+    if bound(&console, None, &mut attributes).await.is_err() {
+        // Over the bound on lifetime only, the key gets the longest one allowed; anything else is refused.
         attributes.expires = None;
         if let Err(problem) = bound(&console, None, &mut attributes).await {
             return cli_refused(StatusCode::FORBIDDEN, "key_bounds_exceeded", &problem);
         }
-        // Only the lifetime was over the bound: the key gets the longest one allowed.
-        let _ = first;
     }
     let expires = attributes.expires.clone().unwrap_or_default();
     let target = json!({
@@ -2462,8 +2461,6 @@ async fn issue(State(console): State<Console>, headers: HeaderMap, body: String)
     )
 }
 
-/// Makes a key and adds it to the keys file, recorded first: the record names the key by its hash prefix, so the
-/// key is made before the record and shown only after both.
 /// Holds a key about to be issued to the policy's `key_bounds:` for `role` (`None`: a key from `gantry login`).
 async fn bound(
     console: &Console,
@@ -2487,9 +2484,19 @@ async fn bound(
         &mut attributes.budget,
         &mut attributes.models,
     )
-    .map_err(|problem| format!("{}{}.", problem[..1].to_uppercase(), &problem[1..]))
+    .map_err(|problem| {
+        let mut chars = problem.chars();
+        let first: String = chars
+            .next()
+            .into_iter()
+            .flat_map(char::to_uppercase)
+            .collect();
+        format!("{first}{}.", chars.as_str())
+    })
 }
 
+/// Makes a key and adds it to the keys file, recorded first: the record names the key by its hash prefix, so the
+/// key is made before the record and shown only after both.
 async fn issued(
     console: &Console,
     admin: &Admin,
@@ -2801,13 +2808,21 @@ async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Ur
     let config = console.config();
     let text = config::policy_text(&config.policy).map(Some);
     let loaded = config::load(&config.policy, Some(&config.keys));
+    let mut source = edit::policy_source(&console, &admin);
+    if let Some(store) = console
+        .store()
+        .filter(|_| admin.may(Permission::SeeRecords))
+    {
+        // A store that cannot be read leaves the panel out: the policy is still worth showing.
+        source.replicas = store.replicas().await.unwrap_or_default();
+    }
     let body = pages::policy(
         &admin.label(),
         &Form::of(&uri),
         &config.policy,
         &text,
         &loaded,
-        &edit::policy_source(&console, &admin),
+        &source,
     );
     page(StatusCode::OK, body)
 }

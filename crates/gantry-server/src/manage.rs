@@ -75,7 +75,9 @@ const fn r(
     }
 }
 
-use Permission::{Credentials, EditPolicy, IssueKeys, Kill, RevokeKeys, SeeKeys, SeeSpend};
+use Permission::{
+    Credentials, EditPolicy, IssueKeys, Kill, RevokeKeys, SeeKeys, SeeRecords, SeeSpend,
+};
 
 /// Every route of the open source admin API, with the module that serves it.
 pub(crate) const ROUTES: &[(Module, AdminRoute)] = &[
@@ -597,6 +599,16 @@ pub(crate) const ROUTES: &[(Module, AdminRoute)] = &[
         Module::Manage,
         r(
             "GET",
+            "/admin/replicas",
+            "list_replicas",
+            Some(SeeRecords),
+            "Every gateway on the store, with its version, schema and whether its heartbeat is recent",
+        ),
+    ),
+    (
+        Module::Manage,
+        r(
+            "GET",
             "/admin/budget/raises",
             "budget_raises",
             Some(SeeSpend),
@@ -978,6 +990,22 @@ async fn allow(
         ));
     }
     match route.action {
+        "list_replicas" => {
+            // Without a store this gateway is the only one: it is listed alone, healthy since it answers.
+            let replicas = match &state.spend.store {
+                Some(store) => store.replicas().await.map_err(|err| {
+                    refused(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "store_unavailable",
+                        format!("Refused: the store could not be read ({err}). Check that its Postgres is reachable and try again."),
+                    )
+                })?,
+                None => Vec::new(),
+            };
+            return Ok(Plan::Read(
+                json!({ "store": state.spend.store.is_some(), "replicas": replicas }),
+            ));
+        }
         "budget_raises" => return Ok(Plan::Read(crate::govern::listed(&state.raises, &role))),
         action @ ("add_budget_raise" | "approve_budget_raise" | "reject_budget_raise") => {
             let id = params.first().map_or("", String::as_str);

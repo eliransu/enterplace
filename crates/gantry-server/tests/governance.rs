@@ -288,6 +288,66 @@ async fn default_guardrails_run_on_every_rule_and_a_key_adds_its_own() -> TestRe
         "{all:?}"
     );
     assert!(!guards_of("ana").contains(&"mask-pii".to_string()));
+
+    // The admin API issues and changes a key's added guardrails, and refuses one the policy does not define.
+    let (status, body) = answer(
+        app,
+        call(
+            "POST",
+            "/admin/keys",
+            ROOT,
+            r#"{"name":"cy","team":"counted","guardrails":["mask-pii"]}"#,
+            &[],
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let prefix = body["sha256_prefix"]
+        .as_str()
+        .ok_or("no prefix")?
+        .to_string();
+    let (status, body) = answer(
+        app,
+        call(
+            "POST",
+            "/admin/keys",
+            ROOT,
+            r#"{"name":"dee","team":"counted","guardrails":["nope"]}"#,
+            &[],
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("\"nope\"")
+    );
+    let (status, body) = answer(
+        app,
+        call(
+            "PATCH",
+            &format!("/admin/keys/{prefix}"),
+            ROOT,
+            r#"{"guardrails":["nope"]}"#,
+            &[],
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = answer(
+        app,
+        call(
+            "PATCH",
+            &format!("/admin/keys/{prefix}"),
+            ROOT,
+            r#"{"guardrails":[]}"#,
+            &[],
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
     Ok(())
 }
 
@@ -418,6 +478,27 @@ async fn a_role_grants_no_more_than_its_key_bounds_allow() -> TestResult {
     )
     .await?;
     assert_eq!(status, StatusCode::CREATED, "{body}");
+    // A change holds to the bounds as an issue does.
+    let new3 = body["sha256_prefix"]
+        .as_str()
+        .ok_or("no prefix")?
+        .to_string();
+    let (status, body) = answer(
+        app,
+        call(
+            "PATCH",
+            &format!("/admin/keys/{new3}"),
+            LEAD,
+            r#"{"budget":{"usd":11,"per":"month"}}"#,
+            &[],
+        )?,
+    )
+    .await?;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "key_bounds_exceeded"),
+        "{body}"
+    );
     // The admin has no bounds of its own: the policy's apply (a year), and nothing else.
     let (status, body) = answer(
         app,
