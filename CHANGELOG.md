@@ -7,6 +7,16 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### One-command install of the CLI
+
+- `curl -fsSL https://gantry.eliran.me/install.sh | sh` installs `gantry` on macOS and Linux, x86_64 and arm64: it
+  picks the latest stable release (or the `edge` pre-release while there is none; `GANTRY_VERSION=edge|vX.Y.Z`),
+  verifies the release signature with `ssh-keygen` and the tarball's SHA256, installs to `~/.local/bin`
+  (`GANTRY_INSTALL_DIR`, with sudo for a folder you cannot write), and prints the PATH line and `gantry start`.
+- Homebrew: `brew install eliransu/tap/gantry`, the formula pushed to the tap by every stable release.
+- Releases now ship macOS arm64 and amd64 tarballs beside the linux ones. Every push to main publishes the rolling
+  pre-release `edge` with the same signed files.
+
 ### Public image and one-command quickstart
 
 - The image `ghcr.io/eliransu/gantry` and the chart `oci://ghcr.io/eliransu/charts/gantry` are public: no

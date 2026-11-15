@@ -29,6 +29,16 @@ Everything outside `enterprise/` is Apache 2.0. The enterprise features in `ente
 
 ## Quickstart
 
+Install the `gantry` CLI (macOS and Linux, x86_64 and arm64; the release signature and SHA256 are checked) and start it:
+
+```bash
+curl -fsSL https://gantry.eliran.me/install.sh | sh
+export OPENAI_API_KEY=sk-...
+gantry start
+```
+
+Or `brew install eliransu/tap/gantry`. Or run the image:
+
 ```bash
 docker run --name gantry -p 8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY=sk-... ghcr.io/eliransu/gantry
 ```
