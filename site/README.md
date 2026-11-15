@@ -59,7 +59,7 @@ Add a new page to the header and footer in `src/partials/layout.html`.
 
 ```sh
 python3 -m http.server 4410 --bind 127.0.0.1 --directory public
-npx --prefix ../docs wrangler deploy
+npx --prefix /Users/lasso/Documents/private/gantry/gantry/docs wrangler deploy
 ```
 
 Run the deploy from this folder. `wrangler.jsonc` serves `public/` with clean URLs and `404.html` for unknown paths.

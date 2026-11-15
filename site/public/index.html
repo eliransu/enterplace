@@ -109,19 +109,19 @@ gantry</a>
 
 <figure class="gate" data-gate aria-label="Four callers send requests through the Gantry gate. Allowed requests pass to the provider. One request is refused because its team is over budget. Each request writes an audit record.">
 <div class="gate-lanes" aria-hidden="true">
-<div class="lane"><span class="lane-from">maya.cohen<i>Claude Code</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
+<div class="lane"><span class="lane-from">sarah.miller<i>Claude Code</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
 <div class="lane"><span class="lane-from">svc-invoice-bot<i>internal app</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">OpenAI</span></div>
-<div class="lane"><span class="lane-from">dana.levi<i>Codex</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">budget_exceeded</span></span><span class="lane-to">OpenAI</span></div>
+<div class="lane"><span class="lane-from">emily.davis<i>Codex</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">budget_exceeded</span></span><span class="lane-to">OpenAI</span></div>
 <div class="lane"><span class="lane-from">ci.release<i>CI job</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
 </div>
 <ol class="records" aria-label="Example audit records, newest first">
-<li><span>#41</span><span class="r-who">maya.cohen<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule payments-team</span><span class="r-hash">eb9301 &larr; 7084cb</span></li>
-<li><span>#40</span><span class="r-who">dana.levi<i>interns</i></span><span class="v v-refused">refused</span><span class="r-meta">gpt-5, budget_exceeded</span><span class="r-hash">963777 &larr; eb9301</span></li>
+<li><span>#41</span><span class="r-who">sarah.miller<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule payments-team</span><span class="r-hash">45190c &larr; 9edaa7</span></li>
+<li><span>#40</span><span class="r-who">emily.davis<i>interns</i></span><span class="v v-refused">refused</span><span class="r-meta">gpt-5, budget_exceeded</span><span class="r-hash">963777 &larr; 45190c</span></li>
 <li><span>#39</span><span class="r-who">ci.release<i>platform</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-haiku-5-5, rule platform</span><span class="r-hash">0e47c0 &larr; 963777</span></li>
 <li><span>#38</span><span class="r-who">svc-invoice-bot<i>finance</i></span><span class="v v-masked">masked</span><span class="r-meta">gpt-5-mini, credit_card masked</span><span class="r-hash">000000 &larr; 0e47c0</span></li>
 </ol>
 <figcaption class="gate-foot"><span>Example requests. Each record carries the hash of the one before it.</span><button class="gate-pause" type="button" aria-pressed="false">Pause</button></figcaption>
-<script type="application/json">{"n": 41, "last": "7084cb", "seq": [[0, "maya.cohen", "payments", "allow", "claude-sonnet-5-5, rule payments-team"], [3, "ci.release", "platform", "blocked", "claude-haiku-5-5, aws_access_key", "aws_access_key"], [1, "svc-invoice-bot", "finance", "allow", "gpt-5-mini, rule finance-apps"], [0, "maya.cohen", "payments", "allow", "claude-haiku-5-5, rule payments-team"], [1, "svc-invoice-bot", "finance", "masked", "gpt-5-mini, credit_card masked"], [3, "ci.release", "platform", "allow", "claude-haiku-5-5, rule platform"], [2, "dana.levi", "interns", "refused", "gpt-5, budget_exceeded", "budget_exceeded"], [0, "maya.cohen", "payments", "allow", "claude-sonnet-5-5, rule payments-team"]]}</script>
+<script type="application/json">{"n": 41, "last": "9edaa7", "seq": [[0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule payments-team"], [3, "ci.release", "platform", "blocked", "claude-haiku-5-5, aws_access_key", "aws_access_key"], [1, "svc-invoice-bot", "finance", "allow", "gpt-5-mini, rule finance-apps"], [0, "sarah.miller", "payments", "allow", "claude-haiku-5-5, rule payments-team"], [1, "svc-invoice-bot", "finance", "masked", "gpt-5-mini, credit_card masked"], [3, "ci.release", "platform", "allow", "claude-haiku-5-5, rule platform"], [2, "emily.davis", "interns", "refused", "gpt-5, budget_exceeded", "budget_exceeded"], [0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule payments-team"]]}</script>
 </figure>
 </section>
 
@@ -222,7 +222,7 @@ gantry</a>
     <p>Prompts and answers go from your callers, through Gantry, to the providers your policy names. Gantry never stores them, and nothing calls home.</p>
   </div>
   <div class="parts">
-    <div><b>ghcr.io/eliransu/gantry</b><h3>One image</h3><p>A single static binary in an image built from scratch, running as a non-root user. It serves the gateway, the console and the admin API.</p></div>
+    <div><b>ghcr.io/ggantry/gantry</b><h3>One image</h3><p>A single static binary in an image built from scratch, running as a non-root user. It serves the gateway, the console and the admin API.</p></div>
     <div><b>DATABASE_URL</b><h3>Postgres</h3><p>Keys, kill switches, budgets and rate limits, shared by every replica. No Redis.</p></div>
     <div><b>gantry.policy.yaml</b><h3>One policy file</h3><p>Providers, rules, budgets and guardrails, kept in git. An unknown field is an error with its line number.</p></div>
   </div>

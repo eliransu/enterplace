@@ -135,7 +135,7 @@ gantry</a>
   <table class="tbl">
     <thead><tr><th>Part</th><th>What it is</th><th>Where it lives</th></tr></thead>
     <tbody>
-      <tr><td>The image</td><td><code>ghcr.io/eliransu/gantry</code>: one static binary, built from scratch, running as user 65532. It serves the gateway, the console and the admin API.</td><td>Your registry, or ghcr.io</td></tr>
+      <tr><td>The image</td><td><code>ghcr.io/ggantry/gantry</code>: one static binary, built from scratch, running as user 65532. It serves the gateway, the console and the admin API.</td><td>Your registry, or ghcr.io</td></tr>
       <tr><td>Postgres</td><td>The store: keys, kill switches and spend, shared by every replica.</td><td>A managed database, or the Compose container</td></tr>
       <tr><td>A volume per replica</td><td>That replica's hash-chained audit log. Two replicas never share one, because each writes its own chain.</td><td>A Docker volume, a PersistentVolumeClaim, EFS, Filestore or Azure Files</td></tr>
       <tr><td>The policy</td><td>One YAML file: providers, rules, guardrails. It holds no secrets.</td><td>Version control, then a ConfigMap, a parameter or a mount</td></tr>

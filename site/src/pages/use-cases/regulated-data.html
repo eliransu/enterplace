@@ -14,16 +14,16 @@ nav: use-cases
 label: Four requests go through Gantry. Requests for the clinical team go to an EU deployment. One request is refused because no deployment in an allowed region can serve it.
 foot: Example requests. Team clinical may reach deployments labelled eu only.
 lane: ruth.adler | clinical | azure-eu, region eu
-lane: omer.katz | research | openai, region us
-lane: yael.ron | clinical | no eu deployment
+lane: mike.johnson | research | openai, region us
+lane: amanda.brown | clinical | no eu deployment
 lane: svc-notes | clinical | azure-eu, region eu
 req: 0 | ruth.adler | clinical | allow | clinical, region eu
-req: 1 | omer.katz | research | allow | gpt-4o, region us
+req: 1 | mike.johnson | research | allow | gpt-4o, region us
 req: 3 | svc-notes | clinical | masked | clinical, region eu, mrn masked
 req: 0 | ruth.adler | clinical | masked | clinical, region eu, email masked
-req: 1 | omer.katz | research | allow | gpt-4o, region us
+req: 1 | mike.johnson | research | allow | gpt-4o, region us
 req: 3 | svc-notes | clinical | allow | clinical, region eu
-req: 2 | yael.ron | clinical | refused | gpt-4o-mini, region_not_allowed | region_not_allowed
+req: 2 | amanda.brown | clinical | refused | gpt-4o-mini, region_not_allowed | region_not_allowed
 req: 0 | ruth.adler | clinical | allow | clinical, region eu
 }}
 </section>

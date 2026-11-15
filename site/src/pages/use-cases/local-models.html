@@ -13,18 +13,18 @@ nav: use-cases
 {{gate
 label: Four callers send requests through Gantry. Requests to local models pass. A request from the legal team for a hosted model is refused because the rule lists local models only.
 foot: Example requests. Team legal may use local models only.
-lane: lior.avni | legal | vLLM, on-prem
-lane: maya.cohen | payments | Ollama, on-prem
+lane: chris.walker | legal | vLLM, on-prem
+lane: sarah.miller | payments | Ollama, on-prem
 lane: tal.shor | legal | hosted
-lane: omer.katz | research | Anthropic
-req: 0 | lior.avni | legal | allow | local-llm, rule legal-local
-req: 1 | maya.cohen | payments | allow | gpt-oss:20b, rule everyone
-req: 3 | omer.katz | research | allow | claude-sonnet-5-5, rule research
-req: 0 | lior.avni | legal | allow | local-llm, rule legal-local
-req: 1 | maya.cohen | payments | allow | gpt-oss:20b, rule everyone
-req: 3 | omer.katz | research | allow | claude-haiku-5-5, rule research
+lane: mike.johnson | research | Anthropic
+req: 0 | chris.walker | legal | allow | local-llm, rule legal-local
+req: 1 | sarah.miller | payments | allow | gpt-oss:20b, rule everyone
+req: 3 | mike.johnson | research | allow | claude-sonnet-5-5, rule research
+req: 0 | chris.walker | legal | allow | local-llm, rule legal-local
+req: 1 | sarah.miller | payments | allow | gpt-oss:20b, rule everyone
+req: 3 | mike.johnson | research | allow | claude-haiku-5-5, rule research
 req: 2 | tal.shor | legal | refused | claude-sonnet-5-5, model_not_allowed | model_not_allowed
-req: 0 | lior.avni | legal | allow | local-llm, rule legal-local
+req: 0 | chris.walker | legal | allow | local-llm, rule legal-local
 }}
 </section>
 

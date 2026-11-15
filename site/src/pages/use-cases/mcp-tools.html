@@ -13,18 +13,18 @@ nav: use-cases
 {{gate
 label: Four tool calls go through Gantry's MCP endpoint. Three are allowed. A call to a tool the rule does not list is refused.
 foot: Example tool calls. A tool the rule does not list is never shown to the caller.
-lane: maya.cohen | github.create_issue | github
+lane: sarah.miller | github.create_issue | github
 lane: svc-triage-agent | docs.search | docs
-lane: dana.levi | warehouse.query | warehouse
-lane: noa.bar | github.merge_pull_request | github
-req: 0 | maya.cohen | payments | allow | github.create_issue, rule payments-team
+lane: emily.davis | warehouse.query | warehouse
+lane: josh.taylor | github.merge_pull_request | github
+req: 0 | sarah.miller | payments | allow | github.create_issue, rule payments-team
 req: 1 | svc-triage-agent | support | allow | docs.search, rule support-agents
-req: 3 | noa.bar | platform | allow | github.merge_pull_request, approved_by ops.admin
-req: 0 | maya.cohen | payments | allow | github.list_issues, rule payments-team
+req: 3 | josh.taylor | platform | allow | github.merge_pull_request, approved_by ops.admin
+req: 0 | sarah.miller | payments | allow | github.list_issues, rule payments-team
 req: 1 | svc-triage-agent | support | allow | docs.search, rule support-agents
-req: 2 | dana.levi | interns | refused | warehouse.query, tool not in the rule | not in the rule
-req: 3 | noa.bar | platform | allow | github.merge_pull_request, approved_by ops.admin
-req: 0 | maya.cohen | payments | allow | github.create_issue, rule payments-team
+req: 2 | emily.davis | interns | refused | warehouse.query, tool not in the rule | not in the rule
+req: 3 | josh.taylor | platform | allow | github.merge_pull_request, approved_by ops.admin
+req: 0 | sarah.miller | payments | allow | github.create_issue, rule payments-team
 }}
 </section>
 
