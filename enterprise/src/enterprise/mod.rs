@@ -40,6 +40,8 @@ const DEVICES: &[&str] = &[
     devices::MIGRATION_2,
     devices::MIGRATION_3,
     devices::MIGRATION_4,
+    devices::MIGRATION_5,
+    devices::MIGRATION_6,
 ];
 /// Watch tokens, what tells a repeated export apart, and the daily sums of what Claude Code reported.
 const WATCH: &[&str] = &[watch::MIGRATION, watch::MIGRATION_2, watch::MIGRATION_3];

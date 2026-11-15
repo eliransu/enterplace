@@ -1,6 +1,8 @@
 //! Device agent (plan 6.4, levels 1 and 2). Every interval it reads the org's device profile from the control plane,
 //! points the installed coding tools of the signed-in OS user at the gateway, puts them back when someone changes
-//! them (drift), and reports each tool's state for the coverage report.
+//! them (drift), reports blocked MCP servers (or takes them out of the tools' MCP files when the profile says
+//! `remove`), and reports each tool's state, the MCP servers and the AI apps it finds for the coverage report. It
+//! writes only files each tool documents, and stops no process.
 
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -82,6 +84,29 @@ fn config_dir(os: Os, home: &Path, from_env: bool) -> PathBuf {
     }
 }
 
+impl Paths {
+    /// Zed's settings file (zed.dev/docs/configuring-zed): `~/.config/zed` on macOS and Linux, `%APPDATA%\Zed` on
+    /// Windows.
+    fn zed_settings(&self) -> PathBuf {
+        match self.os {
+            Os::Windows => self.config.join("Zed"),
+            Os::Linux => self.config.join("zed"),
+            Os::Macos => self.home.join(".config").join("zed"),
+        }
+        .join("settings.json")
+    }
+
+    /// OpenCode's global configuration (opencode.ai/docs/config): `~/.config/opencode/opencode.json` on every OS,
+    /// or `opencode.jsonc` there when that is the one the person keeps.
+    fn opencode_config(&self) -> PathBuf {
+        let dir = self.home.join(".config").join("opencode");
+        if dir.join("opencode.jsonc").exists() && !dir.join("opencode.json").exists() {
+            return dir.join("opencode.jsonc");
+        }
+        dir.join("opencode.json")
+    }
+}
+
 fn user_paths(os: Os, home: PathBuf, from_env: bool) -> Paths {
     Paths {
         os,
@@ -145,15 +170,17 @@ fn paths(home: Option<&Path>) -> Result<Paths, String> {
     Ok(user_paths(os, home, true))
 }
 
+/// Whether a command is on PATH: the file itself, or on Windows its `.exe`, or the `.cmd` npm writes for a command
+/// line tool installed with `npm install -g`.
 fn on_path(bin: &str) -> bool {
-    let exe = format!("{bin}.exe");
+    let names = [bin.to_string(), format!("{bin}.exe"), format!("{bin}.cmd")];
     std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file() || d.join(&exe).is_file()))
+        .map(|p| std::env::split_paths(&p).any(|d| names.iter().any(|n| d.join(n).is_file())))
         .unwrap_or(false)
 }
 
 /// Every tool the agent looks for, by the name the coverage report gives it (`gantry_core::audit::tool_of`).
-pub const TOOLS: [&str; 11] = [
+pub const TOOLS: [&str; 15] = [
     "claude-code",
     "codex",
     "cursor",
@@ -165,10 +192,97 @@ pub const TOOLS: [&str; 11] = [
     "kilo-code",
     "roo-code",
     "claude-desktop",
+    "opencode",
+    "continue",
+    "cline",
+    "aider",
 ];
 
-/// The tools the agent can point at the gateway itself; the others it only inspects.
-pub const MANAGEABLE: [&str; 2] = ["claude-code", "codex"];
+/// The tools the agent can point at the gateway itself, each through a file the tool documents; the others it only
+/// inspects (`why_not`).
+pub const MANAGEABLE: [&str; 9] = [
+    "claude-code",
+    "codex",
+    "opencode",
+    "kilo-code",
+    "continue",
+    "zed",
+    "gemini-cli",
+    "qwen-code",
+    "aider",
+];
+
+/// The tools a device manages when no profile was saved: the two the agent managed before it learned the others,
+/// so an upgrade alone starts writing no new file.
+pub const DEFAULT_MANAGED: [&str; 2] = ["claude-code", "codex"];
+
+/// Why the agent cannot point `tool` at the gateway: no file the tool documents holds its endpoint. `None` for a
+/// tool it can configure.
+pub fn why_not(tool: &str) -> Option<&'static str> {
+    Some(match tool {
+        "cursor" => {
+            "Cursor keeps its OpenAI base URL override in the app's own settings storage, which no documented file sets. Set it in Cursor Settings, Models."
+        }
+        "cline" => {
+            "Cline keeps its provider and base URL in VS Code's extension storage, which no documented file sets. Set them in Cline's settings panel."
+        }
+        "roo-code" => {
+            "Roo Code keeps its provider and base URL in VS Code's extension storage, which no documented file sets. Set them in Roo Code's settings panel."
+        }
+        "github-copilot" => {
+            "GitHub Copilot's own models are served by GitHub; only a custom endpoint a person adds in VS Code is read."
+        }
+        "jetbrains-ai" => {
+            "JetBrains AI Assistant keeps its providers in the IDE's settings storage, which no documented file sets."
+        }
+        "claude-desktop" => {
+            "Claude Desktop takes its gateway from the managed preference inferenceGatewayBaseUrl, which your device management tool delivers, not a file the agent may write."
+        }
+        _ => return None,
+    })
+}
+
+/// AI desktop apps the agent looks for besides `TOOLS`, each by where its vendor's installer puts it: (name, macOS
+/// bundle in /Applications, folder under %LOCALAPPDATA%\Programs, command on PATH, folder it keeps in the home).
+const OTHER_APPS: [(&str, &str, &str, &str, &str); 5] = [
+    ("chatgpt", "ChatGPT.app", "ChatGPT", "", ""),
+    (
+        "windsurf",
+        "Windsurf.app",
+        "Windsurf",
+        "windsurf",
+        ".codeium/windsurf",
+    ),
+    ("ollama", "Ollama.app", "Ollama", "ollama", ".ollama"),
+    (
+        "lm-studio",
+        "LM Studio.app",
+        "LM Studio",
+        "lms",
+        ".lmstudio",
+    ),
+    ("perplexity", "Perplexity.app", "Perplexity", "", ""),
+];
+
+/// The process each app runs as, for the apps whose process name is their own (a command line tool's is often
+/// `node`): (name, process).
+const PROCESSES: [(&str, &str); 7] = [
+    ("chatgpt", "ChatGPT"),
+    ("windsurf", "Windsurf"),
+    ("ollama", "ollama"),
+    ("lm-studio", "LM Studio"),
+    ("perplexity", "Perplexity"),
+    ("cursor", "Cursor"),
+    ("claude-desktop", "Claude"),
+];
+
+/// Every app a device profile can allow or deny: the coding tools and the desktop apps.
+pub fn app_names() -> Vec<&'static str> {
+    TOOLS
+        .into_iter()
+        .chain(OTHER_APPS.into_iter().map(|a| a.0))
+        .collect()
+}
 
 /// Whether `dir` holds an entry whose name starts with `prefix`: VS Code keeps extensions as `<id>-<version>`.
 fn has_entry(dir: &Path, prefix: &str) -> bool {
@@ -181,27 +295,33 @@ fn has_entry(dir: &Path, prefix: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Which tools are installed. With `--home` only that folder counts, so tests do not depend on the machine.
-fn installed(p: &Paths, tool: &str) -> bool {
+/// Whether a desktop app is where each OS's installer puts it: /Applications (or ~/Applications),
+/// %LOCALAPPDATA%\Programs, or a command on PATH.
+fn app_installed(p: &Paths, mac: &str, windows: &str, linux_bin: &str) -> bool {
     let h = &p.home;
-    // Where each OS's installer puts the app: /Applications (or ~/Applications), %LOCALAPPDATA%\Programs, or a
-    // command on PATH.
-    let app = |mac: &str, windows: &str, linux_bin: &str| match p.os {
+    match p.os {
         Os::Macos => {
             Path::new("/Applications").join(mac).exists() && p.system
                 || h.join("Applications").join(mac).exists()
         }
         Os::Windows => {
-            p.system
-                && std::env::var_os("LOCALAPPDATA")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| h.join("AppData").join("Local"))
-                    .join("Programs")
-                    .join(windows)
-                    .exists()
+            let programs = if p.system {
+                std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+            } else {
+                None
+            }
+            .unwrap_or_else(|| h.join("AppData").join("Local"))
+            .join("Programs");
+            !windows.is_empty() && programs.join(windows).exists()
         }
-        Os::Linux => p.system && on_path(linux_bin),
-    };
+        Os::Linux => p.system && !linux_bin.is_empty() && on_path(linux_bin),
+    }
+}
+
+/// Which tools are installed. With `--home` only that folder counts, so tests do not depend on the machine.
+fn installed(p: &Paths, tool: &str) -> bool {
+    let h = &p.home;
+    let app = |mac: &str, windows: &str, linux_bin: &str| app_installed(p, mac, windows, linux_bin);
     let bin = |name: &str| p.system && on_path(name);
     let extension = |id: &str| has_entry(&h.join(".vscode/extensions"), id);
     match tool {
@@ -211,7 +331,9 @@ fn installed(p: &Paths, tool: &str) -> bool {
         "codex" => h.join(".codex").is_dir() || bin("codex"),
         "cursor" => h.join(".cursor").is_dir() || app("Cursor.app", "cursor", "cursor"),
         "github-copilot" => extension("github.copilot") || h.join(".copilot").is_dir(),
-        "zed" => h.join(".config/zed").is_dir() || app("Zed.app", "Zed", "zed"),
+        "zed" => {
+            p.zed_settings().parent().is_some_and(Path::is_dir) || app("Zed.app", "Zed", "zed")
+        }
         "jetbrains-ai" => {
             h.join("Library/Application Support/JetBrains").is_dir()
                 || h.join(".config/JetBrains").is_dir()
@@ -227,8 +349,75 @@ fn installed(p: &Paths, tool: &str) -> bool {
                 || h.join(".config/Claude").is_dir()
                 || h.join("AppData/Roaming/Claude").is_dir()
         }
-        _ => false,
+        "opencode" => {
+            h.join(".config/opencode").is_dir() || h.join(".opencode").is_dir() || bin("opencode")
+        }
+        "continue" => h.join(".continue").is_dir() || extension("continue.continue"),
+        "cline" => extension("saoudrizwan.claude-dev"),
+        "aider" => h.join(".aider.conf.yml").exists() || bin("aider"),
+        other => OTHER_APPS.iter().find(|a| a.0 == other).is_some_and(
+            |(_, mac, windows, command, folder)| {
+                app(mac, windows, command)
+                    || !command.is_empty() && bin(command)
+                    || !folder.is_empty() && h.join(folder).is_dir()
+            },
+        ),
     }
+}
+
+/// The names of the processes running now: the file name of each, without `.exe`. Read from `ps` or `tasklist`;
+/// nothing is stopped.
+fn running(os: Os) -> Vec<String> {
+    let (command, args): (&str, &[&str]) = match os {
+        Os::Windows => ("tasklist", &["/FO", "CSV", "/NH"]),
+        _ => ("ps", &["-axo", "comm="]),
+    };
+    let Ok(out) = std::process::Command::new(command).args(args).output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|line| {
+            let name = match os {
+                // "Image Name","PID",...
+                Os::Windows => line.split("\",").next().unwrap_or("").trim_matches('"'),
+                _ => line.trim().rsplit('/').next().unwrap_or(""),
+            };
+            name.strip_suffix(".exe").unwrap_or(name).to_string()
+        })
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
+/// Every app of `app_names` that is installed or running, with what the profile's lists say of it: `denied` when
+/// the deny list names it, or an allow list is set and does not; `allowed` when the allow list names it; else
+/// `unlisted`.
+fn apps(p: &Paths, allowed: &[String], denied: &[String], processes: &[String]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for app in app_names() {
+        let is_installed = installed(p, app);
+        let is_running = PROCESSES.iter().any(|(name, process)| {
+            *name == app
+                && processes.iter().any(|r| match p.os {
+                    // `claude` is Claude Code and `Claude` the desktop app.
+                    Os::Macos => r == process,
+                    _ => r.eq_ignore_ascii_case(process),
+                })
+        });
+        if !is_installed && !is_running {
+            continue;
+        }
+        let named = |list: &[String]| list.iter().any(|a| a == app);
+        let status = if named(denied) || !allowed.is_empty() && !named(allowed) {
+            "denied"
+        } else if named(allowed) {
+            "allowed"
+        } else {
+            "unlisted"
+        };
+        out.push(json!({ "app": app, "status": status, "installed": is_installed, "running": is_running }));
+    }
+    out
 }
 
 // ---- Where each tool sends. Read from the files and settings each tool documents, nothing else. ----
@@ -342,7 +531,8 @@ fn codex_endpoints(config: &str, logged_in: bool) -> Vec<String> {
 
 /// Where a tool's configuration sends its model requests: base URLs, or a provider's own address when only a
 /// provider key or provider login is configured. Empty when the configuration names none, or keeps it where no
-/// documented file holds it (Cursor, JetBrains AI Assistant, Roo Code keep theirs in the app's own storage).
+/// documented file holds it (Cursor, JetBrains AI Assistant, Cline and Roo Code keep theirs in the app's own
+/// storage: `why_not`).
 fn endpoints(p: &Paths, tool: &str) -> Vec<String> {
     let h = &p.home;
     match tool {
@@ -379,21 +569,64 @@ fn endpoints(p: &Paths, tool: &str) -> Vec<String> {
             h.join(".codex/auth.json").exists(),
         ),
         "github-copilot" => {
-            let mut out = Vec::new();
-            for dir in ["Library/Application Support/Code/User", ".config/Code/User"] {
-                out.extend(string_values(
-                    &read(&h.join(dir).join("chatLanguageModels.json")),
-                    "url",
-                ));
-            }
+            let mut out = string_values(
+                &read(&p.config.join("Code/User/chatLanguageModels.json")),
+                "url",
+            );
             out.extend(string_values(
                 &read(&h.join(".copilot/providers.json")),
                 "baseUrl",
             ));
             out
         }
-        "zed" => string_values(&read(&h.join(".config/zed/settings.json")), "api_url"),
-        "qwen-code" => string_values(&read(&h.join(".qwen/settings.json")), "baseUrl"),
+        "zed" => string_values(&read(&p.zed_settings()), "api_url"),
+        "qwen-code" => {
+            let settings = read(&h.join(".qwen/settings.json"));
+            let mut out = string_values(&settings, "baseUrl");
+            out.extend(dotenv(&read(&h.join(".qwen/.env")), "OPENAI_BASE_URL"));
+            // A sign-in other than the OpenAI-compatible one (Qwen's own, say) does not use the base URL.
+            out.extend(
+                string_values(&settings, "selectedType")
+                    .into_iter()
+                    .filter(|t| t != "openai"),
+            );
+            out
+        }
+        "opencode" => string_values(&read(&p.opencode_config()), "baseURL"),
+        "continue" => {
+            let text = read(&h.join(".continue/config.yaml"));
+            let lines: Vec<&str> = text.lines().collect();
+            continue_models(&lines)
+                .into_iter()
+                .filter_map(|item| {
+                    let value = |key: &str| item_key(&lines, &item, key).map(|(_, v)| v);
+                    // A model with no apiBase goes to its provider's own address: named by the provider.
+                    value("apiBase").or(value("provider"))
+                })
+                .collect()
+        }
+        "aider" => {
+            let text = read(&h.join(".aider.conf.yml"));
+            let top = |key: &str| {
+                text.lines().find_map(|l| {
+                    let value = l.strip_prefix(key)?.strip_prefix(':')?;
+                    let value = value.split(" #").next().unwrap_or("").trim();
+                    Some(value.trim_matches(['"', '\'']).to_string()).filter(|v| !v.is_empty())
+                })
+            };
+            let mut out = Vec::new();
+            match top("openai-api-base") {
+                Some(url) => out.push(url),
+                None if top("openai-api-key").is_some() => {
+                    out.push("https://api.openai.com/v1".into());
+                }
+                None => {}
+            }
+            if top("anthropic-api-key").is_some() {
+                out.push("https://api.anthropic.com".into());
+            }
+            out
+        }
         "gemini-cli" => {
             if let Some(url) = dotenv(&read(&h.join(".gemini/.env")), "GOOGLE_GEMINI_BASE_URL") {
                 return vec![url];
@@ -551,6 +784,210 @@ fn env_file(current: &str, gateway: &str) -> String {
     out
 }
 
+/// A JSON settings file, comments and trailing commas allowed, with `edit` applied and every other key kept. Text
+/// the edit leaves as it was comes back untouched, comments and all; a changed file is written as plain JSON, so its
+/// comments go (the agent keeps the file as it was beside it, `backup`).
+fn json_edit(current: &str, edit: impl FnOnce(&mut Value)) -> Result<String, String> {
+    let before: Value = if current.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(&jsonc(current))
+            .map_err(|e| format!("is not JSON ({e}); fix or delete it"))?
+    };
+    if !before.is_object() {
+        return Err("is not a JSON object; fix or delete it".into());
+    }
+    let mut after = before.clone();
+    edit(&mut after);
+    if after == before {
+        return Ok(current.to_owned());
+    }
+    Ok(format!(
+        "{}\n",
+        serde_json::to_string_pretty(&after).map_err(|e| e.to_string())?
+    ))
+}
+
+/// Sets the string at `path`, keys from the root, making the objects on the way.
+fn set_at(v: &mut Value, path: &[&str], value: &str) {
+    let mut at = v;
+    for key in path {
+        if !at.is_object() {
+            *at = json!({});
+        }
+        at = &mut at[*key];
+    }
+    *at = json!(value);
+}
+
+/// OpenCode's and Kilo CLI's configuration (opencode.ai/docs/providers, kilo.ai/docs: the same `provider` table)
+/// with the built-in `openai` and `anthropic` providers sent to the gateway: `options.baseURL`, and the Gantry key
+/// read from GANTRY_KEY unless the person set a key there.
+fn opencode_config(current: &str, gateway: &str) -> Result<String, String> {
+    json_edit(current, |v| {
+        for provider in ["openai", "anthropic"] {
+            let options = ["provider", provider, "options"];
+            set_at(
+                v,
+                &[options.as_slice(), &["baseURL"]].concat(),
+                &format!("{gateway}/v1"),
+            );
+            if !v["provider"][provider]["options"]["apiKey"].is_string() {
+                set_at(
+                    v,
+                    &[options.as_slice(), &["apiKey"]].concat(),
+                    "{env:GANTRY_KEY}",
+                );
+            }
+        }
+    })
+}
+
+/// Zed's settings (zed.dev/docs/ai/llm-providers) with the OpenAI and Anthropic providers' `api_url` at the gateway.
+/// The key stays where Zed keeps it, the system keychain.
+fn zed_config(current: &str, gateway: &str) -> Result<String, String> {
+    json_edit(current, |v| {
+        set_at(
+            v,
+            &["language_models", "openai", "api_url"],
+            &format!("{gateway}/v1"),
+        );
+        set_at(v, &["language_models", "anthropic", "api_url"], gateway);
+    })
+}
+
+/// Qwen Code's settings (qwenlm.github.io/qwen-code-docs, model providers) with every `modelProviders.openai` entry's
+/// `baseUrl` at the gateway. A file with no such entry is left as it is: `OPENAI_BASE_URL` in `~/.qwen/.env` decides.
+fn qwen_settings(current: &str, gateway: &str) -> Result<String, String> {
+    json_edit(current, |v| {
+        for entry in v["modelProviders"]["openai"]
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_object_mut)
+        {
+            entry.insert("baseUrl".into(), json!(format!("{gateway}/v1")));
+        }
+    })
+}
+
+/// A flat settings file with its `name` line replaced by `line`, or `line` added at the end: a dotenv file
+/// (`sep` `=`, with or without `export`), or the top-level keys of a YAML file (`sep` `:`).
+fn set_line(current: &str, name: &str, sep: char, line: &str) -> String {
+    let mut out = String::new();
+    let mut done = false;
+    for l in current.lines() {
+        let key = if sep == '=' {
+            let t = l.trim();
+            t.strip_prefix("export ").unwrap_or(t)
+        } else {
+            l
+        };
+        let ours = key
+            .strip_prefix(name)
+            .is_some_and(|rest| rest.trim_start().starts_with(sep));
+        if !ours {
+            out.push_str(l);
+            out.push('\n');
+        } else if !done {
+            out.push_str(line);
+            out.push('\n');
+            done = true;
+        }
+    }
+    if !done {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// One item of a YAML list: its first line, the line after its last, and the column its keys start at.
+struct Item {
+    start: usize,
+    end: usize,
+    column: usize,
+}
+
+fn indent(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// The items of the top-level `models:` list of Continue's config.yaml (docs.continue.dev/reference).
+// ponytail: reads block-style YAML by its indentation, as Continue writes it; a flow-style list (`models: [{...}]`)
+// is not seen. A YAML parser that keeps comments if that bites.
+fn continue_models(lines: &[&str]) -> Vec<Item> {
+    let mut out = Vec::new();
+    let mut section = "";
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let text = line.trim_start();
+        if indent(line) == 0 && !text.starts_with(['-', '#']) && !text.is_empty() {
+            section = text.split(':').next().unwrap_or("");
+        }
+        if section != "models" || !text.starts_with("- ") {
+            i += 1;
+            continue;
+        }
+        let at = indent(line);
+        let mut end = i + 1;
+        while end < lines.len() && (lines[end].trim().is_empty() || indent(lines[end]) > at) {
+            end += 1;
+        }
+        out.push(Item {
+            start: i,
+            end,
+            column: at + 1 + indent(&text[1..]),
+        });
+        i = end;
+    }
+    out
+}
+
+/// The line and value of one of an item's own keys.
+fn item_key(lines: &[&str], item: &Item, key: &str) -> Option<(usize, String)> {
+    (item.start..item.end).find_map(|n| {
+        let line = lines[n];
+        let text = line.get(item.column..)?;
+        // The item's own keys start at its column: after the dash on its first line, after spaces on the others.
+        let before = line.get(..item.column)?.trim();
+        if !(before.is_empty() || n == item.start && before == "-") {
+            return None;
+        }
+        let value = text.strip_prefix(key)?.strip_prefix(':')?;
+        let value = value.split(" #").next().unwrap_or("").trim();
+        Some((n, value.trim_matches(['"', '\'']).to_string()))
+    })
+}
+
+/// Continue's config.yaml with `apiBase` at the gateway's `/v1` on every model of `provider: openai`, the one
+/// provider Continue documents `apiBase` for. Other models and every other line stay.
+fn continue_config(current: &str, base: &str) -> String {
+    let lines: Vec<&str> = current.lines().collect();
+    let mut out: Vec<String> = lines.iter().map(|l| (*l).to_string()).collect();
+    // From the last item up, so a line added does not move the items still to do.
+    for item in continue_models(&lines).into_iter().rev() {
+        let Some((provider_line, provider)) = item_key(&lines, &item, "provider") else {
+            continue;
+        };
+        if provider != "openai" {
+            continue;
+        }
+        match item_key(&lines, &item, "apiBase") {
+            Some((n, _)) => out[n] = format!("{}apiBase: {base}", &lines[n][..item.column]),
+            None => out.insert(
+                provider_line + 1,
+                format!("{}apiBase: {base}", " ".repeat(item.column)),
+            ),
+        }
+    }
+    if out.is_empty() {
+        return String::new();
+    }
+    out.join("\n") + "\n"
+}
+
 /// One managed file: whether it already matches, and writing it when not.
 struct Change {
     path: PathBuf,
@@ -589,6 +1026,80 @@ fn write(c: &Change, owner: Option<(u32, u32)>) -> Result<(), String> {
     Ok(())
 }
 
+/// Keeps the file as it is now beside it, as `<name>.gantry-backup`, before the agent changes it. `None` when there
+/// is no file yet.
+fn backup(path: &Path, owner: Option<(u32, u32)>) -> Result<Option<PathBuf>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut name = path.as_os_str().to_owned();
+    name.push(".gantry-backup");
+    let kept = PathBuf::from(name);
+    let err = |e: std::io::Error| format!("{} cannot be written: {e}", kept.display());
+    std::fs::copy(path, &kept).map_err(err)?;
+    #[cfg(unix)]
+    if let Some((uid, gid)) = owner {
+        std::os::unix::fs::chown(&kept, Some(uid), Some(gid)).map_err(err)?;
+    }
+    #[cfg(not(unix))]
+    let _ = owner;
+    Ok(Some(kept))
+}
+
+/// The files that point `tool` at the gateway, each as it is and as it should be. Every path and key is one the
+/// tool's own documentation names; the key or sign-in stays the person's.
+fn changes(p: &Paths, tool: &str, gateway: &str) -> Result<Vec<Change>, String> {
+    let h = &p.home;
+    let v1 = format!("{gateway}/v1");
+    Ok(match tool {
+        "claude-code" => vec![plan(p.claude_settings.clone(), |c| {
+            claude_settings(c, gateway)
+        })?],
+        "codex" => vec![plan(h.join(".codex/config.toml"), |c| {
+            Ok(codex_config(c, gateway))
+        })?],
+        "opencode" => vec![plan(p.opencode_config(), |c| opencode_config(c, gateway))?],
+        "kilo-code" => vec![plan(h.join(".config/kilo/kilo.json"), |c| {
+            opencode_config(c, gateway)
+        })?],
+        "continue" => vec![plan(h.join(".continue/config.yaml"), |c| {
+            Ok(continue_config(c, &v1))
+        })?],
+        "zed" => vec![plan(p.zed_settings(), |c| zed_config(c, gateway))?],
+        // Gemini CLI and Qwen Code read `.env` in their own folder of the home (their docs, "Environment variables
+        // and .env files").
+        "gemini-cli" => vec![plan(h.join(".gemini/.env"), |c| {
+            Ok(set_line(
+                c,
+                "GOOGLE_GEMINI_BASE_URL",
+                '=',
+                &format!("GOOGLE_GEMINI_BASE_URL={gateway}"),
+            ))
+        })?],
+        "qwen-code" => vec![
+            plan(h.join(".qwen/.env"), |c| {
+                Ok(set_line(
+                    c,
+                    "OPENAI_BASE_URL",
+                    '=',
+                    &format!("OPENAI_BASE_URL={v1}"),
+                ))
+            })?,
+            plan(h.join(".qwen/settings.json"), |c| qwen_settings(c, gateway))?,
+        ],
+        // aider.chat/docs/config/aider_conf.html: `openai-api-base` in `.aider.conf.yml` in the home.
+        "aider" => vec![plan(h.join(".aider.conf.yml"), |c| {
+            Ok(set_line(
+                c,
+                "openai-api-base",
+                ':',
+                &format!("openai-api-base: {v1}"),
+            ))
+        })?],
+        _ => Vec::new(),
+    })
+}
+
 // ---- MCP inventory: the MCP servers each tool is configured with, and whether they go through the gateway. ----
 
 /// Each MCP config file of each tool for this user: (tool, file, the key that holds the servers). Paths from each
@@ -596,11 +1107,7 @@ fn write(c: &Change, owner: Option<(u32, u32)>) -> Result<(), String> {
 /// managed-mcp), Cursor (cursor.com/docs/context/mcp), VS Code (code.visualstudio.com, MCP configuration) and Zed
 /// (zed.dev/docs/ai/mcp).
 fn mcp_files(p: &Paths) -> Vec<(&'static str, PathBuf, &'static str)> {
-    let zed = match p.os {
-        Os::Windows => p.config.join("Zed").join("settings.json"),
-        Os::Linux => p.config.join("zed").join("settings.json"),
-        Os::Macos => p.home.join(".config").join("zed").join("settings.json"),
-    };
+    let zed = p.zed_settings();
     let mut files = vec![
         (
             "claude-desktop",
@@ -767,13 +1274,187 @@ fn mcp_inventory(p: &Paths, gateway: &str) -> Vec<Value> {
     out
 }
 
+/// Whether the profile's decisions list `row`'s server, by transport and target, under `kind` (`approved` or
+/// `blocked`).
+fn decided(decisions: &Value, kind: &str, row: &Value) -> bool {
+    decisions[kind].as_array().is_some_and(|list| {
+        list.iter()
+            .any(|d| d["transport"] == row["transport"] && d["target"] == row["target"])
+    })
+}
+
+/// Applies the decisions to one list of servers: with `enforcement` `remove`, a blocked server is taken out (with
+/// `report`, the default, it stays and the report marks it); with `via_gateway`, an approved
+/// HTTP server is pointed at Gantry's MCP gateway, without the headers that held its own credential, or taken out
+/// when the list already has the gateway. Returns what was done, each as its inventory row with an `action`.
+fn enforce_list(
+    list: &mut Value,
+    tool: &str,
+    file: &Path,
+    gateway: &str,
+    decisions: &Value,
+) -> Vec<Value> {
+    let Some(servers) = list.as_object_mut() else {
+        return Vec::new();
+    };
+    let gateway_mcp = format!("{}/mcp", gateway.trim_end_matches('/'));
+    let mut has_gateway = servers
+        .iter()
+        .any(|(name, entry)| mcp_entry(tool, file, name, entry, gateway)["via_gantry"] == true);
+    let mut done = Vec::new();
+    for name in servers.keys().cloned().collect::<Vec<_>>() {
+        let Some(entry) = servers.get_mut(&name) else {
+            continue;
+        };
+        let mut row = mcp_entry(tool, file, &name, entry, gateway);
+        let blocked = decided(decisions, "blocked", &row);
+        let action = if blocked && decisions["enforcement"] == "remove" {
+            servers.remove(&name);
+            "removed"
+        } else if !blocked
+            && decisions["via_gateway"] == true
+            && row["transport"] == "http"
+            && row["via_gantry"] == false
+            && decided(decisions, "approved", &row)
+        {
+            match entry.as_object_mut() {
+                Some(entry) if !has_gateway => {
+                    for key in ["url", "serverUrl", "httpUrl"] {
+                        if entry.contains_key(key) {
+                            entry.insert(key.into(), json!(gateway_mcp));
+                        }
+                    }
+                    entry.remove("headers");
+                    has_gateway = true;
+                }
+                _ => {
+                    servers.remove(&name);
+                }
+            }
+            "rewritten"
+        } else {
+            continue;
+        };
+        row["action"] = action.into();
+        done.push(row);
+    }
+    done
+}
+
+/// Enforces the admin's MCP decisions in each tool's MCP file of this user, keeping the file as it was beside it
+/// (`<name>.gantry-backup`). Returns what was done, for the report. Files outside the home (Claude Code's managed
+/// MCP file) are the device management tool's, and stay.
+fn mcp_enforce(
+    p: &Paths,
+    gateway: &str,
+    decisions: &Value,
+    dry_run: bool,
+) -> Result<Vec<Value>, String> {
+    let mut out = Vec::new();
+    for (tool, file, key) in mcp_files(p) {
+        if !file.starts_with(&p.home) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let Ok(mut config) = serde_json::from_str::<Value>(&jsonc(&text)) else {
+            continue;
+        };
+        let mut done = Vec::new();
+        if let Some(list) = config.get_mut(key) {
+            done.extend(enforce_list(list, tool, &file, gateway, decisions));
+        }
+        // Claude Code keeps servers added in one project under projects.<path>.mcpServers.
+        if file.ends_with(".claude.json")
+            && let Some(projects) = config.get_mut("projects").and_then(Value::as_object_mut)
+        {
+            for (_, project) in projects.iter_mut() {
+                if let Some(list) = project.get_mut(key) {
+                    done.extend(enforce_list(list, tool, &file, gateway, decisions));
+                }
+            }
+        }
+        if done.is_empty() {
+            continue;
+        }
+        for row in &done {
+            println!(
+                "{} MCP server \"{}\" ({}) in {} ({tool}): {}",
+                if dry_run { "would change" } else { "changed" },
+                row["server"].as_str().unwrap_or(""),
+                row["target"].as_str().unwrap_or(""),
+                file.display(),
+                row["action"].as_str().unwrap_or("")
+            );
+        }
+        if dry_run {
+            continue;
+        }
+        let kept = backup(&file, p.owner)?;
+        let change = Change {
+            desired: format!(
+                "{}\n",
+                serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?
+            ),
+            path: file,
+            matches: false,
+        };
+        write(&change, p.owner)?;
+        for mut row in done {
+            row["backup"] = kept
+                .as_ref()
+                .map(|k| k.display().to_string())
+                .unwrap_or_default()
+                .into();
+            out.push(row);
+        }
+    }
+    Ok(out)
+}
+
+/// The device profile, as `GET /device/profile` answers it.
+struct Profile {
+    gateway: String,
+    /// The tools to point at the gateway.
+    manage: Vec<String>,
+    /// The admin's MCP decisions: `approved`, `blocked`, `via_gateway`, and `enforcement` (`report` or `remove`).
+    mcp: Value,
+    apps_allowed: Vec<String>,
+    apps_denied: Vec<String>,
+}
+
+impl Profile {
+    fn parse(profile: &Value) -> Result<Self, String> {
+        let list = |v: &Value| -> Vec<String> {
+            v.as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| t.as_str().map(str::to_owned))
+                .collect()
+        };
+        Ok(Self {
+            gateway: profile["gateway_url"]
+                .as_str()
+                .ok_or("the profile has no gateway_url")?
+                .trim_end_matches('/')
+                .to_owned(),
+            manage: list(&profile["tools"]),
+            mcp: profile["mcp"].clone(),
+            apps_allowed: list(&profile["apps"]["allowed"]),
+            apps_denied: list(&profile["apps"]["denied"]),
+        })
+    }
+}
+
 /// Tools this agent has configured before, kept so a later mismatch counts as drift, not first setup.
 fn applied_path(p: &Paths) -> PathBuf {
     p.home.join(".config/gantry/device-applied")
 }
 
 /// Applies the profile once and returns the report for the control plane.
-fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<Value, String> {
+fn cycle(p: &Paths, profile: &Profile, dry_run: bool) -> Result<Value, String> {
+    let (gateway, manage) = (profile.gateway.as_str(), &profile.manage);
     let applied_file = applied_path(p);
     let mut applied: Vec<String> = std::fs::read_to_string(&applied_file)
         .unwrap_or_default()
@@ -785,41 +1466,36 @@ fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<V
     for tool in TOOLS {
         let inst = installed(p, tool);
         let managed = inst && manage.iter().any(|m| m == tool);
-        let change = match (managed, tool) {
-            (true, "claude-code") => Some(plan(p.claude_settings.clone(), |c| {
-                claude_settings(c, gateway)
-            })?),
-            (true, "codex") => Some(plan(p.home.join(".codex/config.toml"), |c| {
-                Ok(codex_config(c, gateway))
-            })?),
-            _ => None,
+        let managed = managed && MANAGEABLE.contains(&tool);
+        let wanted = if managed {
+            changes(p, tool, gateway)?
+        } else {
+            Vec::new()
         };
         env_needed |= managed;
+        let was_applied = applied.iter().any(|a| a == tool);
         let mut drift = false;
-        if let Some(c) = change {
-            drift = !c.matches && applied.iter().any(|a| a == tool);
-            if c.matches {
-                // Nothing to write.
-            } else if dry_run {
+        for c in wanted.iter().filter(|c| !c.matches) {
+            drift = was_applied;
+            if dry_run {
                 println!("would write {} ({tool})", c.path.display());
-            } else {
-                write(
-                    &c,
-                    if c.path.starts_with(&p.home) {
-                        p.owner
-                    } else {
-                        None
-                    },
-                )?;
-                println!(
-                    "{} {} ({tool})",
-                    if drift { "re-applied" } else { "wrote" },
-                    c.path.display()
-                );
-                if !applied.iter().any(|a| a == tool) {
-                    applied.push(tool.to_owned());
-                }
+                continue;
             }
+            let owner = if c.path.starts_with(&p.home) {
+                p.owner
+            } else {
+                None
+            };
+            backup(&c.path, owner)?;
+            write(c, owner)?;
+            println!(
+                "{} {} ({tool})",
+                if drift { "re-applied" } else { "wrote" },
+                c.path.display()
+            );
+        }
+        if managed && !dry_run && !was_applied {
+            applied.push(tool.to_owned());
         }
         // Read back after writing, so the report says what the tool will do now.
         let (state, direct) = if inst {
@@ -827,14 +1503,19 @@ fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<V
         } else {
             ("not_installed", Vec::new())
         };
-        tools.push(json!({
+        let mut row = json!({
             "tool": tool,
             "state": state,
             "installed": inst,
             "configured": state == "gantry",
             "drift": drift,
             "endpoints": direct,
-        }));
+        });
+        // A tool no documented file configures stays `installed`, and the report says why.
+        if let (true, Some(why)) = (state == "installed", why_not(tool)) {
+            row["note"] = why.into();
+        }
+        tools.push(row);
     }
     if env_needed {
         let c = plan(p.home.join(".config/gantry/env"), |c| {
@@ -864,6 +1545,13 @@ fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<V
         .unwrap_or_default();
     let host = hostname();
     let email = person(&p.home);
+    // Blocked servers go before the inventory is read, so the report lists what the tools have now.
+    let mcp_actions = mcp_enforce(p, gateway, &profile.mcp, dry_run)?;
+    let mut mcp = json!(mcp_inventory(p, gateway));
+    for warning in mcp_decided(&mut mcp, &profile.mcp) {
+        eprintln!("device agent: {warning}");
+    }
+    let processes = if p.system { running(p.os) } else { Vec::new() };
     Ok(json!({
         "device_id": format!("{host}:{os_user}"),
         "hostname": host,
@@ -872,7 +1560,9 @@ fn cycle(p: &Paths, gateway: &str, manage: &[String], dry_run: bool) -> Result<V
         "agent_version": env!("CARGO_PKG_VERSION"),
         "os": format!("{:?}", p.os).to_lowercase(),
         "tools": tools,
-        "mcp": mcp_inventory(p, gateway),
+        "mcp": mcp,
+        "mcp_actions": mcp_actions,
+        "apps": apps(p, &profile.apps_allowed, &profile.apps_denied, &processes),
     }))
 }
 
@@ -899,18 +1589,13 @@ fn hostname() -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-/// Marks each MCP server of the report with the admin's decision from the profile (`approved`, `blocked`, or
-/// `pending` when there is none), and says which blocked ones this user has configured. The agent does not edit the
-/// tools' MCP files: the person, or the device management tool, removes a blocked server.
-fn mcp_decided(report: &mut Value, decisions: &Value) -> Vec<String> {
-    let listed = |kind: &str, row: &Value| {
-        decisions[kind].as_array().is_some_and(|list| {
-            list.iter()
-                .any(|d| d["transport"] == row["transport"] && d["target"] == row["target"])
-        })
-    };
+/// Marks each MCP server of the inventory with the admin's decision from the profile (`approved`, `blocked`, or
+/// `pending` when there is none), and says which blocked ones this user still has: those of a dry run, and those in
+/// a file outside the home, which the agent leaves to the device management tool.
+fn mcp_decided(inventory: &mut Value, decisions: &Value) -> Vec<String> {
+    let listed = |kind: &str, row: &Value| decided(decisions, kind, row);
     let mut warnings = Vec::new();
-    for row in report["mcp"].as_array_mut().into_iter().flatten() {
+    for row in inventory.as_array_mut().into_iter().flatten() {
         if row.get("server").is_none() {
             continue;
         }
@@ -956,22 +1641,7 @@ fn once(agent: &ureq::Agent, opts: &Options) -> Result<(), String> {
         .map_err(call_err)?
         .into_json()
         .map_err(|e| e.to_string())?;
-    let gateway = profile["gateway_url"]
-        .as_str()
-        .ok_or("the profile has no gateway_url")?
-        .trim_end_matches('/');
-    let manage: Vec<String> = profile["tools"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|t| t.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut report = cycle(&p, gateway, &manage, opts.dry_run)?;
-    for warning in mcp_decided(&mut report, &profile["mcp"]) {
-        eprintln!("device agent: {warning}");
-    }
+    let report = cycle(&p, &Profile::parse(&profile)?, opts.dry_run)?;
     if opts.dry_run {
         println!("would report {report}");
         return Ok(());
@@ -1006,6 +1676,32 @@ mod tests {
     use super::*;
 
     const GW: &str = "https://gw.example.com";
+
+    /// A profile that manages `manage` at `GW`, with no MCP decision and no app list.
+    fn profile(manage: &[&str]) -> Profile {
+        Profile {
+            gateway: GW.into(),
+            manage: manage.iter().map(|t| (*t).to_string()).collect(),
+            mcp: Value::Null,
+            apps_allowed: Vec::new(),
+            apps_denied: Vec::new(),
+        }
+    }
+
+    /// An empty home folder of this test, with one OS's paths whatever machine runs the test.
+    fn home_of(test: &str, os: Os) -> Paths {
+        let home =
+            std::env::temp_dir().join(format!("gantry-device-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        user_paths(os, home, false)
+    }
+
+    fn tool_of(report: &Value, tool: &str) -> Value {
+        report["tools"]
+            .as_array()
+            .and_then(|a| a.iter().find(|x| x["tool"] == tool).cloned())
+            .unwrap_or_default()
+    }
 
     #[test]
     fn claude_settings_keep_other_keys() -> Result<(), String> {
@@ -1050,19 +1746,14 @@ mod tests {
         std::fs::create_dir_all(home.join(".claude")).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(home.join(".cursor")).map_err(|e| e.to_string())?;
         let p = paths(Some(&home))?;
-        let manage = vec!["claude-code".to_owned(), "codex".to_owned()];
-        let tool = |r: &Value, t: &str| {
-            r["tools"]
-                .as_array()
-                .and_then(|a| a.iter().find(|x| x["tool"] == t).cloned())
-                .unwrap_or_default()
-        };
+        let manage = profile(&["claude-code", "codex"]);
+        let tool = tool_of;
 
-        let dry = cycle(&p, GW, &manage, true)?;
+        let dry = cycle(&p, &manage, true)?;
         assert_eq!(tool(&dry, "claude-code")["configured"], false);
         assert!(!p.claude_settings.exists(), "dry run writes nothing");
 
-        let r = cycle(&p, GW, &manage, false)?;
+        let r = cycle(&p, &manage, false)?;
         assert_eq!(
             tool(&r, "claude-code"),
             json!({"tool":"claude-code","state":"gantry","installed":true,"configured":true,"drift":false,"endpoints":[]})
@@ -1070,20 +1761,25 @@ mod tests {
         assert_eq!(tool(&r, "codex")["state"], "not_installed");
         assert_eq!(
             tool(&r, "cursor"),
-            json!({"tool":"cursor","state":"installed","installed":true,"configured":false,"drift":false,"endpoints":[]})
+            json!({"tool":"cursor","state":"installed","installed":true,"configured":false,"drift":false,"endpoints":[],"note":why_not("cursor")})
+        );
+        assert!(
+            tool(&r, "cursor")["note"]
+                .as_str()
+                .is_some_and(|n| n.contains("Cursor Settings"))
         );
         assert_eq!(r["tools"].as_array().map(Vec::len), Some(TOOLS.len()));
         assert!(home.join(".config/gantry/env").exists());
 
         std::fs::write(&p.claude_settings, "{}").map_err(|e| e.to_string())?;
-        let r = cycle(&p, GW, &manage, false)?;
+        let r = cycle(&p, &manage, false)?;
         assert_eq!(tool(&r, "claude-code")["drift"], true);
         assert!(
             std::fs::read_to_string(&p.claude_settings)
                 .map_err(|e| e.to_string())?
                 .contains(GW)
         );
-        let r = cycle(&p, GW, &manage, false)?;
+        let r = cycle(&p, &manage, false)?;
         assert_eq!(tool(&r, "claude-code")["drift"], false);
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
@@ -1100,9 +1796,9 @@ mod tests {
     /// Each tool's documented configuration, pointed at a provider, reads as `direct`; at the gateway, as `gantry`.
     #[test]
     fn tools_configured_for_a_provider_report_direct() -> Result<(), String> {
-        let home =
-            std::env::temp_dir().join(format!("gantry-device-direct-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&home);
+        // macOS paths: VS Code's and Claude Desktop's files are under Library.
+        let p = home_of("direct", Os::Macos);
+        let home = p.home.clone();
         let h = &home;
         put(
             h,
@@ -1157,9 +1853,8 @@ mod tests {
             "Library/Managed Preferences/com.anthropic.claudefordesktop.plist",
             "<plist><dict><key>inferenceProvider</key><string>gateway</string><key>inferenceGatewayBaseUrl</key>\n<string>https://other-gateway.example.net</string></dict></plist>",
         )?;
-        let p = paths(Some(h))?;
         // Inspect only: nothing is managed.
-        let r = cycle(&p, GW, &[], true)?;
+        let r = cycle(&p, &profile(&[]), true)?;
         let state = |t: &str| {
             r["tools"]
                 .as_array()
@@ -1206,8 +1901,8 @@ mod tests {
         assert_eq!(state("cursor").0, "not_installed");
 
         // Managing Claude Code and Codex turns both to the gateway.
-        let manage = vec!["claude-code".to_owned(), "codex".to_owned()];
-        let r = cycle(&p, GW, &manage, false)?;
+        let manage = profile(&["claude-code", "codex"]);
+        let r = cycle(&p, &manage, false)?;
         for t in ["claude-code", "codex"] {
             let x = r["tools"]
                 .as_array()
@@ -1229,6 +1924,14 @@ mod tests {
         assert!(files.contains(&home.join("AppData/Roaming/Code/User/mcp.json")));
         assert!(files.contains(&home.join("AppData/Roaming/Zed/settings.json")));
         assert_eq!(win.claude_settings, home.join(".claude/settings.json"));
+        assert_eq!(
+            win.zed_settings(),
+            home.join("AppData/Roaming/Zed/settings.json")
+        );
+        assert_eq!(
+            win.opencode_config(),
+            home.join(".config/opencode/opencode.json")
+        );
         assert_eq!(
             Os::Windows.managed_dir(),
             PathBuf::from(r"C:\Program Files\ClaudeCode")
@@ -1326,7 +2029,7 @@ mod tests {
             "approved": [{"transport": "http", "target": "https://gw.example.com/mcp"}],
             "blocked": [{"transport": "http", "target": "https://api.githubcopilot.com/mcp"}]
         });
-        let warnings = mcp_decided(&mut report, &decisions);
+        let warnings = mcp_decided(&mut report["mcp"], &decisions);
         let decision = |i: usize| report["mcp"][i]["decision"].clone();
         assert_eq!(
             (decision(0), decision(1), decision(2), decision(3)),
@@ -1339,6 +2042,467 @@ mod tests {
         );
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("github") && warnings[0].contains("/h/.cursor/mcp.json"));
+    }
+
+    /// Every tool the agent can configure, each from a provider's address or none to the gateway, through the file
+    /// its docs name; then changed back by hand, which is drift, and repaired.
+    #[test]
+    fn each_manageable_tool_is_pointed_at_the_gateway_and_repaired() -> Result<(), String> {
+        let p = home_of("manage", Os::Linux);
+        let h = &p.home;
+        put(
+            h,
+            ".claude/settings.json",
+            r#"{"env":{"ANTHROPIC_API_KEY":"sk-ant-x"}}"#,
+        )?;
+        put(h, ".codex/config.toml", "model = \"o3\"\n")?;
+        put(h, ".codex/auth.json", "{}")?;
+        put(
+            h,
+            ".config/opencode/opencode.json",
+            "// mine\n{\"theme\": \"dark\"}\n",
+        )?;
+        put(h, ".config/kilo/kilo.json", "{}")?;
+        put(
+            h,
+            ".continue/config.yaml",
+            "name: Mine\nmodels:\n  - name: four\n    provider: openai\n    model: gpt-4o\n    apiBase: https://api.openai.com/v1\n    roles:\n      - chat\n  - provider: openai\n    model: gpt-4o-mini\ncontext:\n  - provider: code\n",
+        )?;
+        put(
+            h,
+            ".config/zed/settings.json",
+            "// Zed settings\n{ \"theme\": \"One\", \"language_models\": { \"openai\": { \"api_url\": \"https://api.openai.com/v1\" } }, }",
+        )?;
+        put(
+            h,
+            ".gemini/settings.json",
+            r#"{"security":{"auth":{"selectedType":"gemini-api-key"}}}"#,
+        )?;
+        put(
+            h,
+            ".qwen/settings.json",
+            r#"{"modelProviders":{"openai":[{"id":"q","envKey":"K","baseUrl":"https://dashscope.aliyuncs.com/compatible-mode/v1"}]},"security":{"auth":{"selectedType":"openai"}}}"#,
+        )?;
+        put(
+            h,
+            ".aider.conf.yml",
+            "openai-api-key: sk-x\nmodel: gpt-4o\n",
+        )?;
+        put(h, ".cursor/mcp.json", "{}")?;
+        put(
+            h,
+            ".vscode/extensions/saoudrizwan.claude-dev-3.0.0/package.json",
+            "{}",
+        )?;
+        put(
+            h,
+            ".vscode/extensions/rooveterinaryinc.roo-cline-3.0.0/package.json",
+            "{}",
+        )?;
+
+        let before = cycle(&p, &profile(&[]), true)?;
+        for t in [
+            "claude-code",
+            "codex",
+            "continue",
+            "zed",
+            "gemini-cli",
+            "qwen-code",
+            "aider",
+        ] {
+            assert_eq!(tool_of(&before, t)["state"], "direct", "{t}");
+        }
+
+        let all = profile(&MANAGEABLE);
+        let r = cycle(&p, &all, false)?;
+        for t in MANAGEABLE {
+            let x = tool_of(&r, t);
+            assert_eq!(x["state"], "gantry", "{t}: {x}");
+            assert_eq!(x["drift"], false, "{t}: first setup is not drift");
+        }
+        // What no documented file configures stays `installed`, with the reason.
+        for t in ["cursor", "cline", "roo-code"] {
+            let x = tool_of(&r, t);
+            assert_eq!(x["state"], "installed", "{t}: {x}");
+            assert!(
+                x["note"]
+                    .as_str()
+                    .is_some_and(|n| n.contains("no documented file")),
+                "{x}"
+            );
+        }
+        // Each file holds the gateway where the tool's docs say, and keeps what else was there.
+        let text = |file: &str| read(&h.join(file));
+        let json_of = |file: &str| serde_json::from_str::<Value>(&text(file)).unwrap_or_default();
+        let opencode = json_of(".config/opencode/opencode.json");
+        assert_eq!(opencode["theme"], "dark");
+        assert_eq!(
+            opencode["provider"]["openai"]["options"]["baseURL"],
+            format!("{GW}/v1")
+        );
+        assert_eq!(
+            opencode["provider"]["anthropic"]["options"]["apiKey"],
+            "{env:GANTRY_KEY}"
+        );
+        assert_eq!(
+            text(".config/opencode/opencode.json.gantry-backup"),
+            "// mine\n{\"theme\": \"dark\"}\n",
+            "the file as it was is kept"
+        );
+        assert_eq!(
+            json_of(".config/kilo/kilo.json")["provider"]["openai"]["options"]["baseURL"],
+            format!("{GW}/v1")
+        );
+        assert_eq!(
+            text(".continue/config.yaml"),
+            format!(
+                "name: Mine\nmodels:\n  - name: four\n    provider: openai\n    model: gpt-4o\n    apiBase: {GW}/v1\n    roles:\n      - chat\n  - provider: openai\n    apiBase: {GW}/v1\n    model: gpt-4o-mini\ncontext:\n  - provider: code\n"
+            )
+        );
+        let zed = json_of(".config/zed/settings.json");
+        assert_eq!(zed["theme"], "One");
+        assert_eq!(
+            zed["language_models"]["openai"]["api_url"],
+            format!("{GW}/v1")
+        );
+        assert_eq!(zed["language_models"]["anthropic"]["api_url"], GW);
+        assert_eq!(
+            text(".gemini/.env"),
+            format!("GOOGLE_GEMINI_BASE_URL={GW}\n")
+        );
+        assert_eq!(text(".qwen/.env"), format!("OPENAI_BASE_URL={GW}/v1\n"));
+        let qwen = json_of(".qwen/settings.json");
+        assert_eq!(
+            qwen["modelProviders"]["openai"][0]["baseUrl"],
+            format!("{GW}/v1")
+        );
+        assert_eq!(qwen["modelProviders"]["openai"][0]["envKey"], "K");
+        assert_eq!(
+            text(".aider.conf.yml"),
+            format!("openai-api-key: sk-x\nmodel: gpt-4o\nopenai-api-base: {GW}/v1\n")
+        );
+
+        // A second pass changes nothing.
+        let zed_text = text(".config/zed/settings.json");
+        let r = cycle(&p, &all, false)?;
+        assert!(MANAGEABLE.iter().all(|t| tool_of(&r, t)["drift"] == false));
+        assert_eq!(text(".config/zed/settings.json"), zed_text);
+
+        // Someone points each back at a provider: drift, repaired in the same pass.
+        put(h, ".claude/settings.json", "{}")?;
+        put(h, ".codex/config.toml", "model = \"o3\"\n")?;
+        put(
+            h,
+            ".config/opencode/opencode.json",
+            r#"{"provider":{"openai":{"options":{"baseURL":"https://api.openai.com/v1"}}}}"#,
+        )?;
+        put(h, ".config/kilo/kilo.json", "{}")?;
+        put(
+            h,
+            ".continue/config.yaml",
+            "models:\n  - provider: openai\n    apiBase: https://api.openai.com/v1\n",
+        )?;
+        put(
+            h,
+            ".config/zed/settings.json",
+            r#"{"language_models":{"anthropic":{"api_url":"https://api.anthropic.com"}}}"#,
+        )?;
+        put(
+            h,
+            ".gemini/.env",
+            "export GOOGLE_GEMINI_BASE_URL=https://generativelanguage.googleapis.com\nGEMINI_API_KEY=k\n",
+        )?;
+        put(h, ".qwen/.env", "")?;
+        put(
+            h,
+            ".aider.conf.yml",
+            "openai-api-base: https://api.openai.com/v1\n",
+        )?;
+        let r = cycle(&p, &all, false)?;
+        for t in MANAGEABLE {
+            let x = tool_of(&r, t);
+            assert_eq!(
+                (x["state"].clone(), x["drift"].clone()),
+                (json!("gantry"), json!(true)),
+                "{t}: {x}"
+            );
+        }
+        assert_eq!(
+            text(".gemini/.env"),
+            format!("GOOGLE_GEMINI_BASE_URL={GW}\nGEMINI_API_KEY=k\n")
+        );
+        let r = cycle(&p, &all, false)?;
+        assert!(MANAGEABLE.iter().all(|t| tool_of(&r, t)["drift"] == false));
+
+        // A tool the profile does not name is left alone.
+        put(
+            h,
+            ".aider.conf.yml",
+            "openai-api-base: https://api.openai.com/v1\n",
+        )?;
+        let r = cycle(&p, &profile(&["codex"]), false)?;
+        assert_eq!(tool_of(&r, "aider")["state"], "direct");
+        let _ = std::fs::remove_dir_all(h);
+        Ok(())
+    }
+
+    #[test]
+    fn continue_models_of_another_provider_stay_and_read_direct() {
+        let config = "models:\n- name: claude\n  provider: anthropic\n  model: claude-sonnet-4-5\n- name: \"local\"\n  provider: 'openai'   # ours\n  apiBase: \"http://localhost:1234/v1\"\nmcpServers:\n  - name: x\n    provider: openai\n";
+        let out = continue_config(config, "https://gw.example.com/v1");
+        assert_eq!(
+            out,
+            "models:\n- name: claude\n  provider: anthropic\n  model: claude-sonnet-4-5\n- name: \"local\"\n  provider: 'openai'   # ours\n  apiBase: https://gw.example.com/v1\nmcpServers:\n  - name: x\n    provider: openai\n"
+        );
+        assert_eq!(continue_config(&out, "https://gw.example.com/v1"), out);
+        assert_eq!(continue_config("", "x"), "", "no file is made for no model");
+        let lines: Vec<&str> = out.lines().collect();
+        let models = continue_models(&lines);
+        assert_eq!(models.len(), 2);
+        assert_eq!(item_key(&lines, &models[0], "apiBase"), None);
+        assert_eq!(
+            item_key(&lines, &models[0], "provider").map(|(_, v)| v),
+            Some("anthropic".into())
+        );
+    }
+
+    #[test]
+    fn a_settings_file_that_is_not_json_is_named_and_left() -> Result<(), String> {
+        let p = home_of("badjson", Os::Linux);
+        put(&p.home, ".config/zed/settings.json", "{ not json")?;
+        let Err(e) = cycle(&p, &profile(&["zed"]), false) else {
+            return Err("a broken settings file was rewritten".into());
+        };
+        assert!(
+            e.contains("settings.json") && e.contains("fix or delete it"),
+            "{e}"
+        );
+        assert_eq!(
+            read(&p.home.join(".config/zed/settings.json")),
+            "{ not json"
+        );
+        let _ = std::fs::remove_dir_all(&p.home);
+        Ok(())
+    }
+
+    /// By default a blocked server is only reported. With `enforcement` `remove`, it leaves each tool's MCP file,
+    /// the file as it was is kept beside it, and the report says what was done. With `via_gateway`, an approved HTTP
+    /// server is pointed at Gantry's MCP gateway.
+    #[test]
+    fn blocked_mcp_servers_are_reported_or_removed_with_a_backup_and_approved_ones_go_through_the_gateway()
+    -> Result<(), String> {
+        let p = home_of("enforce", Os::Linux);
+        let h = &p.home;
+        let desktop = r#"{"mcpServers":{"files":{"command":"/usr/bin/npx","args":["-y","@x/fs"]},"shady":{"command":"shady-mcp"}},"theme":"dark"}"#;
+        put(h, ".config/Claude/claude_desktop_config.json", desktop)?;
+        put(
+            h,
+            ".claude.json",
+            r#"{"numStartups":7,"mcpServers":{"github":{"type":"http","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer x"}}},"projects":{"/repo":{"mcpServers":{"shady":{"command":"/opt/shady-mcp"},"docs":{"type":"http","url":"https://docs.example.com/mcp"}}}}}"#,
+        )?;
+        put(
+            h,
+            ".cursor/mcp.json",
+            r#"{"mcpServers":{"gh":{"url":"https://api.githubcopilot.com/mcp"},"docs":{"url":"https://docs.example.com/mcp?token=abc"}}}"#,
+        )?;
+        put(
+            h,
+            ".config/Code/User/mcp.json",
+            "{\n  // mine\n  \"servers\": {\"shady\": {\"type\": \"stdio\", \"command\": \"shady-mcp\"}, \"ok\": {\"type\": \"http\", \"url\": \"https://gw.example.com/mcp\"},},\n}",
+        )?;
+        put(
+            h,
+            ".config/zed/settings.json",
+            r#"{"theme":"One","context_servers":{"shady":{"command":{"path":"shady-mcp","args":[]}},"pending":{"command":"other"}}}"#,
+        )?;
+        let mut all = profile(&[]);
+        all.mcp = json!({
+            "blocked": [{"transport": "stdio", "target": "shady-mcp"}],
+            "approved": [
+                {"transport": "http", "target": "https://api.githubcopilot.com/mcp"},
+                {"transport": "http", "target": "https://docs.example.com/mcp"}
+            ],
+        });
+
+        // A dry run changes no file and says what is blocked.
+        let dry = cycle(&p, &all, true)?;
+        assert_eq!(dry["mcp_actions"], json!([]));
+        assert_eq!(
+            read(&h.join(".config/Claude/claude_desktop_config.json")),
+            desktop
+        );
+        assert!(
+            dry["mcp"].as_array().is_some_and(|m| m
+                .iter()
+                .filter(|r| r["decision"] == "blocked")
+                .count()
+                == 4),
+            "{dry}"
+        );
+
+        // Report mode, the default: each blocked server is marked in the report and no file changes.
+        let reported = cycle(&p, &all, false)?;
+        assert_eq!(reported["mcp_actions"], json!([]));
+        assert!(
+            reported["mcp"].as_array().is_some_and(|m| m
+                .iter()
+                .filter(|r| r["decision"] == "blocked")
+                .count()
+                == 4),
+            "{reported}"
+        );
+        assert_eq!(
+            read(&h.join(".config/Claude/claude_desktop_config.json")),
+            desktop
+        );
+        assert!(
+            !h.join(".config/Claude/claude_desktop_config.json.gantry-backup")
+                .exists()
+        );
+
+        all.mcp["enforcement"] = json!("remove");
+        let r = cycle(&p, &all, false)?;
+        let actions = r["mcp_actions"].as_array().cloned().unwrap_or_default();
+        assert_eq!(actions.len(), 4, "{actions:?}");
+        assert!(
+            actions
+                .iter()
+                .all(|a| a["action"] == "removed" && a["server"] == "shady")
+        );
+        let tools: Vec<&str> = actions.iter().filter_map(|a| a["tool"].as_str()).collect();
+        assert_eq!(tools, ["claude-desktop", "claude-code", "vscode", "zed"]);
+        // As paths, so Windows' separators compare equal.
+        assert_eq!(
+            actions[0]["backup"].as_str().map(PathBuf::from),
+            Some(h.join(".config/Claude/claude_desktop_config.json.gantry-backup"))
+        );
+        assert_eq!(
+            read(&h.join(".config/Claude/claude_desktop_config.json.gantry-backup")),
+            desktop
+        );
+        let json_of =
+            |file: &str| serde_json::from_str::<Value>(&read(&h.join(file))).unwrap_or_default();
+        let desktop_now = json_of(".config/Claude/claude_desktop_config.json");
+        assert_eq!(desktop_now["theme"], "dark");
+        assert!(
+            desktop_now["mcpServers"]["shady"].is_null()
+                && desktop_now["mcpServers"]["files"].is_object()
+        );
+        let claude = json_of(".claude.json");
+        assert_eq!(claude["numStartups"], 7);
+        assert!(claude["projects"]["/repo"]["mcpServers"]["shady"].is_null());
+        assert!(claude["projects"]["/repo"]["mcpServers"]["docs"].is_object());
+        assert!(json_of(".config/Code/User/mcp.json")["servers"]["shady"].is_null());
+        let zed = json_of(".config/zed/settings.json");
+        assert!(
+            zed["context_servers"]["shady"].is_null()
+                && zed["context_servers"]["pending"].is_object()
+        );
+        // Nothing blocked is left, an approved server stays where it points, and a second pass does nothing.
+        assert!(
+            r["mcp"]
+                .as_array()
+                .is_some_and(|m| m.iter().all(|x| x["decision"] != "blocked")),
+            "{r}"
+        );
+        assert_eq!(
+            claude["mcpServers"]["github"]["url"],
+            "https://api.githubcopilot.com/mcp/"
+        );
+        assert_eq!(cycle(&p, &all, false)?["mcp_actions"], json!([]));
+
+        // The profile sends approved HTTP servers through the gateway: one entry per file becomes the gateway,
+        // without the header that held the server's own credential; another approved one beside it goes.
+        all.mcp["via_gateway"] = json!(true);
+        let r = cycle(&p, &all, false)?;
+        let actions = r["mcp_actions"].as_array().cloned().unwrap_or_default();
+        assert_eq!(actions.len(), 4, "{actions:?}");
+        assert!(actions.iter().all(|a| a["action"] == "rewritten"));
+        let claude = json_of(".claude.json");
+        assert_eq!(
+            claude["mcpServers"]["github"],
+            json!({"type": "http", "url": "https://gw.example.com/mcp"})
+        );
+        assert_eq!(
+            claude["projects"]["/repo"]["mcpServers"]["docs"]["url"],
+            "https://gw.example.com/mcp"
+        );
+        let cursor = json_of(".cursor/mcp.json");
+        assert_eq!(
+            cursor["mcpServers"],
+            json!({"gh": {"url": "https://gw.example.com/mcp"}})
+        );
+        assert!(!read(&h.join(".cursor/mcp.json")).contains("token=abc"));
+        assert!(
+            r["mcp"].as_array().is_some_and(|m| m
+                .iter()
+                .filter(|x| x["transport"] == "http")
+                .all(|x| x["via_gantry"] == true)),
+            "{r}"
+        );
+        assert_eq!(cycle(&p, &all, false)?["mcp_actions"], json!([]));
+        let _ = std::fs::remove_dir_all(h);
+        Ok(())
+    }
+
+    #[test]
+    fn installed_apps_are_reported_as_the_profile_allows_or_denies_them() -> Result<(), String> {
+        let p = home_of("apps", Os::Macos);
+        let h = &p.home;
+        put(h, "Applications/ChatGPT.app/Contents/Info.plist", "")?;
+        put(h, ".ollama/history", "")?;
+        put(h, ".cursor/mcp.json", "{}")?;
+        let status = |r: &Value, app: &str| {
+            r["apps"]
+                .as_array()
+                .and_then(|a| a.iter().find(|x| x["app"] == app))
+                .map(|x| x["status"].clone())
+                .unwrap_or_default()
+        };
+        let mut lists = profile(&[]);
+        let r = cycle(&p, &lists, true)?;
+        assert_eq!(r["apps"].as_array().map(Vec::len), Some(3), "{}", r["apps"]);
+        assert_eq!(status(&r, "chatgpt"), "unlisted");
+        assert_eq!(
+            r["apps"][0],
+            json!({"app": "cursor", "status": "unlisted", "installed": true, "running": false})
+        );
+
+        lists.apps_denied = vec!["chatgpt".into()];
+        let r = cycle(&p, &lists, true)?;
+        assert_eq!(
+            (status(&r, "chatgpt"), status(&r, "ollama")),
+            (json!("denied"), json!("unlisted"))
+        );
+
+        // With an allow list, what it does not name is denied.
+        lists.apps_denied.clear();
+        lists.apps_allowed = vec!["cursor".into()];
+        let r = cycle(&p, &lists, true)?;
+        assert_eq!(
+            (
+                status(&r, "cursor"),
+                status(&r, "chatgpt"),
+                status(&r, "ollama")
+            ),
+            (json!("allowed"), json!("denied"), json!("denied"))
+        );
+
+        // A running app counts though no install was found; `claude` (Claude Code) is not the desktop app on macOS.
+        let found = apps(
+            &p,
+            &[],
+            &["perplexity".into()],
+            &["Perplexity".into(), "claude".into()],
+        );
+        assert!(found.contains(&json!({"app": "perplexity", "status": "denied", "installed": false, "running": true})), "{found:?}");
+        assert!(!found.iter().any(|a| a["app"] == "claude-desktop"));
+        assert!(
+            app_names().contains(&"lm-studio")
+                && app_names().len() == TOOLS.len() + OTHER_APPS.len()
+        );
+        let _ = std::fs::remove_dir_all(h);
+        Ok(())
     }
 
     #[test]

@@ -60,9 +60,9 @@ MCP calls (`/mcp`) carry `user_agent` too, so an MCP client counts under its too
 
 ## Devices: tools that bypass Gantry
 
-The device agent of Gantry Enterprise (`gantry device`, license feature `devices`) reads each coding tool's documented configuration on every enrolled machine and reports one state per tool: `not_installed`, `installed`, `gantry` (pointed at the gateway) or `direct` (pointed at a provider, or holding a provider key or login). See [Devices](/operations/devices/) for enrolment and what is read for each tool. The agent runs on macOS, Linux and Windows, and each report also lists the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed, and whether each goes through Gantry's MCP gateway.
+The device agent of Gantry Enterprise (`gantry device`, license feature `devices`) reads each coding tool's documented configuration on every enrolled machine and reports one state per tool: `not_installed`, `installed`, `gantry` (pointed at the gateway) or `direct` (pointed at a provider, or holding a provider key or login). See [Devices](/operations/devices/) for enrolment and what is read for each tool. The agent runs on macOS, Linux and Windows, and each report also lists the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed, whether each goes through Gantry's MCP gateway, and the AI apps installed with what the device profile says of each (`allowed`, `denied`, `unlisted`).
 
-The console's **Devices** page merges those reports with every replica's traffic (the store's request index), per person: the tools their traffic came from, their enrolled devices, and each tool going direct, as `codex on mbp-ana`. Its **Download devices.json** link gives the reports to the command line:
+The console's **Devices** page merges those reports with every replica's traffic (the store's request index), per person: the tools their traffic came from, their enrolled devices, the tools set to go through Gantry, and a tag for each tool going direct (`codex on mbp-ana`), each denied app installed and each blocked MCP server still configured. Its **Download devices.json** link gives the reports to the command line:
 
 ```bash
 gantry audit coverage /var/lib/gantry/gantry-audit.jsonl --keys gantry.keys.yaml --devices devices.json
@@ -79,6 +79,14 @@ dan	web	-	0	0	never	1	0
 |---|---|
 | `devices` | The person's enrolled devices with the tool installed. For tool `-`, every enrolled device of theirs, none with a tool |
 | `direct` | Of those, the devices where the tool is configured to call a provider directly |
+
+Then one row per person with enrolled devices: the tools configured to go through Gantry, the tools going direct, the denied apps installed (see [Apps](/operations/devices/#apps-allowed-and-denied)) and the blocked MCP servers still configured, each with the device it is on. `-` is none:
+
+```text
+person	team	via_gantry	direct	denied_apps	blocked_mcp
+ana	dev	claude-code	codex on mbp	chatgpt on mbp	github in cursor on mbp
+dan	web	-	-	-	-
+```
 
 Then each device's MCP servers, whether each goes through Gantry's MCP gateway, and the admin's decision on it (see [MCP servers](/operations/devices/#mcp-servers)):
 

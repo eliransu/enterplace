@@ -1,13 +1,13 @@
 ---
 title: Devices
-description: Enrol employee machines with the device agent, point Claude Code and Codex at Gantry, and see which coding tools call a provider directly. Enterprise feature devices.
+description: Enrol employee machines with the device agent, point their coding tools at Gantry, report or remove blocked MCP servers, and see which tools call a provider directly and which denied apps are installed. Enterprise feature devices.
 sidebar:
   order: 12
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-With a license that includes `devices` (see [License key](/operations/license/)), Gantry adds a **Devices** page to the console and two routes for the device agent, `GET /device/profile` and `POST /device/report`. The agent (`gantry device`) runs on each employee machine, points Claude Code and Codex at the gateway, puts them back when someone changes them, and reports every coding tool it finds. Without the feature the page and both routes answer `license_required`.
+With a license that includes `devices` (see [License key](/operations/license/)), Gantry adds a **Devices** page to the console and two routes for the device agent, `GET /device/profile` and `POST /device/report`. The agent (`gantry device`) runs on each employee machine (macOS, Linux and Windows). It points the coding tools a profile names at the gateway, puts them back when someone changes them, reports blocked MCP servers (or takes them out of the tools' MCP files when the profile says `remove`), and reports every coding tool, MCP server and AI app it finds. It writes only files each tool documents, and stops no process. Without the feature the page and both routes answer `license_required`.
 
 The feature keeps its tables in the store's Postgres (namespace `enterprise.devices`), so the policy needs `store:`. See [Store](/operations/store/).
 
@@ -17,9 +17,17 @@ The feature keeps its tables in the store's Postgres (namespace `enterprise.devi
 
 1. **Create an enrolment token.** On the console's Devices page, under **Enrolment tokens**, give it a label (where it is used, such as `jamf-engineering`), a team or none, and how many days it is valid (1 to 365, default 90). The token is shown once; Gantry keeps only its hash. A team token enrols devices into that team; a token without a team takes each device's team from the person's key.
 
-2. **Set a device profile** (optional). Without one, devices send their tools to the address they reached Gantry at, and Claude Code and Codex are managed. A profile sets the gateway URL and the tools to manage, for every team or for one team, which wins for its members.
+2. **Set a device profile** (optional). Without one, devices send their tools to the address they reached Gantry at, and Claude Code and Codex are managed. A profile, for every team or for one team (which wins for its members), sets:
 
-3. **Run the agent.** From your MDM as a LaunchDaemon (see `deploy/mdm/README.md`), or by hand:
+    | Field | Means |
+    |---|---|
+    | Gateway URL | The address tools send requests to, https, without `/v1` |
+    | Tools to manage | Any of `claude-code`, `codex`, `opencode`, `kilo-code`, `continue`, `zed`, `gemini-cli`, `qwen-code`, `aider`. See [What the agent configures](#what-the-agent-configures) |
+    | Denied apps, Allowed apps | AI apps and command line tools to report. See [Apps](#apps-allowed-and-denied) |
+    | Approved MCP servers through Gantry | `yes` points each approved HTTP MCP server at the gateway's `/mcp`. See [MCP servers](#mcp-servers) |
+    | Blocked MCP servers | `report` (the default) lists a blocked server the agent finds; `remove` takes it out of the tool's file. See [MCP servers](#mcp-servers) |
+
+3. **Run the agent.** From your device management tool (see [Device deployment](/operations/device-deployment/) for Intune, Jamf, Kandji and Linux), or by hand:
 
     ```bash
     GANTRY_DEVICE_TOKEN=gantry_dev_... gantry device --control-plane https://gantry.example.com --dry-run
@@ -72,33 +80,102 @@ It reads only the files and settings each tool documents. It never reads keychai
 |---|---|---|
 | Claude Code | `~/.claude`, `claude` on the path | `env.ANTHROPIC_BASE_URL` in the managed settings, then `~/.claude/settings.json`. `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `apiKeyHelper` without a base URL is Anthropic; `CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_VERTEX` is that provider |
 | Codex | `~/.codex`, `codex` on the path | `model_provider` and its `[model_providers.<id>]` `base_url` in `~/.codex/config.toml`. The built-in OpenAI provider with `~/.codex/auth.json` is OpenAI |
-| GitHub Copilot | the VS Code extension `github.copilot*`, `~/.copilot` | `url` in VS Code's `chatLanguageModels.json`, `baseUrl` in `~/.copilot/providers.json` |
-| Zed | `~/.config/zed`, `Zed.app` | `api_url` under `language_models` in `~/.config/zed/settings.json` |
-| Qwen Code | `~/.qwen`, `qwen` on the path | `baseUrl` in `~/.qwen/settings.json` |
+| OpenCode | `~/.config/opencode`, `~/.opencode`, `opencode` on the path | Every `baseURL` in `~/.config/opencode/opencode.json` (or `opencode.jsonc`) |
+| Kilo Code | `~/.config/kilo`, the VS Code extension `kilocode.kilo-code` | Every `baseURL` in `~/.config/kilo/kilo.json` |
+| Continue | `~/.continue`, the VS Code extension `continue.continue` | Each model under `models:` in `~/.continue/config.yaml`: its `apiBase`, or its `provider` when it has none |
+| Zed | Zed's settings folder, `Zed.app` | Every `api_url` in Zed's `settings.json` (`~/.config/zed`, `%APPDATA%\Zed` on Windows) |
 | Gemini CLI | `~/.gemini`, `gemini` on the path | `GOOGLE_GEMINI_BASE_URL` in `~/.gemini/.env`, else any `security.auth.selectedType` in `~/.gemini/settings.json` is Google |
-| Kilo Code | `~/.config/kilo`, the VS Code extension `kilocode.kilo-code` | `baseURL` in `~/.config/kilo/kilo.json` |
-| Claude Desktop | `Claude.app`, `~/Library/Application Support/Claude` | `inferenceGatewayBaseUrl`, else `inferenceProvider`, in the managed preferences `com.anthropic.claudefordesktop` (per user first) |
-| Cursor | `~/.cursor`, `Cursor.app` | Not read: Cursor keeps its base URL in its own database. Reported as `installed` |
-| JetBrains AI Assistant | `~/Library/Application Support/JetBrains` | Not read: kept in the IDE's settings storage. Reported as `installed` |
-| Roo Code | the VS Code extension `rooveterinaryinc.roo-cline` | Not read: kept in VS Code's extension storage. Reported as `installed` |
+| Qwen Code | `~/.qwen`, `qwen` on the path | `baseUrl` in `~/.qwen/settings.json`, `OPENAI_BASE_URL` in `~/.qwen/.env`, and a `security.auth.selectedType` other than `openai` (Qwen's own sign-in), which does not use the base URL |
+| Aider | `~/.aider.conf.yml`, `aider` on the path | `openai-api-base` in `~/.aider.conf.yml`; `openai-api-key` without it is OpenAI, `anthropic-api-key` is Anthropic |
+| GitHub Copilot | the VS Code extension `github.copilot*`, `~/.copilot` | `url` in VS Code's `chatLanguageModels.json`, `baseUrl` in `~/.copilot/providers.json` |
+| Claude Desktop | `Claude.app`, its settings folder | `inferenceGatewayBaseUrl`, else `inferenceProvider`, in the managed preferences `com.anthropic.claudefordesktop` (per user first) |
+| Cursor | `~/.cursor`, `Cursor.app` | Not read: kept in the app's own settings storage |
+| Cline | the VS Code extension `saoudrizwan.claude-dev` | Not read: kept in VS Code's extension storage |
+| Roo Code | the VS Code extension `rooveterinaryinc.roo-cline` | Not read: kept in VS Code's extension storage |
+| JetBrains AI Assistant | JetBrains' settings folder | Not read: kept in the IDE's settings storage |
 
-Only Claude Code and Codex are configured by the agent. The others are reported, so the coverage view shows where they send. A tool configured with no endpoint at all (Claude Code signed in with a Claude account, for example) is `installed`, not `direct`: no setting says where it goes.
+A tool configured with no endpoint at all (Claude Code signed in with a Claude account, for example) is `installed`, not `direct`: no setting says where it goes.
+
+## What the agent configures
+
+For each tool the profile names under **Tools to manage**, the agent writes the gateway where the tool's own documentation says its endpoint goes, and keeps every other line and key of the file. It sets the endpoint, never a key or a sign-in: each person uses their Gantry key, from `gantry login`.
+
+| Tool | File | What is set |
+|---|---|---|
+| Claude Code | The managed settings as root (`/Library/Application Support/ClaudeCode/managed-settings.json`, `/etc/claude-code/managed-settings.json`), else `~/.claude/settings.json` | `env.ANTHROPIC_BASE_URL` |
+| Codex | `~/.codex/config.toml` | `model_provider = "gantry"` and a `[model_providers.gantry]` table that reads the key from `GANTRY_KEY` |
+| OpenCode | `~/.config/opencode/opencode.json` | `provider.openai.options.baseURL` and `provider.anthropic.options.baseURL` (the gateway with `/v1`), and `apiKey: "{env:GANTRY_KEY}"` where none is set |
+| Kilo Code | `~/.config/kilo/kilo.json`, the Kilo CLI's file | The same as OpenCode |
+| Continue | `~/.continue/config.yaml` | `apiBase` (the gateway with `/v1`) on every model of `provider: openai`, the provider Continue documents `apiBase` for. No model is added, and a model of another provider stays and reads `direct` |
+| Zed | Zed's `settings.json` | `language_models.openai.api_url` (with `/v1`) and `language_models.anthropic.api_url` |
+| Gemini CLI | `~/.gemini/.env` | `GOOGLE_GEMINI_BASE_URL` |
+| Qwen Code | `~/.qwen/.env`, and `~/.qwen/settings.json` when it lists providers | `OPENAI_BASE_URL` (with `/v1`), and `baseUrl` on every `modelProviders.openai` entry |
+| Aider | `~/.aider.conf.yml` | `openai-api-base` (with `/v1`) |
+
+Before the agent changes a file that exists, it copies it beside itself as `<name>.gantry-backup`. Zed's and OpenCode's settings may hold comments: a changed file is written as plain JSON, and the backup keeps the comments. A settings file that is not valid JSON is named in the agent's log and left as it is.
+
+**Drift.** Once the agent has configured a tool, a later check that finds the file changed puts it back and reports the tool with `drift`; the Devices page lists the last 20.
+
+A tool whose endpoint no documented file holds cannot be configured. It stays `installed`, and its row of the report, of `devices.json` and of the Devices page says why:
+
+| Tool | Why it stays `installed` |
+|---|---|
+| Cursor | The OpenAI base URL override is in the app's own settings storage. Set it in Cursor Settings, Models. Cursor's MCP servers are in a documented file, so MCP decisions are enforced there |
+| Cline, Roo Code | The provider and base URL are in VS Code's extension storage. Set them in the extension's settings panel |
+| JetBrains AI Assistant | Providers are in the IDE's settings storage |
+| GitHub Copilot | Copilot's own models are served by GitHub; only a custom endpoint a person adds is read |
+| Claude Desktop | The gateway is the managed preference `inferenceGatewayBaseUrl`, which your device management tool delivers |
 
 <Aside type="caution">
-`installed` is not proof of coverage. A Cursor, JetBrains or Roo Code with its own provider key shows as `installed`; the audit log then shows whether it reached Gantry.
+`installed` is not proof of coverage. A Cursor, Cline, JetBrains or Roo Code with its own provider key shows as `installed`; the audit log then shows whether it reached Gantry.
 </Aside>
 
 ## MCP servers
 
 Each report carries the device's OS (`macos`, `linux`, `windows`) and the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed: the tool, the file, the server's name, its transport (`http` or `stdio`), its target (the URL without query or login, or the command's file name) and whether it is Gantry's MCP gateway (`<gateway>/mcp` or a bundle under it). Arguments, environment variables and headers are never sent, and the gateway strips a query or login from a target before it stores it. An agent from before the inventory sends none, and its device keeps what it last listed.
 
-An owner or admin approves or blocks a server on the Devices page (**MCP servers**) or with `POST /console/devices/mcp`; each decision is an admin record, written before it is kept. A server is named by its transport and target, so one decision covers every device and tool that has it, and a decision outlives the configuration it was made for. The device profile (`GET /device/profile`) carries the decisions as `mcp: {"approved": [...], "blocked": [...]}`. The agent marks each server of its next report `approved`, `blocked` or `pending`, and prints a warning naming each blocked server and the file it is in. It does not edit the tools' MCP files: the person, or your device management tool, removes a blocked server, and the page shows it until it is gone.
+An owner or admin approves or blocks a server on the Devices page (**MCP servers**) or with `POST /console/devices/mcp`; each decision is an admin record, written before it is kept. A server is named by its transport and target, so one decision covers every device and tool that has it, and a decision outlives the configuration it was made for. The device profile (`GET /device/profile`) carries the decisions as `mcp: {"approved": [...], "blocked": [...], "via_gateway": false, "enforcement": "report"}`.
+
+### Enforcement
+
+On its next check the agent enforces the decisions in each tool's MCP file in the person's home folder:
+
+| Tool | File | Key |
+|---|---|---|
+| Claude Desktop | `claude_desktop_config.json` in Claude's settings folder | `mcpServers` |
+| Claude Code | `~/.claude.json`, and each project under `projects` | `mcpServers` |
+| Cursor | `~/.cursor/mcp.json` | `mcpServers` |
+| VS Code | `mcp.json` in VS Code's user folder | `servers` |
+| Zed | Zed's `settings.json` | `context_servers` |
+
+- A **blocked** server is reported and stays, unless **Blocked MCP servers** is `remove` in the profile (`mcp_enforcement`): then it is taken out of the file. Start with `report`, see which devices have it, and switch to `remove` once people have been told.
+- With **Approved MCP servers through Gantry** set to `yes` in the profile, an **approved** HTTP server that is not the gateway is pointed at `<gateway>/mcp`, without the `headers` that held its own credential; when the file already has the gateway, the entry is taken out instead. Turn this on once the servers you approved are listed under `mcp:` in the policy, which is what makes `/mcp` serve them: see [MCP gateway](/governance/mcp-gateway/). A stdio server is never rewritten.
+- A server with no decision stays.
+
+Before a file is changed, it is copied beside itself as `<name>.gantry-backup`, and every other key of the file is kept. Each change is in the report as `mcp_actions` (`removed` or `rewritten`, with the backup's path) and on the Devices page under **MCP enforcement**, the last 20. `--dry-run` prints what would change and changes nothing.
+
+The agent leaves two places alone, and warns about a blocked server in them: Claude Code's managed MCP file (`managed-mcp.json`), which is your device management tool's, and project files (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`), since it does not walk the disk for repositories. A blocked server that is still configured shows as a `blocked MCP` tag on its person's row until it is gone.
+
+## Apps: allowed and denied
+
+A profile lists AI apps and command line tools as denied or allowed. The agent reports each one it finds on the device with a status:
+
+| Status | When |
+|---|---|
+| `denied` | The deny list names it, or an allow list is set and does not name it |
+| `allowed` | The allow list names it |
+| `unlisted` | Neither list decides |
+
+The apps it looks for are the coding tools above and `chatgpt`, `windsurf`, `ollama`, `lm-studio` and `perplexity`. An app is found by where its vendor's installer puts it (`/Applications` or `~/Applications` on macOS, `%LOCALAPPDATA%\Programs` on Windows, a command on the path, the folder it keeps in the home) or, for the desktop apps, by a running process of its name (`running: true`), read from `ps` or `tasklist`.
+
+This is detection only. The agent stops no process and removes no app: a denied app shows as a `denied app` tag on its person's row of the Devices page, in `devices.json` (`apps`) and in `gantry audit coverage --devices`. Remove or block the app itself with your device management tool.
 
 ## The Devices page
 
-- **Coverage**: one row per person from the audit log and the reports: the tools their traffic came from, their device count, devices not seen in 24 hours, and a `direct` tag per tool going to a provider, such as `codex on mbp-ana`. Traffic is read from the store's shared request index, so it holds every replica's requests (those of the last second may not be copied yet).
-- **Enrolment tokens** and **Device profiles**, as above.
+- **Coverage**: one row per person from the audit log and the reports: the tools their traffic came from, their device count, devices not seen in 24 hours, the tools set to go through Gantry, and the installed tools that are set by hand. Then one tag for each thing to act on: `direct` per tool going to a provider (`codex on mbp-ana`), `denied app` per denied app installed (`chatgpt on mbp-ana`), `blocked MCP` per blocked server still configured (`github in cursor on mbp-ana`). Below the rows, why each tool set by hand cannot be configured from a file. Traffic is read from the store's shared request index, so it holds every replica's requests (those of the last second may not be copied yet).
+- **MCP servers**, **Enrolment tokens** and **Device profiles**, as above.
 - **Drift**: the last 20 times a managed setting was changed back and re-applied.
+- **MCP enforcement**: the last 20 servers the agent took out of a tool's MCP file or pointed at the gateway.
 - **Refused reports**: the last 20 reports refused because the device is bound to another person or token scope.
 
 **Download devices.json** gives the reports to `gantry audit coverage --devices`. See [Coverage](/governance/coverage/).
@@ -106,6 +183,7 @@ An owner or admin approves or blocks a server on the Devices page (**MCP servers
 ## Related
 
 <CardGrid>
+	<LinkCard title="Device deployment" href="/operations/device-deployment/" description="Install the agent with Intune, Jamf, Kandji or on Linux." />
 	<LinkCard title="Coverage" href="/governance/coverage/" description="Requests per person and tool, merged with device reports." />
 	<LinkCard title="Coding tools" href="/integrations/coding-tools/" description="Every tool with a guide." />
 </CardGrid>

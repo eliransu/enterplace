@@ -33,7 +33,7 @@ use super::members::origin;
 use super::siem::{
     Role, banner, db_error, hidden, input, random_hex, role_of, section, small_button,
 };
-use crate::device::{MANAGEABLE, TOOLS};
+use crate::device::{DEFAULT_MANAGED, MANAGEABLE, TOOLS, app_names, why_not};
 use crate::license::Status;
 
 pub const FEATURE: &str = "devices";
@@ -127,6 +127,39 @@ CREATE TABLE enterprise_mcp_decisions (
     decided_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (transport, target)
 );
+";
+
+/// What a profile says beyond the tools to manage: the AI apps it allows and denies (comma lists of
+/// `device::app_names`), and whether approved MCP servers are pointed at Gantry's MCP gateway. What each device
+/// found of those apps, and each blocked MCP server the agent took out of a tool's file or sent through the gateway.
+pub const MIGRATION_5: &str = "
+ALTER TABLE enterprise_device_profiles ADD COLUMN apps_allowed text NOT NULL DEFAULT '';
+ALTER TABLE enterprise_device_profiles ADD COLUMN apps_denied text NOT NULL DEFAULT '';
+ALTER TABLE enterprise_device_profiles ADD COLUMN mcp_via_gateway boolean NOT NULL DEFAULT false;
+CREATE TABLE enterprise_device_apps (
+    device_id text NOT NULL REFERENCES enterprise_devices (device_id) ON DELETE CASCADE,
+    app text NOT NULL,
+    status text NOT NULL,
+    running boolean NOT NULL DEFAULT false,
+    PRIMARY KEY (device_id, app)
+);
+CREATE TABLE enterprise_device_mcp_actions (
+    id bigserial PRIMARY KEY,
+    device_id text NOT NULL,
+    person text NOT NULL,
+    tool text NOT NULL,
+    server text NOT NULL,
+    transport text NOT NULL,
+    target text NOT NULL,
+    action text NOT NULL,
+    at timestamptz NOT NULL DEFAULT now()
+);
+";
+
+/// What the agent does with a blocked MCP server it finds: `report` it (the default) or `remove` it from the tool's
+/// file, keeping the file as it was beside it.
+pub const MIGRATION_6: &str = "
+ALTER TABLE enterprise_device_profiles ADD COLUMN mcp_enforcement text NOT NULL DEFAULT 'report';
 ";
 
 /// The header the agent sends the person's Gantry key in (the one `gantry login` saved), beside the enrolment token.
@@ -393,7 +426,7 @@ impl Devices {
                 out.push(json!({
                     "device_id": id, "hostname": get(1), "os_user": get(2), "person": get(3), "team": get(4), "org": get(12),
                     "agent_version": get(5), "last_seen": get(6), "stale": r.try_get::<_, bool>(7).unwrap_or(false), "os": get(11),
-                    "tools": [], "mcp": [],
+                    "tools": [], "mcp": [], "apps": [],
                 }));
             }
             let tool = get(8);
@@ -401,7 +434,30 @@ impl Devices {
                 (tool.is_empty(), out.last_mut().map(|d| &mut d["tools"]))
             {
                 let endpoints: Value = serde_json::from_str(&get(10)).unwrap_or(json!([]));
-                tools.push(json!({ "tool": tool, "state": get(9), "endpoints": endpoints }));
+                let mut row = json!({ "tool": tool, "state": get(9), "endpoints": endpoints });
+                // A tool no documented file configures stays `installed`: say why.
+                if let (true, Some(why)) = (get(9) == "installed", why_not(&tool)) {
+                    row["note"] = why.into();
+                }
+                tools.push(row);
+            }
+        }
+        let apps = client
+            .query(
+                "SELECT device_id, app, status, running FROM enterprise_device_apps ORDER BY device_id, app",
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        for r in &apps {
+            let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
+            let id = get(0);
+            if let Some(Value::Array(list)) = out
+                .iter_mut()
+                .find(|d| d["device_id"] == id.as_str())
+                .map(|d| &mut d["apps"])
+            {
+                list.push(json!({ "app": get(1), "status": get(2), "running": r.try_get::<_, bool>(3).unwrap_or(false) }));
             }
         }
         let servers = client
@@ -751,39 +807,59 @@ async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response
     let row = match d.db.client().await {
         Ok(client) => client
             .query_opt(
-                "SELECT gateway_url, tools FROM enterprise_device_profiles WHERE team = $1 OR team = '' ORDER BY team = '' LIMIT 1",
+                "SELECT gateway_url, tools, apps_allowed, apps_denied, mcp_via_gateway, mcp_enforcement FROM enterprise_device_profiles WHERE team = $1 OR team = '' ORDER BY team = '' LIMIT 1",
                 &[&team],
             )
             .await
             .map_err(db_error),
         Err(e) => Err(e),
     };
-    let (gateway, tools) = match row {
-        Ok(Some(r)) => (
-            r.try_get::<_, String>(0).unwrap_or_default(),
-            r.try_get::<_, String>(1)
-                .unwrap_or_default()
-                .split(',')
-                .filter(|t| !t.is_empty())
-                .map(str::to_string)
-                .collect(),
-        ),
+    let (gateway, tools, allowed, denied, via_gateway, enforcement) = match row {
+        Ok(Some(r)) => {
+            let list = |i| names(&r.try_get::<_, String>(i).unwrap_or_default());
+            (
+                r.try_get::<_, String>(0).unwrap_or_default(),
+                list(1),
+                list(2),
+                list(3),
+                r.try_get::<_, bool>(4).unwrap_or(false),
+                r.try_get::<_, String>(5)
+                    .unwrap_or_else(|_| "report".into()),
+            )
+        }
         // The device reached this gateway, so without a profile that is where its tools go.
         Ok(None) => (
             origin(&headers, &tls),
-            MANAGEABLE
+            DEFAULT_MANAGED
                 .iter()
                 .map(|t| (*t).to_string())
                 .collect::<Vec<_>>(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            "report".to_string(),
         ),
         Err(e) => return fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     };
-    let mcp = match d.mcp_decisions().await {
+    let mut mcp = match d.mcp_decisions().await {
         Ok(mcp) => mcp,
         Err(e) => return fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     };
-    Json(json!({ "gateway_url": gateway, "tools": tools, "team": team, "person": person, "mcp": mcp }))
-        .into_response()
+    mcp["via_gateway"] = via_gateway.into();
+    mcp["enforcement"] = enforcement.into();
+    Json(json!({
+        "gateway_url": gateway, "tools": tools, "team": team, "person": person, "mcp": mcp,
+        "apps": { "allowed": allowed, "denied": denied },
+    }))
+    .into_response()
+}
+
+/// The names of a comma list, as a profile keeps its tools and apps.
+fn names(list: &str) -> Vec<String> {
+    list.split(',')
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
 }
 
 fn text_of(body: &Value, field: &str, max: usize) -> Option<String> {
@@ -795,6 +871,8 @@ fn text_of(body: &Value, field: &str, max: usize) -> Option<String> {
 
 /// The OSes the agent reports, as it names them.
 const OSES: [&str; 3] = ["macos", "linux", "windows"];
+/// What a profile's app lists make of an installed app.
+const APP_STATUSES: [&str; 3] = ["allowed", "denied", "unlisted"];
 /// The most MCP servers kept for one device: a report listing more keeps the first ones.
 const MAX_MCP: usize = 200;
 
@@ -904,6 +982,39 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
             .take(MAX_MCP)
             .collect()
     });
+    // The apps the agent found, each one it knows once; an agent from before app lists sends none, and its device
+    // keeps what it last listed.
+    let known_apps = app_names();
+    let apps: Option<BTreeMap<String, (String, bool)>> = body.get("apps").map(|list| {
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|a| {
+                let app = a["app"].as_str().filter(|n| known_apps.contains(n))?;
+                let status = a["status"]
+                    .as_str()
+                    .filter(|s| APP_STATUSES.contains(s))
+                    .unwrap_or("unlisted");
+                Some((
+                    app.to_string(),
+                    (status.to_string(), a["running"].as_bool().unwrap_or(false)),
+                ))
+            })
+            .collect()
+    });
+    // What the agent did to the tools' MCP files in this pass.
+    let actions: Vec<(McpServer, String)> = body["mcp_actions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let action = row["action"]
+                .as_str()
+                .filter(|a| matches!(*a, "removed" | "rewritten"))?;
+            Some((McpServer::from_report(row)?, action.to_string()))
+        })
+        .take(MAX_MCP)
+        .collect();
     let stored = async {
         let mut client = d.db.client().await?;
         let tx = client.transaction().await.map_err(db_error)?;
@@ -975,6 +1086,31 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
                 .await
                 .map_err(db_error)?;
             }
+        }
+        if let Some(apps) = &apps {
+            tx.execute(
+                "DELETE FROM enterprise_device_apps WHERE device_id = $1",
+                &[&device_id],
+            )
+            .await
+            .map_err(db_error)?;
+            for (app, (status, running)) in apps {
+                tx.execute(
+                    "INSERT INTO enterprise_device_apps (device_id, app, status, running) VALUES ($1, $2, $3, $4)",
+                    &[&device_id, app, status, running],
+                )
+                .await
+                .map_err(db_error)?;
+            }
+        }
+        for (m, action) in &actions {
+            tx.execute(
+                "INSERT INTO enterprise_device_mcp_actions (device_id, person, tool, server, transport, target, action) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                &[&device_id, &person, &m.tool, &m.server, &m.transport, &m.target, action],
+            )
+            .await
+            .map_err(db_error)?;
         }
         for (tool, (state, endpoints, drift)) in &tools {
             tx.execute(
@@ -1331,7 +1467,9 @@ fn form(action: &str, inner: &str) -> String {
     )
 }
 
-/// Per person: the tools their traffic came from, their enrolled devices, and each tool going direct.
+/// Per person: the tools their traffic came from, their enrolled devices, the tools set to go through Gantry, and
+/// a tag for each tool going direct, each denied app installed and each blocked MCP server still configured. Then
+/// why each tool found that no documented file configures stays `installed`.
 fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
     #[derive(Default)]
     struct Person {
@@ -1339,7 +1477,7 @@ fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
         seen: BTreeSet<String>,
         devices: usize,
         stale: usize,
-        direct: Vec<String>,
+        by_hand: BTreeSet<String>,
     }
     let mut people: BTreeMap<String, Person> = BTreeMap::new();
     for ((person, tool), row) in traffic {
@@ -1349,6 +1487,7 @@ fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
             p.seen.insert(tool.clone());
         }
     }
+    let mut by_hand: BTreeMap<String, String> = BTreeMap::new();
     for device in devices {
         let p = people
             .entry(device["person"].as_str().unwrap_or("-").to_string())
@@ -1358,17 +1497,11 @@ fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
         }
         p.devices += 1;
         p.stale += usize::from(device["stale"].as_bool().unwrap_or(false));
-        for t in device["tools"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|t| t["state"] == "direct")
-        {
-            p.direct.push(format!(
-                "{} on {}",
-                t["tool"].as_str().unwrap_or(""),
-                device["hostname"].as_str().unwrap_or("")
-            ));
+        for t in device["tools"].as_array().into_iter().flatten() {
+            if let (Some(tool), Some(note)) = (t["tool"].as_str(), t["note"].as_str()) {
+                p.by_hand.insert(tool.to_string());
+                by_hand.insert(tool.to_string(), note.to_string());
+            }
         }
     }
     if people.is_empty() {
@@ -1379,15 +1512,18 @@ fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
             "",
         );
     }
+    // The same sums `gantry audit coverage --devices` prints.
+    let reported: Vec<coverage::Device> =
+        serde_json::from_value(Value::Array(devices.to_vec())).unwrap_or_default();
+    let mut sums = coverage::people(&reported);
     let mut out = String::from(r#"<section class="g-list">"#);
     for (person, p) in people {
+        let sum = sums.remove(&person).unwrap_or_default();
+        let join = |set: &BTreeSet<String>| set.iter().cloned().collect::<Vec<_>>().join(", ");
         let seen = if p.seen.is_empty() {
             "no traffic".to_string()
         } else {
-            format!(
-                "seen: {}",
-                p.seen.into_iter().collect::<Vec<_>>().join(", ")
-            )
+            format!("seen: {}", join(&p.seen))
         };
         let mut meta = format!(
             "{} · {seen} · {} device{}",
@@ -1398,21 +1534,40 @@ fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
         if p.stale > 0 {
             meta += &format!(" · {} not seen in 24 hours", p.stale);
         }
-        let end: String = p
-            .direct
-            .iter()
-            .map(|d| html::tag("", "direct", d))
-            .collect();
+        if !sum.gantry.is_empty() {
+            meta += &format!(" · set to Gantry: {}", join(&sum.gantry));
+        }
+        if !p.by_hand.is_empty() {
+            meta += &format!(" · installed, set by hand: {}", join(&p.by_hand));
+        }
+        let mut end = String::new();
+        for (word, set) in [
+            ("direct", &sum.direct),
+            ("denied app", &sum.denied_apps),
+            ("blocked MCP", &sum.blocked_mcp),
+        ] {
+            for detail in set {
+                end += &html::tag("", word, detail);
+            }
+        }
         out += &html::row(&esc(&person), &esc(&meta), &end, true);
     }
-    out + "</section>"
+    out += "</section>";
+    for (tool, note) in by_hand {
+        out += &format!(
+            r#"<p class="t-small g-muted" style="margin: 0">{}: {}</p>"#,
+            esc(&tool),
+            esc(&note)
+        );
+    }
+    out
 }
 
 /// Each MCP server devices reported, with the tools and devices that have it, whether it goes through Gantry's MCP
 /// gateway, its decision, and the buttons that change it.
 fn mcp_list(servers: &[Value], can_edit: bool) -> String {
     if servers.is_empty() {
-        return r#"<p class="t-small g-muted" style="margin: 0">No device has reported an MCP server yet. The device agent lists those configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed.</p>"#.into();
+        return r#"<p class="t-small g-muted" style="margin: 0">No device has reported an MCP server yet. The device agent lists those configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed, and takes a blocked one out of those files when the profile says remove.</p>"#.into();
     }
     let mut out = String::from(r#"<section class="g-list">"#);
     for m in servers {
@@ -1464,7 +1619,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     let can_edit = role_of(admin) != Role::Viewer;
     let tokens = d.tokens(admin).await?;
     let devices = d.devices(admin).await?;
-    let (traffic, profiles, drift, refusals) = {
+    let (traffic, profiles, drift, refusals, actions) = {
         let client = d.db.client().await?;
         // Every replica's requests, summed in the store's request index (the insights namespace every gateway
         // with a store keeps), not this replica's audit log read whole.
@@ -1501,7 +1656,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
             .await
             .map_err(db_error)?;
         let profiles = client
-            .query("SELECT team, gateway_url, tools, updated_by FROM enterprise_device_profiles ORDER BY team", &[])
+            .query("SELECT team, gateway_url, tools, updated_by, apps_allowed, apps_denied, mcp_via_gateway, mcp_enforcement FROM enterprise_device_profiles ORDER BY team", &[])
             .await
             .map_err(db_error)?;
         let drift = client
@@ -1511,12 +1666,19 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
             )
             .await
             .map_err(db_error)?;
-        (traffic, profiles, drift, refusals)
+        let actions = client
+            .query(
+                &format!("SELECT to_char(at AT TIME ZONE 'UTC', {TIME}), person, tool, device_id, server, target, action FROM enterprise_device_mcp_actions ORDER BY id DESC LIMIT 20"),
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        (traffic, profiles, drift, refusals, actions)
     };
     // Someone whose role keeps them to part of the install is shown what belongs to the devices they may see.
     // ponytail: their people's traffic is cut to those with such a device, and the recent refusals and drift to
     // those among the install's last 20. Filter in the queries if a kept role needs the rest.
-    let (traffic, profiles, drift, refusals) = if admin.confined() {
+    let (traffic, profiles, drift, refusals, actions) = if admin.confined() {
         let mine = |row: &gantry_server::store::tokio_postgres::Row, i: usize| {
             let id = row.try_get::<_, String>(i).unwrap_or_default();
             devices.iter().any(|d| d["device_id"] == id.as_str())
@@ -1534,13 +1696,14 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
             profiles.into_iter().filter(team).collect(),
             drift.into_iter().filter(|r| mine(r, 3)).collect(),
             refusals.into_iter().filter(|r| mine(r, 1)).collect(),
+            actions.into_iter().filter(|r| mine(r, 3)).collect(),
         )
     } else {
-        (traffic, profiles, drift, refusals)
+        (traffic, profiles, drift, refusals, actions)
     };
     let mut out = html::head(
         NAV,
-        "Each person's coding tools: which reached Gantry, which devices are enrolled, and which tools there call a provider directly. The device agent points Claude Code and Codex at the gateway and puts them back when someone changes them.",
+        "Each person's coding tools: which reached Gantry, which devices are enrolled, which tools there call a provider directly, and which denied apps and blocked MCP servers are on them. The device agent points the tools a profile names at the gateway, puts them back when someone changes them, and reports blocked MCP servers, or takes them out of the tools' MCP files when the profile says remove.",
         &html::link(
             "Download devices.json",
             "quiet",
@@ -1623,24 +1786,27 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
             t if t.is_empty() => "Every team".to_string(),
             t => format!("Team {t}"),
         };
-        list += &html::row(
-            &esc(&team),
-            &esc(&format!(
-                "{} · manages {} · by {}",
-                get(1),
-                get(2).replace(',', ", "),
-                get(3)
-            )),
-            "",
-            false,
-        );
+        let mut meta = format!("{} · manages {}", get(1), get(2).replace(',', ", "));
+        for (word, apps) in [("allows", get(4)), ("denies", get(5))] {
+            if !apps.is_empty() {
+                meta += &format!(" · {word} {}", apps.replace(',', ", "));
+            }
+        }
+        if r.try_get::<_, bool>(6).unwrap_or(false) {
+            meta += " · approved MCP servers go through Gantry";
+        }
+        if get(7) == "remove" {
+            meta += " · removes blocked MCP servers";
+        }
+        meta += &format!(" · by {}", get(3));
+        list += &html::row(&esc(&team), &esc(&meta), "", false);
     }
     list += "</section>";
     if can_edit {
         list += &form(
             "profile_save",
             &format!(
-                "{}{}{}{}",
+                "{}{}{}{}{}{}{}{}",
                 input(
                     "team",
                     "Team",
@@ -1658,9 +1824,40 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
                 input(
                     "tools",
                     "Tools to manage",
-                    &MANAGEABLE.join(", "),
+                    &DEFAULT_MANAGED.join(", "),
                     "",
                     &format!("Any of {}, comma separated.", MANAGEABLE.join(", "))
+                ),
+                input(
+                    "apps_denied",
+                    "Denied apps",
+                    "",
+                    "",
+                    &format!(
+                        "Reported where installed, never stopped. Any of {}, comma separated.",
+                        app_names().join(", ")
+                    )
+                ),
+                input(
+                    "apps_allowed",
+                    "Allowed apps",
+                    "",
+                    "",
+                    "Empty for no allow list. With one, every other app above counts as denied."
+                ),
+                input(
+                    "mcp_via_gateway",
+                    "Approved MCP servers through Gantry",
+                    "no",
+                    "",
+                    "yes or no. With yes, the agent points each approved HTTP server at this gateway's /mcp: list those servers under mcp: in the policy first."
+                ),
+                input(
+                    "mcp_enforcement",
+                    "Blocked MCP servers",
+                    "report",
+                    "",
+                    "report or remove. With report, the agent lists a blocked server it finds; with remove, it takes it out of the tool's file and keeps the file as it was beside it."
                 ),
                 html::button("Save device profile", "", "submit", ""),
             ),
@@ -1683,6 +1880,33 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     }
     list += "</section>";
     out += &section("Drift: settings changed back and re-applied", &list);
+
+    let mut list = String::from(r#"<section class="g-list">"#);
+    for r in &actions {
+        let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
+        list += &html::row(
+            &esc(&get(1)),
+            &esc(&format!(
+                "{} · {} ({}) in {} · {} · {}",
+                get(6),
+                get(4),
+                get(5),
+                get(2),
+                get(3),
+                get(0)
+            )),
+            "",
+            true,
+        );
+    }
+    if actions.is_empty() {
+        list += r#"<p class="t-small g-muted" style="margin: 0">Nothing enforced yet. With a profile that says remove, the agent takes a blocked server out of a tool's MCP file and keeps the file as it was beside it.</p>"#;
+    }
+    list += "</section>";
+    out += &section(
+        "MCP enforcement: servers removed or sent through Gantry",
+        &list,
+    );
 
     let mut list = String::from(r#"<section class="g-list">"#);
     for r in &refusals {
@@ -1818,12 +2042,22 @@ async fn save_profile(
         .trim()
         .trim_end_matches('/')
         .to_string();
-    let tools: Vec<String> = form
-        .get("tools")
-        .split(',')
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
-        .collect();
+    let tools = names(form.get("tools"));
+    let (allowed, denied) = (
+        names(form.get("apps_allowed")),
+        names(form.get("apps_denied")),
+    );
+    let via_gateway = match form.get("mcp_via_gateway").trim() {
+        "" | "no" => Some(false),
+        "yes" => Some(true),
+        _ => None,
+    };
+    let enforcement = match form.get("mcp_enforcement").trim() {
+        "" | "report" => Some("report"),
+        "remove" => Some("remove"),
+        _ => None,
+    };
+    let known_apps = app_names();
     let problem = if role_of(admin) == Role::Viewer {
         Some((
             "read_only",
@@ -1836,21 +2070,54 @@ async fn save_profile(
         ))
     } else if !valid_gateway(&gateway) {
         Some(("invalid_request", "The gateway URL is an https address without a query, such as https://gantry.example.com.".to_string()))
+    } else if let Some(t) = tools.iter().find(|t| !MANAGEABLE.contains(&t.as_str())) {
+        Some((
+            "invalid_request",
+            match why_not(t) {
+                Some(why) => format!("The agent cannot configure {t:?}: {why}"),
+                None => format!(
+                    "The agent cannot configure {t:?}. Tools it manages: {}.",
+                    MANAGEABLE.join(", ")
+                ),
+            },
+        ))
+    } else if let Some(app) = allowed
+        .iter()
+        .chain(&denied)
+        .find(|a| !known_apps.contains(&a.as_str()))
+    {
+        Some((
+            "invalid_request",
+            format!(
+                "{app:?} is not an app the agent looks for. Apps it knows: {}.",
+                known_apps.join(", ")
+            ),
+        ))
+    } else if let Some(app) = allowed.iter().find(|a| denied.contains(a)) {
+        Some((
+            "invalid_request",
+            format!("{app:?} is both allowed and denied. List it under one."),
+        ))
+    } else if via_gateway.is_none() {
+        Some((
+            "invalid_request",
+            "Approved MCP servers through Gantry is yes or no.".to_string(),
+        ))
+    } else if enforcement.is_none() {
+        Some((
+            "invalid_request",
+            "Blocked MCP servers is report or remove.".to_string(),
+        ))
     } else {
-        tools
-            .iter()
-            .find(|t| !MANAGEABLE.contains(&t.as_str()))
-            .map(|t| {
-                (
-                    "invalid_request",
-                    format!(
-                        "The agent cannot configure {t:?}. Tools it manages: {}.",
-                        MANAGEABLE.join(", ")
-                    ),
-                )
-            })
+        None
     };
-    let details = json!({ "team": team, "gateway_url": gateway, "tools": tools });
+    let via_gateway = via_gateway.unwrap_or(false);
+    let enforcement = enforcement.unwrap_or("report");
+    let details = json!({
+        "team": team, "gateway_url": gateway, "tools": tools,
+        "apps_allowed": allowed, "apps_denied": denied, "mcp_via_gateway": via_gateway,
+        "mcp_enforcement": enforcement,
+    });
     if let Some((code, message)) = problem {
         let _ = console
             .audit(Some(admin), action, details, Some(code))
@@ -1864,9 +2131,10 @@ async fn save_profile(
     let client = d.db.client().await?;
     client
         .execute(
-            "INSERT INTO enterprise_device_profiles (team, gateway_url, tools, updated_by) VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (team) DO UPDATE SET gateway_url = excluded.gateway_url, tools = excluded.tools, updated_by = excluded.updated_by, updated_at = now()",
-            &[&team, &gateway, &tools.join(","), &admin.name],
+            "INSERT INTO enterprise_device_profiles (team, gateway_url, tools, updated_by, apps_allowed, apps_denied, mcp_via_gateway, mcp_enforcement) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (team) DO UPDATE SET gateway_url = excluded.gateway_url, tools = excluded.tools, updated_by = excluded.updated_by, \
+             apps_allowed = excluded.apps_allowed, apps_denied = excluded.apps_denied, mcp_via_gateway = excluded.mcp_via_gateway, mcp_enforcement = excluded.mcp_enforcement, updated_at = now()",
+            &[&team, &gateway, &tools.join(","), &admin.name, &allowed.join(","), &denied.join(","), &via_gateway, &enforcement],
         )
         .await
         .map_err(db_error)?;

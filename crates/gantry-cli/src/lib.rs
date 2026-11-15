@@ -1596,7 +1596,8 @@ fn not_a_folder(path: &Path) -> Option<ExitCode> {
 
 /// Requests per person and coding tool, from the audit log's request records and their `user_agent`; with
 /// `--keys`, every key holder who sent nothing; with `--devices`, each tool's enrolled devices and how many of them
-/// call a provider directly. Tab-separated, like `key list`.
+/// call a provider directly, then per person the tools set to go through Gantry, those going direct, denied apps and
+/// blocked MCP servers still configured. Tab-separated, like `key list`.
 fn audit_coverage(path: &Path, keys: Option<&Path>, devices: Option<&Path>) -> Result<(), String> {
     use gantry_core::coverage;
     let mut rows = coverage::traffic(path)?;
@@ -1630,6 +1631,27 @@ fn audit_coverage(path: &Path, keys: Option<&Path>, devices: Option<&Path>) -> R
             "{person}\t{}\t{tool}\t{}\t{}\t{}{more}",
             r.team, r.requests, r.refused, r.last_seen
         );
+    }
+    // Then each person's devices summed: what goes through Gantry, and what is there that should not be.
+    if let Some(devices) = &devices {
+        let list = |set: &std::collections::BTreeSet<String>| {
+            if set.is_empty() {
+                "-".to_string()
+            } else {
+                set.iter().cloned().collect::<Vec<_>>().join(", ")
+            }
+        };
+        println!("\nperson\tteam\tvia_gantry\tdirect\tdenied_apps\tblocked_mcp");
+        for (person, p) in coverage::people(devices) {
+            println!(
+                "{person}\t{}\t{}\t{}\t{}\t{}",
+                if p.team.is_empty() { "-" } else { &p.team },
+                list(&p.gantry),
+                list(&p.direct),
+                list(&p.denied_apps),
+                list(&p.blocked_mcp)
+            );
+        }
     }
     // Then each device's MCP servers, and whether each goes through Gantry's MCP gateway.
     let servers: Vec<_> = devices

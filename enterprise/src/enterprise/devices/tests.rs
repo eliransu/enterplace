@@ -761,7 +761,8 @@ async fn mcp_servers_are_stored_shown_and_approved_or_blocked() -> Result<(), Er
     assert_eq!(
         profile.body["mcp"],
         json!({"approved": [{"transport": "http", "target": "https://gw.example.com/mcp"}],
-               "blocked": [{"transport": "http", "target": "https://api.githubcopilot.com/mcp"}]}),
+               "blocked": [{"transport": "http", "target": "https://api.githubcopilot.com/mcp"}],
+               "via_gateway": false, "enforcement": "report"}),
         "{}",
         profile.text
     );
@@ -801,6 +802,291 @@ async fn mcp_servers_are_stored_shown_and_approved_or_blocked() -> Result<(), Er
 }
 
 /// The IDs of the enrolment tokens `key`'s holder is shown that still work.
+/// What this slice adds: a profile names more tools, denied apps and MCP through the gateway; the agent enforces a
+/// blocked MCP server in a tool's file and reports apps; the page and devices.json show each per person.
+#[tokio::test]
+async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> Result<(), Error> {
+    let Some(url) = database("devices_enforce").await? else {
+        return Ok(());
+    };
+    let gw = gateway("devices_enforce", &url, &licensed(&["devices"]))?;
+    let mut owner = Browser::admin(&gw.app).await?;
+    let made = call(
+        &gw.app,
+        "POST",
+        "/console/devices/tokens",
+        ADMIN_KEY,
+        Some(json!({"label": "enforce"})),
+    )
+    .await?;
+    let token = made.body["token"].as_str().ok_or("no token")?.to_string();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let app = gw.app.clone();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let gateway_url = format!("http://localhost:{}", address.port());
+
+    // A profile is refused for a tool no file configures (with the reason), an unknown app, or one on both lists.
+    let save = |tools: &'static str,
+                denied: &'static str,
+                allowed: &'static str,
+                via: &'static str,
+                enforcement: &'static str| {
+        let gateway_url = gateway_url.clone();
+        let app = gw.app.clone();
+        let mut owner = Browser {
+            cookie: owner.cookie.clone(),
+        };
+        async move {
+            owner
+                .go(
+                    &app,
+                    "POST",
+                    "/console/devices",
+                    &[
+                        ("action", "profile_save"),
+                        ("team", ""),
+                        ("gateway_url", &gateway_url),
+                        ("tools", tools),
+                        ("apps_denied", denied),
+                        ("apps_allowed", allowed),
+                        ("mcp_via_gateway", via),
+                        ("mcp_enforcement", enforcement),
+                    ],
+                )
+                .await
+        }
+    };
+    for (tools, denied, allowed, via, enforcement, why) in [
+        ("cursor", "", "", "no", "", "Cursor Settings"),
+        (
+            "codex",
+            "notepad",
+            "",
+            "no",
+            "",
+            "is not an app the agent looks for",
+        ),
+        (
+            "codex",
+            "chatgpt",
+            "chatgpt",
+            "no",
+            "",
+            "both allowed and denied",
+        ),
+        ("codex", "", "", "maybe", "", "is yes or no"),
+        ("codex", "", "", "no", "delete", "is report or remove"),
+    ] {
+        let refused = save(tools, denied, allowed, via, enforcement).await?;
+        assert!(refused.text.contains(why), "{why}: {}", refused.text);
+    }
+    let saved = save(
+        "claude-code, gemini-cli, aider",
+        "chatgpt, ollama",
+        "",
+        "yes",
+        "remove",
+    )
+    .await?;
+    assert!(saved.text.contains("saved"), "{}", saved.text);
+    assert!(
+        saved.text.contains("denies chatgpt, ollama"),
+        "{}",
+        saved.text
+    );
+    assert!(
+        saved
+            .text
+            .contains("approved MCP servers go through Gantry"),
+        "{}",
+        saved.text
+    );
+    assert!(
+        saved.text.contains("removes blocked MCP servers"),
+        "{}",
+        saved.text
+    );
+
+    // An admin blocks one server and approves another before any device has them.
+    for (transport, target, decision) in [
+        ("stdio", "shady-mcp", "blocked"),
+        ("http", "https://docs.example.com/mcp", "approved"),
+    ] {
+        let decided = call(
+            &gw.app,
+            "POST",
+            "/console/devices/mcp",
+            ADMIN_KEY,
+            Some(json!({"transport": transport, "target": target, "decision": decision})),
+        )
+        .await?;
+        assert_eq!(decided.status, StatusCode::OK, "{}", decided.text);
+    }
+    let profile = call(&gw.app, "GET", "/device/profile", &token, None).await?;
+    assert_eq!(
+        profile.body["tools"],
+        json!(["claude-code", "gemini-cli", "aider"])
+    );
+    assert_eq!(
+        profile.body["apps"],
+        json!({"allowed": [], "denied": ["chatgpt", "ollama"]})
+    );
+    assert_eq!(profile.body["mcp"]["via_gateway"], true);
+    assert_eq!(profile.body["mcp"]["enforcement"], "remove");
+
+    // The agent on a machine with those tools, a denied app, a blocked server and an approved one.
+    let home = gw.dir.join("home");
+    let put = |file: &str, text: &str| -> Result<(), Error> {
+        let path = home.join(file);
+        std::fs::create_dir_all(path.parent().ok_or("no parent")?)?;
+        Ok(std::fs::write(path, text)?)
+    };
+    put(".claude/settings.json", "{}")?;
+    put(
+        ".gemini/settings.json",
+        r#"{"security":{"auth":{"selectedType":"gemini-api-key"}}}"#,
+    )?;
+    put(".aider.conf.yml", "openai-api-key: sk-x\n")?;
+    put(".ollama/history", "")?;
+    let cursor = r#"{"mcpServers":{"shady":{"command":"/opt/shady-mcp","env":{"T":"s3cret"}},"docs":{"url":"https://docs.example.com/mcp","headers":{"Authorization":"Bearer up"}},"mine":{"command":"mine"}}}"#;
+    put(".cursor/mcp.json", cursor)?;
+    put(
+        ".config/gantry/credentials",
+        &format!("name=noa\nkey={ADMIN_KEY}\n"),
+    )?;
+    let opts = crate::device::Options {
+        control_plane: gateway_url.clone(),
+        token,
+        interval: std::time::Duration::from_secs(1),
+        dry_run: false,
+        once: true,
+        home: Some(home.clone()),
+    };
+    tokio::task::spawn_blocking(move || crate::device::run(opts)).await??;
+
+    // Each managed tool's documented file holds the gateway.
+    assert!(std::fs::read_to_string(home.join(".claude/settings.json"))?.contains(&gateway_url));
+    assert_eq!(
+        std::fs::read_to_string(home.join(".gemini/.env"))?,
+        format!("GOOGLE_GEMINI_BASE_URL={gateway_url}\n")
+    );
+    assert!(
+        std::fs::read_to_string(home.join(".aider.conf.yml"))?
+            .contains(&format!("openai-api-base: {gateway_url}/v1"))
+    );
+    // The blocked server is gone from Cursor's file, the approved one goes through the gateway without its own
+    // credential, the undecided one stays, and the file as it was is kept.
+    let now: Value =
+        serde_json::from_str(&std::fs::read_to_string(home.join(".cursor/mcp.json"))?)?;
+    assert_eq!(
+        now["mcpServers"],
+        json!({"docs": {"url": format!("{gateway_url}/mcp")}, "mine": {"command": "mine"}})
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join(".cursor/mcp.json.gantry-backup"))?,
+        cursor
+    );
+
+    let listed = call(
+        &gw.app,
+        "GET",
+        "/console/devices/devices.json",
+        ADMIN_KEY,
+        None,
+    )
+    .await?;
+    let device = &listed.body[0];
+    let tool = |t: &str| {
+        device["tools"]
+            .as_array()
+            .and_then(|a| a.iter().find(|x| x["tool"] == t))
+            .cloned()
+            .unwrap_or_default()
+    };
+    for t in ["claude-code", "gemini-cli", "aider"] {
+        assert_eq!(tool(t)["state"], "gantry", "{t}: {}", listed.text);
+    }
+    assert_eq!(tool("cursor")["state"], "installed");
+    assert!(
+        tool("cursor")["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("no documented file")),
+        "{}",
+        listed.text
+    );
+    assert!(
+        device["apps"].as_array().is_some_and(
+            |a| a.contains(&json!({"app": "ollama", "status": "denied", "running": false}))
+        ),
+        "{}",
+        listed.text
+    );
+    assert!(!listed.text.contains("s3cret") && !listed.text.contains("Bearer up"));
+    let devices: Vec<gantry_core::coverage::Device> = serde_json::from_str(&listed.text)?;
+    let noa = gantry_core::coverage::people(&devices)
+        .remove("noa")
+        .unwrap_or_default();
+    assert!(
+        noa.gantry.contains("aider") && noa.blocked_mcp.is_empty(),
+        "{noa:?}"
+    );
+    assert_eq!(noa.denied_apps.len(), 1, "{noa:?}");
+
+    // A blocked server the agent could not take out (an older agent, or a file outside the home) and a denied app
+    // a later report lists both show on the person's row; a made-up app is dropped.
+    let mut sent = report(
+        "noa",
+        "mbp",
+        json!([{"tool": "codex", "state": "direct", "installed": true}]),
+    );
+    sent["apps"] = json!([{"app": "chatgpt", "status": "denied", "running": true}, {"app": "notepad", "status": "denied"}]);
+    sent["mcp"] = json!([{"tool": "claude-code", "file": "/Library/x/managed-mcp.json", "server": "shady", "transport": "stdio", "target": "shady-mcp", "via_gantry": false}]);
+    sent["mcp_actions"] = json!([{"tool": "zed", "file": "/h/settings.json", "server": "other", "transport": "stdio", "target": "shady-mcp", "action": "removed"}, {"tool": "zed", "server": "x", "transport": "stdio", "target": "y", "action": "exploded"}]);
+    let stored = agent(
+        &gw.app,
+        "POST",
+        "/device/report",
+        &profile_token(&gw).await?,
+        ADMIN_KEY,
+        Some(sent),
+    )
+    .await?;
+    assert_eq!(stored.status, StatusCode::OK, "{}", stored.text);
+    let page = owner.go(&gw.app, "GET", "/console/devices", &[]).await?;
+    for shown in [
+        "set to Gantry: aider, claude-code, gemini-cli",
+        "installed, set by hand: cursor",
+        "codex on mbp",
+        "denied app",
+        "chatgpt on mbp",
+        "blocked MCP",
+        "shady in claude-code on mbp",
+        "MCP enforcement",
+        "removed · shady (shady-mcp) in cursor",
+        "rewritten · docs (https://docs.example.com/mcp) in cursor",
+        "removed · other (shady-mcp) in zed",
+        "cursor: Cursor keeps its OpenAI base URL override",
+    ] {
+        assert!(page.text.contains(shown), "{shown}: {}", page.text);
+    }
+    assert!(!page.text.contains("notepad") && !page.text.contains("exploded"));
+    Ok(())
+}
+
+/// Another enrolment token of the same scope, for a report sent by hand.
+async fn profile_token(gw: &Gateway) -> Result<String, Error> {
+    let made = call(
+        &gw.app,
+        "POST",
+        "/console/devices/tokens",
+        ADMIN_KEY,
+        Some(json!({"label": "by-hand"})),
+    )
+    .await?;
+    Ok(made.body["token"].as_str().ok_or("no token")?.to_string())
+}
+
 async fn listed_ids(app: &Router, key: &str) -> Result<Vec<String>, Error> {
     let listed = call(app, "GET", "/console/devices/tokens", key, None).await?;
     assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);

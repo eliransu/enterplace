@@ -98,6 +98,44 @@ jobs:
       # The open source crates, without enterprise/: they must build and pass on their own.
       - run: cargo test --locked --workspace --exclude gantry-enterprise
 
+  device-agent:
+    # The device agent (gantry device) runs on employee machines, so the enterprise binary builds and the agent's
+    # unit tests pass on Linux and on Windows, where its paths and installer are checked too.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - name: The agent's unit tests
+        run: cargo test --locked -p gantry-enterprise device::tests
+      - name: The Linux installer parses
+        if: runner.os == 'Linux'
+        run: sh -n deploy/mdm/install-linux.sh
+      - name: The Windows installer parses
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/deploy/mdm/windows/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+      - name: The agent builds for Windows on arm64
+        if: runner.os == 'Windows'
+        run: |
+          rustup target add aarch64-pc-windows-msvc
+          cargo check --locked -p gantry-enterprise --target aarch64-pc-windows-msvc
+      # The binary deploy/mdm/windows/install.ps1 installs, kept from runs on main and runs by hand.
+      - name: The Windows binary
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        run: cargo build --release --locked -p gantry-enterprise
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        with:
+          name: gantry-enterprise-windows-x86_64
+          path: target/release/gantry-enterprise.exe
+
   supply-chain:
     runs-on: ubuntu-latest
     steps:
