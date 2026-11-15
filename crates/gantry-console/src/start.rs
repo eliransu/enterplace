@@ -248,7 +248,7 @@ impl Facts {
     }
 
     /// Requests sent with a key other than an admin's.
-    fn from_people(&self) -> Vec<&Row> {
+    fn sent_by_people(&self) -> Vec<&Row> {
         let names = self.names();
         self.requests
             .iter()
@@ -258,7 +258,7 @@ impl Facts {
 
     fn senders(&self) -> Vec<String> {
         let mut out: Vec<String> = self
-            .from_people()
+            .sent_by_people()
             .iter()
             .map(|r| r.label("person").to_string())
             .collect();
@@ -735,7 +735,7 @@ impl Ctx<'_> {
     }
 
     fn requests_done(&self) -> String {
-        match self.f.from_people().last() {
+        match self.f.sent_by_people().last() {
             Some(r) => format!(
                 "First request at {} from {}: {}{}, {}.",
                 clock(&r.time),
@@ -859,7 +859,7 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     .finished(made_text(c, first));
     let s2 = Step::new(
         "Point Claude Code at Gantry and send one prompt",
-        !f.from_people().is_empty(),
+        !f.sent_by_people().is_empty(),
         format!(
             r#"<p class="t-body">Paste these lines in the terminal where Claude Code runs, then ask it anything. The key from step 1 is already in them.</p>{}{}"#,
             block(
@@ -1822,9 +1822,7 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
             checklist(&list, &st, false)
         };
         let banner = if finished && !viewing_other {
-            format!(
-                r#"<form class="g-banner" method="post" action="/console/start/pick"><span class="t-body">All required steps are done. Next: the five steps of a rollout, starting with the one this choice leaves open.</span><input type="hidden" name="steps" value="1"><button class="g-btn t-body" type="submit">Show the five steps</button></form>"#
-            )
+            r#"<form class="g-banner" method="post" action="/console/start/pick"><span class="t-body">All required steps are done. Next: the five steps of a rollout, starting with the one this choice leaves open.</span><input type="hidden" name="steps" value="1"><button class="g-btn t-body" type="submit">Show the five steps</button></form>"#.to_string()
         } else {
             String::new()
         };
