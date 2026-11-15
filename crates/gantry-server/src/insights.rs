@@ -646,6 +646,51 @@ impl Index for PgIndex {
         })
     }
 
+    fn cost_lines(&self, query: &Query) -> Pending<Vec<insights::CostLine>> {
+        let pg = self.pg.clone();
+        let query = query.clone();
+        Box::pin(async move {
+            let client = pg.connect().await?;
+            let (clause, params) = clause(&query);
+            let allowed = if clause.is_empty() {
+                "WHERE verdict <> 'refused'".to_string()
+            } else {
+                format!("{clause} AND verdict <> 'refused'")
+            };
+            // The first value of each label, as `Row::label` reads it, so both ways of counting agree.
+            let sql = format!(
+                "SELECT to_char(time AT TIME ZONE 'UTC', 'YYYY-MM-DD'), coalesce(labels -> 'org' ->> 0, ''), \
+                 coalesce(labels -> 'team' ->> 0, ''), coalesce(labels -> 'provider' ->> 0, ''), coalesce(labels -> 'model' ->> 0, ''), \
+                 count(*), coalesce(sum(input_tokens), 0)::bigint, coalesce(sum(output_tokens), 0)::bigint, coalesce(sum(cost_usd), 0)::float8 \
+                 FROM gantry_requests {allowed} GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2, 3, 4, 5"
+            );
+            let refs: Vec<&(dyn ToSql + Sync)> = params
+                .iter()
+                .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+                .collect();
+            let rows = client.query(&sql, &refs).await.map_err(db)?;
+            rows.iter()
+                .map(|r| {
+                    let text = |i: usize| r.try_get::<_, String>(i).map_err(db);
+                    let count = |i: usize| -> Result<u64, String> {
+                        Ok(u64::try_from(r.try_get::<_, i64>(i).map_err(db)?).unwrap_or_default())
+                    };
+                    Ok(insights::CostLine {
+                        day: text(0)?,
+                        org: text(1)?,
+                        team: text(2)?,
+                        provider: text(3)?,
+                        model: text(4)?,
+                        requests: count(5)?,
+                        input_tokens: count(6)?,
+                        output_tokens: count(7)?,
+                        cost_usd: r.try_get(8).map_err(db)?,
+                    })
+                })
+                .collect()
+        })
+    }
+
     fn spent(&self, query: &Query, dimension: &str) -> Pending<Vec<(String, f64)>> {
         let pg = self.pg.clone();
         let query = query.clone();

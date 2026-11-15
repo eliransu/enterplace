@@ -772,7 +772,8 @@ async fn answer(state: &AppState, request: Request, planned: Planned) -> Respons
 /// What a call does once it is allowed.
 enum Plan {
     Read(Value),
-    Csv(String),
+    /// A CSV file and the name a browser saves it under.
+    Csv(String, &'static str),
     Change {
         text: String,
         base: Option<i64>,
@@ -982,6 +983,9 @@ async fn allow(
         "usage" => {
             let form = gantry_console::Form::parse(&query);
             call.target = Some(json!({ "query": query }));
+            if form.get("format") == "focus" {
+                return focus(&reloader.audit_path(), &form, &role).await;
+            }
             let wants_csv = form.get("format") == "csv"
                 || parts
                     .headers
@@ -1200,7 +1204,7 @@ const USAGE_COLUMNS: [&str; 9] = [
 ];
 
 /// A CSV field, quoted, and kept from reading as a formula in a spreadsheet.
-fn csv_field(text: &str) -> String {
+pub(crate) fn csv_field(text: &str) -> String {
     let text = if text.starts_with(['=', '+', '-', '@']) {
         format!("'{text}")
     } else {
@@ -1305,7 +1309,7 @@ async fn usage(
                 .collect();
             out.push_str(&format!("{},{}\n", csv_field(value), cells.join(",")));
         }
-        return Ok(Plan::Csv(out));
+        return Ok(Plan::Csv(out, "gantry-usage.csv"));
     }
     let rows: Vec<Value> = groups
         .iter()
@@ -1327,19 +1331,52 @@ async fn usage(
     })))
 }
 
+/// `GET /admin/usage?format=focus`: the requests the query matches as a FOCUS 1.2 cost and usage file, one line per
+/// UTC day, organization, team, provider and model (`focus.rs` has the column mapping). `group_by` does not apply.
+async fn focus(
+    audit: &std::path::Path,
+    form: &gantry_console::Form,
+    role: &Role,
+) -> Result<Plan, Refusal> {
+    let mut query = Query::parse(&|name| form.get(name).to_string()).map_err(bad)?;
+    confine(&mut query, role)?;
+    query.limit = insights::MAX_ROWS;
+    let lines = match insights::attached(audit).index {
+        Some(index) => index.cost_lines(&query).await,
+        None => {
+            let path = audit.to_path_buf();
+            blocking(move || {
+                insights::fold_chain(&path).map(|rows| {
+                    let rows: Vec<_> = rows.into_iter().filter(|r| query.matches(r)).collect();
+                    insights::cost_lines(&rows)
+                })
+            })
+            .await?
+        }
+    }
+    .map_err(|err| {
+        refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_unavailable",
+            format!("Refused: {err}"),
+        )
+    })?;
+    Ok(Plan::Csv(crate::focus::csv(&lines), "gantry-focus.csv"))
+}
+
 type Done = (Response, Option<(String, String)>);
 
 async fn act(state: &AppState, plan: Plan) -> Result<Done, Refusal> {
     match plan {
         Plan::Read(body) => Ok((json_response(StatusCode::OK, &body), None)),
-        Plan::Csv(text) => Ok((
+        Plan::Csv(text, name) => Ok((
             (
                 StatusCode::OK,
                 [
-                    (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+                    (header::CONTENT_TYPE, "text/csv; charset=utf-8".to_string()),
                     (
                         header::CONTENT_DISPOSITION,
-                        "attachment; filename=\"gantry-usage.csv\"",
+                        format!("attachment; filename=\"{name}\""),
                     ),
                 ],
                 text,

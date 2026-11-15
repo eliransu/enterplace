@@ -512,3 +512,126 @@ async fn the_console_shows_deployments_tests_a_provider_and_a_requests_time_by_s
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_caller_reads_its_own_budget_and_a_rule_can_put_it_on_every_answer() -> TestResult {
+    let g = gateway("budget").await?;
+    let me = |key: &str| {
+        Request::get("/v1/gantry/me")
+            .header(header::AUTHORIZATION, format!("Bearer {key}"))
+            .body(Body::empty())
+    };
+    let before = send(&g.gw.router, me(MAYA)?).await?;
+    assert_eq!(before.status, StatusCode::OK, "{}", before.body);
+    let before = before.json()?;
+    assert_eq!(before["name"], "maya.cohen");
+    assert_eq!(before["team"], "payments");
+    assert_eq!(before["rule"], "payments");
+    assert_eq!(before["remaining_usd"], 10.0);
+    assert_eq!(before["budgets"][0]["usd"], 10.0);
+    assert_eq!(before["budgets"][0]["per"], "month");
+    assert!(
+        before["resets"]
+            .as_str()
+            .is_some_and(|r| r.ends_with("00:00 UTC")),
+        "{before}"
+    );
+
+    // The rule has budget_headers: each answer says what the tightest budget has left, and when it resets.
+    let answer = send(&g.gw.router, chat("m", "hello")?).await?;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let left: f64 = answer.header("x-gantry-budget-remaining-usd").parse()?;
+    assert!(left < 10.0 && left > 9.0, "{left}");
+    assert_eq!(
+        Some(answer.header("x-gantry-budget-reset")),
+        before["resets"].as_str()
+    );
+    g.settled(1).await?;
+    let after = send(&g.gw.router, me(MAYA)?).await?.json()?;
+    // 1,000 tokens in at $1 and 500 out at $2 a million.
+    assert_eq!(after["budgets"][0]["spent_usd"], 0.002);
+    assert_eq!(after["remaining_usd"], 9.998);
+
+    // A rule without budget_headers adds none, and its caller has no budget to show.
+    let plain = Request::post("/v1/chat/completions")
+        .header(header::AUTHORIZATION, format!("Bearer {ADMIN}"))
+        .body(Body::from(
+            r#"{"model":"m","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}"#,
+        ))?;
+    let plain = send(&g.gw.router, plain).await?;
+    assert_eq!(plain.status, StatusCode::OK);
+    assert!(!plain.headers.contains_key("x-gantry-budget-remaining-usd"));
+    let admin_me = send(&g.gw.router, me(ADMIN)?).await?.json()?;
+    assert!(admin_me["remaining_usd"].is_null() && admin_me["budgets"] == serde_json::json!([]));
+
+    // A key Gantry does not know learns nothing, and asking writes no audit record.
+    let stranger = send(&g.gw.router, me("gantry_nobody_0123456789")?).await?;
+    assert_eq!(stranger.status, StatusCode::UNAUTHORIZED);
+    g.settled(2).await?;
+    assert!(!std::fs::read_to_string(&g.audit)?.contains("/v1/gantry/me"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn usage_is_exported_as_a_focus_cost_file() -> TestResult {
+    let g = gateway("focus").await?;
+    for _ in 0..2 {
+        let answer = send(&g.gw.router, chat("m", "hello")?).await?;
+        assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    }
+    // A refused request reached no provider: it is no line.
+    assert_eq!(
+        send(&g.gw.router, chat("nope", "hello")?).await?.status,
+        StatusCode::FORBIDDEN
+    );
+    g.settled(2).await?;
+    let file = send(&g.gw.router, admin("GET", "/admin/usage?format=focus")?).await?;
+    assert_eq!(file.status, StatusCode::OK, "{}", file.body);
+    assert!(file.header("content-type").starts_with("text/csv"));
+    assert!(file.header("content-disposition").contains("gantry-focus.csv"));
+    let mut lines = file.body.lines();
+    let header: Vec<&str> = lines.next().ok_or("no header")?.split(',').collect();
+    for column in [
+        "BilledCost",
+        "BillingAccountId",
+        "BillingCurrency",
+        "BillingPeriodStart",
+        "BillingPeriodEnd",
+        "ChargeCategory",
+        "ChargePeriodStart",
+        "ChargePeriodEnd",
+        "EffectiveCost",
+        "ListCost",
+        "ContractedCost",
+        "ProviderName",
+        "PublisherName",
+        "InvoiceIssuerName",
+        "ServiceCategory",
+        "ServiceName",
+        "SkuId",
+        "SubAccountId",
+        "ConsumedQuantity",
+        "ConsumedUnit",
+        "Tags",
+    ] {
+        assert!(header.contains(&column), "{column} missing from the header");
+    }
+    let rows: Vec<&str> = lines.collect();
+    assert_eq!(rows.len(), 1, "one line per day, team, provider and model: {rows:?}");
+    let row = rows[0];
+    let today = &gantry_core::audit::timestamp()[..10];
+    // Two requests of 1,000 tokens in and 500 out: $0.004, 3,000 tokens.
+    assert!(row.starts_with("0.004,\"default\",\"default\",USD,"), "{row}");
+    assert!(row.contains(&format!("Usage-Based,{today}T00:00:00Z,")), "{row}");
+    assert!(row.contains(",3000,Tokens,0.004,0.004,\"mock\",0.004,Standard,"), "{row}");
+    assert!(row.contains("\"AI and Machine Learning\",\"mock\",\"m\",\"payments\",\"payments\","), "{row}");
+    assert!(row.ends_with(",2,2000,1000"), "{row}");
+    // A filter narrows it as it narrows the JSON answer.
+    let none = send(
+        &g.gw.router,
+        admin("GET", "/admin/usage?format=focus&team=nobody")?,
+    )
+    .await?;
+    assert_eq!(none.body.lines().count(), 1, "the header alone");
+    Ok(())
+}

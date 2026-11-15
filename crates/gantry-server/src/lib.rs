@@ -38,6 +38,7 @@ mod cloud_batch;
 mod cors;
 mod credentials;
 mod events;
+mod focus;
 mod health;
 pub mod insights;
 mod jwt;
@@ -97,6 +98,8 @@ pub const MAX_BUFFERED_BYTES_PER_CALLER: usize = MAX_BUFFERED_BYTES / 4;
 type Held = Vec<OwnedSemaphorePermit>;
 
 /// The routes this version forwards, and the kind of provider each one reaches.
+/// A caller's own budgets (`me`).
+const ME: &str = "/v1/gantry/me";
 const CHAT: &str = "/v1/chat/completions";
 const MESSAGES: &str = "/v1/messages";
 const COUNT_TOKENS: &str = "/v1/messages/count_tokens";
@@ -1083,7 +1086,8 @@ fn build(
         .route(
             "/api/hello",
             head(|| async { StatusCode::OK }).fallback(handle),
-        );
+        )
+        .route(ME, get(me).fallback(handle));
     // The admin API changes the keys file, so it exists only when Gantry serves from one.
     if reloader.is_some() {
         router = router
@@ -4664,16 +4668,26 @@ async fn limit(
             threshold: semantic.threshold,
         });
     }
-    match spend::admit(&state.spend, state.audit.as_ref().map(|a| &a.log), ask).await? {
+    let admitted = spend::admit(&state.spend, state.audit.as_ref().map(|a| &a.log), ask).await?;
+    // Read after the request's own reservation was made, so what is left already leaves room for it.
+    let left = if rule.limits.budget_headers {
+        BudgetLeft::of(state, &applied).await
+    } else {
+        None
+    };
+    match admitted {
         spend::Admit::Hit(response, admitted, found) => {
             seen.cache = Some("hit");
             seen.hit = Some(admitted);
             seen.found = Some(found);
             // The cache holds the provider's own format, so a translated request gets its hit translated too.
             let plan = parts.extensions.get::<Plan>();
-            Ok(Some(
-                for_caller(provider.kind, &provider.name, plan, decision, response).await?,
-            ))
+            let mut response =
+                for_caller(provider.kind, &provider.name, plan, decision, response).await?;
+            if let Some(left) = left {
+                left.write(response.headers_mut());
+            }
+            Ok(Some(response))
         }
         spend::Admit::Go(meter, cache, would_refuse) => {
             seen.cache = cache;
@@ -4681,8 +4695,177 @@ async fn limit(
                 observed(seen, refusal, by);
             }
             parts.extensions.insert(meter);
+            if let Some(left) = left {
+                parts.extensions.insert(left);
+            }
             Ok(None)
         }
+    }
+}
+
+/// What the tightest budget a request counts against has left, for the `x-gantry-budget-*` headers of a rule with
+/// `budget_headers: true`.
+#[derive(Clone, Debug)]
+struct BudgetLeft {
+    usd: f64,
+    /// When that budget's period ends, as refusals write it (`2026-12-01 00:00 UTC`). None for a sliding window,
+    /// which has no end.
+    reset: Option<String>,
+}
+
+impl BudgetLeft {
+    /// The budget with the least left of those `applied` names, a shadowed one aside: it refuses nothing.
+    async fn of(state: &AppState, applied: &[gantry_core::policy::Applied]) -> Option<Self> {
+        let mut least: Option<Self> = None;
+        for budget in budgets_now(state, applied).await {
+            if budget.shadow {
+                continue;
+            }
+            if least.as_ref().is_none_or(|l| budget.remaining < l.usd) {
+                least = Some(Self {
+                    usd: budget.remaining,
+                    reset: budget.resets.clone(),
+                });
+            }
+        }
+        least
+    }
+
+    fn write(&self, headers: &mut HeaderMap) {
+        let text = format!("{:.6}", self.usd.max(0.0));
+        let text = text.trim_end_matches('0').trim_end_matches('.');
+        if let Ok(value) = HeaderValue::from_str(text) {
+            headers.insert(
+                HeaderName::from_static("x-gantry-budget-remaining-usd"),
+                value,
+            );
+        }
+        if let Some(value) = self
+            .reset
+            .as_deref()
+            .and_then(|r| HeaderValue::from_str(r).ok())
+        {
+            headers.insert(HeaderName::from_static("x-gantry-budget-reset"), value);
+        }
+    }
+}
+
+/// One budget a caller counts against, with what it has spent and holds now.
+struct BudgetNow {
+    of: &'static str,
+    whose: String,
+    usd: f64,
+    per: String,
+    spent: f64,
+    reserved: f64,
+    remaining: f64,
+    resets: Option<String>,
+    shadow: bool,
+}
+
+/// Each budget among `applied`, read now from the counters every gateway on the store shares.
+async fn budgets_now(
+    state: &AppState,
+    applied: &[gantry_core::policy::Applied],
+) -> Vec<BudgetNow> {
+    let now = gantry_core::audit::timestamp();
+    let mut out = Vec::new();
+    for a in applied {
+        let gantry_core::policy::Limit::Budget(budget) = a.limit else {
+            continue;
+        };
+        let (spent, reserved) = state
+            .spend
+            .spent_now(&a.scope, budget.per)
+            .await
+            .unwrap_or_default();
+        out.push(BudgetNow {
+            of: a.of,
+            whose: a.whose.clone(),
+            usd: budget.usd,
+            per: budget.per.word(),
+            spent,
+            reserved,
+            remaining: budget.usd - spent - reserved,
+            resets: (!budget.per.sliding).then(|| budget.per.resets(&budget.per.label(&now))),
+            shadow: a.shadow.is_some(),
+        });
+    }
+    out
+}
+
+/// `GET /v1/gantry/me`: who the caller's key is and what each budget it counts against has left, for a status line
+/// or `gantry budget status`. Any key may ask about itself and only itself. `?model=` adds the budgets of that
+/// model. It reaches no provider, costs nothing and writes no audit record: a status line asks every few seconds.
+async fn me(State(state): State<AppState>, request: Request) -> Response {
+    let decision = id::decision_id();
+    let version = state.version();
+    // The request's body is never read: only its head is kept across the waits below.
+    let (parts, _) = request.into_parts();
+    let outcome = async {
+        let Some(policy) = &version.policy else {
+            return Err(unknown_route());
+        };
+        let key = caller_key(&parts.headers)?;
+        let client_ip = client_ip(
+            policy,
+            parts.extensions.get::<ClientAddr>(),
+            &parts.headers,
+        );
+        let minted = std::sync::OnceLock::new();
+        let mut seen = Seen::default();
+        let path = parts.uri.path();
+        let (person, _) =
+            identify(&state, policy, key, path, client_ip, &minted, &mut seen).await?;
+        let rule = policy.rule_for(person).ok_or_else(|| no_rule(person))?;
+        let model = gantry_console::Form::parse(parts.uri.query().unwrap_or_default())
+            .get("model")
+            .to_string();
+        let applied = policy.applied(
+            person,
+            rule,
+            gantry_core::policy::Context {
+                sent: &model,
+                model: &model,
+                customer: person.customer.as_deref(),
+                tags: &person.tags,
+            },
+        );
+        let budgets = budgets_now(&state, &applied).await;
+        let least = budgets
+            .iter()
+            .filter(|b| !b.shadow)
+            .min_by(|a, b| a.remaining.total_cmp(&b.remaining));
+        let rows: Vec<serde_json::Value> = budgets
+            .iter()
+            .map(|b| {
+                serde_json::json!({
+                    "of": b.of,
+                    "whose": b.whose,
+                    "usd": b.usd,
+                    "per": b.per,
+                    "spent_usd": b.spent,
+                    "reserved_usd": b.reserved,
+                    "remaining_usd": b.remaining.max(0.0),
+                    "resets": b.resets,
+                    "shadow": b.shadow,
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({
+            "name": person.name,
+            "team": person.team,
+            "key": person.key,
+            "rule": rule.name,
+            "remaining_usd": least.map(|b| b.remaining.max(0.0)),
+            "resets": least.and_then(|b| b.resets.clone()),
+            "budgets": rows,
+        }))
+    }
+    .await;
+    match outcome {
+        Ok(body) => admin::json_response(StatusCode::OK, &body),
+        Err(refusal) => refusal.respond(&decision, false),
     }
 }
 
@@ -6009,6 +6192,7 @@ async fn send(
         .extensions
         .remove::<stages::Stages>()
         .unwrap_or_default();
+    let budget_left = parts.extensions.remove::<BudgetLeft>();
     let answer_check = parts.extensions.remove::<AnswerCheck>();
     let turn = parts.extensions.remove::<events::Carry>();
     let mut creator = parts.extensions.remove::<batch::Creator>();
@@ -6309,6 +6493,9 @@ async fn send(
         Some(price) => with_cost(response, &price, bytes.len()).await,
         None => response,
     };
+    if let Some(left) = budget_left {
+        left.write(response.headers_mut());
+    }
     if let Some(check) = answer_check {
         response.extensions_mut().insert(check);
     }

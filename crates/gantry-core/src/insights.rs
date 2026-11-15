@@ -933,6 +933,55 @@ pub trait Index: Send + Sync + std::fmt::Debug {
     /// The decision records of every gateway since `since` (RFC 3339), as written, oldest first: the newest `max`
     /// of them when there are more. What a policy dry run replays.
     fn lines(&self, since: &str, max: usize) -> Pending<Vec<String>>;
+    /// What the requests the query matches cost, by day, organization, team, provider and model, summed where the
+    /// rows are kept. What a cost export writes ([`cost_lines`] over the local chain).
+    fn cost_lines(&self, query: &Query) -> Pending<Vec<CostLine>>;
+}
+
+/// One line of a cost export: what one team's requests to one model at one provider cost in one UTC day.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CostLine {
+    /// `2026-11-15`.
+    pub day: String,
+    pub org: String,
+    pub team: String,
+    pub provider: String,
+    pub model: String,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_usd: f64,
+}
+
+/// [`Index::cost_lines`] over rows folded here, from the local chain. A refused request reached no provider and
+/// cost nothing, so it is no line.
+pub fn cost_lines(rows: &[Row]) -> Vec<CostLine> {
+    let mut by: BTreeMap<[String; 5], CostLine> = BTreeMap::new();
+    for row in rows.iter().filter(|r| r.verdict != "refused") {
+        let key = [
+            row.time.get(..10).unwrap_or_default().to_string(),
+            row.label("org").to_string(),
+            row.label("team").to_string(),
+            row.label("provider").to_string(),
+            row.label("model").to_string(),
+        ];
+        let line = by.entry(key.clone()).or_insert_with(|| {
+            let [day, org, team, provider, model] = key;
+            CostLine {
+                day,
+                org,
+                team,
+                provider,
+                model,
+                ..CostLine::default()
+            }
+        });
+        line.requests += 1;
+        line.input_tokens += row.input_tokens.unwrap_or_default();
+        line.output_tokens += row.output_tokens.unwrap_or_default();
+        line.cost_usd += row.cost_usd.unwrap_or_default();
+    }
+    by.into_values().collect()
 }
 
 /// [`Index::spent`] over rows folded here, from the local chain.

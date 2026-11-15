@@ -1426,6 +1426,32 @@ async fn every_gateway_shows_the_same_deployment_health() -> TestResult {
         .ok_or("the live deployment of pair is missing")?;
     assert_eq!(live["state"], "up");
     assert!(live["latency_p50_ms"].is_number(), "{live}");
+
+    // The FOCUS cost file is summed in the store's request index, so b writes the lines of a's requests.
+    let start = Instant::now();
+    loop {
+        let response = b
+            .router
+            .clone()
+            .oneshot(request("GET", "/admin/usage?format=focus", ADMIN, "")?)
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = String::from_utf8(response.into_body().collect().await?.to_bytes().to_vec())?;
+        let requests: u64 = text
+            .lines()
+            .skip(1)
+            .filter(|line| line.contains("\"paired\""))
+            .filter_map(|line| line.rsplit(',').nth(2)?.parse::<u64>().ok())
+            .sum();
+        if requests == 2 {
+            assert!(text.starts_with("BilledCost,BillingAccountId,"), "{text}");
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(15) {
+            return Err(format!("the index never held a's two requests: {text}").into());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     Ok(())
 }
 
