@@ -1537,7 +1537,7 @@ fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
             ("blocked MCP", &sum.blocked_mcp),
         ] {
             for detail in set {
-                end += &html::tag("", word, &esc(detail));
+                end += &html::tag("", word, detail);
             }
         }
         out += &html::row(&esc(&person), &esc(&meta), &end, true);
