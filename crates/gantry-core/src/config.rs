@@ -145,6 +145,8 @@ const KNOWN: &[&str] = &[
     "recipe",
     "config_id",
     "guard_name",
+    "profile_name",
+    "policy_id",
     "case_sensitive",
     "whole_word",
     "shadow_until",

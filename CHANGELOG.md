@@ -7,6 +7,14 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Guardrails: five more vendors
+
+- New guardrail types, each asked in the vendor's own API: `prisma_airs` (Palo Alto Networks Prisma AIRS AI
+  Runtime, with `profile_name`), `enkrypt` (Enkrypt AI), `grayswan` (Gray Swan Cygnal, with `policy_id`),
+  `cisco_ai_defense` (Cisco AI Defense, `region` us, eu or ap) and `mistral_moderation`. Findings are recorded by
+  kind, never content. Prompt Security, Pillar Security, Noma, Qualifire and Zscaler AI Guard are not built in: none
+  publishes its request and answer fields without an account.
+
 ### Providers: images, rerank and counts across clouds, OCR, Azure and AWS SDK keys
 
 - `POST /v1/images/generations` reaches Imagen and Gemini image models on the Gemini API and Vertex AI, and Amazon

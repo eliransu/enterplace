@@ -61,6 +61,16 @@ pub enum GuardType {
     Lasso,
     GuardrailsAi,
     Aporia,
+    /// Palo Alto Networks Prisma AIRS AI Runtime: the sync scan API with an API security profile.
+    PrismaAirs,
+    /// Enkrypt AI guardrails: POST /guardrails/detect.
+    Enkrypt,
+    /// Gray Swan Cygnal: POST /cygnal/monitor with a policy.
+    Grayswan,
+    /// Cisco AI Defense: the chat inspection API.
+    CiscoAiDefense,
+    /// Mistral's moderation API, on conversations.
+    MistralModeration,
     /// Not a check: a service that rewrites the whole request or answer (docs/transform-webhook). Runs before every
     /// other guardrail of the rule, so the checks read what is really sent.
     Transform,
@@ -188,6 +198,12 @@ pub struct GuardrailFile {
     /// guardrails_ai: the guard on the Guardrails AI server.
     #[serde(default)]
     pub guard_name: Option<String>,
+    /// prisma_airs: the API security profile that sets what is scanned for.
+    #[serde(default)]
+    pub profile_name: Option<String>,
+    /// grayswan: the Cygnal policy to apply.
+    #[serde(default)]
+    pub policy_id: Option<String>,
     /// secrets: `gitleaks` reads with Gitleaks' default rule set in place of Gantry's own secrets detector.
     #[serde(default)]
     pub pack: Option<String>,
@@ -741,6 +757,11 @@ fn type_name(kind: GuardType) -> &'static str {
         GuardType::Lasso => "lasso",
         GuardType::GuardrailsAi => "guardrails_ai",
         GuardType::Aporia => "aporia",
+        GuardType::PrismaAirs => "prisma_airs",
+        GuardType::Enkrypt => "enkrypt",
+        GuardType::Grayswan => "grayswan",
+        GuardType::CiscoAiDefense => "cisco_ai_defense",
+        GuardType::MistralModeration => "mistral_moderation",
         GuardType::Transform => "transform",
         GuardType::Events => "events",
     }
@@ -769,6 +790,8 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         ("recipe", def.recipe.is_some()),
         ("config_id", def.config_id.is_some()),
         ("guard_name", def.guard_name.is_some()),
+        ("profile_name", def.profile_name.is_some()),
+        ("policy_id", def.policy_id.is_some()),
     ];
     let takes: &[&str] = match def.kind {
         GuardType::OpenaiModeration => &["key_env", "model"],
@@ -788,6 +811,11 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         GuardType::Lasso => &["key_env"],
         GuardType::GuardrailsAi => &["key_env", "guard_name"],
         GuardType::Aporia => &["key_env"],
+        GuardType::PrismaAirs => &["key_env", "profile_name"],
+        GuardType::Enkrypt => &["key_env"],
+        GuardType::Grayswan => &["key_env", "policy_id"],
+        GuardType::CiscoAiDefense => &["key_env", "region"],
+        GuardType::MistralModeration => &["key_env", "model"],
         _ => &[],
     };
     if let Some((field, _)) = given.iter().find(|(f, on)| *on && !takes.contains(f)) {
@@ -818,6 +846,11 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
             | GuardType::Pangea
             | GuardType::Lasso
             | GuardType::Aporia
+            | GuardType::PrismaAirs
+            | GuardType::Enkrypt
+            | GuardType::Grayswan
+            | GuardType::CiscoAiDefense
+            | GuardType::MistralModeration
     );
     if key_needed && def.key_env.is_none() {
         return Err(format!(
@@ -937,6 +970,31 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
             Vendor::GuardrailsAi { guard }
         }
         GuardType::Aporia => Vendor::Aporia,
+        GuardType::PrismaAirs => Vendor::PrismaAirs {
+            profile: required(
+                "profile_name (the API security profile in Strata Cloud Manager)",
+                &def.profile_name,
+            )?,
+        },
+        GuardType::Enkrypt => Vendor::Enkrypt,
+        GuardType::Grayswan => Vendor::Grayswan {
+            policy: required(
+                "policy_id (the Cygnal policy; Gray Swan applies none by default)",
+                &def.policy_id,
+            )?,
+        },
+        GuardType::CiscoAiDefense => {
+            let region = def.region.clone().unwrap_or_else(|| "us".into());
+            if !matches!(region.as_str(), "us" | "eu" | "ap") {
+                return Err(format!(
+                    "guardrail \"{name}\": region \"{region}\" is not a Cisco AI Defense region. Use us, eu or ap."
+                ));
+            }
+            Vendor::CiscoAiDefense { region }
+        }
+        GuardType::MistralModeration => Vendor::MistralModeration {
+            model: def.model.clone(),
+        },
         _ => Vendor::Contract,
     })
 }

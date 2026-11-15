@@ -127,6 +127,28 @@ fn vendor_answer(path: &str, headers: &HeaderMap, body: &Value, key: &str) -> Op
         "/aporia/validate" if header("x-aporia-api-key") == key => {
             Some(json!({"action": if bad { "block" } else { "passthrough" }}))
         }
+        "/v1/scan/sync/request" if header("x-pan-token") == key => Some(json!({
+            "action": if bad { "block" } else { "allow" }, "category": if bad { "malicious" } else { "benign" },
+            "prompt_detected": {"injection": bad, "dlp": false}, "tr_id": body["tr_id"]
+        })),
+        "/guardrails/detect" if header("apikey") == key => Some(json!({
+            // The detectors' own names hold the bad word: only the text decides.
+            "summary": {"injection_attack": i32::from(body["text"].as_str().unwrap_or("").contains(BAD)), "toxicity": [], "nsfw": 0}, "details": {}
+        })),
+        "/cygnal/monitor" if header("grayswan-api-key") == key && body["policy_id"] == "pol1" => {
+            Some(json!({
+                "violation": if bad { 0.97 } else { 0.02 }, "violated_rules": if bad { json!([2]) } else { json!([]) },
+                "ipi": false, "error": false
+            }))
+        }
+        "/api/v1/inspect/chat" if header("x-cisco-ai-defense-api-key") == key => Some(json!({
+            "is_safe": !bad, "classifications": if bad { json!(["SECURITY_VIOLATION"]) } else { json!([]) },
+            "rules": if bad { json!([{"rule_name": "Prompt Injection"}]) } else { json!([]) }
+        })),
+        "/mistral/v1/chat/moderations" if bearer => Some(json!({
+            "id": "m1", "model": "mistral-moderation-latest",
+            "results": [{"categories": {"violence_and_threats": bad, "pii": false}}]
+        })),
         "/v1/chat/completions" if bearer => Some(json!({
             "choices": [{"message": {"role": "assistant", "content": if bad { "unsafe\nS1" } else { "safe" }}}]
         })),
@@ -313,6 +335,36 @@ async fn each_vendor_is_asked_in_its_own_api_and_blocks_or_allows() -> TestResul
             format!("    url: {base}/aporia\n    key_env: {KEY_ENV}\n"),
             "/aporia/validate",
             "aporia_policy",
+        ),
+        (
+            "prisma_airs",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n    profile_name: gantry\n"),
+            "/v1/scan/sync/request",
+            "injection",
+        ),
+        (
+            "enkrypt",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n"),
+            "/guardrails/detect",
+            "injection_attack",
+        ),
+        (
+            "grayswan",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n    policy_id: pol1\n"),
+            "/cygnal/monitor",
+            "rule_2",
+        ),
+        (
+            "cisco_ai_defense",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n    region: eu\n"),
+            "/api/v1/inspect/chat",
+            "prompt_injection",
+        ),
+        (
+            "mistral_moderation",
+            format!("    url: {base}/mistral/v1\n    key_env: {KEY_ENV}\n"),
+            "/mistral/v1/chat/moderations",
+            "violence_and_threats",
         ),
     ];
     for (kind, fields, path, finding) in cases {
