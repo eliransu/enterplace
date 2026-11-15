@@ -408,32 +408,6 @@ fn key_json(entry: &config::KeyEntry) -> Value {
     })
 }
 
-/// How long the old key keeps working after a rotation: `48h`, `30m`, `7d`, `90s` or `0`. At most 90 days.
-fn grace(text: &str) -> Result<std::time::Duration, String> {
-    let wrong = || {
-        format!(
-            "grace is \"{text}\". Write how long the old key keeps working, such as 48h, 30m or 7d (at most 90d), or 0 to end it now"
-        )
-    };
-    let text = text.trim();
-    if text == "0" {
-        return Ok(std::time::Duration::ZERO);
-    }
-    let (number, unit) = text.split_at(text.len().saturating_sub(1));
-    let n: u64 = number.parse().map_err(|_| wrong())?;
-    let seconds = match unit {
-        "s" => n,
-        "m" => n.saturating_mul(60),
-        "h" => n.saturating_mul(3600),
-        "d" => n.saturating_mul(86_400),
-        _ => return Err(wrong()),
-    };
-    if seconds > 90 * 86_400 {
-        return Err(wrong());
-    }
-    Ok(std::time::Duration::from_secs(seconds))
-}
-
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NewBudget {
@@ -1242,14 +1216,15 @@ async fn allow(
                         ),
                     ));
                 }
-                let wait = grace(sent.get("grace").and_then(Value::as_str).unwrap_or("24h"))
-                    .map_err(|problem| {
-                        refused(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_request",
-                            format!("Refused: {problem}."),
-                        )
-                    })?;
+                let wait =
+                    keyfile::grace(sent.get("grace").and_then(Value::as_str).unwrap_or("24h"))
+                        .map_err(|problem| {
+                            refused(
+                                StatusCode::BAD_REQUEST,
+                                "invalid_request",
+                                format!("Refused: {problem}."),
+                            )
+                        })?;
                 let key = id::new_key().map_err(|err| {
                     refused(
                         StatusCode::SERVICE_UNAVAILABLE,
@@ -1257,12 +1232,7 @@ async fn allow(
                         format!("Refused: {err}. Try again."),
                     )
                 })?;
-                let at = audit::rfc3339(std::time::SystemTime::now() + wait);
-                // An expiry already earlier than the grace stays: a rotation never lengthens a key's life.
-                let until = match &found.expires {
-                    Some(old) if gantry_core::policy::expiry_passed(old, &at) => old.clone(),
-                    _ => format!("{}Z", &at[..19]),
-                };
+                let until = keyfile::rotation_end(&found, wait);
                 let mut target = named;
                 target["replaced_by"] = id::sha256_hex(key.as_bytes())[..8].into();
                 target["old_key_until"] = until.clone().into();
@@ -1755,50 +1725,10 @@ async fn act(state: &AppState, version: &Snapshot, plan: Plan) -> Result<Respons
             ))
         }
         Plan::Rotate { old, key, until } => {
-            let attributes = keyfile::Attributes {
-                admin: old.admin,
-                expires: old.expires.clone(),
-                budget: old.budget,
-                models: old.models.clone(),
-                tpm: old.tpm,
-                org: old.org.clone(),
-                customer: old.customer.clone(),
-                tags: old.tags.clone(),
-                parallel: old.parallel,
-                role: old.role.clone(),
-                options: gantry_core::policy::KeyOptions {
-                    replaced_by: None,
-                    ..old.options.clone()
-                },
-            };
-            let new_prefix = id::sha256_hex(key.as_bytes())[..8].to_string();
-            let (o, k, p, u, np) = (
-                old.clone(),
-                key.clone(),
-                keys_path.clone(),
-                until.clone(),
-                new_prefix.clone(),
-            );
-            blocking(move || {
-                keyfile::add_with(&o.name, &o.team, &k, &attributes, &p)?;
-                let ended = keyfile::update(&p, &o.sha256, &|entry| {
-                    entry.expires = Some(u.clone());
-                    entry.options.replaced_by = Some(np.clone());
-                });
-                match ended {
-                    Ok(Some(_)) => Ok(()),
-                    // The new key was never shown: it is taken out again, so nobody holds a key the record does not explain.
-                    other => {
-                        let _ = keyfile::revoke(&p, &id::sha256_hex(k.as_bytes()));
-                        Err(match other {
-                            Err(err) => err,
-                            _ => "the old key was removed by someone else meanwhile. No new key was made.".into(),
-                        })
-                    }
-                }
-            })
-            .await?
-            .map_err(file_error)?;
+            let (o, k, p, u) = (old.clone(), key.clone(), keys_path.clone(), until.clone());
+            let new_prefix = blocking(move || keyfile::rotate(&p, &o, &k, &u))
+                .await?
+                .map_err(file_error)?;
             let status = reload(state).await?;
             Ok(json_response(
                 StatusCode::CREATED,

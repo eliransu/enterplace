@@ -1366,6 +1366,69 @@ async fn a_deployment_that_failed_on_one_gateway_is_passed_over_by_the_others() 
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn every_gateway_shows_the_same_deployment_health() -> TestResult {
+    let Some(url) = database("health").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let [a, b, _c] = three("health", &url, port, &[("maya", "paired", MAYA)])?;
+    add_key(&a, "root", "platform", ADMIN, true)?;
+    // Through a alone: one of the two goes to the dead deployment first, which a puts to cool down.
+    for _ in 0..2 {
+        let (status, body) = answer(
+            &a.router,
+            request(
+                "POST",
+                "/v1/chat/completions",
+                MAYA,
+                r#"{"model":"pair","messages":[]}"#,
+            )?,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    // b sent nothing and failed nothing, and answers with what a saw: reports reach the store every 2 seconds.
+    let start = Instant::now();
+    let view = loop {
+        let (status, view) =
+            answer(&b.router, request("GET", "/admin/deployments", ADMIN, "")?).await?;
+        let dead = view["deployments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|d| d["deployment"] == "dead/gone")
+            .cloned()
+            .unwrap_or_default();
+        if status == StatusCode::OK
+            && view["gateways"] == 3
+            && dead["state"] == "cooling"
+            && dead["cooldowns"] == 1
+        {
+            break view;
+        }
+        if start.elapsed() > Duration::from_secs(15) {
+            return Err(format!("b never showed what a saw: {status} {view}").into());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(view["counted_by"], "store");
+    let live = view["deployments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|d| {
+            d["aliases"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|n| n == "pair"))
+                && d["deployment"] != "dead/gone"
+        })
+        .ok_or("the live deployment of pair is missing")?;
+    assert_eq!(live["state"], "up");
+    assert!(live["latency_p50_ms"].is_number(), "{live}");
+    Ok(())
+}
+
 /// The deployment and the reason of each routed request in `gw`'s audit log, oldest first.
 fn routes(gw: &Governed) -> Result<Vec<(String, String)>, Error> {
     let log = std::fs::read_to_string(dir_of(gw).join("gantry-audit.jsonl"))?;

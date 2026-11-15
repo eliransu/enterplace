@@ -36,7 +36,7 @@ use crate::{
     },
     page,
     pages::{self, PolicySource, alert, long_time, money, tool_page},
-    read_only, record, redirect, same_origin,
+    people_body, read_only, record, redirect, same_origin,
 };
 
 pub(crate) fn routes() -> Router<Console> {
@@ -45,6 +45,7 @@ pub(crate) fn routes() -> Router<Console> {
         .route("/models/{action}", post(models_change))
         .route("/teams", get(teams_page))
         .route("/people/edit", get(key_page).post(key_change))
+        .route("/people/rotate", post(key_rotate))
         .route("/policy/versions", get(versions_page))
         .route("/policy/versions/{id}/{action}", post(version_action))
         .route("/policy/edit", get(editor_page))
@@ -780,13 +781,40 @@ fn key_body(
     } else {
         alert(&esc(error))
     };
+    // Rotation is its own form: it makes a new key, where the form above changes what this one may do.
+    let rotate = if entry.options.replaced_by.is_some() {
+        format!(
+            r#"<div class="g-panel g-stack" style="max-width: 40rem"><p class="t-body" style="margin: 0">This key was rotated and replaced by key {}. It stops working at {}. Rotate the new key instead, or revoke this one.</p></div>"#,
+            esc(entry.options.replaced_by.as_deref().unwrap_or_default()),
+            esc(entry.expires.as_deref().unwrap_or_default())
+        )
+    } else {
+        format!(
+            r#"<div class="g-panel g-stack" style="max-width: 40rem">
+<form class="g-stack" style="gap: var(--space-6)" method="post" action="/console/people/rotate"><input type="hidden" name="sha256" value="{}">{}<div class="g-dialog__actions">{}</div></form>
+</div>"#,
+            esc(&entry.sha256),
+            field(&Field {
+                id: "key-grace",
+                name: "grace",
+                label: "Rotate: how long the old key keeps working",
+                value: &typed.map_or("24h".to_string(), |f| f.get("grace").to_string()),
+                mono: true,
+                extra: r#" autocomplete="off""#,
+                hint: "Makes a new key with the same settings and shows it once. Write 48h, 30m or 7d (at most 90d), or 0 to end the old key now. Requests made with the old key until then are recorded with key_rotated.",
+                error: "",
+            }),
+            button("Rotate the key", "", "submit", "")
+        )
+    };
     let main = format!(
         r#"{}
 {error}
 <div class="g-panel g-stack" style="max-width: 40rem">
 {}
 <form class="g-stack" style="gap: var(--space-6)" method="post" action="/console/people/edit"><input type="hidden" name="sha256" value="{}">{fields}<div class="g-dialog__actions">{}{}</div></form>
-</div>"#,
+</div>
+{rotate}"#,
         head(
             &format!("Edit the key of {}", esc(&entry.name)),
             "The key itself does not change and is never shown again: only what it may do. Every gateway uses the new fields within 2 seconds.",
@@ -903,6 +931,104 @@ async fn key_change(State(console): State<Console>, headers: HeaderMap, body: St
     };
     let _ = record(&console, &act, Some("keys_file"), Some(&error)).await;
     refuse(&error)
+}
+
+/// Rotates a key from its edit page: a new key with the same settings, shown once, and the old one ends after the
+/// grace. The same change as `POST /admin/keys/<prefix>/rotate`, recorded before it is made.
+async fn key_rotate(State(console): State<Console>, headers: HeaderMap, body: String) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    let Some(admin) = console.admin(&headers).await else {
+        return redirect("/console/sign-in");
+    };
+    let form = Form::parse(&body);
+    let Some(entry) = entry_of(&console, form.get("sha256")) else {
+        return redirect("/console/people");
+    };
+    let refuse = |error: &str| {
+        page(
+            StatusCode::BAD_REQUEST,
+            key_body(&admin, &Form(Vec::new()), &entry, Some(&form), error),
+        )
+    };
+    if !edits_key(&admin, &entry) {
+        read_only(&console, &admin, "rotate_key").await;
+        return refuse("You are signed in read only: ask an admin to rotate keys.");
+    }
+    let mut act = Act {
+        action: "rotate_key",
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target: json!({ "name": entry.name, "team": entry.team, "sha256_prefix": &entry.sha256[..8] }),
+    };
+    // The new key carries the old one's rights and its issuer sees it: only someone who holds them all may make it.
+    if (entry.admin || entry.role.is_some()) && !full_admin(&admin) {
+        let _ = record(&console, &act, Some("not_permitted"), None).await;
+        return refuse(
+            "Only an admin of the whole install may rotate an admin key or a key with a role.",
+        );
+    }
+    if let Some(by) = &entry.options.replaced_by {
+        let _ = record(&console, &act, Some("already_rotated"), None).await;
+        return refuse(&format!(
+            "This key was already rotated and replaced by key {by}. Rotate the new key instead, or revoke this one."
+        ));
+    }
+    let grace = match form.get("grace").trim() {
+        "" => "24h",
+        typed => typed,
+    };
+    let wait = match keyfile::grace(grace) {
+        Ok(wait) => wait,
+        Err(problem) => {
+            let _ = record(&console, &act, Some("invalid_request"), None).await;
+            return refuse(&sentence(&problem));
+        }
+    };
+    let key = match gantry_core::id::new_key() {
+        Ok(key) => key,
+        Err(err) => return refuse(&sentence(&format!("{err}. Try again"))),
+    };
+    let until = keyfile::rotation_end(&entry, wait);
+    act.target = json!({
+        "name": entry.name, "team": entry.team, "sha256_prefix": &entry.sha256[..8],
+        "replaced_by": &gantry_core::id::sha256_hex(key.as_bytes())[..8], "old_key_until": until,
+    });
+    if record(&console, &act, None, None).await.is_err() {
+        return refuse(NOT_RECORDED);
+    }
+    let (keys, old, new, end) = (
+        console.config().keys.clone(),
+        entry.clone(),
+        key.clone(),
+        until.clone(),
+    );
+    let done = tokio::task::spawn_blocking(move || keyfile::rotate(&keys, &old, &new, &end))
+        .await
+        .unwrap_or_else(|err| Err(format!("nothing was changed: {err}. Try again.")));
+    match done {
+        Ok(_) => page(
+            StatusCode::OK,
+            people_body(
+                &console,
+                &admin,
+                &Form(Vec::new()),
+                pages::Dialog::Rotated {
+                    name: entry.name.clone(),
+                    team: entry.team.clone(),
+                    key,
+                    until,
+                },
+            ),
+        ),
+        Err(err) => {
+            let error = sentence(&err);
+            // The record above says it was allowed; this one says it did not happen.
+            let _ = record(&console, &act, Some("keys_file"), Some(&error)).await;
+            refuse(&error)
+        }
+    }
 }
 
 // ---------------------------------------------------------------- versions

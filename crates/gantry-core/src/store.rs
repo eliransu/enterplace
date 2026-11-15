@@ -200,6 +200,13 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     }
     /// This gateway's load on a deployment now, for the others. Does not wait: written on the next poll.
     fn publish_load(&self, _deployment: &str, _load: DeploymentLoad) {}
+    /// What this gateway knows of each deployment and pool key (a JSON object), for every gateway's deployment
+    /// health view. Does not wait: written on the next poll.
+    fn publish_health(&self, _report: String) {}
+    /// What the other gateways on the store published in the last seconds, one report each. From memory, polled.
+    fn health_reports(&self) -> Arc<Vec<String>> {
+        Arc::default()
+    }
     /// Whether this gateway runs the health probe of `deployment` now. One gateway at a time holds each, for `ttl`
     /// after it last took it; without a store every gateway probes its own.
     fn probe_lease(&self, _deployment: String, _ttl: Duration) -> Pending<bool> {

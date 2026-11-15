@@ -322,3 +322,193 @@ async fn metrics_count_unpriced_requests_reserved_budget_and_a_deployments_rate_
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_admin_api_shows_each_deployments_health_and_tests_a_providers_connection() -> TestResult
+{
+    let g = gateway("deployments").await?;
+    let answer = send(&g.gw.router, chat("smart", "hello")?).await?;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    g.settled(1).await?;
+
+    let view = send(&g.gw.router, admin("GET", "/admin/deployments")?).await?;
+    assert_eq!(view.status, StatusCode::OK, "{}", view.body);
+    let view = view.json()?;
+    assert_eq!(view["counted_by"], "this gateway");
+    let of = |name: &str| -> Result<Value, Error> {
+        view["deployments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|d| d["deployment"] == name)
+            .cloned()
+            .ok_or_else(|| format!("{name} missing from {view}").into())
+    };
+    let gone = of("gone/g")?;
+    assert_eq!(gone["state"], "cooling", "{gone}");
+    assert_eq!(gone["cooldowns"], 1);
+    assert!(
+        gone["cooling_seconds"]
+            .as_u64()
+            .is_some_and(|s| s > 0 && s <= 60)
+    );
+    assert_eq!(gone["aliases"], serde_json::json!(["smart"]));
+    assert!(gone["error_rate"].as_f64().is_some_and(|e| e > 0.0));
+    let mock = of("mock/m")?;
+    assert_eq!(mock["state"], "up", "{mock}");
+    assert_eq!(mock["limits"]["rpm"], 100);
+    assert_eq!(mock["requests_this_minute"], 1);
+    assert_eq!(mock["rate_headroom"], 0.25);
+    assert!(mock["latency_p50_ms"].is_number() && mock["latency_p90_ms"].is_number());
+    assert_eq!(mock["error_rate"], 0.0);
+    assert!(view["providers"].as_array().is_some_and(|p| {
+        p.iter()
+            .any(|p| p["name"] == "mock" && p["kind"] == "openai")
+    }));
+
+    // The test asks for the model list: the cheapest call, which bills nothing.
+    let ok = send(&g.gw.router, admin("POST", "/admin/providers/mock/test")?).await?;
+    assert_eq!(ok.status, StatusCode::OK, "{}", ok.body);
+    let ok = ok.json()?;
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert_eq!(ok["status"], 200);
+    assert_eq!(ok["models_listed"], 2);
+    assert_eq!(ok["call"], "GET /v1/models");
+    let refused = send(&g.gw.router, admin("POST", "/admin/providers/wrong/test")?)
+        .await?
+        .json()?;
+    assert_eq!(refused["ok"], false);
+    assert_eq!(refused["status"], 401);
+    assert!(
+        refused["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("refused the key")),
+        "{refused}"
+    );
+    let unreachable = send(&g.gw.router, admin("POST", "/admin/providers/gone/test")?)
+        .await?
+        .json()?;
+    assert_eq!(unreachable["ok"], false);
+    assert_eq!(unreachable["outcome"], "upstream_unreachable");
+    let missing = send(&g.gw.router, admin("POST", "/admin/providers/nope/test")?).await?;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    // A key that is not an admin's is refused.
+    let stranger = Request::get("/admin/deployments")
+        .header(header::AUTHORIZATION, format!("Bearer {MAYA}"))
+        .body(Body::empty())?;
+    assert_eq!(
+        send(&g.gw.router, stranger).await?.status,
+        StatusCode::FORBIDDEN
+    );
+
+    // Each test is in the audit log with its outcome, and the provider's key is in none of them.
+    let log = std::fs::read_to_string(&g.audit)?;
+    let tests: Vec<Value> = log
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|r| r["action"] == "test_provider")
+        .collect();
+    assert_eq!(tests.len(), 4, "{tests:?}");
+    assert!(tests.iter().any(|r| r["target"]["ok"] == true));
+    assert!(tests.iter().any(|r| r["target"]["status"] == 401));
+    assert!(!log.contains("not-the-key") && !log.contains("\"secret\""));
+    Ok(())
+}
+
+const HOST: &str = "gantry.test";
+
+/// Signs in to the console with the admin key and returns the session cookie.
+async fn sign_in(app: &Router) -> Result<String, Error> {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/console/sign-in")
+                .header(header::HOST, HOST)
+                .header(header::ORIGIN, format!("http://{HOST}"))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("key={ADMIN}")))?,
+        )
+        .await?;
+    let cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .ok_or("the console set no session cookie")?;
+    Ok(cookie.to_string())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_console_shows_deployments_tests_a_provider_and_a_requests_time_by_stage() -> TestResult
+{
+    let g = gateway("console").await?;
+    let answer = send(&g.gw.router, chat("smart", "hello dana@example.com")?).await?;
+    assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+    let decision = answer.header("x-gantry-decision").to_string();
+    g.settled(1).await?;
+    let cookie = sign_in(&g.gw.router).await?;
+    let page = |path: &str| {
+        Request::get(path)
+            .header(header::HOST, HOST)
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+    };
+
+    let deployments = send(&g.gw.router, page("/console/deployments")?).await?;
+    assert_eq!(deployments.status, StatusCode::OK);
+    for wanted in [
+        "gone/g",
+        "mock/m",
+        "cooling",
+        "rpm 100",
+        "Test connection",
+        "this gateway",
+    ] {
+        assert!(
+            deployments.body.contains(wanted),
+            "{wanted} missing from the Deployments page"
+        );
+    }
+    let test = |provider: &str| {
+        Request::post("/console/deployments")
+            .header(header::HOST, HOST)
+            .header(header::ORIGIN, format!("http://{HOST}"))
+            .header(header::COOKIE, &cookie)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(format!("provider={provider}")))
+    };
+    let tested = send(&g.gw.router, test("mock")?).await?;
+    assert_eq!(tested.status, StatusCode::OK);
+    assert!(tested.body.contains("connected"), "the result is shown");
+    let failed = send(&g.gw.router, test("wrong")?).await?;
+    assert!(
+        failed.body.contains("failed") && failed.body.contains("refused the key"),
+        "a refused key is shown with what to check"
+    );
+    // A form from another site tests nothing.
+    let foreign = Request::post("/console/deployments")
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, "http://elsewhere.test")
+        .header(header::COOKIE, &cookie)
+        .body(Body::from("provider=mock"))?;
+    assert_ne!(send(&g.gw.router, foreign).await?.status, StatusCode::OK);
+    let log = std::fs::read_to_string(&g.audit)?;
+    let tests = log
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|r| r["action"] == "test_provider" && r["via"] == "console")
+        .count();
+    assert_eq!(tests, 2, "each console test is recorded once");
+
+    // The request's row says where its time went.
+    let row = send(
+        &g.gw.router,
+        page(&format!("/console/requests?open={decision}"))?,
+    )
+    .await?;
+    assert_eq!(row.status, StatusCode::OK);
+    for wanted in ["Time by stage", "first byte", "guardrail builtin"] {
+        assert!(row.body.contains(wanted), "{wanted} missing from the row");
+    }
+    Ok(())
+}

@@ -38,6 +38,7 @@ mod cloud_batch;
 mod cors;
 mod credentials;
 mod events;
+mod health;
 pub mod insights;
 mod jwt;
 mod manage;
@@ -1067,6 +1068,8 @@ fn build(
     }
     batch::spawn_poller(Arc::downgrade(&keep));
     spawn_probes(Arc::downgrade(&keep));
+    health::publish(Arc::downgrade(&keep));
+    let health_pages = health::console(keep.clone());
     let metrics = Router::new()
         .route("/metrics", get(metrics::serve))
         .with_state(state.clone());
@@ -1095,6 +1098,8 @@ fn build(
         .fallback(handle)
         .with_state(state);
     let mut console_extension = config.extension.console;
+    console_extension.nav.extend(health_pages.nav);
+    console_extension.routes = console_extension.routes.merge(health_pages.routes);
     let router = match mcp {
         Some(mcp) => {
             console_extension.nav.extend(mcp.console.nav);

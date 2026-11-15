@@ -453,6 +453,26 @@ pub(crate) const ROUTES: &[(Module, AdminRoute)] = &[
         Module::Manage,
         r(
             "GET",
+            "/admin/deployments",
+            "list_deployments",
+            None,
+            "Each alias deployment's state, probe, limits, load, latency and error rate, and each provider's key pool, as every gateway on the store sees them",
+        ),
+    ),
+    (
+        Module::Manage,
+        r(
+            "POST",
+            "/admin/providers/{name}/test",
+            "test_provider",
+            Some(EditPolicy),
+            "Tests the connection to a provider with its model list, which bills nothing; the outcome is in the answer and the admin record",
+        ),
+    ),
+    (
+        Module::Manage,
+        r(
+            "GET",
             "/admin/providers/{name}",
             "show_provider",
             None,
@@ -981,6 +1001,24 @@ async fn allow(
             Ok(Plan::Read(
                 json!({ "models": models, "aliases": read("aliases")?.as_array().cloned().unwrap_or_default() }),
             ))
+        }
+        "list_deployments" => Ok(Plan::Read(crate::health::deployments(state, &version))),
+        "test_provider" => {
+            let Some(index) = version.providers.iter().position(|p| p.name == name) else {
+                call.target = Some(json!({ "provider": name }));
+                return Err(refused(
+                    StatusCode::NOT_FOUND,
+                    "no_such_entry",
+                    format!(
+                        "Refused: the policy has no provider named \"{name}\". GET /admin/providers lists them."
+                    ),
+                ));
+            };
+            // Run before the admin record is written, so the one record holds the outcome. The test reads a model
+            // list and changes nothing, so nothing is done that the record could fail to cover.
+            let result = crate::health::test_provider(state, &version, index).await;
+            call.target = Some(result.clone());
+            Ok(Plan::Read(result))
         }
         "list_budgets" => Ok(Plan::Read(
             json!({ "limits": read("limits")?.as_array().cloned().unwrap_or_default() }),
