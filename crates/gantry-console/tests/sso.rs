@@ -521,7 +521,7 @@ async fn an_rs256_admin_signs_in_is_recorded_and_signs_out() -> TestResult {
     let token = jwt(&Signer::Rsa(&rsa), "r1", &claims(&s, &started.nonce))?;
     let (status, headers, body) = finish(&s, &started, token).await?;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(body.contains(r#"http-equiv="refresh" content="0; url=/console/audit""#));
+    assert!(body.contains(r#"http-equiv="refresh" content="0; url=/console/start""#));
     let session = set_cookie(&headers, "gantry_console");
     assert_eq!(session.len(), 64);
     let cookie = format!("gantry_console={session}");

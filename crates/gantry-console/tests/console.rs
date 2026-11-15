@@ -1044,7 +1044,7 @@ async fn a_browser_form_from_this_console_is_accepted_and_one_from_another_site_
     // A page that does not exist is a console page too.
     let (status, _, page) = send(&s.app, get("/console/nope", "")?).await?;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert!(page.contains("g-empty") && page.contains(r#"href="/console/audit""#));
+    assert!(page.contains("g-empty") && page.contains(r#"href="/console/start""#));
     Ok(())
 }
 
