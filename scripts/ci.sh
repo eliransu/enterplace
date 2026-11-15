@@ -59,6 +59,10 @@ step "the Helm chart: lint, render, security settings, its policy passes gantry 
 python3 scripts/check_deploy.py target/release/gantry
 step "every policy example in README and the docs passes gantry check"
 python3 scripts/check_examples.py target/release/gantry
+step "the website serves the same install.sh as the repository root"
+# gantry.eliran.me/install.sh is site/src/static/install.sh, copied into site/public by site/build.py.
+cmp install.sh site/src/static/install.sh
+cmp install.sh site/public/install.sh
 if [ "$bench" = 1 ]; then
   step "bench gate (chat, 1,000 requests a second for 5 seconds, p99 overhead under 1,000 us, best of 3)"
   # One 5 s sample at p99 is at the mercy of whatever else the machine runs. A warm-up fills caches and wakes the

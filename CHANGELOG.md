@@ -34,6 +34,9 @@ one repository. How a release is made: RELEASING.md.
   and checks with no real waiting.
 - Fixed: while a new Gantry watched another one's audit lock, it held a process-wide lock through each wait, so
   every other audit log in the same process (an organization's chain, say) waited up to 40 seconds to open or close.
+- Fixed: `/readyz` and the `gantry_audit_broken` gauge could report a healthy audit log as unwritable for one
+  check when a record was written at the same moment: the check read the file's size before the count of bytes
+  written. It now reads the count first.
 - The store can be polled on request (`Store::poll_now`). The cross-gateway store tests for deployment limits,
   rate limits and a database that goes away poll when they need to instead of waiting for the 500 ms poll.
 - The parallel-limit tests in access and observe hold a request at the mock provider until the test lets it go,

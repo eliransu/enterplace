@@ -879,7 +879,7 @@ fn write_batch(
             Ok(()) => {
                 (chain.n, chain.prev) = (n, prev);
                 chain.len += lines.len() as u64;
-                len.store(chain.len, Ordering::Relaxed);
+                len.store(chain.len, Ordering::Release);
             }
             Err(_) => {
                 *failed = true;
@@ -1484,20 +1484,21 @@ impl AuditLog {
             .syncer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Read before the file's size: the writer grows the file first and this count after, so a write landing
+        // between the two reads cannot make a healthy log look cut short.
+        let written = self.len.load(Ordering::Acquire);
         #[cfg(unix)]
         if let (Some(path), Some(open)) = (&self.path, syncer.as_ref()) {
             use std::os::unix::fs::MetadataExt;
             return !matches!(
                 (std::fs::metadata(path), open.metadata()),
-                (Ok(named), Ok(open)) if named.ino() == open.ino() && named.dev() == open.dev() && open.len() >= self.len.load(Ordering::Relaxed)
+                (Ok(named), Ok(open)) if named.ino() == open.ino() && named.dev() == open.dev() && open.len() >= written
             );
         }
         // Elsewhere the log is opened so it cannot be deleted or replaced (see `open`): only its length can change.
         #[cfg(not(unix))]
         if let (Some(_), Some(open)) = (&self.path, syncer.as_ref()) {
-            return !open
-                .metadata()
-                .is_ok_and(|open| open.len() >= self.len.load(Ordering::Relaxed));
+            return !open.metadata().is_ok_and(|open| open.len() >= written);
         }
         false
     }
