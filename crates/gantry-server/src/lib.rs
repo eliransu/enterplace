@@ -560,6 +560,8 @@ struct Snapshot {
     aliases: Vec<gantry_core::config::Alias>,
     policy_sha256: String,
     keys_sha256: String,
+    /// The upstream MCP servers. The MCP gateway builds what changed when it sees a new list.
+    mcp: Arc<Vec<McpRoute>>,
 }
 
 /// A pooled client to providers.
@@ -630,6 +632,8 @@ struct AppState {
     transform: Option<Arc<dyn Transform>>,
     // Events plugins: the binary's own, the queues of observing guardrails, and the sessions plugins ended.
     events: Arc<events::Plugins>,
+    // The MCP gateway, once built, for the admin API's routes over its sessions.
+    mcp: Arc<std::sync::OnceLock<std::sync::Weak<mcp::Mcp>>>,
 }
 
 /// The client every call out is made with.
@@ -969,6 +973,7 @@ fn build(
         aliases: config.aliases,
         policy_sha256,
         keys_sha256,
+        mcp: Arc::new(config.mcp),
     })));
     let reloader = make_reloader(&live);
     let mut spend = spend::Spend::default();
@@ -1056,6 +1061,7 @@ fn build(
         admin_api: config.extension.admin.clone(),
         transform: config.extension.transform.clone(),
         events: Arc::new(events::Plugins::new(config.extension.events.clone())),
+        mcp: Arc::default(),
     };
     let keep = Arc::new(state.clone());
     batch::spawn_poller(Arc::downgrade(&keep));
@@ -1080,7 +1086,7 @@ fn build(
             .route("/admin", any(manage::dispatch))
             .route("/admin/{*rest}", any(manage::dispatch));
     }
-    let mcp = mcp::router(&state, config.mcp, config.mcp_setup)?;
+    let mcp = mcp::router(&state, state.version().mcp.clone(), config.mcp_setup)?;
     let cors_state = state.clone();
     let router = router
         .merge(batch::routes(keep))

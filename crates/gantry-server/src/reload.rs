@@ -92,6 +92,8 @@ pub struct Reloader {
     /// The organizations whose chains are open, and what a reload that adds one opens and tells.
     orgs: Mutex<BTreeSet<String>>,
     new_org: NewOrg,
+    /// Whether this gateway can seal each person's MCP credentials: a server that keeps them needs it.
+    mcp_seals: bool,
 }
 
 type Seal = Arc<dyn gantry_core::insights::Seal>;
@@ -584,6 +586,81 @@ type Served = (
     Option<Arc<dyn gantry_core::insights::Bodies>>,
 );
 
+/// The MCP servers of a policy as the gateway reaches them: each credential read from the environment, and a stdio
+/// server's command checked against the commands this gateway's own environment lets it start.
+fn mcp_routes(
+    servers: &[gantry_core::mcp::Server],
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Vec<crate::McpRoute>, String> {
+    use gantry_core::mcp::{STDIO_ALLOW_ENV, Transport, UserAuth};
+    let mut mcp = Vec::new();
+    for server in servers {
+        let read = |variable: &str, what: &str| {
+            env(variable)
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| Secret::new(v.trim()))
+                .ok_or_else(|| {
+                    format!(
+                        "MCP server \"{}\" {what} the environment variable {variable}, which is not set. Set it (`export {variable}=...`) and start again.",
+                        server.name
+                    )
+                })
+        };
+        let mut headers = Vec::new();
+        for (header, variable) in &server.headers_env {
+            headers.push((
+                header.clone(),
+                read(variable, &format!("sends header {header} from"))?,
+            ));
+        }
+        let oauth_client_secret = match &server.user_auth {
+            Some(
+                UserAuth::OAuth {
+                    client_secret_env: Some(variable),
+                    ..
+                }
+                | UserAuth::Exchange {
+                    client_secret_env: Some(variable),
+                    ..
+                },
+            ) => Some(read(variable, "takes its OAuth client secret from")?),
+            _ => None,
+        };
+        let mut stdio_env = Vec::new();
+        if let Transport::Stdio {
+            command, env: vars, ..
+        } = &server.transport
+        {
+            let allowed = env(STDIO_ALLOW_ENV).unwrap_or_default();
+            if !allowed.split(',').any(|path| path.trim() == command) {
+                return Err(format!(
+                    "MCP server \"{}\" starts {command}, which this gateway may not run: {STDIO_ALLOW_ENV} does not list it. The policy cannot choose what the gateway runs; whoever runs the gateway does. Add the path to {STDIO_ALLOW_ENV} in the gateway's environment (comma separated absolute paths) and start again, or remove the server.",
+                    server.name
+                ));
+            }
+            for (child, variable) in vars {
+                stdio_env.push((
+                    child.clone(),
+                    read(variable, &format!("gives its process {child} from"))?,
+                ));
+            }
+        }
+        mcp.push(crate::McpRoute {
+            name: server.name.clone(),
+            url: server.url.clone(),
+            headers,
+            user_auth: server.user_auth.clone(),
+            tool_changes: server.tool_changes,
+            oauth_client_secret,
+            transport: server.transport.clone(),
+            stdio_env,
+            call_price_usd: server.call_price_usd,
+            tool_prices: server.tool_prices.clone(),
+        });
+    }
+    Ok(mcp)
+}
+
 /// `governed`, with what an embedding binary adds: `extend` runs before the router is built.
 pub fn governed_with(
     policy_path: &Path,
@@ -611,50 +688,26 @@ pub fn governed_with(
             &loaded.policy_text,
         )?);
     }
-    let mut mcp = Vec::new();
-    for server in &loaded.mcp {
-        let mut headers = Vec::new();
-        for (header, variable) in &server.headers_env {
-            let value = provider_key(variable).filter(|v| !v.trim().is_empty()).ok_or_else(|| {
-                format!(
-                    "MCP server \"{}\" sends header {header} from the environment variable {variable}, which is not set. Set it (`export {variable}=...`) and start again.",
-                    server.name
-                )
-            })?;
-            headers.push((header.clone(), Secret::new(value.trim())));
-        }
-        let oauth_client_secret = match &server.user_auth {
-            Some(gantry_core::mcp::UserAuth::OAuth {
-                client_secret_env: Some(variable),
-                ..
-            }) => Some(Secret::new(
-                provider_key(variable)
-                    .filter(|v| !v.trim().is_empty())
-                    .ok_or_else(|| {
-                        format!(
-                            "MCP server \"{}\" takes its OAuth client secret from the environment variable {variable}, which is not set. Set it (`export {variable}=...`) and start again.",
-                            server.name
-                        )
-                    })?
-                    .trim(),
-            )),
-            _ => None,
-        };
-        mcp.push(crate::McpRoute {
-            name: server.name.clone(),
-            url: server.url.clone(),
-            headers,
-            user_auth: server.user_auth.clone(),
-            tool_changes: server.tool_changes,
-            oauth_client_secret,
-        });
-    }
+    let mcp = mcp_routes(&loaded.mcp, provider_key)?;
     // Each person's MCP credentials are sealed with the store's master key, or without a store with the gateway's.
-    let mcp_master = if postgres.is_none() && loaded.mcp.iter().any(|s| s.user_auth.is_some()) {
-        crate::MasterKey::from_env(provider_key)?.map(Arc::new)
+    // Read whenever it is set, so a server with user_auth can be added by a reload.
+    let mcp_master = if postgres.is_none() {
+        match crate::MasterKey::from_env(provider_key) {
+            Ok(master) => master.map(Arc::new),
+            Err(err)
+                if loaded
+                    .mcp
+                    .iter()
+                    .any(|s| crate::mcp::keeps_credentials(&s.user_auth)) =>
+            {
+                return Err(err);
+            }
+            Err(_) => None,
+        }
     } else {
         None
     };
+    let mcp_seals = postgres.is_some() || mcp_master.is_some();
     let mcp_setup = crate::McpSetup {
         postgres: postgres.clone(),
         file: Some(policy_path.with_file_name("gantry.mcp.json")),
@@ -840,6 +893,7 @@ pub fn governed_with(
             store: shared.clone(),
             orgs: Mutex::new(known_orgs.clone()),
             new_org: new_org.clone(),
+            mcp_seals,
         }))
     })
     .map_err(|err| err.to_string())?;
@@ -1103,6 +1157,29 @@ impl Reloader {
         if let Err(err) = self.open_orgs(&new) {
             return self.reject(current, trigger, prints, vec![err]);
         }
+        // The MCP servers as before keep their list, so the gateway keeps their sessions; a change builds a new one.
+        let mcp =
+            if current.loaded.mcp == new.mcp {
+                old_version.mcp.clone()
+            } else {
+                let built =
+                    mcp_routes(&new.mcp, &gantry_core::secrets::var).and_then(|routes| {
+                        match new.mcp.iter().find(|s| {
+                            crate::mcp::keeps_credentials(&s.user_auth) && !self.mcp_seals
+                        }) {
+                            Some(server) => Err(format!(
+                                "MCP server \"{}\" has user_auth, and {}",
+                                server.name,
+                                crate::mcp::keep::NO_SEALER
+                            )),
+                            None => Ok(routes),
+                        }
+                    });
+                match built {
+                    Ok(routes) => Arc::new(routes),
+                    Err(err) => return self.reject(current, trigger, prints, vec![err]),
+                }
+            };
         let old = &current.loaded;
         let record = loaded_record(
             &self.policy_path,
@@ -1125,6 +1202,7 @@ impl Reloader {
             aliases: new.aliases.clone(),
             policy_sha256: new.policy_sha256.clone(),
             keys_sha256: new.keys_sha256.clone(),
+            mcp,
         });
         match self.live.write() {
             Ok(mut live) => *live = version,
@@ -1271,6 +1349,7 @@ impl Reloader {
             aliases: old.aliases.clone(),
             policy_sha256: old.policy_sha256.clone(),
             keys_sha256: old.keys_sha256.clone(),
+            mcp: old.mcp.clone(),
         });
         match self.live.write() {
             Ok(mut live) => *live = version,

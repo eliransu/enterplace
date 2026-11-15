@@ -14,7 +14,26 @@ use crate::config::{base_url, is_private, line_of_key, list_lines};
 #[serde(deny_unknown_fields)]
 pub(crate) struct ServerFile {
     name: String,
-    url: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    transport: Option<String>,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    call_price_usd: Option<f64>,
+    #[serde(default)]
+    tool_prices: Option<BTreeMap<String, f64>>,
+    #[serde(default)]
+    token_url: Option<String>,
+    #[serde(default)]
+    audience: Option<String>,
+    #[serde(default)]
+    resource: Option<String>,
     #[serde(default)]
     headers_env: Option<BTreeMap<String, String>>,
     #[serde(default)]
@@ -46,7 +65,52 @@ pub enum UserAuth {
         client_secret_env: Option<String>,
         scopes: Vec<String>,
     },
+    /// Gantry trades the token the caller holds for one the server takes, at the identity provider's token
+    /// endpoint, on every person's behalf: RFC 8693 token exchange, or the on-behalf-of flow.
+    Exchange {
+        /// `true` sends the on-behalf-of form (`grant_type=jwt-bearer`, `requested_token_use=on_behalf_of`).
+        on_behalf_of: bool,
+        token_url: String,
+        client_id: String,
+        client_secret_env: Option<String>,
+        scopes: Vec<String>,
+        audience: Option<String>,
+        resource: Option<String>,
+    },
 }
+
+/// How Gantry reaches an upstream server.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Transport {
+    /// MCP's Streamable HTTP: one POST per message.
+    #[default]
+    Http,
+    /// The older HTTP+SSE transport (MCP 2024-11-05): a GET that stays open for answers, and a POST per message
+    /// to the endpoint the server names on it.
+    Sse,
+    /// A process the gateway starts, spoken to on its standard input and output.
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        /// (the child's variable, the gateway's variable its value is read from).
+        env: Vec<(String, String)>,
+    },
+}
+
+impl Transport {
+    pub fn word(&self) -> &'static str {
+        match self {
+            Transport::Http => "http",
+            Transport::Sse => "sse",
+            Transport::Stdio { .. } => "stdio",
+        }
+    }
+}
+
+/// The environment variable that lists the commands a gateway may start as stdio MCP servers, comma separated,
+/// each an absolute path. It is read from the gateway's environment only, never from the policy: whoever can
+/// change the policy cannot choose what the gateway runs.
+pub const STDIO_ALLOW_ENV: &str = "GANTRY_MCP_STDIO_ALLOW";
 
 /// What Gantry does when a server changes a tool's description or schema after it was first seen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -59,11 +123,17 @@ pub enum ToolChanges {
 }
 
 /// An upstream MCP server, as checked.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Server {
     pub name: String,
-    /// The server's MCP endpoint, for example `https://mcp.example.com/mcp`, without a trailing slash.
+    /// The server's MCP endpoint, for example `https://mcp.example.com/mcp`, without a trailing slash. Empty for
+    /// a stdio server.
     pub url: String,
+    pub transport: Transport,
+    /// What one call of any tool of this server costs, in US dollars, unless `tool_prices` names the tool.
+    pub call_price_usd: Option<f64>,
+    /// (tool, US dollars per call), by the server's own tool names.
+    pub tool_prices: Vec<(String, f64)>,
     /// (header name, environment variable). Only the variable's name is in the policy; its value is read at start.
     pub headers_env: Vec<(String, String)>,
     pub allow_private: bool,
@@ -83,6 +153,8 @@ pub struct McpRule {
     pub approve: Vec<String>,
     /// How long a call waits for that approval before it is refused.
     pub approval_timeout_seconds: u64,
+    /// The MCP client applications that may use the gateway under this rule. Empty lets every client.
+    pub clients: Vec<String>,
     /// Never from the policy: lists a request adds (the key's `mcp_tools`, the `x-gantry-mcp-tools` header), each of
     /// which must also allow a tool. They only narrow what `tools` allows.
     pub narrow: Vec<Vec<String>>,
@@ -97,9 +169,44 @@ impl Default for McpRule {
             resources: Vec::new(),
             approve: Vec::new(),
             approval_timeout_seconds: DEFAULT_APPROVAL_TIMEOUT,
+            clients: Vec::new(),
             narrow: Vec::new(),
         }
     }
+}
+
+/// Whether a rule's `mcp_clients:` list lets a client connect. `name` is what the client called itself at
+/// `initialize` (`clientInfo.name`), `user_agent` its `user-agent` header and `oauth_client` the OAuth client it
+/// signed in through. An entry matches a name, or the product of a user agent (the part before the first `/` or
+/// space), without regard to case, and ends in `*` to match a prefix; `oauth:<client id>` matches the OAuth client
+/// exactly. An empty list lets every client.
+pub fn client_allowed(
+    patterns: &[String],
+    name: Option<&str>,
+    user_agent: Option<&str>,
+    oauth_client: Option<&str>,
+) -> bool {
+    if patterns.is_empty() {
+        return true;
+    }
+    let product = user_agent.map(|ua| {
+        ua.split(|c: char| c == '/' || c.is_whitespace())
+            .next()
+            .unwrap_or(ua)
+    });
+    patterns.iter().any(|pattern| {
+        if let Some(id) = pattern.strip_prefix("oauth:") {
+            return oauth_client == Some(id);
+        }
+        let pattern = pattern.to_ascii_lowercase();
+        [name, product].into_iter().flatten().any(|given| {
+            let given = given.to_ascii_lowercase();
+            match pattern.strip_suffix('*') {
+                Some(prefix) => given.starts_with(prefix),
+                None => given == pattern,
+            }
+        })
+    })
 }
 
 /// A virtual MCP server: chosen tools of several servers, served at `/mcp/<name>`.
@@ -220,22 +327,44 @@ pub(crate) fn servers(
                 entry.name
             ));
         }
-        let url = match base_url(&entry.url) {
-            Ok(url) => url,
-            Err(problem) => {
-                errors.push(format!(
-                    "{}: {}",
-                    at("url"),
-                    problem.replace("provider url", "MCP server url")
-                ));
-                continue;
-            }
-        };
-        if is_private(&url) && !entry.allow_private {
+        if entry.name == "sessions" {
             errors.push(format!(
-                "{}: the MCP server url points at this machine or a private network. If that is intended, add `allow_private: true` to the server.",
-                at("url")
+                "{}: an MCP server cannot be named \"sessions\": /admin/mcp/sessions lists the MCP sessions. Rename the server.",
+                at("name")
             ));
+        }
+        let (url, transport) = match transport(entry, &at, errors) {
+            Some(found) => found,
+            None => continue,
+        };
+        let mut tool_prices = Vec::new();
+        for (what, price) in entry
+            .call_price_usd
+            .iter()
+            .map(|p| ("call_price_usd".to_string(), *p))
+            .chain(
+                entry
+                    .tool_prices
+                    .iter()
+                    .flatten()
+                    .map(|(tool, p)| (format!("tool_prices: {tool}"), *p)),
+            )
+        {
+            if !(price.is_finite() && (0.0..=1000.0).contains(&price)) {
+                errors.push(format!(
+                    "{}: {what} is {price}. Write what one call costs in US dollars, from 0 to 1000, for example 0.002.",
+                    at(what.split(':').next().unwrap_or("tool_prices"))
+                ));
+            }
+        }
+        for (tool, price) in entry.tool_prices.iter().flatten() {
+            if tool.is_empty() || tool.contains('*') {
+                errors.push(format!(
+                    "{}: tool_prices names \"{tool}\". Name each tool as the server names it, for example create_issue, and set call_price_usd for every other tool of the server.",
+                    at("tool_prices")
+                ));
+            }
+            tool_prices.push((tool.clone(), *price));
         }
         let mut headers_env = Vec::new();
         for (header, variable) in entry.headers_env.iter().flatten() {
@@ -276,9 +405,20 @@ pub(crate) fn servers(
                 ToolChanges::Record
             }
         };
+        if matches!(transport, Transport::Stdio { .. })
+            && (user_auth.is_some() || !headers_env.is_empty())
+        {
+            errors.push(format!(
+                "{}: a stdio MCP server takes no HTTP headers, so headers_env and user_auth do not apply to it. Pass its credential in env, as <the process's variable>: <the gateway's variable>.",
+                at("transport")
+            ));
+        }
         out.push(Server {
             name: entry.name.clone(),
             url,
+            transport,
+            call_price_usd: entry.call_price_usd,
+            tool_prices,
             headers_env,
             allow_private: entry.allow_private,
             user_auth,
@@ -286,6 +426,105 @@ pub(crate) fn servers(
         });
     }
     out
+}
+
+/// A server's address and how it is reached: `url` with `transport: http` (the default) or `sse`, or `command`
+/// with `transport: stdio`.
+fn transport(
+    entry: &ServerFile,
+    at: &dyn Fn(&str) -> String,
+    errors: &mut Vec<String>,
+) -> Option<(String, Transport)> {
+    let word = entry
+        .transport
+        .as_deref()
+        .unwrap_or(if entry.command.is_some() {
+            "stdio"
+        } else {
+            "http"
+        });
+    if word == "stdio" {
+        if entry.url.is_some() {
+            errors.push(format!(
+                "{}: a stdio MCP server is a process the gateway starts, so it has no url. Remove url, or remove command and transport to reach the server over HTTP.",
+                at("url")
+            ));
+        }
+        let Some(command) = entry.command.clone().filter(|c| Path::new(c).is_absolute()) else {
+            errors.push(format!(
+                "{}: a stdio MCP server needs command, the absolute path of the program to start, for example /usr/local/bin/mcp-server-git. The gateway starts it only when its own environment lists that path in {STDIO_ALLOW_ENV}.",
+                at("command")
+            ));
+            return None;
+        };
+        let mut env = Vec::new();
+        for (child, variable) in entry.env.iter().flatten() {
+            let name = |v: &str| {
+                !v.is_empty()
+                    && !v.starts_with(|c: char| c.is_ascii_digit())
+                    && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            };
+            if !name(child) || !name(variable) {
+                errors.push(format!(
+                    "{}: env gives the process {child} from \"{variable}\". Write <the process's variable>: <the gateway's variable>, both names of environment variables, and keep the value itself out of this file.",
+                    at("env")
+                ));
+                continue;
+            }
+            env.push((child.clone(), variable.clone()));
+        }
+        return Some((
+            String::new(),
+            Transport::Stdio {
+                command,
+                args: entry.args.clone(),
+                env,
+            },
+        ));
+    }
+    if entry.command.is_some() || !entry.args.is_empty() || entry.env.is_some() {
+        errors.push(format!(
+            "{}: command, args and env belong to a stdio MCP server. Add `transport: stdio`, or remove them.",
+            at("command")
+        ));
+    }
+    let kind = match word {
+        "http" => Transport::Http,
+        "sse" => Transport::Sse,
+        other => {
+            errors.push(format!(
+                "{}: transport is \"{other}\". Write http (Streamable HTTP, the default), sse (the older HTTP+SSE transport) or stdio (a process the gateway starts).",
+                at("transport")
+            ));
+            Transport::Http
+        }
+    };
+    let Some(given) = &entry.url else {
+        errors.push(format!(
+            "{}: MCP server \"{}\" has no url. Add the server's MCP endpoint, for example url: https://mcp.example.com/mcp.",
+            at("name"),
+            entry.name
+        ));
+        return None;
+    };
+    let url = match base_url(given) {
+        Ok(url) => url,
+        Err(problem) => {
+            errors.push(format!(
+                "{}: {}",
+                at("url"),
+                problem.replace("provider url", "MCP server url")
+            ));
+            return None;
+        }
+    };
+    if is_private(&url) && !entry.allow_private {
+        errors.push(format!(
+            "{}: the MCP server url points at this machine or a private network. If that is intended, add `allow_private: true` to the server.",
+            at("url")
+        ));
+    }
+    Some((url, kind))
 }
 
 /// A server's `user_auth`, checked against its other fields.
@@ -340,19 +579,55 @@ fn user_auth(
                 scopes: entry.oauth_scopes.clone(),
             })
         }
+        Some(word @ ("token_exchange" | "on_behalf_of")) => {
+            let token_url = entry.token_url.clone().unwrap_or_default();
+            match base_url(&token_url) {
+                Ok(_) if entry.oauth_client_id.is_some() => {}
+                _ => errors.push(format!(
+                    "{at}: user_auth: {word} needs token_url, the identity provider's token endpoint (an https URL), and oauth_client_id, the client Gantry is registered as there."
+                )),
+            }
+            if let Some(variable) = &entry.oauth_client_secret_env
+                && (variable.is_empty()
+                    || !variable
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+            {
+                errors.push(format!(
+                    "{at}: oauth_client_secret_env is \"{variable}\", which is not the name of an environment variable. Write the variable's name and keep the secret itself out of this file."
+                ));
+            }
+            Some(UserAuth::Exchange {
+                on_behalf_of: word == "on_behalf_of",
+                token_url,
+                client_id: entry.oauth_client_id.clone().unwrap_or_default(),
+                client_secret_env: entry.oauth_client_secret_env.clone(),
+                scopes: entry.oauth_scopes.clone(),
+                audience: entry.audience.clone(),
+                resource: entry.resource.clone(),
+            })
+        }
         Some(other) => {
             errors.push(format!(
-                "{at}: user_auth is \"{other}\". Write headers (each person gives their own header values) or oauth (each person signs in at the server once)."
+                "{at}: user_auth is \"{other}\". Write headers (each person gives their own header values), oauth (each person signs in at the server once), token_exchange (Gantry trades the caller's token for the server's, RFC 8693) or on_behalf_of."
             ));
             None
         }
     };
+    let exchange = matches!(auth, Some(UserAuth::Exchange { .. }));
+    if (entry.token_url.is_some() || entry.audience.is_some() || entry.resource.is_some())
+        && !exchange
+    {
+        errors.push(format!(
+            "{at}: token_url, audience or resource is set and user_auth is not token_exchange or on_behalf_of. Add one of them as user_auth, or remove the fields."
+        ));
+    }
     if entry.user_headers.is_some() && !matches!(auth, Some(UserAuth::Headers(_))) {
         errors.push(format!(
             "{at}: user_headers is set and user_auth is not headers. Add `user_auth: headers`, or remove user_headers."
         ));
     }
-    if oauth_fields && !matches!(auth, Some(UserAuth::OAuth { .. })) {
+    if oauth_fields && !matches!(auth, Some(UserAuth::OAuth { .. })) && !exchange {
         errors.push(format!(
             "{at}: oauth_client_id, oauth_client_secret_env or oauth_scopes is set and user_auth is not oauth. Add `user_auth: oauth`, or remove them."
         ));
@@ -362,7 +637,9 @@ fn user_auth(
         Some(UserAuth::Headers(headers)) => {
             headers.iter().map(|h| h.to_ascii_lowercase()).collect()
         }
-        Some(UserAuth::OAuth { .. }) => vec!["authorization".to_string()],
+        Some(UserAuth::OAuth { .. } | UserAuth::Exchange { .. }) => {
+            vec!["authorization".to_string()]
+        }
         None => Vec::new(),
     };
     for (header, _) in shared {
@@ -447,6 +724,7 @@ pub(crate) struct RuleFields<'a> {
     pub resources: &'a [String],
     pub approve_tools: &'a [String],
     pub approval_timeout_seconds: Option<i64>,
+    pub mcp_clients: &'a [String],
 }
 
 /// Checks a rule's prompts, resources and approvals. `at` gives where each key is written.
@@ -476,7 +754,22 @@ pub(crate) fn rule(
             DEFAULT_APPROVAL_TIMEOUT
         }
     };
+    for client in fields.mcp_clients {
+        let bare = client.strip_prefix("oauth:").unwrap_or(client);
+        let inner = bare.strip_suffix('*').unwrap_or(bare);
+        if inner.is_empty()
+            || inner.len() > 200
+            || inner.contains('*')
+            || (client.starts_with("oauth:") && bare.ends_with('*'))
+        {
+            errors.push(format!(
+                "{}: \"{client}\" is not an MCP client. Write the name a client gives itself (for example claude-code), a prefix ending in * (cursor*), or oauth:<client id> for the OAuth client it signs in through.",
+                at("mcp_clients")
+            ));
+        }
+    }
     McpRule {
+        clients: fields.mcp_clients.to_vec(),
         prompts: fields.prompts.to_vec(),
         resources: fields.resources.to_vec(),
         approve: fields.approve_tools.to_vec(),

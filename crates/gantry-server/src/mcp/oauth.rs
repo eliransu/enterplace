@@ -586,6 +586,7 @@ impl Mcp {
                 ),
             ));
         }
+        asked.oauth_client = token["client_id"].as_str().map(str::to_string);
         let subject = &token["subject"];
         let (person, kill) = match subject["via"].as_str() {
             Some("key") => {
@@ -623,11 +624,144 @@ impl Mcp {
         &self,
         server: &Upstream,
         person: &Principal,
-        _origin: &str,
-    ) -> Result<Conn, ()> {
+        subject: Option<&str>,
+    ) -> Result<Conn, Option<String>> {
+        match self.conn_of(server, person, subject).await {
+            Ok(conn) => Ok(conn),
+            Err(why) => Err(why),
+        }
+    }
+
+    /// The token `server` takes for the caller, traded for the token the caller holds (`subject`) at the identity
+    /// provider's token endpoint: RFC 8693 token exchange, or the on-behalf-of flow. Kept until it expires.
+    async fn exchange(
+        &self,
+        server: &Upstream,
+        person: &Principal,
+        subject: Option<&str>,
+    ) -> Result<Conn, Option<String>> {
+        let Some(UserAuth::Exchange {
+            on_behalf_of,
+            token_url,
+            client_id,
+            scopes,
+            audience,
+            resource,
+            ..
+        }) = &server.user_auth
+        else {
+            return Err(None);
+        };
+        let kind = if *on_behalf_of {
+            "on_behalf_of"
+        } else {
+            "token_exchange"
+        };
+        let Some(subject) = subject else {
+            return Err(Some(format!(
+                "MCP server \"{}\" is reached with a token traded for yours, and this request carried none. Send the access token you hold at your identity provider in the {} header.",
+                server.name,
+                super::SUBJECT_HEADER
+            )));
+        };
+        let key = sha(subject);
+        let held = super::lock(&server.exchanged)
+            .get(&key)
+            .filter(|(_, exp)| *exp > now() + 30)
+            .map(|(token, _)| token.clone());
+        let token = match held {
+            Some(token) => token,
+            None => {
+                let scope = scopes.join(" ");
+                let mut pairs: Vec<(&str, &str)> = if *on_behalf_of {
+                    vec![
+                        ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
+                        ("assertion", subject),
+                        ("requested_token_use", "on_behalf_of"),
+                    ]
+                } else {
+                    vec![
+                        (
+                            "grant_type",
+                            "urn:ietf:params:oauth:grant-type:token-exchange",
+                        ),
+                        ("subject_token", subject),
+                        (
+                            "subject_token_type",
+                            "urn:ietf:params:oauth:token-type:access_token",
+                        ),
+                        (
+                            "requested_token_type",
+                            "urn:ietf:params:oauth:token-type:access_token",
+                        ),
+                    ]
+                };
+                pairs.push(("client_id", client_id));
+                if let Some(secret) = &server.client_secret {
+                    pairs.push(("client_secret", secret));
+                }
+                if !scope.is_empty() {
+                    pairs.push(("scope", &scope));
+                }
+                if let Some(audience) = audience.as_deref().filter(|_| !on_behalf_of) {
+                    pairs.push(("audience", audience));
+                }
+                if let Some(resource) = resource.as_deref().filter(|_| !on_behalf_of) {
+                    pairs.push(("resource", resource));
+                }
+                let answer = self.post_form(token_url, &pairs).await.map_err(|err| {
+                    Some(format!(
+                        "MCP server \"{}\" is reached with a token traded for yours, and the identity provider did not trade it: {err}. Sign in again for a fresh token; if it keeps failing, a Gantry admin checks the server's token_url, oauth_client_id and audience.",
+                        server.name
+                    ))
+                })?;
+                let Some(token) = answer["access_token"].as_str() else {
+                    return Err(Some(format!(
+                        "MCP server \"{}\": the identity provider's answer to the token exchange holds no access_token. A Gantry admin checks the server's token_url.",
+                        server.name
+                    )));
+                };
+                let expires = now() + answer["expires_in"].as_u64().unwrap_or(300);
+                let mut kept = super::lock(&server.exchanged);
+                let at = now();
+                kept.retain(|_, (_, exp)| *exp > at);
+                if kept.len() < 10_000 {
+                    kept.insert(key, (token.to_string(), expires));
+                }
+                token.to_string()
+            }
+        };
+        let mut value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| None)?;
+        value.set_sensitive(true);
+        Ok(Conn {
+            key: person.name.clone(),
+            headers: vec![(header::AUTHORIZATION, value)],
+            auth: Some(kind),
+        })
+    }
+
+    async fn conn_of(
+        &self,
+        server: &Upstream,
+        person: &Principal,
+        subject: Option<&str>,
+    ) -> Result<Conn, Option<String>> {
         let Some(auth) = &server.user_auth else {
             return Ok(Conn::default());
         };
+        if matches!(auth, UserAuth::Exchange { .. }) {
+            return self.exchange(server, person, subject).await;
+        }
+        self.own(server, person, auth).await.map_err(|()| None)
+    }
+
+    /// The person's own credential, kept sealed since they connected their account.
+    async fn own(
+        &self,
+        server: &Upstream,
+        person: &Principal,
+        auth: &UserAuth,
+    ) -> Result<Conn, ()> {
         let id = format!("{}/{}", server.name, person.name);
         let name = sealed_name(&server.name, &person.name);
         let stored = match self.keep.get("cred", &id).await {
@@ -656,6 +790,7 @@ impl Mcp {
                 }
                 "user_headers"
             }
+            UserAuth::Exchange { .. } => return Err(()),
             UserAuth::OAuth { .. } => {
                 let expires = opened["expires_at"].as_u64().unwrap_or(0);
                 if expires > 0 && expires <= now() + 30 {
@@ -699,7 +834,19 @@ impl Mcp {
     }
 
     /// The refusal of a call whose person has not connected their account to the server, with the link to do it.
-    pub(super) async fn need(&self, asked: &mut Asked, server: &Upstream, _: ()) -> Refusal {
+    pub(super) async fn need(
+        &self,
+        asked: &mut Asked,
+        server: &Upstream,
+        why: Option<String>,
+    ) -> Refusal {
+        if let Some(why) = why {
+            return Refusal::new(
+                StatusCode::FORBIDDEN,
+                "credential_needed",
+                format!("Refused: {why}"),
+            );
+        }
         let person = asked.person.clone().unwrap_or_default();
         match self.connect_link(server, &person, &asked.origin).await {
             Ok(url) => {
@@ -1080,7 +1227,12 @@ async fn connect(State(mcp): State<Shared>, Path(id): Path<String>) -> Response 
         return gone();
     };
     let text = |f: &str| link[f].as_str().unwrap_or_default().to_string();
-    let Some(server) = mcp.servers.iter().find(|s| s.name == text("server")) else {
+    let Some(server) = mcp
+        .servers()
+        .iter()
+        .find(|s| s.name == text("server"))
+        .cloned()
+    else {
         return gone();
     };
     match &server.user_auth {
@@ -1115,9 +1267,9 @@ async fn connect(State(mcp): State<Shared>, Path(id): Path<String>) -> Response 
         Some(UserAuth::OAuth { scopes, .. }) => {
             let redirect = format!("{}/oauth/callback", text("origin"));
             let started = async {
-                let meta = mcp.discover(server).await?;
+                let meta = mcp.discover(&server).await?;
                 let (client_id, client_secret) =
-                    mcp.upstream_client(server, &meta, &redirect).await?;
+                    mcp.upstream_client(&server, &meta, &redirect).await?;
                 let verifier = id::random_hex(32);
                 let token_endpoint = meta["token_endpoint"]
                     .as_str()
@@ -1161,7 +1313,7 @@ async fn connect(State(mcp): State<Shared>, Path(id): Path<String>) -> Response 
                 ),
             }
         }
-        None => gone(),
+        Some(UserAuth::Exchange { .. }) | None => gone(),
     }
 }
 
@@ -1187,7 +1339,12 @@ async fn connect_headers(
         return gone();
     };
     let text = |f: &str| link[f].as_str().unwrap_or_default().to_string();
-    let Some(server) = mcp.servers.iter().find(|s| s.name == text("server")) else {
+    let Some(server) = mcp
+        .servers()
+        .iter()
+        .find(|s| s.name == text("server"))
+        .cloned()
+    else {
         return gone();
     };
     let Some(UserAuth::Headers(names)) = &server.user_auth else {
@@ -1244,7 +1401,12 @@ async fn callback(State(mcp): State<Shared>, uri: Uri) -> Response {
         return gone();
     };
     let text = |f: &str| link[f].as_str().unwrap_or_default().to_string();
-    let Some(server) = mcp.servers.iter().find(|s| s.name == text("server")) else {
+    let Some(server) = mcp
+        .servers()
+        .iter()
+        .find(|s| s.name == text("server"))
+        .cloned()
+    else {
         return gone();
     };
     if !query.get("error").is_empty() {

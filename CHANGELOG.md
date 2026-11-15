@@ -7,6 +7,28 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### MCP gateway: servers without a restart, more transports, prices, token exchange, sessions
+
+- MCP servers are added, changed and removed without a restart: by a saved policy file, `SIGHUP`, or
+  `PUT`/`DELETE /admin/mcp/<name>` with the policy in the store. A server reached as before keeps the sessions
+  Gantry holds at it. `/mcp` is served whenever Gantry runs with a policy, so the first server can be added the same
+  way. A reload that names an unset variable is rejected and the version in use stays.
+- `transport: sse` reaches servers that speak the older HTTP+SSE transport (MCP 2024-11-05). `transport: stdio`
+  starts a server as a process (`command`, `args`, `env`): only a command listed in `GANTRY_MCP_STDIO_ALLOW` in the
+  gateway's own environment, with an environment emptied of everything but what `env:` names. The policy alone
+  cannot make the gateway run a program.
+- `call_price_usd` and `tool_prices` on a server price its tool calls. A priced call the server answered writes a
+  usage record (`provider: "mcp"`, the tool as its model) and counts against the caller's budgets; with a budget
+  spent, the call is refused with `budget_exceeded` before it reaches the server.
+- `user_auth: token_exchange` trades the token a caller sends in `x-gantry-subject-token` for the server's at the
+  identity provider's token endpoint (RFC 8693); `user_auth: on_behalf_of` sends the on-behalf-of form. Records say
+  `upstream_auth` and hold neither token.
+- `GET /admin/mcp/sessions` and the console's MCP sessions page list the MCP clients connected to a gateway and each
+  person's own account at a server; `DELETE /admin/mcp/sessions/<id>` ends one. New refusal code: `session_revoked`.
+- A rule's `mcp_clients` names the MCP client applications that may connect, by the name a client gives itself, its
+  user agent, or `oauth:<client id>`. New refusal code: `mcp_client_not_allowed`.
+- An MCP server can no longer be named `sessions`.
+
 ### Plugin events: guardrail contract v2
 
 - A new guardrail type, `events`, sends an outside service the whole conversation as typed events: `system_prompt`,

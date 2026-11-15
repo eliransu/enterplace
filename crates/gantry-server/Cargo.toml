@@ -10,7 +10,8 @@ license.workspace = true
 gantry-core.workspace = true
 gantry-console.workspace = true
 axum.workspace = true
-tokio.workspace = true
+# process and io-util: stdio MCP servers are child processes spoken to line by line (mcp/duplex.rs).
+tokio = { workspace = true, features = ["process", "io-util"] }
 hyper-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true

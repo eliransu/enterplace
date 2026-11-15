@@ -17,7 +17,7 @@ use gantry_console::{Console, Form, html};
 use gantry_core::{id, kill::Kill, mcp::ToolChanges};
 use serde_json::{Value, json};
 
-use super::{Conn, Item, Mcp, Shared, event};
+use super::{Conn, Item, Mcp, Server, Shared, event};
 use crate::Refusal;
 
 const TOOLS: &str = "MCP tools";
@@ -54,8 +54,7 @@ impl Mcp {
     /// Compares one server's tool list with its pins. The first list of a server pins every tool; later, a new or
     /// changed tool is recorded, and with `tool_changes: block` held. Returns the server's own names of the tools
     /// held for approval, to leave out of the list.
-    pub(super) async fn observe(&self, index: usize, tools: &[Value]) -> HashSet<String> {
-        let server = &self.servers[index];
+    pub(super) async fn observe(&self, server: &Server, tools: &[Value]) -> HashSet<String> {
         let block = server.tool_changes == ToolChanges::Block;
         let _one = self.pinning.lock().await;
         let prefix = format!("{}/", server.name);
@@ -165,11 +164,10 @@ impl Mcp {
     /// Refuses a call to a tool of a blocking server that is held for approval, or that Gantry has never seen.
     pub(super) async fn check_pin(
         &self,
-        index: usize,
+        server: &Server,
         conn: &Conn,
         tool: &str,
     ) -> Result<(), Refusal> {
-        let server = &self.servers[index];
         if server.tool_changes != ToolChanges::Block {
             return Ok(());
         }
@@ -177,8 +175,8 @@ impl Mcp {
         let mut pin = self.keep.get("pin", &id).await.ok().flatten();
         if pin.is_none() {
             // A tool never listed is pinned (or held) by listing it once.
-            let tools = self.list_server(index, conn, Item::Tool).await;
-            self.observe(index, &tools).await;
+            let tools = self.list_server(server, conn, Item::Tool).await;
+            self.observe(server, &tools).await;
             pin = self.keep.get("pin", &id).await.ok().flatten();
         }
         match pin {
@@ -239,6 +237,9 @@ impl Mcp {
 
 /// The console's MCP pages and the end of an MCP client's single sign-on.
 pub(super) fn extension(mcp: Shared) -> gantry_console::Extension {
+    // Weak: the console must not keep the gateway (and its audit log) alive after the server is dropped.
+    let mcp = std::sync::Arc::downgrade(&mcp);
+    let sessions = mcp.clone();
     let (a, b, c, d, e) = (mcp.clone(), mcp.clone(), mcp.clone(), mcp.clone(), mcp);
     let routes: Router<Console> = Router::new()
         .route(
@@ -246,6 +247,11 @@ pub(super) fn extension(mcp: Shared) -> gantry_console::Extension {
             get(move |State(console): State<Console>, uri: Uri| {
                 let mcp = a.clone();
                 async move {
+                    let Some(mcp) = mcp.upgrade() else {
+                        return axum::response::IntoResponse::into_response(
+                            axum::http::StatusCode::NOT_FOUND,
+                        );
+                    };
                     let query = Form::of(&uri);
                     mcp.finish_sso(&console, query.get("state"), query.get("code"))
                         .await
@@ -257,7 +263,14 @@ pub(super) fn extension(mcp: Shared) -> gantry_console::Extension {
             get(
                 move |State(console): State<Console>, headers: HeaderMap, uri: Uri| {
                     let mcp = b.clone();
-                    async move { tools_page(&mcp, &console, &headers, &uri, "").await }
+                    async move {
+                        let Some(mcp) = mcp.upgrade() else {
+                            return axum::response::IntoResponse::into_response(
+                                axum::http::StatusCode::NOT_FOUND,
+                            );
+                        };
+                        tools_page(&mcp, &console, &headers, &uri, "").await
+                    }
                 },
             )
             .post(
@@ -266,7 +279,14 @@ pub(super) fn extension(mcp: Shared) -> gantry_console::Extension {
                       uri: Uri,
                       body: String| {
                     let mcp = c.clone();
-                    async move { tools_action(&mcp, &console, &headers, &uri, &body).await }
+                    async move {
+                        let Some(mcp) = mcp.upgrade() else {
+                            return axum::response::IntoResponse::into_response(
+                                axum::http::StatusCode::NOT_FOUND,
+                            );
+                        };
+                        tools_action(&mcp, &console, &headers, &uri, &body).await
+                    }
                 },
             ),
         )
@@ -275,7 +295,14 @@ pub(super) fn extension(mcp: Shared) -> gantry_console::Extension {
             get(
                 move |State(console): State<Console>, headers: HeaderMap, uri: Uri| {
                     let mcp = d.clone();
-                    async move { approvals_page(&mcp, &console, &headers, &uri, "").await }
+                    async move {
+                        let Some(mcp) = mcp.upgrade() else {
+                            return axum::response::IntoResponse::into_response(
+                                axum::http::StatusCode::NOT_FOUND,
+                            );
+                        };
+                        approvals_page(&mcp, &console, &headers, &uri, "").await
+                    }
                 },
             )
             .post(
@@ -284,7 +311,14 @@ pub(super) fn extension(mcp: Shared) -> gantry_console::Extension {
                       uri: Uri,
                       body: String| {
                     let mcp = e.clone();
-                    async move { approvals_action(&mcp, &console, &headers, &uri, &body).await }
+                    async move {
+                        let Some(mcp) = mcp.upgrade() else {
+                            return axum::response::IntoResponse::into_response(
+                                axum::http::StatusCode::NOT_FOUND,
+                            );
+                        };
+                        approvals_action(&mcp, &console, &headers, &uri, &body).await
+                    }
                 },
             ),
         );
@@ -292,13 +326,17 @@ pub(super) fn extension(mcp: Shared) -> gantry_console::Extension {
         nav: vec![
             ("/console/mcp/tools".into(), TOOLS.into()),
             ("/console/mcp/approvals".into(), APPROVALS.into()),
+            (
+                "/console/mcp/sessions".into(),
+                super::sessions::SESSIONS.into(),
+            ),
         ],
-        routes,
+        routes: routes.merge(super::sessions::routes(sessions)),
         ..gantry_console::Extension::default()
     }
 }
 
-fn form(action: &str, fields: &[(&str, &str)], label: &str, kind: &str) -> String {
+pub(super) fn form(action: &str, fields: &[(&str, &str)], label: &str, kind: &str) -> String {
     let hidden: String = fields
         .iter()
         .map(|(n, v)| {

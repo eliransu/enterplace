@@ -567,6 +567,26 @@ pub(crate) const ROUTES: &[(Module, AdminRoute)] = &[
         Module::Manage,
         r(
             "GET",
+            "/admin/mcp/sessions",
+            "list_mcp_sessions",
+            Some(SeeKeys),
+            "The MCP clients connected to this gateway, and each person's own account at an MCP server",
+        ),
+    ),
+    (
+        Module::Manage,
+        r(
+            "DELETE",
+            "/admin/mcp/sessions/{id}",
+            "end_mcp_session",
+            Some(RevokeKeys),
+            "Ends an MCP client's session, or a person's connection to a server (<server>:<person>)",
+        ),
+    ),
+    (
+        Module::Manage,
+        r(
+            "GET",
             "/admin/mcp/{name}",
             "show_mcp_server",
             None,
@@ -760,6 +780,8 @@ enum Plan {
         by: String,
     },
     Extension(Arc<dyn AdminApi>, AdminCall),
+    /// Ends an MCP session, within the caller's reach: (id, organization, teams, kept to customers).
+    EndMcpSession(String, Option<String>, Vec<String>, bool),
 }
 
 async fn run(
@@ -934,6 +956,25 @@ async fn allow(
                 by,
             },
         ));
+    }
+    if matches!(route.action, "list_mcp_sessions" | "end_mcp_session") {
+        let id = params.first().cloned().unwrap_or_default();
+        if route.action == "end_mcp_session" {
+            call.target = Some(json!({ "id": id }));
+            return Ok(Plan::EndMcpSession(
+                id,
+                role.org.clone(),
+                role.teams.clone(),
+                !role.customers.is_empty(),
+            ));
+        }
+        let mcp = mcp_of(state)?;
+        let reach = crate::mcp::sessions::Reach {
+            org: role.org.as_deref(),
+            teams: &role.teams,
+            customers: !role.customers.is_empty(),
+        };
+        return Ok(Plan::Read(mcp.sessions(&reach).await));
     }
     let reloader = state.reloader.clone().ok_or_else(|| {
         refused(
@@ -1291,9 +1332,44 @@ async fn usage(
 
 type Done = (Response, Option<(String, String)>);
 
+/// The MCP gateway of this Gantry.
+fn mcp_of(state: &AppState) -> Result<Arc<crate::mcp::Mcp>, Refusal> {
+    state
+        .mcp
+        .get()
+        .and_then(std::sync::Weak::upgrade)
+        .ok_or_else(|| {
+            refused(
+                StatusCode::NOT_FOUND,
+                "unknown_route",
+                "Refused: this Gantry serves no MCP gateway, so it has no MCP sessions.",
+            )
+        })
+}
+
 async fn act(state: &AppState, plan: Plan) -> Result<Done, Refusal> {
     match plan {
         Plan::Read(body) => Ok((json_response(StatusCode::OK, &body), None)),
+        Plan::EndMcpSession(id, org, teams, customers) => {
+            let reach = crate::mcp::sessions::Reach {
+                org: org.as_deref(),
+                teams: &teams,
+                customers,
+            };
+            match mcp_of(state)?.end_session(&id, &reach).await {
+                Some(ended) => Ok((
+                    json_response(StatusCode::OK, &json!({ "ended": ended })),
+                    None,
+                )),
+                None => Err(refused(
+                    StatusCode::NOT_FOUND,
+                    "no_such_session",
+                    format!(
+                        "Refused: no MCP session or connection has the id \"{id}\". GET /admin/mcp/sessions lists them with their ids."
+                    ),
+                )),
+            }
+        }
         Plan::Csv(text) => Ok((
             (
                 StatusCode::OK,

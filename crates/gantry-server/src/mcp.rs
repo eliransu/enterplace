@@ -14,8 +14,10 @@
 //! `/mcp/<bundle>` serves a virtual server: the tools a policy's `mcp_bundles` entry names, within the rule.
 
 mod console;
+mod duplex;
 pub(crate) mod keep;
 mod oauth;
+pub(crate) mod sessions;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -41,7 +43,7 @@ use gantry_core::{
     audit::Entry,
     guard::{self, Guardrail},
     id,
-    mcp::{Bundle, ToolChanges, UserAuth, tool_allowed},
+    mcp::{Bundle, ToolChanges, Transport, UserAuth, tool_allowed},
     policy::{Principal, Rule},
 };
 use http_body_util::BodyExt;
@@ -86,8 +88,58 @@ pub struct McpRoute {
     /// Each person's own credential, when every call must run as the person.
     pub user_auth: Option<UserAuth>,
     pub tool_changes: ToolChanges,
-    /// The client secret for `user_auth: oauth` with a client registered by hand.
+    /// The client secret for `user_auth: oauth` with a client registered by hand, or of a token exchange.
     pub oauth_client_secret: Option<Secret>,
+    pub transport: Transport,
+    /// A stdio server's environment, read from the gateway's: (the process's variable, its value).
+    pub stdio_env: Vec<(String, Secret)>,
+    /// What a call of any tool costs, in US dollars, and of the tools priced by name.
+    pub call_price_usd: Option<f64>,
+    pub tool_prices: Vec<(String, f64)>,
+}
+
+impl McpRoute {
+    /// A server reached over Streamable HTTP with no credential and no price: what most embedders and tests need.
+    pub fn http(name: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            url: url.into(),
+            headers: Vec::new(),
+            user_auth: None,
+            tool_changes: ToolChanges::default(),
+            oauth_client_secret: None,
+            transport: Transport::Http,
+            stdio_env: Vec::new(),
+            call_price_usd: None,
+            tool_prices: Vec::new(),
+        }
+    }
+
+    /// Everything that decides how the server is reached, secrets by their hash: a server whose print is the
+    /// same after a reload keeps its sessions.
+    fn print(&self) -> String {
+        let secrets: Vec<String> = self
+            .headers
+            .iter()
+            .chain(&self.stdio_env)
+            .map(|(name, secret)| format!("{name}={}", id::sha256_hex(secret.0.as_bytes())))
+            .chain(
+                self.oauth_client_secret
+                    .iter()
+                    .map(|s| id::sha256_hex(s.0.as_bytes())),
+            )
+            .collect();
+        format!(
+            "{}|{}|{:?}|{:?}|{:?}|{secrets:?}|{:?}|{:?}",
+            self.name,
+            self.url,
+            self.transport,
+            self.user_auth,
+            self.tool_changes,
+            self.call_price_usd,
+            self.tool_prices
+        )
+    }
 }
 
 struct Upstream {
@@ -99,7 +151,31 @@ struct Upstream {
     client_secret: Option<String>,
     /// One session per credential: the shared one under "", each person's under their name.
     sessions: Mutex<HashMap<String, Session>>,
+    transport: Transport,
+    stdio_env: Vec<(String, String)>,
+    /// The open connection of each session of a server that is not Streamable HTTP (`duplex`).
+    duplex: tokio::sync::Mutex<HashMap<String, Arc<duplex::Duplex>>>,
+    call_price_usd: Option<f64>,
+    tool_prices: Vec<(String, f64)>,
+    /// Tokens got by token exchange, by the hash of the token they were traded for: (token, its expiry).
+    exchanged: Mutex<HashMap<String, (String, u64)>>,
+    print: String,
 }
+
+impl Upstream {
+    /// What one call of `tool` (the server's own name) costs, when the policy prices it.
+    fn price_of(&self, tool: &str) -> Option<f64> {
+        self.tool_prices
+            .iter()
+            .find(|(name, _)| name == tool)
+            .map(|(_, price)| *price)
+            .or(self.call_price_usd)
+    }
+}
+
+type Server = Arc<Upstream>;
+/// The policy's servers, and the same as the gateway reaches them.
+type Served = (Arc<Vec<McpRoute>>, Arc<Vec<Server>>);
 
 #[derive(Clone)]
 struct Session {
@@ -118,7 +194,7 @@ struct Conn {
 
 /// A request a server sent inside a stream, passed to the caller under an id of Gantry's.
 struct Relayed {
-    server: usize,
+    server: Server,
     upstream_id: Value,
     session: Session,
     conn: Conn,
@@ -132,17 +208,32 @@ struct CallerSession {
     owner: String,
     capabilities: Value,
     at: Instant,
+    /// For the sessions list: who opened it, as what client, when, and when it was last used.
+    person: String,
+    team: String,
+    org: String,
+    client_name: Option<String>,
+    client_version: Option<String>,
+    user_agent: Option<String>,
+    oauth_client: Option<String>,
+    bundle: Option<String>,
+    started: String,
+    last_used: String,
 }
 
 pub(crate) struct Mcp {
     app: AppState,
-    servers: Vec<Upstream>,
+    /// The servers of the policy version they were built from. A reload that changes `mcp:` puts a new list in the
+    /// version; the next request builds what changed and keeps the rest, sessions included.
+    servers: Mutex<Served>,
     // Each request to an upstream server gets its own id: callers share a session, so their ids could collide.
     next: AtomicU64,
     keep: Keep,
     sso: bool,
     audit_path: Option<std::path::PathBuf>,
     callers: Mutex<HashMap<String, CallerSession>>,
+    /// Sessions an admin ended: a request in one is refused until its client connects again.
+    revoked: Mutex<HashSet<String>>,
     relayed: Mutex<HashMap<String, Relayed>>,
     /// One pinning at a time on this gateway, so one change is recorded once.
     pinning: tokio::sync::Mutex<()>,
@@ -165,44 +256,20 @@ pub(crate) struct Built {
 /// The `/mcp` routes, when the policy names MCP servers.
 pub(crate) fn router(
     app: &AppState,
-    routes: Vec<McpRoute>,
+    routes: Arc<Vec<McpRoute>>,
     setup: McpSetup,
 ) -> Result<Option<Built>, ConfigError> {
-    if routes.is_empty() {
+    // Served whenever there is a policy to reload: a server added later needs the routes to be there.
+    if routes.is_empty() && app.reloader.is_none() {
         return Ok(None);
     }
     let mut servers = Vec::new();
-    for route in routes {
-        let mut headers = Vec::new();
-        for (name, secret) in &route.headers {
-            let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
-                ConfigError(format!(
-                    "MCP server \"{}\": \"{name}\" cannot be an HTTP header name. Name a header such as Authorization.",
-                    route.name
-                ))
-            })?;
-            let mut value = HeaderValue::from_str(&secret.0).map_err(|_| {
-                ConfigError(format!(
-                    "MCP server \"{}\": the value of header {name} holds a character that cannot go in an HTTP header. Check its variable for a stray newline or quote.",
-                    route.name
-                ))
-            })?;
-            value.set_sensitive(true);
-            headers.push((name, value));
-        }
-        servers.push(Upstream {
-            url: checked_upstream(&route.url)?,
-            name: route.name,
-            headers,
-            user_auth: route.user_auth,
-            tool_changes: route.tool_changes,
-            client_secret: route.oauth_client_secret.map(|s| s.0),
-            sessions: Mutex::default(),
-        });
+    for route in routes.iter() {
+        servers.push(Arc::new(upstream_of(route)?));
     }
     let (sso, audit_path) = (setup.sso, setup.audit_path.clone());
     let keep = Keep::start(setup).map_err(ConfigError)?;
-    if let Some(server) = servers.iter().find(|s| s.user_auth.is_some())
+    if let Some(server) = servers.iter().find(|s| keeps_credentials(&s.user_auth))
         && !keep.can_seal()
     {
         return Err(ConfigError(format!(
@@ -213,12 +280,13 @@ pub(crate) fn router(
     }
     let mcp: Shared = Arc::new(Mcp {
         app: app.clone(),
-        servers,
+        servers: Mutex::new((routes, Arc::new(servers))),
         next: AtomicU64::new(1),
         keep,
         sso,
         audit_path,
         callers: Mutex::default(),
+        revoked: Mutex::default(),
         relayed: Mutex::default(),
         pinning: tokio::sync::Mutex::new(()),
     });
@@ -239,10 +307,87 @@ pub(crate) fn router(
         )
         .merge(oauth::routes())
         .with_state(mcp.clone());
+    // For the admin API's session routes. Weak: the gateway's routes own the MCP gateway, not its own state.
+    let _ = app.mcp.set(Arc::downgrade(&mcp));
     Ok(Some(Built {
         router,
         console: console::extension(mcp),
     }))
+}
+
+/// Whether each person's own credential to a server is kept, sealed: not so for a token traded on every call.
+pub(crate) fn keeps_credentials(auth: &Option<UserAuth>) -> bool {
+    matches!(auth, Some(UserAuth::Headers(_) | UserAuth::OAuth { .. }))
+}
+
+/// A server as requests are sent to it, from what the policy and the environment say of it.
+fn upstream_of(route: &McpRoute) -> Result<Upstream, ConfigError> {
+    let mut headers = Vec::new();
+    for (name, secret) in &route.headers {
+        let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+            ConfigError(format!(
+                "MCP server \"{}\": \"{name}\" cannot be an HTTP header name. Name a header such as Authorization.",
+                route.name
+            ))
+        })?;
+        let mut value = HeaderValue::from_str(&secret.0).map_err(|_| {
+            ConfigError(format!(
+                "MCP server \"{}\": the value of header {name} holds a character that cannot go in an HTTP header. Check its variable for a stray newline or quote.",
+                route.name
+            ))
+        })?;
+        value.set_sensitive(true);
+        headers.push((name, value));
+    }
+    Ok(Upstream {
+        url: if matches!(route.transport, Transport::Stdio { .. }) {
+            String::new()
+        } else {
+            checked_upstream(&route.url)?
+        },
+        name: route.name.clone(),
+        headers,
+        user_auth: route.user_auth.clone(),
+        tool_changes: route.tool_changes,
+        client_secret: route.oauth_client_secret.as_ref().map(|s| s.0.clone()),
+        sessions: Mutex::default(),
+        transport: route.transport.clone(),
+        stdio_env: route
+            .stdio_env
+            .iter()
+            .map(|(name, secret)| (name.clone(), secret.0.clone()))
+            .collect(),
+        duplex: tokio::sync::Mutex::default(),
+        call_price_usd: route.call_price_usd,
+        tool_prices: route.tool_prices.clone(),
+        exchanged: Mutex::default(),
+        print: route.print(),
+    })
+}
+
+impl Mcp {
+    /// The servers of the policy version in use. After a reload that changed them, a server reached as before is
+    /// kept with its sessions, and a new or changed one is built now.
+    fn servers(&self) -> Arc<Vec<Server>> {
+        let version = self.app.version();
+        let mut held = lock(&self.servers);
+        if !Arc::ptr_eq(&held.0, &version.mcp) {
+            let mut servers = Vec::new();
+            for route in version.mcp.iter() {
+                let print = route.print();
+                match held.1.iter().find(|s| s.print == print) {
+                    Some(kept) => servers.push(kept.clone()),
+                    None => match upstream_of(route) {
+                        Ok(built) => servers.push(Arc::new(built)),
+                        // The reload checked it, so this is not reached; said rather than served half built.
+                        Err(err) => eprintln!("gantry: {err} The server is left out."),
+                    },
+                }
+            }
+            *held = (version.mcp.clone(), Arc::new(servers));
+        }
+        held.1.clone()
+    }
 }
 
 async fn serve(mcp: Shared, bundle: Option<String>, request: Request) -> Response {
@@ -302,6 +447,14 @@ struct Asked {
     origin: String,
     /// `oauth` when the caller signed in with an OAuth access token.
     via: Option<&'static str>,
+    /// The OAuth client the caller signed in through, and what the client called itself at `initialize`.
+    oauth_client: Option<String>,
+    client_name: Option<String>,
+    /// The token the caller holds at its identity provider (`x-gantry-subject-token`), for a server reached by
+    /// token exchange. Never recorded.
+    subject: Option<String>,
+    /// What the call costs when the server answers it, and the budgets it counts against.
+    price: Option<(f64, Vec<(String, gantry_core::policy::Period)>)>,
     /// More fields of the decision record: guardrail findings, who approved, whose credential went upstream.
     extra: Map<String, Value>,
     /// Where the caller signs in to an upstream server, when its credential is missing.
@@ -326,6 +479,12 @@ async fn post(mcp: &Shared, bundle: Option<String>, request: Request, decision: 
             .filter(|v| !v.is_empty())
             .map(str::to_string),
         origin: oauth::origin(&parts),
+        subject: parts
+            .headers
+            .get(SUBJECT_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
         bundle,
         ..Asked::default()
     };
@@ -483,6 +642,9 @@ fn allows(item: Item, rule: &Rule, bundle: Option<&Bundle>, name: &str) -> bool 
         && (item != Item::Tool || rule.mcp.narrow.iter().all(|l| tool_allowed(l, name)))
 }
 
+/// The header a caller gives the token it holds at its identity provider in, for servers reached by token exchange.
+pub(crate) const SUBJECT_HEADER: &str = "x-gantry-subject-token";
+
 /// The header a caller narrows its tools with, for one request: a comma separated list of `tools:` patterns.
 pub(crate) const NARROW_HEADER: &str = "x-gantry-mcp-tools";
 
@@ -591,19 +753,34 @@ async fn answer(
     };
     asked.id = Some(call_id.clone());
     let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
-    let capabilities = parts
+    let session_header = parts
         .headers
         .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.to_str().ok());
+    let capabilities = session_header
         .and_then(|session| {
             lock(&mcp.callers)
-                .get(session)
+                .get_mut(session)
                 .filter(|s| s.owner == key_sha256)
-                .map(|s| s.capabilities.clone())
+                .map(|s| {
+                    s.last_used = gantry_core::audit::timestamp();
+                    asked.client_name = s.client_name.clone();
+                    s.capabilities.clone()
+                })
         })
         .unwrap_or_else(|| json!({}));
+    if method != "initialize"
+        && let Some(session) = session_header
+        && lock(&mcp.revoked).contains(session)
+    {
+        return Err(Refusal::new(
+            StatusCode::NOT_FOUND,
+            "session_revoked",
+            "Refused: a Gantry admin ended this MCP session. Connect the MCP client again to open a new one.",
+        ));
+    }
     let item = match method {
-        "initialize" => return Ok(mcp.initialize(&call_id, &params, &key_sha256, bundle.as_ref())),
+        "initialize" => return Ok(mcp.initialize(&call_id, &params, asked, bundle.as_ref())),
         "ping" => return Ok(result(&call_id, json!({}))),
         "tools/call" => Some(Item::Tool),
         "prompts/get" => Some(Item::Prompt),
@@ -665,9 +842,42 @@ async fn answer(
     })?;
     let rule = &narrowed(rule, &person, &parts.headers)?;
     asked.rule = Some(rule.clone());
+    let shadow = policy.observing(rule.shadow_until.as_deref());
+    if !rule.mcp.clients.is_empty() {
+        let client = asked
+            .client_name
+            .clone()
+            .or_else(|| asked.user_agent.clone())
+            .unwrap_or_else(|| "unnamed".into());
+        asked.extra.insert(
+            "mcp_client".into(),
+            client.chars().take(200).collect::<String>().into(),
+        );
+        if !gantry_core::mcp::client_allowed(
+            &rule.mcp.clients,
+            asked.client_name.as_deref(),
+            asked.user_agent.as_deref(),
+            asked.oauth_client.as_deref(),
+        ) {
+            let refusal = Refusal::new(
+                StatusCode::FORBIDDEN,
+                "mcp_client_not_allowed",
+                format!(
+                    "Refused: rule \"{}\" lets only these MCP clients connect: {}. This client called itself \"{client}\". Use one of them, or ask a Gantry admin to add this client to the rule's mcp_clients.",
+                    rule.name,
+                    rule.mcp.clients.join(", ")
+                ),
+            );
+            match shadow {
+                Some(by) => asked
+                    .would_refuse
+                    .push(crate::would_refuse_entry(refusal, by)),
+                None => return Err(refusal),
+            }
+        }
+    }
     // Observe mode or the rule's shadow period: every tool, prompt and resource is listed and may be used, and one
     // the rule does not allow is recorded as would_refuse.
-    let shadow = policy.observing(rule.shadow_until.as_deref());
     let listed = shadow.map(|_| {
         let mut open = rule.clone();
         open.tools = vec!["*".into()];
@@ -688,7 +898,7 @@ async fn answer(
                 listed.as_ref().unwrap_or(rule),
                 bundle.as_ref(),
                 &person,
-                &asked.origin,
+                asked.subject.as_deref(),
             )
             .await;
         return Ok(result(&call_id, json!({ item.key(): items })));
@@ -747,12 +957,14 @@ async fn answer(
             .would_refuse
             .push(crate::would_refuse_entry(refusal, by));
     }
-    let index = asked
+    let servers = mcp.servers();
+    let server = asked
         .server
         .as_deref()
-        .and_then(|s| mcp.servers.iter().position(|u| u.name == s))
+        .and_then(|s| servers.iter().find(|u| u.name == s))
+        .cloned()
         .ok_or_else(|| {
-            let names: Vec<&str> = mcp.servers.iter().map(|s| s.name.as_str()).collect();
+            let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
             Refusal::new(
                 StatusCode::NOT_FOUND,
                 "unknown_tool",
@@ -763,8 +975,8 @@ async fn answer(
                 ),
             )
         })?;
-    let server = &mcp.servers[index];
-    let conn = match mcp.conn(server, &person, &asked.origin).await {
+    let server = &server;
+    let conn = match mcp.conn(server, &person, asked.subject.as_deref()).await {
         Ok(conn) => conn,
         Err(need) => return Err(mcp.need(asked, server, need).await),
     };
@@ -786,14 +998,51 @@ async fn answer(
             return Ok(refused(&unavailable, asked, decision));
         }
         let started = Instant::now();
-        let upstream = mcp.ask(index, &conn, method, forwarded).await;
+        let upstream = mcp.ask(server, &conn, method, forwarded).await;
         let (response, outcome) = mcp
             .finish(upstream, &call_id, decision, asked, &[], started)
             .await;
         record_outcome(mcp, decision, asked, outcome).await;
         return Ok(json_response(StatusCode::OK, &response));
     }
-    mcp.check_pin(index, &conn, &own).await?;
+    mcp.check_pin(server, &conn, &own).await?;
+    // A priced tool counts against the budgets of whoever calls it, and is refused once one of them is spent.
+    if let Some(price) = server.price_of(&own) {
+        let budgets = policy.applied(
+            &person,
+            rule,
+            gantry_core::policy::Context {
+                sent: &name,
+                model: &name,
+                customer: None,
+                tags: &[],
+            },
+        );
+        if price > 0.0 && !crate::spend::room(&mcp.app.spend, &budgets).await {
+            let refusal = Refusal::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "budget_exceeded",
+                format!(
+                    "Refused: tool \"{name}\" costs ${price} a call, and a budget \"{}\" counts against (of rule \"{}\", its key or the limits: list) is spent for this period. It starts again at the next period; ask a Gantry admin to raise it if you need more before then.",
+                    person.name, rule.name
+                ),
+            );
+            match shadow {
+                Some(by) => asked
+                    .would_refuse
+                    .push(crate::would_refuse_entry(refusal, by)),
+                None => return Err(refusal),
+            }
+        }
+        let counted = budgets
+            .into_iter()
+            .filter_map(|a| match a.limit {
+                gantry_core::policy::Limit::Budget(b) => Some((a.scope, b.per)),
+                _ => None,
+            })
+            .collect();
+        asked.price = Some((price, counted));
+    }
     let observe = policy.mode() == gantry_core::policy::Mode::Observe;
     let guards: Vec<Guardrail> =
         crate::observed_guards(policy, &rule.guardrails).unwrap_or_else(|| rule.guardrails.clone());
@@ -906,7 +1155,7 @@ async fn answer(
         .get(header::ACCEPT)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.contains("text/event-stream"));
-    let reply = mcp.start(index, &conn, "tools/call", forwarded).await;
+    let reply = mcp.start(server, &conn, "tools/call", forwarded).await;
     let upstream = match reply {
         Ok((Reply::Events(events), id)) if streams => {
             return Ok(mcp.clone().relay(
@@ -935,9 +1184,16 @@ impl Mcp {
         &self,
         call_id: &Value,
         params: &Value,
-        owner: &str,
+        asked: &Asked,
         bundle: Option<&Bundle>,
     ) -> Response {
+        let owner = asked.key_sha256.as_str();
+        let info = |field: &str| {
+            params["clientInfo"][field]
+                .as_str()
+                .map(|v| v.chars().take(200).collect::<String>())
+        };
+        let person = asked.person.clone().unwrap_or_default();
         let asked_for = params.get("protocolVersion").and_then(Value::as_str);
         let protocol = VERSIONS
             .iter()
@@ -963,6 +1219,16 @@ impl Mcp {
                     owner: owner.to_string(),
                     capabilities: params.get("capabilities").cloned().unwrap_or(json!({})),
                     at: Instant::now(),
+                    person: person.name,
+                    team: person.team,
+                    org: person.org,
+                    client_name: info("name"),
+                    client_version: info("version"),
+                    user_agent: asked.user_agent.clone(),
+                    oauth_client: asked.oauth_client.clone(),
+                    bundle: asked.bundle.clone(),
+                    started: gantry_core::audit::timestamp(),
+                    last_used: gantry_core::audit::timestamp(),
                 },
             );
         }
@@ -1002,11 +1268,11 @@ impl Mcp {
         rule: &Rule,
         bundle: Option<&Bundle>,
         person: &Principal,
-        origin: &str,
+        subject: Option<&str>,
     ) -> Vec<Value> {
         let mut out = Vec::new();
-        for (index, server) in self.servers.iter().enumerate() {
-            let conn = match self.conn(server, person, origin).await {
+        for server in self.servers().iter() {
+            let conn = match self.conn(server, person, subject).await {
                 Ok(conn) => conn,
                 Err(_) => {
                     // Without the person's credential the server cannot be asked. A tool that says how to connect
@@ -1022,9 +1288,9 @@ impl Mcp {
                     continue;
                 }
             };
-            let items = self.list_server(index, &conn, item).await;
+            let items = self.list_server(server, &conn, item).await;
             let hidden = if item == Item::Tool {
-                self.observe(index, &items).await
+                self.observe(server, &items).await
             } else {
                 HashSet::new()
             };
@@ -1047,8 +1313,7 @@ impl Mcp {
     }
 
     /// One server's whole list of one kind, every page.
-    async fn list_server(&self, index: usize, conn: &Conn, item: Item) -> Vec<Value> {
-        let server = &self.servers[index];
+    async fn list_server(&self, server: &Server, conn: &Conn, item: Item) -> Vec<Value> {
         let mut out = Vec::new();
         let mut cursor: Option<Value> = None;
         for _ in 0..MAX_PAGES {
@@ -1056,7 +1321,7 @@ impl Mcp {
                 Some(cursor) => json!({"cursor": cursor}),
                 None => json!({}),
             };
-            let page = match self.ask(index, conn, item.list_method(), params).await {
+            let page = match self.ask(server, conn, item.list_method(), params).await {
                 Ok(answer) if answer.get("result").is_some() => answer,
                 Ok(answer) => {
                     eprintln!(
@@ -1205,14 +1470,15 @@ impl Mcp {
                 );
                 // A person's credential the server no longer takes: they sign in to it again.
                 if failure.outcome == "unauthorized"
-                    && let (Some(index), Some(person)) = (
-                        self.servers.iter().position(|s| s.name == server),
+                    && let (Some(upstream), Some(person)) = (
+                        self.servers().iter().find(|s| s.name == server).cloned(),
                         &asked.person,
                     )
-                    && self.servers[index].user_auth.is_some()
-                    && let Ok(url) = self
-                        .connect_link(&self.servers[index], person, &asked.origin)
-                        .await
+                    && matches!(
+                        upstream.user_auth,
+                        Some(UserAuth::Headers(_) | UserAuth::OAuth { .. })
+                    )
+                    && let Ok(url) = self.connect_link(&upstream, person, &asked.origin).await
                 {
                     code = URL_REQUIRED;
                     message = format!(
@@ -1359,7 +1625,7 @@ impl Mcp {
         };
         let mut answer = Value::Object(message.clone());
         answer["id"] = relayed.upstream_id.clone();
-        self.post_upstream(relayed.server, &relayed.session, &relayed.conn, &answer)
+        self.post_upstream(&relayed.server, &relayed.session, &relayed.conn, &answer)
             .await;
     }
 
@@ -1406,13 +1672,13 @@ impl Mcp {
                     let wanted = method.split('/').next().unwrap_or_default();
                     if method == "ping" {
                         let pong = json!({"jsonrpc": "2.0", "id": upstream_id, "result": {}});
-                        self.post_upstream(events.server, &events.session, &events.conn, &pong)
+                        self.post_upstream(&events.server, &events.session, &events.conn, &pong)
                             .await;
                         continue;
                     }
                     if capabilities.get(wanted).is_none() {
                         let refusal = json!({"jsonrpc": "2.0", "id": upstream_id, "error": {"code": -32601, "message": format!("The MCP client behind Gantry did not say it supports {wanted}, so {method} was not passed to it.")}});
-                        self.post_upstream(events.server, &events.session, &events.conn, &refusal)
+                        self.post_upstream(&events.server, &events.session, &events.conn, &refusal)
                             .await;
                         continue;
                     }
@@ -1424,7 +1690,7 @@ impl Mcp {
                             relayed.insert(
                                 gantry_id.clone(),
                                 Relayed {
-                                    server: events.server,
+                                    server: events.server.clone(),
                                     upstream_id: upstream_id.clone(),
                                     session: events.session.clone(),
                                     conn: events.conn.clone(),
@@ -1699,6 +1965,49 @@ async fn record_outcome(mcp: &Mcp, decision: &str, asked: &Asked, outcome: Map<S
         field.into(),
         value.chars().take(200).collect::<String>().into(),
     );
+    // A priced call the server answered is charged, as a model's answer is: a usage record, and its budgets.
+    let ran = matches!(
+        outcome.get("outcome").and_then(Value::as_str),
+        Some("ok" | "tool_error" | "guardrail_blocked")
+    );
+    if let (Some((price, counted)), Some(person), true) = (&asked.price, &asked.person, ran) {
+        let version = mcp.app.version();
+        let tool = format!("{}.{value}", asked.server.as_deref().unwrap_or_default());
+        let mut extra = Map::new();
+        extra.insert("mcp_tool".into(), tool.as_str().into());
+        let (charged, mut usage) = crate::spend::charge(
+            &mcp.app.spend,
+            crate::spend::Line {
+                decision,
+                person: &person.name,
+                team: &person.team,
+                key: &person.key,
+                org: &person.org,
+                customer: None,
+                tags: &[],
+                counted,
+                model: &tool,
+                provider: "mcp",
+                version: (&version.policy_sha256, &version.keys_sha256),
+                price: None,
+                usage: None,
+                share: 1.0,
+                unreported: *price,
+                succeeded: true,
+                extra,
+            },
+        );
+        record.insert("charged_usd".into(), charged.into());
+        // The price is the policy's: what the call cost is known, where a model's unreported usage is not.
+        usage.insert("cost_usd".into(), charged.into());
+        usage.insert("price".into(), "known".into());
+        usage.insert("usage".into(), "per_call".into());
+        if !append(mcp, &usage).await {
+            eprintln!(
+                "gantry: the usage record of MCP call {decision} could not be written to the audit log"
+            );
+        }
+    }
     record.extend(outcome);
     if !append(mcp, &record).await {
         eprintln!(
@@ -1730,7 +2039,7 @@ enum Reply {
 struct Events {
     body: Body,
     read: Vec<u8>,
-    server: usize,
+    server: Server,
     session: Session,
     conn: Conn,
 }
@@ -1819,13 +2128,13 @@ impl Mcp {
     /// refused: the caller of this one cannot answer them.
     async fn ask(
         &self,
-        index: usize,
+        server: &Server,
         conn: &Conn,
         method: &str,
         params: Value,
     ) -> Result<Value, Failure> {
         let exchange = async {
-            let (reply, id) = self.start(index, conn, method, params).await?;
+            let (reply, id) = self.start(server, conn, method, params).await?;
             self.drain(reply, id).await
         };
         tokio::time::timeout(self.app.timeouts.first_byte, exchange)
@@ -1852,7 +2161,7 @@ impl Mcp {
                     } else {
                         json!({"jsonrpc": "2.0", "id": upstream_id, "error": {"code": -32601, "message": format!("Gantry cannot pass {method} to its caller on this request: the caller did not ask for an event stream.")}})
                     };
-                    self.post_upstream(events.server, &events.session, &events.conn, &reply)
+                    self.post_upstream(&events.server, &events.session, &events.conn, &reply)
                         .await;
                 }
             }
@@ -1870,17 +2179,16 @@ impl Mcp {
     /// new session if the server says the old one has ended. Returns the reply and the id the request was sent with.
     async fn start(
         &self,
-        index: usize,
+        server: &Server,
         conn: &Conn,
         method: &str,
         params: Value,
     ) -> Result<(Reply, u64), Failure> {
-        let server = &self.servers[index];
         for _ in 0..2 {
-            let session = self.session(index, conn).await?;
+            let session = self.session(server, conn).await?;
             let id = self.next.fetch_add(1, Ordering::Relaxed);
             let body = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-            match self.send(index, Some(&session), conn, &body).await {
+            match self.send(server, Some(&session), conn, &body).await {
                 Err(f) if f.outcome == "session_ended" => {
                     lock(&server.sessions).remove(&conn.key);
                 }
@@ -1893,8 +2201,7 @@ impl Mcp {
         ))
     }
 
-    async fn session(&self, index: usize, conn: &Conn) -> Result<Session, Failure> {
-        let server = &self.servers[index];
+    async fn session(&self, server: &Server, conn: &Conn) -> Result<Session, Failure> {
         if let Some(session) = lock(&server.sessions).get(&conn.key).cloned() {
             return Ok(session);
         }
@@ -1907,7 +2214,7 @@ impl Mcp {
             "capabilities": {"sampling": {}, "elicitation": {}, "roots": {"listChanged": false}},
             "clientInfo": {"name": "gantry", "version": gantry_core::VERSION},
         }});
-        let (reply, session_id) = self.send(index, None, conn, &body).await?;
+        let (reply, session_id) = self.send(server, None, conn, &body).await?;
         let answer = self.drain(reply, id).await?;
         if let Some(error) = answer.get("error") {
             return Err(failure(
@@ -1924,7 +2231,7 @@ impl Mcp {
         };
         let notified = self
             .send(
-                index,
+                server,
                 Some(&session),
                 conn,
                 &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
@@ -1946,12 +2253,11 @@ impl Mcp {
 
     fn request(
         &self,
-        index: usize,
+        server: &Server,
         session: Option<&Session>,
         conn: &Conn,
         body: &Value,
     ) -> Result<axum::http::Request<Body>, Failure> {
-        let server = &self.servers[index];
         let mut request = axum::http::Request::post(&server.url)
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::ACCEPT, "application/json, text/event-stream");
@@ -1973,11 +2279,17 @@ impl Mcp {
     }
 
     /// Sends a notification or an answer to a server, which takes it with 202 and says nothing more.
-    async fn post_upstream(&self, index: usize, session: &Session, conn: &Conn, message: &Value) {
-        if let Err(f) = self.send(index, Some(session), conn, message).await {
+    async fn post_upstream(
+        &self,
+        server: &Server,
+        session: &Session,
+        conn: &Conn,
+        message: &Value,
+    ) {
+        if let Err(f) = self.send(server, Some(session), conn, message).await {
             eprintln!(
                 "gantry: MCP server \"{}\" did not take an answer Gantry passed on from its caller: {}",
-                self.servers[index].name, f.detail
+                server.name, f.detail
             );
         }
     }
@@ -1986,12 +2298,18 @@ impl Mcp {
     /// and the session ID it gave, if any.
     async fn send(
         &self,
-        index: usize,
+        server: &Server,
         session: Option<&Session>,
         conn: &Conn,
         body: &Value,
     ) -> Result<(Reply, Option<String>), Failure> {
-        let request = self.request(index, session, conn, body)?;
+        if !matches!(server.transport, Transport::Http) {
+            let answer = self
+                .send_duplex(server, session.is_some(), conn, body)
+                .await?;
+            return Ok((Reply::Answer(answer), None));
+        }
+        let request = self.request(server, session, conn, body)?;
         let exchange = async {
             let response = self
                 .app
@@ -2031,7 +2349,7 @@ impl Mcp {
                     Reply::Events(Events {
                         body,
                         read: Vec::new(),
-                        server: index,
+                        server: server.clone(),
                         session: session.cloned().unwrap_or(Session {
                             id: session_id.clone(),
                             version: UPSTREAM_VERSION.to_string(),
