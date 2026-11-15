@@ -13,7 +13,7 @@
 //!
 //! `/mcp/<bundle>` serves a virtual server: the tools a policy's `mcp_bundles` entry names, within the rule.
 
-mod console;
+pub(crate) mod console;
 pub(crate) mod keep;
 mod oauth;
 

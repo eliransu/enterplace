@@ -274,6 +274,11 @@ tokio::task_local! {
     static BASE: String;
 }
 
+/// The gateway's address as the browser of this request reached it, for an extension's pages.
+pub fn request_base() -> String {
+    base()
+}
+
 /// The gateway's address as the browser of this request reached it.
 pub(crate) fn base() -> String {
     BASE.try_with(Clone::clone)

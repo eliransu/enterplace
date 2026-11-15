@@ -1094,7 +1094,12 @@ fn build(
             console_extension.routes = console_extension.routes.merge(mcp.console.routes);
             router.merge(mcp.router)
         }
-        None => router,
+        None => {
+            let empty = mcp::console::empty_extension();
+            console_extension.nav.extend(empty.nav);
+            console_extension.routes = console_extension.routes.merge(empty.routes);
+            router
+        }
     };
     // Over every route but the console's, nested below; the layer itself skips the admin API.
     let router = router

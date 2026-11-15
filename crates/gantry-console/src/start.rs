@@ -2187,14 +2187,14 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
         "Alerts" => Empty {
             title: "No alert rules yet",
             body: "Add a channel (Slack, Microsoft Teams, PagerDuty, email or a webhook) and send a test alert. Then add a rule, such as 80% of a team's budget.".into(),
-            action: ("Add a channel", "/console/alerts?add=channel"),
+            action: ("Add a channel", "/console/alerts#add-channel"),
             docs: "/operations/alerting/",
             extra: String::new(),
         },
         "Devices" => Empty {
             title: "No devices enrolled",
             body: "Make an enrolment token, then run the device agent from your MDM or by hand. Each machine shows here with the coding tools it found.".into(),
-            action: ("Make an enrolment token", "/console/devices?token=new"),
+            action: ("Make an enrolment token", "/console/devices#add-token"),
             docs: "/operations/devices/",
             extra: command(
                 "empty-copy",
