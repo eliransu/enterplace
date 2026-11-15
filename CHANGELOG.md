@@ -7,8 +7,12 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
-### Guardrails: five more vendors
+### Guardrails: an LLM judge and five more vendors
 
+- New guardrail type `judge`: a model asked through Gantry's own chat completions route whether the conversation
+  breaks a `rubric`, with a Gantry key of its own, so each judge call is governed, recorded and charged to that key's
+  person and team. `FAIL` blocks with the finding `rubric`. Verdicts are reused for `cache_seconds` (300 by
+  default). A judge never runs on requests made with its own key.
 - New guardrail types, each asked in the vendor's own API: `prisma_airs` (Palo Alto Networks Prisma AIRS AI
   Runtime, with `profile_name`), `enkrypt` (Enkrypt AI), `grayswan` (Gray Swan Cygnal, with `policy_id`),
   `cisco_ai_defense` (Cisco AI Defense, `region` us, eu or ap) and `mistral_moderation`. Findings are recorded by

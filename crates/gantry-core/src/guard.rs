@@ -71,6 +71,8 @@ pub enum GuardType {
     CiscoAiDefense,
     /// Mistral's moderation API, on conversations.
     MistralModeration,
+    /// A model asked through Gantry whether the conversation breaks a rubric.
+    Judge,
     /// Not a check: a service that rewrites the whole request or answer (docs/transform-webhook). Runs before every
     /// other guardrail of the rule, so the checks read what is really sent.
     Transform,
@@ -204,6 +206,12 @@ pub struct GuardrailFile {
     /// grayswan: the Cygnal policy to apply.
     #[serde(default)]
     pub policy_id: Option<String>,
+    /// judge: what the judging model refuses, in plain words.
+    #[serde(default)]
+    pub rubric: Option<String>,
+    /// judge: how long a verdict on the same conversation is reused. 300 by default, 0 to ask every time.
+    #[serde(default)]
+    pub cache_seconds: Option<u64>,
     /// secrets: `gitleaks` reads with Gitleaks' default rule set in place of Gantry's own secrets detector.
     #[serde(default)]
     pub pack: Option<String>,
@@ -762,6 +770,7 @@ fn type_name(kind: GuardType) -> &'static str {
         GuardType::Grayswan => "grayswan",
         GuardType::CiscoAiDefense => "cisco_ai_defense",
         GuardType::MistralModeration => "mistral_moderation",
+        GuardType::Judge => "judge",
         GuardType::Transform => "transform",
         GuardType::Events => "events",
     }
@@ -792,6 +801,8 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         ("guard_name", def.guard_name.is_some()),
         ("profile_name", def.profile_name.is_some()),
         ("policy_id", def.policy_id.is_some()),
+        ("rubric", def.rubric.is_some()),
+        ("cache_seconds", def.cache_seconds.is_some()),
     ];
     let takes: &[&str] = match def.kind {
         GuardType::OpenaiModeration => &["key_env", "model"],
@@ -816,6 +827,7 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         GuardType::Grayswan => &["key_env", "policy_id"],
         GuardType::CiscoAiDefense => &["key_env", "region"],
         GuardType::MistralModeration => &["key_env", "model"],
+        GuardType::Judge => &["key_env", "model", "rubric", "cache_seconds"],
         _ => &[],
     };
     if let Some((field, _)) = given.iter().find(|(f, on)| *on && !takes.contains(f)) {
@@ -851,6 +863,7 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
             | GuardType::Grayswan
             | GuardType::CiscoAiDefense
             | GuardType::MistralModeration
+            | GuardType::Judge
     );
     if key_needed && def.key_env.is_none() {
         return Err(format!(
@@ -995,6 +1008,25 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         GuardType::MistralModeration => Vendor::MistralModeration {
             model: def.model.clone(),
         },
+        GuardType::Judge => {
+            let cache = def.cache_seconds.unwrap_or(300);
+            if cache > 86_400 {
+                return Err(format!(
+                    "guardrail \"{name}\": cache_seconds is {cache}. Keep a verdict at most a day (86400), or 0 to ask every time."
+                ));
+            }
+            Vendor::Judge {
+                model: required(
+                    "model (the model that judges, as Gantry knows it)",
+                    &def.model,
+                )?,
+                rubric: required(
+                    "rubric (what the judge refuses, in plain words)",
+                    &def.rubric,
+                )?,
+                cache_seconds: cache,
+            }
+        }
         _ => Vendor::Contract,
     })
 }

@@ -49,7 +49,7 @@ Guardrails are defined once at the top level and named by rules. A change applie
 |---|---|---|
 | Built in | `secrets`, `pii` | Inside Gantry, no network call. |
 | Custom | `regex`, `keywords` | Your patterns and word lists, inside Gantry, no network call. |
-| Vendor | `openai_moderation`, `presidio`, `lakera`, `bedrock_guardrail`, `azure_content_safety`, `azure_prompt_shield`, `llama_guard`, `model_armor`, `pangea`, `nemo_guardrails`, `hiddenlayer`, `lasso`, `guardrails_ai`, `aporia`, `prisma_airs`, `enkrypt`, `grayswan`, `cisco_ai_defense`, `mistral_moderation` | Gantry calls the vendor's own API. No adapter needed. |
+| Vendor | `openai_moderation`, `presidio`, `lakera`, `bedrock_guardrail`, `azure_content_safety`, `azure_prompt_shield`, `llama_guard`, `model_armor`, `pangea`, `nemo_guardrails`, `hiddenlayer`, `lasso`, `guardrails_ai`, `aporia`, `prisma_airs`, `enkrypt`, `grayswan`, `cisco_ai_defense`, `mistral_moderation`, `judge` | Gantry calls the vendor's own API. No adapter needed. |
 | Webhook | `webhook` | Your service, speaking [Gantry's contract](/governance/guardrail-webhooks/). |
 | Events | `events` | Your service, sent the whole conversation as [typed events](/governance/plugin-events/) with a session and a turn: tool calls, tool results, reasoning, MCP calls. |
 
@@ -583,6 +583,33 @@ guardrails:
 
 </TabItem>
 </Tabs>
+
+### LLM as a judge
+
+`type: judge` asks a model whether the conversation breaks a rubric you write. The model is called through Gantry's own `POST /v1/chat/completions`, with a Gantry key of the judge's own, so each judge call is a governed request: decided by that key's rule, recorded, priced and charged to that key's person and team. Mint the key for a scope such as a `guardrails` team and give it a budget to cap what judging costs.
+
+```yaml
+guardrails:
+  - name: no-legal-advice
+    type: judge
+    url: http://127.0.0.1:8080/v1      # this Gantry
+    key_env: GANTRY_JUDGE_KEY          # a Gantry key, team guardrails
+    model: gpt-5-mini
+    rubric: The assistant must not give legal advice or interpret contracts.
+    cache_seconds: 300
+    on_failure: fail_closed
+    timeout_ms: 5000
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `url` | required | Gantry's own address with `/v1`. |
+| `key_env` | required | The variable holding the judge's Gantry key. |
+| `model` | required | The judging model, as the policy names it. |
+| `rubric` | required | What the judge refuses, in plain words. |
+| `cache_seconds` | `300` | How long a verdict on the same conversation, rubric and model is reused without asking again. `0` asks every time; at most `86400`. |
+
+The judge is told to answer `PASS` or `FAIL`. `FAIL` blocks with the finding `rubric`; the record never holds the model's words, which may quote the conversation. Any other answer counts as a service failure and follows `on_failure`. A judge does not run on requests made with its own key, so its calls are never judged again, even when the judge's key falls under the same rule. Cached verdicts are kept per process.
 
 Not built in: Prompt Security, Pillar Security, Noma, Qualifire and Zscaler AI Guard publish no API reference with the request and answer fields without an account, so connect them with a [webhook](/governance/guardrail-webhooks/) that calls their API. Anthropic documents no hosted moderation endpoint: its guide classifies with Claude itself, which you can do with a `llama_guard` guardrail whose `url` is a Gantry and whose `prompt` asks for `safe` or `unsafe`.
 

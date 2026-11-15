@@ -4334,6 +4334,11 @@ async fn decide(
     if let Some(shadowed) = &shadowed {
         guards = shadowed;
     }
+    // A judge's own call comes back through Gantry with the judge's key; that judge does not judge it again.
+    let unjudged = unjudged(guards, seen.credential.as_deref());
+    if let Some(unjudged) = &unjudged {
+        guards = unjudged;
+    }
     // An audio upload holds no text a guardrail reads. It is forwarded, and its record says the guardrails did not
     // run on it, rather than that they ran and found nothing.
     let on_request = guards.iter().any(|g| g.on.request);
@@ -6067,7 +6072,86 @@ async fn transformed(
     (out, None)
 }
 
+/// The rule's guardrails without the judges whose key made this request, or `None` when there are none such.
+fn unjudged(guards: &[Guardrail], credential: Option<&str>) -> Option<Vec<Guardrail>> {
+    let credential = credential?;
+    let own = |g: &Guardrail| match &g.check {
+        guard::Check::Webhook(hook) => {
+            matches!(hook.vendor, gantry_core::vendors::Vendor::Judge { .. })
+                && hook
+                    .key_env
+                    .as_deref()
+                    .and_then(gantry_core::secrets::var)
+                    .is_some_and(|key| key.trim() == credential)
+        }
+        _ => false,
+    };
+    guards
+        .iter()
+        .any(own)
+        .then(|| guards.iter().filter(|g| !own(g)).cloned().collect())
+}
+
+/// Judge verdicts by a hash of the judge and the conversation, with when each was given.
+// ponytail: one map per process, emptied when it passes JUDGED_MAX; replicas each ask once. A shared cache in the
+// store is the upgrade when a fleet's judge bill matters.
+static JUDGED: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, (Instant, guard::WebhookAnswer)>>,
+> = std::sync::LazyLock::new(Default::default);
+const JUDGED_MAX: usize = 10_000;
+
+/// The cache key of a judge's verdict, and how long it is kept, for a judge that keeps them.
+fn judged_key(hook: &guard::Webhook, sent: &guard::WebhookRequest) -> Option<(String, Duration)> {
+    let gantry_core::vendors::Vendor::Judge {
+        model,
+        rubric,
+        cache_seconds,
+    } = &hook.vendor
+    else {
+        return None;
+    };
+    if *cache_seconds == 0 {
+        return None;
+    }
+    let messages: Vec<(&str, &str)> = sent
+        .messages
+        .iter()
+        .map(|m| (m.role.as_str(), m.text.as_str()))
+        .collect();
+    let what = serde_json::json!([hook.url, hook.key_env, model, rubric, messages]).to_string();
+    Some((
+        gantry_core::id::sha256_hex(what.as_bytes()),
+        Duration::from_secs(*cache_seconds),
+    ))
+}
+
 pub(crate) async fn ask(
+    state: &AppState,
+    action: guard::Action,
+    hook: &guard::Webhook,
+    sent: &guard::WebhookRequest,
+) -> Result<guard::WebhookAnswer, String> {
+    let judged = judged_key(hook, sent);
+    if let Some((key, keep)) = &judged
+        && let Ok(cache) = JUDGED.lock()
+        && let Some((at, answer)) = cache.get(key)
+        && at.elapsed() < *keep
+    {
+        return Ok(answer.clone());
+    }
+    let answer = ask_service(state, action, hook, sent).await;
+    if let (Some((key, _)), Ok(verdict)) = (judged, &answer)
+        && let Ok(mut cache) = JUDGED.lock()
+    {
+        if cache.len() >= JUDGED_MAX {
+            cache.clear();
+        }
+        cache.insert(key, (Instant::now(), verdict.clone()));
+    }
+    answer
+}
+
+async fn ask_service(
     state: &AppState,
     action: guard::Action,
     hook: &guard::Webhook,
