@@ -83,9 +83,11 @@ pub fn unlocked(feature: &str) -> bool {
 pub fn start() -> Result<&'static Status, String> {
     let status = from_env()?;
     let line = status.describe();
+    // `gantry start` prints the dashboard link first; the open source edition needs no word on a first run.
+    let first_run = std::env::var_os(gantry_server::START_ENV).is_some();
     if line.starts_with("warning:") {
         eprintln!("{line}");
-    } else {
+    } else if !(first_run && line.starts_with("No license")) {
         println!("{line}");
     }
     Ok(CURRENT.get_or_init(|| status))
