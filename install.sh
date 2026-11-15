@@ -151,7 +151,17 @@ $sudo mv -f "$INSTALL_DIR/.gantry.new" "$INSTALL_DIR/gantry"
 
 say "Installed $("$INSTALL_DIR/gantry" version 2> /dev/null || echo gantry) to $INSTALL_DIR/gantry"
 case ":$PATH:" in
-  *":$INSTALL_DIR:"*) gantry=gantry ;;
+  *":$INSTALL_DIR:"*)
+    gantry=gantry
+    # An older gantry earlier on the PATH would run instead of the one just installed.
+    found=$(command -v gantry 2> /dev/null || true)
+    if [ -n "$found" ] && [ "$found" != "$INSTALL_DIR/gantry" ]; then
+      gantry=$INSTALL_DIR/gantry
+      say ""
+      say "Another gantry at $found comes first on your PATH and would run instead of this one."
+      say "Remove it ($found), or put $INSTALL_DIR first on your PATH. Until then, run $INSTALL_DIR/gantry."
+    fi
+    ;;
   *)
     gantry=$INSTALL_DIR/gantry
     say ""
@@ -165,3 +175,4 @@ case ":$PATH:" in
 esac
 say ""
 say "Next: $gantry start"
+say "(If your shell still runs an old gantry, run: hash -r)"

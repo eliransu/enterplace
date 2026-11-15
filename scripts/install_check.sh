@@ -85,5 +85,14 @@ awk -v n="$(basename "$t")" -v s="$sum" '$2 == n { $1 = s; print $1 "  " $2; nex
 cp "$work/sums" "$d/SHA256SUMS"
 run bad-signature resigned fail
 
+# An older gantry earlier on the PATH must be named, and the next step must use the full path.
+mkdir -p "$work/old"; printf '#!/bin/sh\necho old\n' > "$work/old/gantry"; chmod 755 "$work/old/gantry"
+run shadowed stable 0.1.0 PATH="$work/old:$work/bin-shadowed:$PATH"
+if grep -q "Another gantry at $work/old/gantry" "$work/shadowed.log" && grep -q "Next: $work/bin-shadowed/gantry start" "$work/shadowed.log"; then
+  echo "ok   shadowed-warning"
+else
+  echo "FAIL shadowed-warning"; sed 's/^/     /' "$work/shadowed.log"; failures=$((failures + 1))
+fi
+
 [ "$failures" -eq 0 ] || { echo "$failures install.sh check(s) failed"; exit 1; }
 echo "install.sh: all checks passed"
