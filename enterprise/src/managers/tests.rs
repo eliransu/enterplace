@@ -53,10 +53,22 @@ async fn mock() -> Result<String, Box<dyn std::error::Error>> {
                     .and_then(|v| v.to_str().ok())
                     .is_some_and(|v| v.starts_with("AWS4-HMAC-SHA256 Credential=AKIATEST/"));
                 let target = headers.get("x-amz-target").and_then(|v| v.to_str().ok());
+                let id: Value = serde_json::from_str(&body).unwrap_or_default();
+                if signed && target == Some("TrentService.Decrypt") {
+                    let scoped = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|v| v.contains("/eu-west-1/kms/aws4_request"));
+                    if !scoped || id["CiphertextBlob"] != "d3JhcHBlZA==" || id["KeyId"] != "alias/gantry" {
+                        return (StatusCode::BAD_REQUEST, json!({"__type": "InvalidCiphertextException"}).to_string());
+                    }
+                    // A raw 32-byte data key, as `aws kms generate-data-key` makes.
+                    let key: Vec<u8> = (0u8..32).collect();
+                    return (StatusCode::OK, json!({"Plaintext": gantry_core::x509::base64_encode(&key)}).to_string());
+                }
                 if !signed || target != Some("secretsmanager.GetSecretValue") {
                     return (StatusCode::FORBIDDEN, json!({"message": "bad signature"}).to_string());
                 }
-                let id: Value = serde_json::from_str(&body).unwrap_or_default();
                 let string = if id["SecretId"] == "prod/json" {
                     r#"{"openai":"sk-aws-json"}"#
                 } else {
@@ -85,6 +97,62 @@ async fn mock() -> Result<String, Box<dyn std::error::Error>> {
                     (StatusCode::OK, json!({"access_token": "azure-token", "expires_in": 3600}).to_string())
                 } else {
                     (StatusCode::UNAUTHORIZED, json!({"error": "invalid_client"}).to_string())
+                }
+            }),
+        )
+        .route(
+            "/kms/v1/{*name}",
+            post(|Path(name): Path<String>, headers: HeaderMap, body: String| async move {
+                let body: Value = serde_json::from_str(&body).unwrap_or_default();
+                if !bearer(&headers, "Bearer google-token") || name != "projects/p/locations/global/keyRings/r/cryptoKeys/master:decrypt" || body["ciphertext"] != "d3JhcHBlZA==" {
+                    return (StatusCode::FORBIDDEN, json!({"error": name}).to_string());
+                }
+                (StatusCode::OK, json!({"plaintext": gantry_core::x509::base64_encode(b"sk-from-gcp-kms")}).to_string())
+            }),
+        )
+        .route(
+            "/keys/{key}/unwrapkey",
+            post(|Path(key): Path<String>, uri: Uri, headers: HeaderMap, body: String| async move {
+                let body: Value = serde_json::from_str(&body).unwrap_or_default();
+                if !bearer(&headers, "Bearer azure-token") || uri.query() != Some("api-version=7.4") || key != "master" || body["alg"] != "RSA-OAEP-256" || body["value"] != "d3JhcHBlZA" {
+                    return (StatusCode::FORBIDDEN, json!({}).to_string());
+                }
+                // base64url, as Key Vault answers: "s??" is "cz8/" in standard base64.
+                (StatusCode::OK, json!({"kid": "k", "value": "cz8_"}).to_string())
+            }),
+        )
+        .route(
+            "/authn/{account}/{login}/authenticate",
+            post(|Path((account, login)): Path<(String, String)>, body: String| async move {
+                if account == "acme" && login == "host/gantry" && body == "conjur-api-key" {
+                    (StatusCode::OK, r#"{"protected":"p","payload":"x","signature":"s"}"#.to_string())
+                } else {
+                    (StatusCode::UNAUTHORIZED, String::new())
+                }
+            }),
+        )
+        .route(
+            "/authn-jwt/{service}/{account}/authenticate",
+            post(|Path((service, account)): Path<(String, String)>, body: String| async move {
+                if service == "k8s" && account == "acme" && body == "jwt=pod-jwt" {
+                    (StatusCode::OK, r#"{"protected":"p","payload":"x","signature":"s"}"#.to_string())
+                } else {
+                    (StatusCode::UNAUTHORIZED, String::new())
+                }
+            }),
+        )
+        .route(
+            "/secrets/{account}/variable/{id}",
+            get(|Path((account, id)): Path<(String, String)>, headers: HeaderMap| async move {
+                let token = gantry_core::x509::base64_encode(br#"{"protected":"p","payload":"x","signature":"s"}"#);
+                let want = format!("Token token=\"{token}\"");
+                if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some(want.as_str()) || account != "acme" {
+                    return (StatusCode::UNAUTHORIZED, String::new());
+                }
+                match id.as_str() {
+                    "prod/openai" => (StatusCode::OK, "sk-conjur".to_string()),
+                    "prod/json" => (StatusCode::OK, r#"{"anthropic":"sk-conjur-json"}"#.to_string()),
+                    _ => (StatusCode::NOT_FOUND, String::new()),
                 }
             }),
         )
@@ -280,6 +348,118 @@ async fn azure_key_vault_is_read_with_an_entra_token() -> TestResult {
     assert!(
         err.contains("could not sign in to Azure") && err.contains("401"),
         "{err}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn conjur_is_read_with_an_api_key_or_the_workloads_jwt() -> TestResult {
+    let addr = mock().await?;
+    let m = Arc::new(managers(&[
+        ("CONJUR_APPLIANCE_URL", format!("http://{addr}")),
+        ("CONJUR_ACCOUNT", "acme".into()),
+        ("CONJUR_AUTHN_LOGIN", "host/gantry".into()),
+        ("CONJUR_AUTHN_API_KEY", "conjur-api-key".into()),
+    ]));
+    assert_eq!(fetch(m.clone(), "conjur://prod/openai").await?, "sk-conjur");
+    assert_eq!(
+        fetch(m.clone(), "conjur://prod/json#anthropic").await?,
+        "sk-conjur-json"
+    );
+    let err = fetch(m, "conjur://prod/missing").await.err().ok_or("404")?;
+    assert!(err.contains("Conjur answered 404"), "{err}");
+
+    let dir = std::env::temp_dir().join(format!("gantry-managers-c-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("jwt"), "pod-jwt\n")?;
+    let jwt = Arc::new(managers(&[
+        ("CONJUR_APPLIANCE_URL", format!("http://{addr}")),
+        ("CONJUR_ACCOUNT", "acme".into()),
+        ("CONJUR_AUTHN_JWT_SERVICE_ID", "k8s".into()),
+        (
+            "CONJUR_JWT_TOKEN_PATH",
+            dir.join("jwt").display().to_string(),
+        ),
+    ]));
+    assert_eq!(fetch(jwt, "conjur://prod/openai").await?, "sk-conjur");
+    let none = Arc::new(managers(&[
+        ("CONJUR_APPLIANCE_URL", format!("http://{addr}")),
+        ("CONJUR_ACCOUNT", "acme".into()),
+    ]));
+    let err = fetch(none, "conjur://prod/openai")
+        .await
+        .err()
+        .ok_or("sign-in")?;
+    assert!(err.contains("CONJUR_AUTHN_LOGIN"), "{err}");
+    Ok(())
+}
+
+/// A master key kept wrapped by a cloud key: decrypted at start by the key's service, and usable as the master key.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_value_wrapped_by_a_cloud_key_is_decrypted_by_aws_kms_google_kms_and_azure_key_vault()
+-> TestResult {
+    let addr = mock().await?;
+    let aws = Arc::new(managers(&[
+        ("AWS_ACCESS_KEY_ID", "AKIATEST".into()),
+        ("AWS_SECRET_ACCESS_KEY", "secret".into()),
+        ("AWS_REGION", "eu-west-1".into()),
+        ("AWS_EC2_METADATA_DISABLED", "true".into()),
+        ("AWS_ENDPOINT_URL_KMS", format!("http://{addr}")),
+    ]));
+    let master = fetch(aws.clone(), "aws-kms://alias/gantry#d3JhcHBlZA==").await?;
+    assert_eq!(
+        master,
+        (0u8..32).map(|b| format!("{b:02x}")).collect::<String>()
+    );
+    let key = gantry_server::MasterKey::from_env(&|v| {
+        (v == "GANTRY_MASTER_KEY").then(|| master.clone())
+    })?;
+    assert!(key.is_some(), "the decrypted key is a master key");
+    let err = fetch(aws, "aws-kms://alias/gantry#b3RoZXI=")
+        .await
+        .err()
+        .ok_or("bad blob")?;
+    assert!(err.contains("AWS KMS answered 400"), "{err}");
+    let err = fetch(Arc::new(managers(&[])), "aws-kms://alias/gantry")
+        .await
+        .err()
+        .ok_or("shape")?;
+    assert!(err.contains("#<base64 ciphertext>"), "{err}");
+
+    let dir = std::env::temp_dir().join(format!("gantry-managers-k-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let file = dir.join("adc.json");
+    std::fs::write(
+        &file,
+        json!({"type": "authorized_user", "client_id": "c", "client_secret": "s", "refresh_token": "r", "token_uri": format!("http://{addr}/token")}).to_string(),
+    )?;
+    let google = Arc::new(managers(&[
+        ("GOOGLE_APPLICATION_CREDENTIALS", file.display().to_string()),
+        ("HOME", dir.display().to_string()),
+        ("GCE_METADATA_HOST", "127.0.0.1:9".into()),
+        (
+            "CLOUDSDK_API_ENDPOINT_OVERRIDES_CLOUDKMS",
+            format!("http://{addr}/kms/"),
+        ),
+    ]));
+    assert_eq!(
+        fetch(
+            google,
+            "gcp-kms://projects/p/locations/global/keyRings/r/cryptoKeys/master#d3JhcHBlZA=="
+        )
+        .await?,
+        "sk-from-gcp-kms"
+    );
+
+    let azure = Arc::new(managers(&[
+        ("AZURE_TENANT_ID", "tenant-1".into()),
+        ("AZURE_CLIENT_ID", "client".into()),
+        ("AZURE_CLIENT_SECRET", "azure-secret".into()),
+        ("AZURE_AUTHORITY_HOST", format!("http://{addr}")),
+    ]));
+    assert_eq!(
+        fetch(azure, &format!("azure-kv-key://{addr}/master#d3JhcHBlZA")).await?,
+        "s??"
     );
     Ok(())
 }

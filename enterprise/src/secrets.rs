@@ -186,18 +186,42 @@ pub fn aws_get(
     secret_id: &str,
     base: Option<&str>,
 ) -> Result<Value, String> {
+    let payload = serde_json::json!({ "SecretId": secret_id });
+    aws_json(
+        agent,
+        credentials,
+        region,
+        (
+            "secretsmanager",
+            "secretsmanager.GetSecretValue",
+            "AWS Secrets Manager",
+        ),
+        base,
+        &payload,
+    )
+}
+
+/// One signed call to an AWS JSON 1.1 API: `(service, target, name for errors)`, at `base` or the region's endpoint.
+pub fn aws_json(
+    agent: &ureq::Agent,
+    credentials: &sigv4::Credentials,
+    region: &str,
+    (service, target, what): (&str, &str, &str),
+    base: Option<&str>,
+    payload: &Value,
+) -> Result<Value, String> {
     let base = base
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("https://secretsmanager.{region}.amazonaws.com"));
+        .unwrap_or_else(|| format!("https://{service}.{region}.amazonaws.com"));
     let host = base
         .split_once("://")
         .map_or(base.as_str(), |(_, h)| h)
         .trim_end_matches('/');
-    let payload = serde_json::json!({ "SecretId": secret_id }).to_string();
+    let payload = payload.to_string();
     let headers = [
         ("content-type", "application/x-amz-json-1.1"),
         ("host", host),
-        ("x-amz-target", "secretsmanager.GetSecretValue"),
+        ("x-amz-target", target),
     ];
     let request = sigv4::Request {
         method: "POST",
@@ -209,7 +233,7 @@ pub fn aws_get(
     let signed = sigv4::sign(
         credentials,
         region,
-        "secretsmanager",
+        service,
         &request,
         &sigv4::amz_date_now(),
     );
@@ -221,7 +245,7 @@ pub fn aws_get(
         req = req.set(name, value);
     }
     req.send_string(&payload)
-        .map_err(|err| http_error("AWS Secrets Manager", err))?
+        .map_err(|err| http_error(what, err))?
         .into_json()
         .map_err(|err| format!("AWS sent a response that is not JSON: {err}"))
 }

@@ -7,6 +7,13 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Secret managers: CyberArk Conjur and KMS-wrapped values
+
+- Gantry Enterprise (`secrets`): `conjur://<variable id>` reads CyberArk Conjur, signed in with a host API key or the
+  workload's JWT. `aws-kms://`, `gcp-kms://` and `azure-kv-key://` hold a value encrypted with a cloud key and are
+  decrypted by AWS KMS, Google Cloud KMS or Azure Key Vault's unwrapKey, so `GANTRY_MASTER_KEY` can be kept wrapped.
+  A raw decrypted key is used as hex.
+
 ### WebSocket passthrough
 
 - A WebSocket to `/passthrough/<provider>/<path>` reaches a provider's realtime API that Gantry has no route of its
