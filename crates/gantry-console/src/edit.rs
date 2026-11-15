@@ -643,7 +643,11 @@ async fn teams_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
     } else {
         link("Issue a key", "", "/console/people?issue=1", false)
     };
-    let table = if rows.is_empty() {
+    // Only admin keys and no team the policy lists: a team comes with the first key that is not an admin's.
+    let only_admins = teams
+        .values()
+        .all(|people| !people.is_empty() && people.iter().all(|(_, admin)| *admin));
+    let table = if rows.is_empty() || only_admins {
         crate::empty_page("Teams", &crate::base(), admin.may(Permission::IssueKeys))
     } else {
         format!(

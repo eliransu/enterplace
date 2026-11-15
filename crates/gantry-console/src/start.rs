@@ -1772,7 +1772,9 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
             others()
         )
     } else {
-        let traffic = matches!(track, Track::Coding | Track::Apps | Track::Limit)
+        // The first rows are records: shown only to someone who may see records.
+        let traffic = admin.may(Permission::SeeRecords)
+            && matches!(track, Track::Coding | Track::Apps | Track::Limit)
             && list.get(1).is_some_and(|s| s.done)
             && !finished;
         let sig = signature(Some(track), &st, finished);

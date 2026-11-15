@@ -187,7 +187,7 @@ async fn an_admin_key_signs_in_with_a_session_cookie_that_is_not_the_key() -> Te
     )
     .await?;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    assert_eq!(location(&headers), "/console/audit");
+    assert_eq!(location(&headers), "/console/start");
     let cookie = headers
         .get(header::SET_COOKIE)
         .and_then(|v| v.to_str().ok())

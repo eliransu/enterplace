@@ -2192,8 +2192,14 @@ pub fn audit(view: &AuditView<'_>) -> String {
     };
     let banner = kills_banner(view.kills) + observe + &banner;
     let main = format!(
-        "{banner}{}\n{chain}\n\n{stats}\n\n{toolbar}\n\n{list}",
-        head("Audit log", lead, &verify)
+        "{banner}{}\n{}{chain}\n\n{stats}\n\n{toolbar}\n\n{list}",
+        head("Audit log", lead, &verify),
+        // Sign-ins and setup only, no request yet: the page says what fills it above those records.
+        if records.iter().all(|r| r.get("event").is_some()) {
+            crate::empty_page("Audit log", &crate::base(), true)
+        } else {
+            String::new()
+        }
     );
     tool_page(
         "Audit log",

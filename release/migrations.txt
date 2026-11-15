@@ -1,6 +1,6 @@
 # Store migrations by namespace: entries, SHA-256 of them. Written by a test (see RELEASING.md), read by
 # scripts/version.py: a change since the previous tag needs a minor version bump.
-core 6 11dc071e1bbe6db84d1294c49edb0a2bb81b70294b6f48f6b51bc5967d2a13fb
+core 7 8a0018a17cb44f1b57a595bf967114370e7592e75df5a9c5eba046e3a141fdbb
 gantry_policy 1 20df33973eeb89590ebd099b6a7345f641dc2e5d972ed9f6056dcf28c741e4c8
 gantry_routing 3 f2cf9ff36cb2d486a60339319bf3083b8c41c993dd828efce74f7ccc9d5023a2
 batches 2 21ead9918f5f62a7ac4dd78ad835b146a2d66d43ce41ef0b87b0e3410cf9d500
