@@ -15,9 +15,11 @@ one repository. How a release is made: RELEASING.md.
   OpenCode, Continue, Cline and Aider. Cursor, Cline, Roo Code, JetBrains AI, GitHub Copilot and Claude Desktop keep
   their endpoint where no documented file sets it: they stay `installed`, and the report, `devices.json` and the
   Devices page say why. A device with no saved profile still manages Claude Code and Codex only.
-- MCP decisions are enforced: a blocked server is taken out of Claude Desktop's, Claude Code's, Cursor's, VS Code's
-  and Zed's MCP file, the file as it was is kept beside it, and the Devices page lists each change under **MCP
-  enforcement**. A profile can send approved HTTP servers through Gantry's MCP gateway.
+- MCP decisions are enforced, opt-in: a profile's **Blocked MCP servers** (`mcp_enforcement`) is `report` by default,
+  which lists a blocked server where it is configured and changes no file. With `remove`, a blocked server is taken
+  out of Claude Desktop's, Claude Code's, Cursor's, VS Code's and Zed's MCP file, the file as it was is kept beside
+  it, and the Devices page lists each change under **MCP enforcement**. A profile can send approved HTTP servers
+  through Gantry's MCP gateway, a setting of its own.
 - A device profile lists allowed and denied AI apps. The agent reports which are installed or running (detection
   only, nothing is stopped), and the Devices page tags each denied app on its person's row.
 - `gantry audit coverage --devices` and the Devices page show, per person, the tools set to go through Gantry, the

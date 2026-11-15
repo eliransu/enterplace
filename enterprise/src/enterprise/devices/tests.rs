@@ -762,7 +762,7 @@ async fn mcp_servers_are_stored_shown_and_approved_or_blocked() -> Result<(), Er
         profile.body["mcp"],
         json!({"approved": [{"transport": "http", "target": "https://gw.example.com/mcp"}],
                "blocked": [{"transport": "http", "target": "https://api.githubcopilot.com/mcp"}],
-               "via_gateway": false}),
+               "via_gateway": false, "enforcement": "report"}),
         "{}",
         profile.text
     );
@@ -827,39 +827,44 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
     let gateway_url = format!("http://localhost:{}", address.port());
 
     // A profile is refused for a tool no file configures (with the reason), an unknown app, or one on both lists.
-    let save =
-        |tools: &'static str, denied: &'static str, allowed: &'static str, via: &'static str| {
-            let gateway_url = gateway_url.clone();
-            let app = gw.app.clone();
-            let mut owner = Browser {
-                cookie: owner.cookie.clone(),
-            };
-            async move {
-                owner
-                    .go(
-                        &app,
-                        "POST",
-                        "/console/devices",
-                        &[
-                            ("action", "profile_save"),
-                            ("team", ""),
-                            ("gateway_url", &gateway_url),
-                            ("tools", tools),
-                            ("apps_denied", denied),
-                            ("apps_allowed", allowed),
-                            ("mcp_via_gateway", via),
-                        ],
-                    )
-                    .await
-            }
+    let save = |tools: &'static str,
+                denied: &'static str,
+                allowed: &'static str,
+                via: &'static str,
+                enforcement: &'static str| {
+        let gateway_url = gateway_url.clone();
+        let app = gw.app.clone();
+        let mut owner = Browser {
+            cookie: owner.cookie.clone(),
         };
-    for (tools, denied, allowed, via, why) in [
-        ("cursor", "", "", "no", "Cursor Settings"),
+        async move {
+            owner
+                .go(
+                    &app,
+                    "POST",
+                    "/console/devices",
+                    &[
+                        ("action", "profile_save"),
+                        ("team", ""),
+                        ("gateway_url", &gateway_url),
+                        ("tools", tools),
+                        ("apps_denied", denied),
+                        ("apps_allowed", allowed),
+                        ("mcp_via_gateway", via),
+                        ("mcp_enforcement", enforcement),
+                    ],
+                )
+                .await
+        }
+    };
+    for (tools, denied, allowed, via, enforcement, why) in [
+        ("cursor", "", "", "no", "", "Cursor Settings"),
         (
             "codex",
             "notepad",
             "",
             "no",
+            "",
             "is not an app the agent looks for",
         ),
         (
@@ -867,11 +872,13 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
             "chatgpt",
             "chatgpt",
             "no",
+            "",
             "both allowed and denied",
         ),
-        ("codex", "", "", "maybe", "is yes or no"),
+        ("codex", "", "", "maybe", "", "is yes or no"),
+        ("codex", "", "", "no", "delete", "is report or remove"),
     ] {
-        let refused = save(tools, denied, allowed, via).await?;
+        let refused = save(tools, denied, allowed, via, enforcement).await?;
         assert!(refused.text.contains(why), "{why}: {}", refused.text);
     }
     let saved = save(
@@ -879,6 +886,7 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
         "chatgpt, ollama",
         "",
         "yes",
+        "remove",
     )
     .await?;
     assert!(saved.text.contains("saved"), "{}", saved.text);
@@ -891,6 +899,11 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
         saved
             .text
             .contains("approved MCP servers go through Gantry"),
+        "{}",
+        saved.text
+    );
+    assert!(
+        saved.text.contains("removes blocked MCP servers"),
         "{}",
         saved.text
     );
@@ -920,6 +933,7 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
         json!({"allowed": [], "denied": ["chatgpt", "ollama"]})
     );
     assert_eq!(profile.body["mcp"]["via_gateway"], true);
+    assert_eq!(profile.body["mcp"]["enforcement"], "remove");
 
     // The agent on a machine with those tools, a denied app, a blocked server and an approved one.
     let home = gw.dir.join("home");

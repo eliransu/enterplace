@@ -1,13 +1,13 @@
 ---
 title: Devices
-description: Enrol employee machines with the device agent, point their coding tools at Gantry, take blocked MCP servers out of them, and see which tools call a provider directly and which denied apps are installed. Enterprise feature devices.
+description: Enrol employee machines with the device agent, point their coding tools at Gantry, report or remove blocked MCP servers, and see which tools call a provider directly and which denied apps are installed. Enterprise feature devices.
 sidebar:
   order: 12
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-With a license that includes `devices` (see [License key](/operations/license/)), Gantry adds a **Devices** page to the console and two routes for the device agent, `GET /device/profile` and `POST /device/report`. The agent (`gantry device`) runs on each employee machine (macOS, Linux and Windows). It points the coding tools a profile names at the gateway, puts them back when someone changes them, takes blocked MCP servers out of the tools' MCP files, and reports every coding tool, MCP server and AI app it finds. It writes only files each tool documents, and stops no process. Without the feature the page and both routes answer `license_required`.
+With a license that includes `devices` (see [License key](/operations/license/)), Gantry adds a **Devices** page to the console and two routes for the device agent, `GET /device/profile` and `POST /device/report`. The agent (`gantry device`) runs on each employee machine (macOS, Linux and Windows). It points the coding tools a profile names at the gateway, puts them back when someone changes them, reports blocked MCP servers (or takes them out of the tools' MCP files when the profile says `remove`), and reports every coding tool, MCP server and AI app it finds. It writes only files each tool documents, and stops no process. Without the feature the page and both routes answer `license_required`.
 
 The feature keeps its tables in the store's Postgres (namespace `enterprise.devices`), so the policy needs `store:`. See [Store](/operations/store/).
 
@@ -25,6 +25,7 @@ The feature keeps its tables in the store's Postgres (namespace `enterprise.devi
     | Tools to manage | Any of `claude-code`, `codex`, `opencode`, `kilo-code`, `continue`, `zed`, `gemini-cli`, `qwen-code`, `aider`. See [What the agent configures](#what-the-agent-configures) |
     | Denied apps, Allowed apps | AI apps and command line tools to report. See [Apps](#apps-allowed-and-denied) |
     | Approved MCP servers through Gantry | `yes` points each approved HTTP MCP server at the gateway's `/mcp`. See [MCP servers](#mcp-servers) |
+    | Blocked MCP servers | `report` (the default) lists a blocked server the agent finds; `remove` takes it out of the tool's file. See [MCP servers](#mcp-servers) |
 
 3. **Run the agent.** From your device management tool (see [Device deployment](/operations/device-deployment/) for Intune, Jamf, Kandji and Linux), or by hand:
 
@@ -133,7 +134,7 @@ A tool whose endpoint no documented file holds cannot be configured. It stays `i
 
 Each report carries the device's OS (`macos`, `linux`, `windows`) and the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed: the tool, the file, the server's name, its transport (`http` or `stdio`), its target (the URL without query or login, or the command's file name) and whether it is Gantry's MCP gateway (`<gateway>/mcp` or a bundle under it). Arguments, environment variables and headers are never sent, and the gateway strips a query or login from a target before it stores it. An agent from before the inventory sends none, and its device keeps what it last listed.
 
-An owner or admin approves or blocks a server on the Devices page (**MCP servers**) or with `POST /console/devices/mcp`; each decision is an admin record, written before it is kept. A server is named by its transport and target, so one decision covers every device and tool that has it, and a decision outlives the configuration it was made for. The device profile (`GET /device/profile`) carries the decisions as `mcp: {"approved": [...], "blocked": [...], "via_gateway": false}`.
+An owner or admin approves or blocks a server on the Devices page (**MCP servers**) or with `POST /console/devices/mcp`; each decision is an admin record, written before it is kept. A server is named by its transport and target, so one decision covers every device and tool that has it, and a decision outlives the configuration it was made for. The device profile (`GET /device/profile`) carries the decisions as `mcp: {"approved": [...], "blocked": [...], "via_gateway": false, "enforcement": "report"}`.
 
 ### Enforcement
 
@@ -147,7 +148,7 @@ On its next check the agent enforces the decisions in each tool's MCP file in th
 | VS Code | `mcp.json` in VS Code's user folder | `servers` |
 | Zed | Zed's `settings.json` | `context_servers` |
 
-- A **blocked** server is taken out of the file.
+- A **blocked** server is reported and stays, unless **Blocked MCP servers** is `remove` in the profile (`mcp_enforcement`): then it is taken out of the file. Start with `report`, see which devices have it, and switch to `remove` once people have been told.
 - With **Approved MCP servers through Gantry** set to `yes` in the profile, an **approved** HTTP server that is not the gateway is pointed at `<gateway>/mcp`, without the `headers` that held its own credential; when the file already has the gateway, the entry is taken out instead. Turn this on once the servers you approved are listed under `mcp:` in the policy, which is what makes `/mcp` serve them: see [MCP gateway](/governance/mcp-gateway/). A stdio server is never rewritten.
 - A server with no decision stays.
 

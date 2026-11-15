@@ -1,8 +1,8 @@
 //! Device agent (plan 6.4, levels 1 and 2). Every interval it reads the org's device profile from the control plane,
 //! points the installed coding tools of the signed-in OS user at the gateway, puts them back when someone changes
-//! them (drift), takes blocked MCP servers out of the tools' MCP files, and reports each tool's state, the MCP
-//! servers and the AI apps it finds for the coverage report. It writes only files each tool documents, and stops no
-//! process.
+//! them (drift), reports blocked MCP servers (or takes them out of the tools' MCP files when the profile says
+//! `remove`), and reports each tool's state, the MCP servers and the AI apps it finds for the coverage report. It
+//! writes only files each tool documents, and stops no process.
 
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -1283,7 +1283,8 @@ fn decided(decisions: &Value, kind: &str, row: &Value) -> bool {
     })
 }
 
-/// Applies the decisions to one list of servers: a blocked server is taken out; with `via_gateway`, an approved
+/// Applies the decisions to one list of servers: with `enforcement` `remove`, a blocked server is taken out (with
+/// `report`, the default, it stays and the report marks it); with `via_gateway`, an approved
 /// HTTP server is pointed at Gantry's MCP gateway, without the headers that held its own credential, or taken out
 /// when the list already has the gateway. Returns what was done, each as its inventory row with an `action`.
 fn enforce_list(
@@ -1306,10 +1307,12 @@ fn enforce_list(
             continue;
         };
         let mut row = mcp_entry(tool, file, &name, entry, gateway);
-        let action = if decided(decisions, "blocked", &row) {
+        let blocked = decided(decisions, "blocked", &row);
+        let action = if blocked && decisions["enforcement"] == "remove" {
             servers.remove(&name);
             "removed"
-        } else if decisions["via_gateway"] == true
+        } else if !blocked
+            && decisions["via_gateway"] == true
             && row["transport"] == "http"
             && row["via_gantry"] == false
             && decided(decisions, "approved", &row)
@@ -1415,7 +1418,7 @@ struct Profile {
     gateway: String,
     /// The tools to point at the gateway.
     manage: Vec<String>,
-    /// The admin's MCP decisions: `approved`, `blocked`, and `via_gateway`.
+    /// The admin's MCP decisions: `approved`, `blocked`, `via_gateway`, and `enforcement` (`report` or `remove`).
     mcp: Value,
     apps_allowed: Vec<String>,
     apps_denied: Vec<String>,
@@ -2282,10 +2285,11 @@ mod tests {
         Ok(())
     }
 
-    /// A blocked server leaves each tool's MCP file, the file as it was is kept beside it, and the report says what
-    /// was done. With `via_gateway`, an approved HTTP server is pointed at Gantry's MCP gateway.
+    /// By default a blocked server is only reported. With `enforcement` `remove`, it leaves each tool's MCP file,
+    /// the file as it was is kept beside it, and the report says what was done. With `via_gateway`, an approved HTTP
+    /// server is pointed at Gantry's MCP gateway.
     #[test]
-    fn blocked_mcp_servers_are_removed_with_a_backup_and_approved_ones_go_through_the_gateway()
+    fn blocked_mcp_servers_are_reported_or_removed_with_a_backup_and_approved_ones_go_through_the_gateway()
     -> Result<(), String> {
         let p = home_of("enforce", Os::Linux);
         let h = &p.home;
@@ -2336,6 +2340,27 @@ mod tests {
             "{dry}"
         );
 
+        // Report mode, the default: each blocked server is marked in the report and no file changes.
+        let reported = cycle(&p, &all, false)?;
+        assert_eq!(reported["mcp_actions"], json!([]));
+        assert!(
+            reported["mcp"].as_array().is_some_and(|m| m
+                .iter()
+                .filter(|r| r["decision"] == "blocked")
+                .count()
+                == 4),
+            "{reported}"
+        );
+        assert_eq!(
+            read(&h.join(".config/Claude/claude_desktop_config.json")),
+            desktop
+        );
+        assert!(
+            !h.join(".config/Claude/claude_desktop_config.json.gantry-backup")
+                .exists()
+        );
+
+        all.mcp["enforcement"] = json!("remove");
         let r = cycle(&p, &all, false)?;
         let actions = r["mcp_actions"].as_array().cloned().unwrap_or_default();
         assert_eq!(actions.len(), 4, "{actions:?}");

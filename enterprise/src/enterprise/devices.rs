@@ -156,6 +156,12 @@ CREATE TABLE enterprise_device_mcp_actions (
 );
 ";
 
+/// What the agent does with a blocked MCP server it finds: `report` it (the default) or `remove` it from the tool's
+/// file, keeping the file as it was beside it.
+pub const MIGRATION_6: &str = "
+ALTER TABLE enterprise_device_profiles ADD COLUMN mcp_enforcement text NOT NULL DEFAULT 'report';
+";
+
 /// The header the agent sends the person's Gantry key in (the one `gantry login` saved), beside the enrolment token.
 pub const PERSON_HEADER: &str = "x-gantry-key";
 
@@ -801,14 +807,14 @@ async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response
     let row = match d.db.client().await {
         Ok(client) => client
             .query_opt(
-                "SELECT gateway_url, tools, apps_allowed, apps_denied, mcp_via_gateway FROM enterprise_device_profiles WHERE team = $1 OR team = '' ORDER BY team = '' LIMIT 1",
+                "SELECT gateway_url, tools, apps_allowed, apps_denied, mcp_via_gateway, mcp_enforcement FROM enterprise_device_profiles WHERE team = $1 OR team = '' ORDER BY team = '' LIMIT 1",
                 &[&team],
             )
             .await
             .map_err(db_error),
         Err(e) => Err(e),
     };
-    let (gateway, tools, allowed, denied, via_gateway) = match row {
+    let (gateway, tools, allowed, denied, via_gateway, enforcement) = match row {
         Ok(Some(r)) => {
             let list = |i| names(&r.try_get::<_, String>(i).unwrap_or_default());
             (
@@ -817,6 +823,8 @@ async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response
                 list(2),
                 list(3),
                 r.try_get::<_, bool>(4).unwrap_or(false),
+                r.try_get::<_, String>(5)
+                    .unwrap_or_else(|_| "report".into()),
             )
         }
         // The device reached this gateway, so without a profile that is where its tools go.
@@ -829,6 +837,7 @@ async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response
             Vec::new(),
             Vec::new(),
             false,
+            "report".to_string(),
         ),
         Err(e) => return fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     };
@@ -837,6 +846,7 @@ async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response
         Err(e) => return fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     };
     mcp["via_gateway"] = via_gateway.into();
+    mcp["enforcement"] = enforcement.into();
     Json(json!({
         "gateway_url": gateway, "tools": tools, "team": team, "person": person, "mcp": mcp,
         "apps": { "allowed": allowed, "denied": denied },
@@ -1557,7 +1567,7 @@ fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
 /// gateway, its decision, and the buttons that change it.
 fn mcp_list(servers: &[Value], can_edit: bool) -> String {
     if servers.is_empty() {
-        return r#"<p class="t-small g-muted" style="margin: 0">No device has reported an MCP server yet. The device agent lists those configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed, and takes a blocked one out of those files.</p>"#.into();
+        return r#"<p class="t-small g-muted" style="margin: 0">No device has reported an MCP server yet. The device agent lists those configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed, and takes a blocked one out of those files when the profile says remove.</p>"#.into();
     }
     let mut out = String::from(r#"<section class="g-list">"#);
     for m in servers {
@@ -1646,7 +1656,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
             .await
             .map_err(db_error)?;
         let profiles = client
-            .query("SELECT team, gateway_url, tools, updated_by, apps_allowed, apps_denied, mcp_via_gateway FROM enterprise_device_profiles ORDER BY team", &[])
+            .query("SELECT team, gateway_url, tools, updated_by, apps_allowed, apps_denied, mcp_via_gateway, mcp_enforcement FROM enterprise_device_profiles ORDER BY team", &[])
             .await
             .map_err(db_error)?;
         let drift = client
@@ -1693,7 +1703,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     };
     let mut out = html::head(
         NAV,
-        "Each person's coding tools: which reached Gantry, which devices are enrolled, which tools there call a provider directly, and which denied apps and blocked MCP servers are on them. The device agent points the tools a profile names at the gateway, puts them back when someone changes them, and takes blocked MCP servers out of the tools' MCP files.",
+        "Each person's coding tools: which reached Gantry, which devices are enrolled, which tools there call a provider directly, and which denied apps and blocked MCP servers are on them. The device agent points the tools a profile names at the gateway, puts them back when someone changes them, and reports blocked MCP servers, or takes them out of the tools' MCP files when the profile says remove.",
         &html::link(
             "Download devices.json",
             "quiet",
@@ -1785,6 +1795,9 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
         if r.try_get::<_, bool>(6).unwrap_or(false) {
             meta += " · approved MCP servers go through Gantry";
         }
+        if get(7) == "remove" {
+            meta += " · removes blocked MCP servers";
+        }
         meta += &format!(" · by {}", get(3));
         list += &html::row(&esc(&team), &esc(&meta), "", false);
     }
@@ -1793,7 +1806,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
         list += &form(
             "profile_save",
             &format!(
-                "{}{}{}{}{}{}{}",
+                "{}{}{}{}{}{}{}{}",
                 input(
                     "team",
                     "Team",
@@ -1839,6 +1852,13 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
                     "",
                     "yes or no. With yes, the agent points each approved HTTP server at this gateway's /mcp: list those servers under mcp: in the policy first."
                 ),
+                input(
+                    "mcp_enforcement",
+                    "Blocked MCP servers",
+                    "report",
+                    "",
+                    "report or remove. With report, the agent lists a blocked server it finds; with remove, it takes it out of the tool's file and keeps the file as it was beside it."
+                ),
                 html::button("Save device profile", "", "submit", ""),
             ),
         );
@@ -1880,7 +1900,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
         );
     }
     if actions.is_empty() {
-        list += r#"<p class="t-small g-muted" style="margin: 0">Nothing enforced yet. The agent takes a blocked server out of a tool's MCP file and keeps the file as it was beside it.</p>"#;
+        list += r#"<p class="t-small g-muted" style="margin: 0">Nothing enforced yet. With a profile that says remove, the agent takes a blocked server out of a tool's MCP file and keeps the file as it was beside it.</p>"#;
     }
     list += "</section>";
     out += &section(
@@ -2032,6 +2052,11 @@ async fn save_profile(
         "yes" => Some(true),
         _ => None,
     };
+    let enforcement = match form.get("mcp_enforcement").trim() {
+        "" | "report" => Some("report"),
+        "remove" => Some("remove"),
+        _ => None,
+    };
     let known_apps = app_names();
     let problem = if role_of(admin) == Role::Viewer {
         Some((
@@ -2078,13 +2103,20 @@ async fn save_profile(
             "invalid_request",
             "Approved MCP servers through Gantry is yes or no.".to_string(),
         ))
+    } else if enforcement.is_none() {
+        Some((
+            "invalid_request",
+            "Blocked MCP servers is report or remove.".to_string(),
+        ))
     } else {
         None
     };
     let via_gateway = via_gateway.unwrap_or(false);
+    let enforcement = enforcement.unwrap_or("report");
     let details = json!({
         "team": team, "gateway_url": gateway, "tools": tools,
         "apps_allowed": allowed, "apps_denied": denied, "mcp_via_gateway": via_gateway,
+        "mcp_enforcement": enforcement,
     });
     if let Some((code, message)) = problem {
         let _ = console
@@ -2099,10 +2131,10 @@ async fn save_profile(
     let client = d.db.client().await?;
     client
         .execute(
-            "INSERT INTO enterprise_device_profiles (team, gateway_url, tools, updated_by, apps_allowed, apps_denied, mcp_via_gateway) VALUES ($1, $2, $3, $4, $5, $6, $7) \
+            "INSERT INTO enterprise_device_profiles (team, gateway_url, tools, updated_by, apps_allowed, apps_denied, mcp_via_gateway, mcp_enforcement) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (team) DO UPDATE SET gateway_url = excluded.gateway_url, tools = excluded.tools, updated_by = excluded.updated_by, \
-             apps_allowed = excluded.apps_allowed, apps_denied = excluded.apps_denied, mcp_via_gateway = excluded.mcp_via_gateway, updated_at = now()",
-            &[&team, &gateway, &tools.join(","), &admin.name, &allowed.join(","), &denied.join(","), &via_gateway],
+             apps_allowed = excluded.apps_allowed, apps_denied = excluded.apps_denied, mcp_via_gateway = excluded.mcp_via_gateway, mcp_enforcement = excluded.mcp_enforcement, updated_at = now()",
+            &[&team, &gateway, &tools.join(","), &admin.name, &allowed.join(","), &denied.join(","), &via_gateway, &enforcement],
         )
         .await
         .map_err(db_error)?;
