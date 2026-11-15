@@ -7,7 +7,10 @@
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::atomic::AtomicUsize,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering::SeqCst},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -26,7 +29,10 @@ use ring::{
     signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair},
 };
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::Semaphore,
+};
 use tower::ServiceExt;
 
 type Error = Box<dyn std::error::Error>;
@@ -36,26 +42,47 @@ const ADMIN: &str = "gantry_admin_0123456789abcdef0123456789abcdef";
 const MAYA: &str = "gantry_maya_0123456789abcdef0123456789abcdef0";
 const CHAT_OK: &str = r#"{"id":"c","object":"chat.completion","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}"#;
 
-/// A provider that answers every chat request; model `slow` answers after 400 ms.
+/// A provider that answers every chat request.
 async fn provider() -> Result<SocketAddr, Error> {
+    Ok(held_provider().await?.0)
+}
+
+/// `provider`, where the first request for model `held` is answered only once the gate gets a permit, and the
+/// count says how many `held` requests have arrived: a test orders requests by what the provider saw, not by time.
+async fn held_provider() -> Result<(SocketAddr, Arc<Semaphore>, Arc<AtomicUsize>), Error> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
-    let app = Router::new().fallback(|request: Request<Body>| async move {
-        let body = request
-            .into_body()
-            .collect()
-            .await
-            .map(|b| b.to_bytes())
-            .unwrap_or_default();
-        if body.windows(6).any(|w| w == b"\"slow\"") {
-            tokio::time::sleep(Duration::from_millis(400)).await;
+    let (gate, arrived) = (Arc::new(Semaphore::new(0)), Arc::new(AtomicUsize::new(0)));
+    let app = Router::new().fallback({
+        let (gate, arrived) = (gate.clone(), arrived.clone());
+        move |request: Request<Body>| async move {
+            let body = request
+                .into_body()
+                .collect()
+                .await
+                .map(|b| b.to_bytes())
+                .unwrap_or_default();
+            if body.windows(6).any(|w| w == b"\"held\"") && arrived.fetch_add(1, SeqCst) == 0 {
+                let _ = gate.acquire().await;
+            }
+            ([(header::CONTENT_TYPE, "application/json")], CHAT_OK).into_response()
         }
-        ([(header::CONTENT_TYPE, "application/json")], CHAT_OK).into_response()
     });
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    Ok(addr)
+    Ok((addr, gate, arrived))
+}
+
+/// Waits until the provider has seen `n` held requests.
+async fn arrived(count: &AtomicUsize, n: usize) -> Result<(), Error> {
+    for _ in 0..1500 {
+        if count.load(SeqCst) >= n {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    Err(format!("the provider never saw {n} held requests").into())
 }
 
 fn dir(name: &str) -> Result<PathBuf, Error> {
@@ -84,7 +111,7 @@ providers:
     url: http://127.0.0.1:{port}
     allow_private: true
     key_env: MOCK_KEY
-    models: [m, slow]
+    models: [m, held]
 {top}rules:
   - name: everyone
     principals: {{ any: true }}
@@ -343,8 +370,8 @@ async fn a_rotated_key_works_through_its_grace_with_every_use_recorded_then_stop
 
 #[tokio::test]
 async fn a_key_limited_to_routes_or_to_parallel_requests_is_refused_past_them() -> TestResult {
-    let port = provider().await?.port();
-    let (gw, _dir) = gateway("routes", port, "", "")?;
+    let (addr, gate, held) = held_provider().await?;
+    let (gw, _dir) = gateway("routes", addr.port(), "", "")?;
     let path = format!("/admin/keys/{}", maya_prefix());
     let (status, _) = answer(
         &gw.router,
@@ -364,9 +391,12 @@ async fn a_key_limited_to_routes_or_to_parallel_requests_is_refused_past_them() 
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    let (first, second) = tokio::join!(chat(&gw.router, MAYA, "slow"), async {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        chat(&gw.router, MAYA, "slow").await
+    // The second is sent once the provider holds the first, so the first is in flight whatever the scheduler does.
+    let (first, second) = tokio::join!(chat(&gw.router, MAYA, "held"), async {
+        arrived(&held, 1).await?;
+        let second = chat(&gw.router, MAYA, "held").await;
+        gate.add_permits(1);
+        second
     });
     let (first, second) = (first?, second?);
     assert_eq!(first.0, StatusCode::OK, "{}", first.1);
@@ -377,7 +407,7 @@ async fn a_key_limited_to_routes_or_to_parallel_requests_is_refused_past_them() 
         second.1
     );
     // The place comes back with the answer.
-    assert_eq!(chat(&gw.router, MAYA, "slow").await?.0, StatusCode::OK);
+    assert_eq!(chat(&gw.router, MAYA, "held").await?.0, StatusCode::OK);
     Ok(())
 }
 

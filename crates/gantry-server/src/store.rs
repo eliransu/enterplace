@@ -294,6 +294,9 @@ struct Inner {
     seen: Mutex<Option<(i64, i64, i64, i64)>>,
     /// One refresh at a time: a slow one finishing after a newer one would put older keys back for a poll.
     refreshing: tokio::sync::Mutex<()>,
+    /// One poll round at a time: a round asked for with `poll_now` starts after any already under way, so what that
+    /// one took to write is in the database before this one reads.
+    polling: tokio::sync::Mutex<()>,
     keys: RwLock<String>,
     kills: RwLock<Arc<Vec<Kill>>>,
     cooling: RwLock<Arc<HashMap<String, Instant>>>,
@@ -373,6 +376,7 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         client: RwLock::new(None),
         seen: Mutex::new(None),
         refreshing: tokio::sync::Mutex::new(()),
+        polling: tokio::sync::Mutex::new(()),
         keys: RwLock::new(String::new()),
         kills: RwLock::new(Arc::new(Vec::new())),
         cooling: RwLock::default(),
@@ -421,9 +425,7 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
             let Some(inner) = weak.upgrade() else {
                 return;
             };
-            inner.poll().await;
-            inner.flush_returns().await;
-            inner.flush_routing().await;
+            inner.round().await;
         }
     });
     Ok(Arc::new(store))
@@ -861,6 +863,14 @@ impl Inner {
         let client = Arc::new(self.connect().await.map_err(|err| err.to_string())?);
         write(&self.client, Some(client.clone()));
         Ok(client)
+    }
+
+    /// One round of the poller: what changed is read, and what this gateway gave back and measured is written.
+    async fn round(&self) {
+        let _one = self.polling.lock().await;
+        self.poll().await;
+        self.flush_returns().await;
+        self.flush_routing().await;
     }
 
     /// One poll: reloads what changed, and reports the database going away or coming back.
@@ -2267,6 +2277,20 @@ impl Store for PgStore {
     fn refresh_policy(&self) -> Result<(), String> {
         let inner = self.inner.clone();
         self.wait(async move { inner.refresh().await })
+    }
+
+    fn poll_now(&self) -> Result<(), String> {
+        let inner = self.inner.clone();
+        self.wait(async move {
+            inner.round().await;
+            if inner.down.load(Ordering::Relaxed) {
+                return Err(format!(
+                    "the store cannot be reached. Check Postgres and {}.",
+                    inner.env
+                ));
+            }
+            Ok(())
+        })
     }
 
     fn policy_versions(&self) -> Result<Arc<Vec<PolicyVersion>>, String> {

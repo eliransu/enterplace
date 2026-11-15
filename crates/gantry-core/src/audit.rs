@@ -341,11 +341,58 @@ fn secs(time: Duration) -> String {
     format!("{:.0}", time.as_secs_f64().ceil())
 }
 
+/// The time the lock is judged and kept by. Every heartbeat and staleness decision reads it, so a test can drive
+/// the exact sequence of beats and checks on a clock it advances itself, with no real waiting.
+trait Clock: Send + Sync {
+    /// Time since a fixed point of this clock.
+    fn now(&self) -> Duration;
+    fn sleep(&self, time: Duration);
+    /// Runs `beat` every `every` until it returns false or `stop`'s sender is dropped. The handle, when there is
+    /// one, is joined after the sender is dropped.
+    fn repeat(
+        &self,
+        every: Duration,
+        stop: mpsc::Receiver<()>,
+        beat: Box<dyn FnMut() -> bool + Send>,
+    ) -> io::Result<Option<std::thread::JoinHandle<()>>>;
+}
+
+struct RealClock;
+
+impl Clock for RealClock {
+    fn now(&self) -> Duration {
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        START.get_or_init(Instant::now).elapsed()
+    }
+
+    fn sleep(&self, time: Duration) {
+        std::thread::sleep(time);
+    }
+
+    fn repeat(
+        &self,
+        every: Duration,
+        stop: mpsc::Receiver<()>,
+        mut beat: Box<dyn FnMut() -> bool + Send>,
+    ) -> io::Result<Option<std::thread::JoinHandle<()>>> {
+        std::thread::Builder::new()
+            .name("gantry-audit-lock".into())
+            .spawn(move || {
+                while let Err(mpsc::RecvTimeoutError::Timeout) = stop.recv_timeout(every) {
+                    if !beat() {
+                        return;
+                    }
+                }
+            })
+            .map(Some)
+    }
+}
+
 /// The holder's own say on whether it still holds its lock, which the writer asks before each write.
 struct Fence {
     lock: PathBuf,
-    start: Instant,
-    /// When the holder last rewrote its lock, in milliseconds after `start`.
+    clock: Arc<dyn Clock>,
+    /// When the holder last rewrote its lock, in milliseconds of `clock`.
     beat_ms: AtomicU64,
     limit: Duration,
     /// Why records stopped. Kept once set: a lock that came back does not undo records another Gantry wrote meanwhile.
@@ -354,14 +401,14 @@ struct Fence {
 
 impl Fence {
     fn beat(&self) {
-        let ms = u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let ms = u64::try_from(self.clock.now().as_millis()).unwrap_or(u64::MAX);
         self.beat_ms.store(ms, Ordering::Relaxed);
     }
 
     /// Why records may no longer be written, or None while the lock is this log's.
     fn lost(&self) -> Option<String> {
         let since = Duration::from_millis(self.beat_ms.load(Ordering::Relaxed));
-        if self.lost.get().is_none() && self.start.elapsed().saturating_sub(since) >= self.limit {
+        if self.lost.get().is_none() && self.clock.now().saturating_sub(since) >= self.limit {
             let _ = self.lost.set(format!(
                 "the audit log lock {} could not be updated for {} seconds, so another Gantry may take the log over. Every request is refused until Gantry is started again. Check that the folder is reachable and writable.",
                 self.lock.display(),
@@ -427,37 +474,27 @@ fn write_lock(lock: &Path, text: &str) -> io::Result<()> {
     })
 }
 
-/// Rewrites the lock every beat, and stops once it names another Gantry.
-fn keep_lock(
-    lock: &Path,
-    me: &Me,
-    instance: &str,
-    fence: &Fence,
-    stop: &mpsc::Receiver<()>,
-    beat: Duration,
-) {
-    let mut n = 0;
-    while let Err(mpsc::RecvTimeoutError::Timeout) = stop.recv_timeout(beat) {
-        n += 1;
-        let text = lock_text(me, instance, n);
-        let wrote = match std::fs::read_to_string(lock) {
-            Ok(_) if is_mine(lock, instance) => write_lock(lock, &text),
-            // Removed by hand while this log holds it: nobody else holds it either.
-            Err(err) if err.kind() == io::ErrorKind::NotFound => create_lock(lock, &text),
-            Ok(_) => {
-                let _ = fence.lost.set(format!(
-                    "the audit log lock {} now names another Gantry, which took the log over after this one could not update the lock. Every request is refused until Gantry is started again: two writers would break the chain.",
-                    lock.display()
-                ));
-                return;
-            }
-            Err(err) => Err(err),
-        };
-        // A beat that fails is tried again; after three the fence stops the writer.
-        if wrote.is_ok() {
-            fence.beat();
+/// Rewrites the lock once, as beat `n`. False once it names another Gantry: then it is never written again.
+fn keep_lock(lock: &Path, me: &Me, instance: &str, fence: &Fence, n: u64) -> bool {
+    let text = lock_text(me, instance, n);
+    let wrote = match std::fs::read_to_string(lock) {
+        Ok(_) if is_mine(lock, instance) => write_lock(lock, &text),
+        // Removed by hand while this log holds it: nobody else holds it either.
+        Err(err) if err.kind() == io::ErrorKind::NotFound => create_lock(lock, &text),
+        Ok(_) => {
+            let _ = fence.lost.set(format!(
+                "the audit log lock {} now names another Gantry, which took the log over after this one could not update the lock. Every request is refused until Gantry is started again: two writers would break the chain.",
+                lock.display()
+            ));
+            return false;
         }
+        Err(err) => Err(err),
+    };
+    // A beat that fails is tried again; after three the fence stops the writer.
+    if wrote.is_ok() {
+        fence.beat();
     }
+    true
 }
 
 enum Verdict {
@@ -503,13 +540,18 @@ fn judge(holder: &Holder, me: &Me, held_here: bool) -> Verdict {
 // it, a window of microseconds after thirty seconds of watching; create_new settles who creates the new one, and a
 // loser that removed the winner's lock is caught by the winner's next beat, which stops the winner's writer. An OS
 // lock does not help: NFS and SMB locks do not survive a client that is gone.
-fn take_lock(path: &Path, beat: Duration, me: &Me) -> Result<Option<Lock>, String> {
+fn take_lock(
+    path: &Path,
+    beat: Duration,
+    me: &Me,
+    clock: &Arc<dyn Clock>,
+) -> Result<Option<Lock>, String> {
     let lock = lock_path(path);
     let (stale, wait) = (beat * 6, beat * 8);
-    let deadline = Instant::now() + wait;
+    let deadline = clock.now() + wait;
     let instance = crate::id::random_hex(8);
     let mine = lock_text(me, &instance, 0);
-    let mut seen: Option<(String, Instant)> = None;
+    let mut seen: Option<(String, Duration)> = None;
     let mut told = false;
     loop {
         let text = match std::fs::read_to_string(&lock) {
@@ -525,7 +567,10 @@ fn take_lock(path: &Path, beat: Duration, me: &Me) -> Result<Option<Lock>, Strin
         };
         let take = if let Some(text) = &text {
             let holder = Holder::parse(text);
-            match judge(&holder, me, locked_paths().contains(&lock)) {
+            // Read on its own line: a guard taken in the match would be held through the wait below, and every other
+            // log in this process would wait to open or close behind it.
+            let held_here = locked_paths().contains(&lock);
+            match judge(&holder, me, held_here) {
                 Verdict::Take => true,
                 Verdict::Live => {
                     return Err(format!(
@@ -537,7 +582,7 @@ fn take_lock(path: &Path, beat: Duration, me: &Me) -> Result<Option<Lock>, Strin
                     ));
                 }
                 Verdict::Watch => {
-                    let now = Instant::now();
+                    let now = clock.now();
                     let changed = match &seen {
                         Some((before, at)) if before == text => *at,
                         _ => {
@@ -570,7 +615,7 @@ fn take_lock(path: &Path, beat: Duration, me: &Me) -> Result<Option<Lock>, Strin
                                 secs(stale)
                             );
                         }
-                        std::thread::sleep(beat / 5);
+                        clock.sleep(beat / 5);
                         false
                     }
                 }
@@ -598,8 +643,9 @@ fn take_lock(path: &Path, beat: Duration, me: &Me) -> Result<Option<Lock>, Strin
     }
     let fence = Arc::new(Fence {
         lock: lock.clone(),
-        start: Instant::now(),
-        beat_ms: AtomicU64::new(0),
+        clock: clock.clone(),
+        // Counted from when the lock was taken, as a beat would.
+        beat_ms: AtomicU64::new(u64::try_from(clock.now().as_millis()).unwrap_or(u64::MAX)),
         limit: beat * 3,
         lost: std::sync::OnceLock::new(),
     });
@@ -613,16 +659,21 @@ fn take_lock(path: &Path, beat: Duration, me: &Me) -> Result<Option<Lock>, Strin
         beats: None,
     };
     let me = me.clone();
-    held.beats = Some(
-        std::thread::Builder::new()
-            .name("gantry-audit-lock".into())
-            .spawn(move || keep_lock(&lock, &me, &instance, &fence, &stopped, beat))
-            .map_err(|err| {
+    let mut n = 0;
+    held.beats = clock
+        .repeat(
+            beat,
+            stopped,
+            Box::new(move || {
+                n += 1;
+                keep_lock(&lock, &me, &instance, &fence, n)
+            }),
+        )
+        .map_err(|err| {
                 format!(
                     "the audit log lock could not be kept: {err}. Without it another Gantry could take the log over while this one writes. Check the process and thread limits and start again."
                 )
-            })?,
-    );
+            })?;
     Ok(Some(held))
 }
 
@@ -957,13 +1008,24 @@ pub fn line_holds(line: &str) -> bool {
 impl AuditLog {
     /// Opens the log for appending and picks the chain up where the last record left it.
     pub fn open(path: &Path) -> Result<Self, String> {
-        Self::open_as(path, BEAT, &Me::this_process())
+        Self::open_as(
+            path,
+            BEAT,
+            &Me::this_process(),
+            &(Arc::new(RealClock) as Arc<dyn Clock>),
+        )
     }
 
-    /// `open` with the beat of the lock and the holder it names, so a test can be another Gantry, sooner.
-    fn open_as(path: &Path, beat: Duration, me: &Me) -> Result<Self, String> {
+    /// `open` with the beat of the lock, the holder it names and the clock it keeps time by, so a test can be
+    /// another Gantry and drive its time.
+    fn open_as(
+        path: &Path,
+        beat: Duration,
+        me: &Me,
+        clock: &Arc<dyn Clock>,
+    ) -> Result<Self, String> {
         // Taken before the chain is read: a Gantry waited for may still be adding records until it stops.
-        let lock = take_lock(path, beat, me)?;
+        let lock = take_lock(path, beat, me, clock)?;
         let mut file = log_options()
             .open(path)
             .map_err(|err| {
@@ -2337,8 +2399,116 @@ mod tests {
         Ok(())
     }
 
-    /// A short beat, so a test sees a lock go stale in a second instead of thirty.
-    const TEST_BEAT: Duration = Duration::from_millis(200);
+    /// One thing a `TestClock` does at a set time: once, or every `every` until it returns false or `stop` closes.
+    struct Task {
+        due: Duration,
+        every: Option<Duration>,
+        stop: Option<mpsc::Receiver<()>>,
+        run: Box<dyn FnMut() -> bool + Send>,
+    }
+
+    /// A clock that moves only when it is told to, and does what is due on the thread that moves it. Taking a lock
+    /// sleeps on it, so a test that opens a log runs every beat and every scheduled step itself, in order of time,
+    /// on one thread: the outcome depends on nothing but the sequence the test sets.
+    #[derive(Default)]
+    struct TestClock {
+        state: std::sync::Mutex<(Duration, Vec<Task>)>,
+    }
+
+    impl TestClock {
+        fn state(&self) -> std::sync::MutexGuard<'_, (Duration, Vec<Task>)> {
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        }
+
+        /// Moves the clock on by `time`, running each task as its time comes, earliest first, ties in the order set.
+        fn advance(&self, time: Duration) {
+            let target = self.now() + time;
+            loop {
+                let next = {
+                    let mut state = self.state();
+                    let first = (0..state.1.len()).min_by_key(|&i| state.1[i].due);
+                    match first {
+                        Some(i) if state.1[i].due <= target => {
+                            let task = state.1.remove(i);
+                            state.0 = task.due;
+                            Some(task)
+                        }
+                        _ => {
+                            state.0 = target;
+                            None
+                        }
+                    }
+                };
+                let Some(mut task) = next else {
+                    return;
+                };
+                if let Some(stop) = &task.stop
+                    && !matches!(stop.try_recv(), Err(mpsc::TryRecvError::Empty))
+                {
+                    continue;
+                }
+                if (task.run)()
+                    && let Some(every) = task.every
+                {
+                    task.due += every;
+                    self.state().1.push(task);
+                }
+            }
+        }
+
+        /// Does `step` once, `time` from now.
+        fn at(&self, time: Duration, step: impl FnOnce() + Send + 'static) {
+            let mut step = Some(step);
+            let mut state = self.state();
+            let due = state.0 + time;
+            state.1.push(Task {
+                due,
+                every: None,
+                stop: None,
+                run: Box::new(move || {
+                    if let Some(step) = step.take() {
+                        step();
+                    }
+                    false
+                }),
+            });
+        }
+    }
+
+    impl Clock for TestClock {
+        fn now(&self) -> Duration {
+            self.state().0
+        }
+
+        fn sleep(&self, time: Duration) {
+            self.advance(time);
+        }
+
+        fn repeat(
+            &self,
+            every: Duration,
+            stop: mpsc::Receiver<()>,
+            beat: Box<dyn FnMut() -> bool + Send>,
+        ) -> io::Result<Option<std::thread::JoinHandle<()>>> {
+            let mut state = self.state();
+            let due = state.0 + every;
+            state.1.push(Task {
+                due,
+                every: Some(every),
+                stop: Some(stop),
+                run: beat,
+            });
+            Ok(None)
+        }
+    }
+
+    fn test_clock() -> (Arc<TestClock>, Arc<dyn Clock>) {
+        let clock = Arc::new(TestClock::default());
+        let shared: Arc<dyn Clock> = clock.clone();
+        (clock, shared)
+    }
 
     /// A Gantry in another container or on another machine: a process space this one cannot see into.
     fn elsewhere(space: &str) -> Me {
@@ -2349,44 +2519,37 @@ mod tests {
         }
     }
 
-    /// The beat of the test below. Off Linux, telling whether a process runs means starting `ps`, which a loaded
-    /// machine can take more than a second to do. "At once" means without watching the lock, which takes at least
-    /// six beats; a beat long enough that `ps` cannot cross five of them keeps that distinction and lets a slow `ps`
-    /// pass. A Live or Take verdict never sleeps, so the test takes only as long as `ps` does.
-    const LIVE_BEAT: Duration = Duration::from_secs(2);
-
     #[test]
     fn a_lock_from_this_host_names_a_live_process_and_is_refused_at_once() -> TestResult {
         let path = temp("live-here");
+        let (clock, shared) = test_clock();
         let other = std::process::Command::new("sleep").arg("60").spawn()?;
         let here = Me {
             pid: other.id(),
             ..Me::this_process()
         };
         std::fs::write(lock_path(&path), lock_text(&here, "abc", 0))?;
-        let started = Instant::now();
-        let err = AuditLog::open_as(&path, LIVE_BEAT, &Me::this_process())
-            .err()
-            .ok_or("opened a log held by a live process on this host")?;
-        let refused_after = started.elapsed();
+        let refused = AuditLog::open_as(&path, BEAT, &Me::this_process(), &shared).err();
         let mut other = other;
         other.kill()?;
         other.wait()?;
+        let err = refused.ok_or("opened a log held by a live process on this host")?;
         // Refused as a live holder, not after watching its lock go quiet: that refusal says how long it waited.
         assert!(err.contains("it wrote") && !err.contains("waited"), "{err}");
-        assert!(
-            refused_after < LIVE_BEAT * 5,
-            "waited for a holder it can see: {refused_after:?}"
+        assert_eq!(
+            clock.now(),
+            Duration::ZERO,
+            "waited for a holder it can see"
         );
         assert!(err.contains(&format!("process {}", other.id())), "{err}");
         // Once that process is gone, its lock is taken over at once.
-        let started = Instant::now();
-        drop(AuditLog::open_as(&path, LIVE_BEAT, &Me::this_process())?);
-        let taken_after = started.elapsed();
-        assert!(
-            taken_after < LIVE_BEAT * 5,
-            "waited for a dead holder: {taken_after:?}"
-        );
+        drop(AuditLog::open_as(
+            &path,
+            BEAT,
+            &Me::this_process(),
+            &shared,
+        )?);
+        assert_eq!(clock.now(), Duration::ZERO, "waited for a dead holder");
         assert!(!lock_path(&path).exists());
         Ok(())
     }
@@ -2394,32 +2557,29 @@ mod tests {
     #[test]
     fn a_holder_elsewhere_that_still_beats_is_waited_for_then_refused() -> TestResult {
         let path = temp("remote-live");
+        let (clock, shared) = test_clock();
         let remote = elsewhere("a");
         std::fs::write(lock_path(&path), lock_text(&remote, "abc", 0))?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let beating = std::thread::spawn({
-            let (stop, lock, remote) = (stop.clone(), lock_path(&path), remote.clone());
-            move || {
-                let mut n = 0;
-                while !stop.load(Ordering::Relaxed) {
-                    n += 1;
-                    let _ = write_lock(&lock, &lock_text(&remote, "abc", n));
-                    std::thread::sleep(TEST_BEAT / 4);
-                }
-            }
-        });
-        let started = Instant::now();
-        let refused = AuditLog::open_as(&path, TEST_BEAT, &Me::this_process()).err();
-        let waited = started.elapsed();
-        stop.store(true, Ordering::Relaxed);
-        let _ = beating.join();
+        // The holder elsewhere rewrites its lock four times a beat for as long as `beating` lives.
+        let (beating, beats) = mpsc::channel();
+        let mut n = 0;
+        let lock = lock_path(&path);
+        let _ = clock.repeat(
+            BEAT / 4,
+            beats,
+            Box::new(move || {
+                n += 1;
+                let _ = write_lock(&lock, &lock_text(&remote, "abc", n));
+                true
+            }),
+        )?;
+        let refused = AuditLog::open_as(&path, BEAT, &Me::this_process(), &shared).err();
+        let waited = clock.now();
+        drop(beating);
         let err = refused.ok_or("opened a log a live Gantry elsewhere holds")?;
-        // Waited out the bound, and not much longer.
-        assert!(waited >= TEST_BEAT * 8, "gave up after {waited:?}");
-        assert!(
-            waited < TEST_BEAT * 8 + Duration::from_secs(5),
-            "{waited:?}"
-        );
+        // Waited out the bound, and no longer than one more look at the lock.
+        assert!(waited >= BEAT * 8, "gave up after {waited:?}");
+        assert!(waited <= BEAT * 8 + BEAT / 5, "{waited:?}");
         assert!(
             err.contains("process 1 on host-a") && err.contains(".lock") && err.contains("gone"),
             "{err}"
@@ -2435,13 +2595,12 @@ mod tests {
     #[test]
     fn a_holder_elsewhere_whose_lock_stopped_changing_is_taken_over() -> TestResult {
         let path = temp("remote-gone");
+        let (clock, shared) = test_clock();
         std::fs::write(lock_path(&path), lock_text(&elsewhere("a"), "abc", 7))?;
-        let started = Instant::now();
-        let log = AuditLog::open_as(&path, TEST_BEAT, &Me::this_process())?;
-        assert!(
-            started.elapsed() >= TEST_BEAT * 6,
-            "took over a lock it had not watched"
-        );
+        let log = AuditLog::open_as(&path, BEAT, &Me::this_process(), &shared)?;
+        let waited = clock.now();
+        assert!(waited >= BEAT * 6, "took over a lock it had not watched");
+        assert!(waited <= BEAT * 6 + BEAT / 5, "{waited:?}");
         assert!(
             !std::fs::read_to_string(lock_path(&path))?.contains("host-a"),
             "the lock still names the holder that is gone"
@@ -2453,30 +2612,46 @@ mod tests {
 
     #[test]
     fn a_new_gantry_waits_for_the_old_one_and_continues_its_chain() -> TestResult {
-        // The old Gantry must stop between six beats (a stale lock) and eight (the new one's deadline) after the
-        // new one starts waiting. With TEST_BEAT that window is 200 ms, and on a loaded machine a sleeping thread
-        // wakes later than that: about one run in five failed under load. A beat of 600 ms gives 600 ms; every
-        // check is the same.
-        let beat = TEST_BEAT * 3;
+        // The old Gantry beats every beat on the shared clock while the new one watches its lock; at three beats it
+        // writes a record, at seven (past the six a stale lock takes) it stops, and the new one takes over before
+        // its deadline at eight.
         let path = temp("rollout");
-        let old = AuditLog::open_as(&path, beat, &elsewhere("old"))?;
+        let (clock, shared) = test_clock();
+        let old = AuditLog::open_as(&path, BEAT, &elsewhere("old"), &shared)?;
         old.append(&entry("A"))?;
-        let started = Instant::now();
-        let new = std::thread::spawn({
-            let path = path.clone();
-            move || AuditLog::open_as(&path, beat, &elsewhere("new"))
+        let old = Arc::new(std::sync::Mutex::new(Some(old)));
+        let (said, heard) = mpsc::channel();
+        clock.at(BEAT * 3, {
+            let (old, said) = (old.clone(), said.clone());
+            move || {
+                let old = old
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(old) = old.as_ref() {
+                    let wrote = old.append(&entry("B")).is_ok();
+                    old.flush();
+                    let _ = said.send(format!("wrote B: {wrote}"));
+                }
+            }
         });
-        // Written and flushed while the new one waits, well before its deadline.
-        std::thread::sleep(beat * 3);
-        old.append(&entry("B"))?;
-        old.flush();
-        // Longer than a stale lock takes, counted from the start of the wait: the old one beats, so the new one
-        // keeps waiting.
-        std::thread::sleep((beat * 7).saturating_sub(started.elapsed()));
-        assert!(!new.is_finished(), "the new Gantry did not wait");
-        assert!(!old.is_broken(), "the old Gantry lost its lock");
-        drop(old);
-        let new = new.join().map_err(|_| "the new Gantry panicked")??;
+        clock.at(BEAT * 7, move || {
+            let old = old
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(old) = old {
+                let _ = said.send(format!("old broken: {}", old.is_broken()));
+            }
+        });
+        let new = AuditLog::open_as(&path, BEAT, &elsewhere("new"), &shared)?;
+        let waited = clock.now();
+        // Both steps ran inside the new one's open, so it was still waiting at seven beats with the old one intact.
+        assert_eq!(
+            heard.try_iter().collect::<Vec<_>>(),
+            ["wrote B: true", "old broken: false"],
+            "the new Gantry did not wait for the old one, or the old one lost its lock"
+        );
+        assert!(waited >= BEAT * 7 && waited < BEAT * 8, "{waited:?}");
         assert_eq!(
             new.records_at_open(),
             2,
@@ -2492,18 +2667,12 @@ mod tests {
     #[test]
     fn a_log_whose_lock_another_gantry_took_refuses_records() -> TestResult {
         let path = temp("lost");
-        let log = AuditLog::open_as(&path, TEST_BEAT, &Me::this_process())?;
+        let (clock, shared) = test_clock();
+        let log = AuditLog::open_as(&path, BEAT, &Me::this_process(), &shared)?;
         log.append(&entry("A"))?;
-        // The Gantry that took over keeps its lock current, as a live one does. Written once, the lock could be
-        // overwritten by a beat that read it a moment before (and a fixed wait loses to a slow wake under load), so
-        // it is written each half beat until this log sees it, for at most 10 seconds.
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut n = 0;
-        while !log.is_broken() && Instant::now() < deadline {
-            std::fs::write(lock_path(&path), lock_text(&elsewhere("a"), "abc", n))?;
-            n += 1;
-            std::thread::sleep(TEST_BEAT / 2);
-        }
+        std::fs::write(lock_path(&path), lock_text(&elsewhere("a"), "abc", 0))?;
+        assert!(!log.is_broken(), "refused before its next beat looked");
+        clock.advance(BEAT);
         assert!(
             log.is_broken(),
             "the lock another Gantry took went unnoticed"
