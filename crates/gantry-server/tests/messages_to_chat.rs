@@ -344,10 +344,15 @@ async fn untranslatable_fields_wrong_routes_and_errors_are_named() -> TestResult
         text.contains("wrong_route") && text.contains("accept_messages: true"),
         "{text}"
     );
+    // A chat provider has no count API: Gantry answers with its own estimate, marked as one.
     let (status, _, text) =
         claude_code(&gw, "/v1/messages/count_tokens", &message("gpt-4o", false)).await?;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(text.contains("does not count tokens"), "{text}");
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)?["estimated"],
+        true,
+        "{text}"
+    );
     let all: Vec<Value> = std::fs::read_to_string(&gw.log)?
         .lines()
         .map(serde_json::from_str)
