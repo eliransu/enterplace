@@ -923,6 +923,30 @@ pub fn start_provider(
     Some(lines)
 }
 
+/// The name of the provider that sends Claude Code's own subscription logins on (`auth: passthrough`).
+pub const SUBSCRIPTION_PROVIDER: &str = "claude-subscriptions";
+
+/// The policy lines of the passthrough provider `gantry start` and the console's Coding agents step write: Claude
+/// Code on the developers' own Claude subscriptions, with no Anthropic key at all. `identity: optional` records a
+/// request that names no person as unknown, so it works before any person token is handed out. Its URL comes from
+/// `GANTRY_ANTHROPIC_BASE_URL` as the keyed provider's does.
+pub fn subscription_provider(env: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut lines = format!(
+        "  # Claude Code on your developers' own Claude subscriptions (Pro, Max, Team, Enterprise): each request carries\n  # the person's own Claude login, sent on unchanged and never kept. Gantry holds no Anthropic key for it.\n  - name: {SUBSCRIPTION_PROVIDER}\n    kind: anthropic\n    auth: passthrough\n    identity: optional\n    models: [\"claude-*\"]\n"
+    );
+    match env(&base_url_env("anthropic")).filter(|u| !u.trim().is_empty()) {
+        Some(url) => {
+            let url = url.trim();
+            lines.push_str(&format!("    url: {url}\n"));
+            if crate::config::is_private(url) {
+                lines.push_str("    allow_private: true\n");
+            }
+        }
+        None => lines.push_str("    url: https://api.anthropic.com\n"),
+    }
+    lines
+}
+
 /// The variable that points a provider `gantry start` sets up at another URL: `GANTRY_OPENAI_BASE_URL`. Not
 /// `OPENAI_BASE_URL`, which the console tells people to set to Gantry itself in their shell.
 pub fn base_url_env(id: &str) -> String {

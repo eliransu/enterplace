@@ -269,6 +269,10 @@ const KNOWN: &[&str] = &[
     "body",
     "rph",
     "rpd",
+    "tpd",
+    "budget_basis",
+    "auth",
+    "identity",
     "session_requests",
     "answer_cache",
     // Last, so a misspelled "models" (one letter off both) is still offered "models", the word far more often meant.
@@ -957,6 +961,12 @@ struct ProviderFile {
     // openai (OCI Generative AI): requests are signed with an OCI API signing key instead of carrying a key.
     #[serde(default)]
     oci_signing: Option<OciSigningFile>,
+    // `passthrough`: each caller's own login (a Claude subscription) is sent on unchanged, and Gantry holds no key.
+    #[serde(default)]
+    auth: Option<String>,
+    // With `auth: passthrough`: whether a request must name its person in x-gantry-user (`required`, the default).
+    #[serde(default)]
+    identity: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1056,6 +1066,8 @@ struct RuleFile {
     mcp_clients: Vec<String>,
     #[serde(default)]
     caller_provider_key: Option<String>,
+    #[serde(default)]
+    budget_basis: Option<String>,
     #[serde(default)]
     from: Vec<String>,
     #[serde(default)]
@@ -1161,6 +1173,9 @@ struct RateFile {
     rph: Option<i64>,
     #[serde(default)]
     rpd: Option<i64>,
+    /// Tokens per calendar day, UTC.
+    #[serde(default)]
+    tpd: Option<i64>,
     /// In a rule: the most requests one session may send.
     #[serde(default)]
     session_requests: Option<i64>,
@@ -1912,6 +1927,70 @@ fn parallel_of(n: i64, at: &str, errors: &mut Vec<String>) -> Option<u32> {
 pub const MAX_TAGS: usize = 16;
 
 /// The tokens-per-minute limit `tpm` names, or what is wrong with it. `at` names where it is written.
+/// A provider's `auth` and `identity`, checked. Returns whether it is a passthrough provider.
+fn provider_auth(
+    entry: &ProviderFile,
+    kind: Option<Kind>,
+    at: &dyn Fn(&str) -> String,
+    errors: &mut Vec<String>,
+) -> bool {
+    let passthrough = match entry.auth.as_deref() {
+        None | Some("key") => false,
+        Some("passthrough") => true,
+        Some(other) => {
+            errors.push(format!(
+                "{}: auth is \"{other}\". It is key (the default: Gantry sends the provider key the policy names) or passthrough (each caller's own login, such as a Claude Pro, Max, Team or Enterprise subscription, is sent on unchanged and Gantry holds no key).",
+                at("auth")
+            ));
+            false
+        }
+    };
+    if passthrough {
+        if kind.is_some_and(|k| k != Kind::Anthropic) {
+            errors.push(format!(
+                "{}: auth: passthrough is for a provider of kind anthropic, which Claude Code signs in to with a Claude subscription. Use kind: anthropic with url https://api.anthropic.com, or remove auth.",
+                at("auth")
+            ));
+        }
+        if entry.key_env.is_some()
+            || entry.key_file.is_some()
+            || entry.credential.is_some()
+            || !entry.keys.is_empty()
+            || entry.oci_signing.is_some()
+        {
+            errors.push(format!(
+                "{}: provider \"{}\" has auth: passthrough, so it sends each caller's own login and never a key of Gantry's. Remove key_env, key_file, credential and keys from it, or remove auth: passthrough and keep the key.",
+                at("auth"),
+                entry.name
+            ));
+        }
+    }
+    match (entry.identity.as_deref(), passthrough) {
+        (None, _) | (Some("required" | "optional"), true) => {}
+        (Some(_), false) => errors.push(format!(
+            "{}: identity applies only to a provider with auth: passthrough, where it says whether a request must name its person in x-gantry-user. Remove it, or add auth: passthrough.",
+            at("identity")
+        )),
+        (Some(other), true) => errors.push(format!(
+            "{}: identity is \"{other}\". It is required (the default: a request must name its person with a Gantry person token in x-gantry-user) or optional (a request without one is recorded as an unknown person, by its session).",
+            at("identity")
+        )),
+    }
+    passthrough
+}
+
+fn tpd_of(tpd: i64, at: &str, errors: &mut Vec<String>) -> Option<u32> {
+    match u32::try_from(tpd) {
+        Ok(tpd) if tpd >= 1 => Some(tpd),
+        _ => {
+            errors.push(format!(
+                "{at}: tpd is the number of tokens (prompt and answer) that may be used per calendar day (UTC), 1 to 4294967295, for example tpd: 2000000. To set no limit, remove it."
+            ));
+            None
+        }
+    }
+}
+
 fn tpm_of(tpm: i64, at: &str, errors: &mut Vec<String>) -> Option<u32> {
     match u32::try_from(tpm) {
         Ok(tpm) if (1..=1_000_000_000).contains(&tpm) => Some(tpm),
@@ -2392,6 +2471,11 @@ pub struct Provider {
     pub chat_as_responses: bool,
     /// Signs requests with an OCI API signing key, in place of a provider key.
     pub oci_signing: Option<OciSigning>,
+    /// `auth: passthrough`: Gantry holds no key for it. Each request carries the caller's own login (a Claude
+    /// subscription's OAuth token), sent on unchanged and never kept.
+    pub passthrough: bool,
+    /// `identity: optional`: a passthrough request without x-gantry-user is recorded as an unknown person.
+    pub identity_optional: bool,
 }
 
 /// How a Bedrock or Vertex AI provider runs batches through `/v1/batches`.
@@ -3355,7 +3439,7 @@ fn scope_limits(
             .as_ref()
             .map(|b| scope_budgets(b, &at, errors))
             .unwrap_or_default();
-        let (mut rpm, mut tpm, mut rph, mut rpd) = (None, None, None, None);
+        let (mut rpm, mut tpm, mut rph, mut rpd, mut tpd) = (None, None, None, None, None);
         if let Some(rate) = &entry.rate {
             if let Some(n) = rate.rpm {
                 match u32::try_from(n) {
@@ -3366,6 +3450,7 @@ fn scope_limits(
                 }
             }
             tpm = rate.tpm.and_then(|n| tpm_of(n, &at, errors));
+            tpd = rate.tpd.and_then(|n| tpd_of(n, &at, errors));
             rph = requests_of(rate.rph, "rph", &at, errors);
             rpd = requests_of(rate.rpd, "rpd", &at, errors);
             if rate.session_requests.is_some() {
@@ -3404,6 +3489,7 @@ fn scope_limits(
             rph,
             rpd,
             tpm,
+            tpd,
             parallel,
             shadow_until: shadow_of(
                 &entry.shadow_until,
@@ -3826,6 +3912,7 @@ fn limits(
             && rate.tpm.is_none()
             && rate.rph.is_none()
             && rate.rpd.is_none()
+            && rate.tpd.is_none()
             && rate.session_requests.is_none()
         {
             errors.push(format!(
@@ -3835,6 +3922,7 @@ fn limits(
         }
         limits.rph = requests_of(rate.rph, "rph", &at("rate"), errors);
         limits.rpd = requests_of(rate.rpd, "rpd", &at("rate"), errors);
+        limits.tpd = rate.tpd.and_then(|n| tpd_of(n, &at("rate"), errors));
         limits.session_requests = requests_of(
             rate.session_requests,
             "session_requests",
@@ -3924,6 +4012,14 @@ fn limits(
             CallerKey::Refused
         }
     };
+    match rule.budget_basis.as_deref() {
+        None | Some("billed") => {}
+        Some("api_equivalent") => limits.budget_api_equivalent = true,
+        Some(other) => errors.push(format!(
+            "{}: budget_basis is \"{other}\". It is billed (the default: dollar budgets count what the organization is billed per request, so subscription passthrough traffic does not count against them) or api_equivalent (subscription passthrough traffic counts at its estimated API price).",
+            at("budget_basis")
+        )),
+    }
     match cidrs(&rule.from) {
         Ok(from) if from.len() <= MAX_LIST => limits.from = from,
         Ok(_) => errors.push(format!(
@@ -4885,8 +4981,9 @@ fn providers(
 ) -> Vec<Provider> {
     let lines = provider_lines(text);
     let mut out = Vec::new();
-    // Which provider, at which line, claimed each model: a model served by two providers would be ambiguous.
-    let mut claimed: HashMap<String, (String, usize)> = HashMap::new();
+    // Which provider, at which line, claimed each model: a model served by two providers would be ambiguous. A
+    // passthrough provider and a keyed one may share a model: a request's credential picks between them.
+    let mut claimed: HashMap<(String, bool), (String, usize)> = HashMap::new();
     if parsed.providers.is_empty() {
         errors.push(format!(
             "{}:{}: the file lists no provider, so no request could be forwarded. Add one under providers.",
@@ -5048,6 +5145,8 @@ fn providers(
             (None, false) if entry.allow_private && kind == Some(Kind::OpenAi) => {}
             // The demo model is answered inside the gateway: there is no provider to send a key to.
             (None, false) if kind == Some(Kind::Demo) => {}
+            // Each caller brings their own login.
+            (None, false) if entry.auth.as_deref() == Some("passthrough") => {}
             (None, false)
                 if entry.key_file.is_some()
                     || entry.credential.is_some()
@@ -5070,6 +5169,7 @@ fn providers(
                 at("name")
             ));
         }
+        let passthrough = provider_auth(entry, kind, &at, errors);
         let upstream_models = provider_options(entry, kind, &at, errors);
         let models = entry.models.clone().unwrap_or_default();
         if entry.kind.is_none() || entry.models.is_none() {
@@ -5127,7 +5227,8 @@ fn providers(
                 ));
                 continue;
             }
-            match claimed.get(model) {
+            let claim = (model.clone(), entry.auth.as_deref() == Some("passthrough"));
+            match claimed.get(&claim) {
                 Some((other, other_line)) => errors.push(format!(
                     "{}: model \"{model}\" is listed by provider \"{}\" and by provider \"{other}\" at line {other_line}. A model is served by one provider. Remove it from one of them.",
                     at("models"),
@@ -5135,7 +5236,7 @@ fn providers(
                 )),
                 None => {
                     let model_line = line_of_key(text, "models", line, until);
-                    claimed.insert(model.clone(), (entry.name.clone(), model_line));
+                    claimed.insert(claim, (entry.name.clone(), model_line));
                 }
             }
         }
@@ -5257,6 +5358,8 @@ fn providers(
                 }),
                 project_id: entry.project_id.clone(),
                 chat_as_responses: entry.chat_as_responses.unwrap_or(false),
+                passthrough,
+                identity_optional: passthrough && entry.identity.as_deref() == Some("optional"),
                 oci_signing: entry.oci_signing.as_ref().map(|oci| OciSigning {
                     tenancy: oci.tenancy.clone(),
                     user: oci.user.clone(),

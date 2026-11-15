@@ -254,6 +254,10 @@ const COLUMNS: &str = "id, to_char(time AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24
 fn row_of(r: &tokio_postgres::Row) -> Result<Row, String> {
     let get = |i: usize| r.try_get::<_, String>(i).map_err(db);
     let unsigned = |v: Option<i64>| v.and_then(|v| u64::try_from(v).ok());
+    let line = get(6)?;
+    // Read from the decision record itself, so the index needs no column of its own.
+    let estimate = serde_json::from_str::<serde_json::Value>(&line)
+        .is_ok_and(|record| record["auth"] == "passthrough");
     Ok(Row {
         id: get(0)?,
         time: get(1)?,
@@ -261,7 +265,8 @@ fn row_of(r: &tokio_postgres::Row) -> Result<Row, String> {
         n: u64::try_from(r.try_get::<_, i64>(3).map_err(db)?).unwrap_or_default(),
         hash: get(4)?,
         linked: r.try_get(5).map_err(db)?,
-        line: get(6)?,
+        line,
+        estimate,
         path: get(7)?,
         labels: serde_json::from_str(&get(8)?).unwrap_or_default(),
         verdict: get(9)?,

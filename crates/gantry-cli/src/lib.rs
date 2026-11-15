@@ -26,7 +26,7 @@ Commands:
         rule that decides, and every limit that applies (rule, key, organization, team, person, customer, tag,
         model, global) with where it is written and what it overrides. A running gateway adds what each budget
         has spent: GET /admin/explain.
-  key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>]
+  key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>]
           [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>]
           [--url <gateway url>] [--quiet] [--keys <file>]
         Make a key for a person or a workload. The key is printed once, with the lines that point
@@ -39,7 +39,9 @@ Commands:
         for a time zone: --budget 100/month@America/New_York. --org puts the key in an organization the
         policy lists; --customer makes every request with it for that end customer; --tags tags them;
         --parallel 4 caps its requests in flight; --role names a console role from the policy.
-        --quiet prints the key alone.
+        --quiet prints the key alone. --identity-only makes a person token (gantry_u_...) in place of a key:
+        it names the person for Claude subscription passthrough (in Claude Code's
+        ANTHROPIC_CUSTOM_HEADERS as x-gantry-user: <token>) and reaches no model on its own.
   key list [--keys <file>]
         List the keys in the keys file: name, team, hash prefix, admin, expiry, budget,
         models and tpm. Never a key.
@@ -265,7 +267,7 @@ pub async fn run(args: &[String]) -> ExitCode {
             let rest: Vec<&str> = rest
                 .iter()
                 .copied()
-                .filter(|a| !matches!(*a, "--admin" | "--quiet"))
+                .filter(|a| !matches!(*a, "--admin" | "--quiet" | "--identity-only"))
                 .collect();
             match options(
                 &rest,
@@ -293,6 +295,16 @@ pub async fn run(args: &[String]) -> ExitCode {
                         .map_or_else(|| PathBuf::from("gantry.keys.yaml"), PathBuf::from);
                     let made = attributes(flag("--admin"), &named).and_then(|attributes| {
                         let _store = store_for(&keys, named.get("--policy").copied())?;
+                        if flag("--identity-only") {
+                            return person_token_new(
+                                positional[0],
+                                named["--team"],
+                                &attributes,
+                                named.get("--url").copied(),
+                                flag("--quiet"),
+                                &keys,
+                            );
+                        }
                         key_new(
                             positional[0],
                             named["--team"],
@@ -696,7 +708,7 @@ pub async fn run(args: &[String]) -> ExitCode {
                 "gantry import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>], or gantry import litellm --url <proxy> --master-key-env <VAR> [--out <policy file>] [--keys-out <keys file>]",
             ),
             ["key", ..] => Some(
-                "gantry key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]",
+                "gantry key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]",
             ),
             ["serve", ..] => Some(
                 "gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>]",
@@ -1066,6 +1078,36 @@ fn explain(policy: &Path, named: &HashMap<&str, &str>) -> Result<(), String> {
     println!(
         "{}",
         serde_json::to_string_pretty(&explained).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
+/// `gantry key new --identity-only`: a person token for Claude subscription passthrough. It names the person and
+/// reaches no model on its own, so it costs nothing and holds no limits of a key's.
+fn person_token_new(
+    name: &str,
+    team: &str,
+    attributes: &keyfile::Attributes,
+    url: Option<&str>,
+    quiet: bool,
+    keys: &Path,
+) -> Result<(), String> {
+    if attributes.admin
+        || attributes.budget.is_some()
+        || attributes.models.is_some()
+        || attributes.tpm.is_some()
+    {
+        return Err("--identity-only makes a person token, which names a person and reaches no model, so it takes no --admin, --budget, --models or --tpm. Set limits on the person's rule, or leave out --identity-only for a key.".into());
+    }
+    let issued = keyfile::issue_person_token(name, team, keys)?;
+    if quiet {
+        println!("{}", issued.key);
+        return Ok(());
+    }
+    let url = url.unwrap_or("http://127.0.0.1:8080").trim_end_matches('/');
+    println!(
+        "Person token for {name}, team {team}. It names {name} to Gantry and reaches no model on its own; it is shown once:\n\n  {key}\n\nClaude Code keeps its normal Claude login (Pro, Max, Team or Enterprise). Add these two lines to the shell profile, with ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: {key}\"\n\nThe gateway needs a provider with auth: passthrough (gantry start writes one). Docs: https://gantry-docs.eliran.me/integrations/claude-code/\n",
+        key = issued.key
     );
     Ok(())
 }
@@ -2010,7 +2052,7 @@ async fn login(url: &str, no_browser: bool) -> Result<(), String> {
     // UX12-3: the next login revokes this key, so a profile holding the key itself would break on schedule. The
     // profile reads this file instead, which every login rewrites and logout deletes.
     let env = path.with_file_name("env");
-    save_credentials(&env, &env_lines(&url, &got.key))?;
+    save_credentials(&env, &env_lines(&url, &got.key, got.subscriptions))?;
     println!(
         "Point your tools at Gantry: Claude Code and the OpenAI SDKs read these variables, and Codex reads GANTRY_KEY (see https://gantry-docs.eliran.me/integrations/codex/). They are in {env}, which the next `gantry login` rewrites. Add this line to your shell profile, and run it now in this shell:\n\n  . {env}\n\nThe key works within 2 seconds. Every request with it is recorded under {}.",
         got.name,
@@ -2019,10 +2061,18 @@ async fn login(url: &str, no_browser: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The shell lines that point Claude Code, the OpenAI SDKs and Codex at Gantry with `key`.
-fn env_lines(url: &str, key: &str) -> String {
+/// The shell lines that point Claude Code, the OpenAI SDKs and Codex at Gantry with `key`. On a gateway with Claude
+/// subscription passthrough, Claude Code keeps its own Claude login and the key only names the person.
+fn env_lines(url: &str, key: &str, subscriptions: bool) -> String {
+    let claude = if subscriptions {
+        format!(
+            "# Claude Code keeps your Claude subscription login; the key names you to Gantry.\nunset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN\nexport ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: {key}\"\n"
+        )
+    } else {
+        format!("export ANTHROPIC_API_KEY={key}\n")
+    };
     format!(
-        "# Written by gantry login. `gantry logout` deletes this file.\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_API_KEY={key}\nexport OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\nexport GANTRY_KEY={key}\n"
+        "# Written by gantry login. `gantry logout` deletes this file.\nexport ANTHROPIC_BASE_URL={url}\n{claude}export OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\nexport GANTRY_KEY={key}\n"
     )
 }
 
@@ -2720,7 +2770,7 @@ mod tests {
 
     #[test]
     fn the_login_variables_file_sets_every_tool_and_is_sourced_not_pasted() {
-        let text = super::env_lines("https://gw.example", "gantry_k");
+        let text = super::env_lines("https://gw.example", "gantry_k", false);
         for line in [
             "export ANTHROPIC_BASE_URL=https://gw.example\n",
             "export ANTHROPIC_API_KEY=gantry_k\n",
@@ -2730,5 +2780,9 @@ mod tests {
         ] {
             assert!(text.contains(line), "{line}");
         }
+        let text = super::env_lines("https://gw.example", "gantry_k", true);
+        assert!(text.contains("export ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: gantry_k\"\n"));
+        assert!(text.contains("unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN\n"));
+        assert!(!text.contains("export ANTHROPIC_API_KEY"));
     }
 }

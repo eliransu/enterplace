@@ -326,7 +326,7 @@ pub(crate) async fn requests_page(
             outcome_tag(row),
             cell("model"),
             cell("provider"),
-            row.cost_usd.map_or("-".into(), money),
+            cost_text(row),
             ms(row.latency_ms),
             proof_tag(row),
             esc(&open),
@@ -454,7 +454,14 @@ fn row_sheet(row: &Row, close: &str) -> String {
                 row.output_tokens.map_or("-".into(), count)
             ),
         ),
-        ("Cost, USD", row.cost_usd.map_or("-".into(), money)),
+        (
+            if row.estimate {
+                "Cost, USD (API-equivalent estimate)"
+            } else {
+                "Cost, USD"
+            },
+            cost_text(row),
+        ),
         ("Charged, USD", money(row.charged_usd)),
         ("Latency", ms(row.latency_ms)),
     ]);
@@ -1058,4 +1065,13 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> String {
     format!(
         r#"<div class="g-panel g-stack"><h2 class="t-md" style="margin: 0">Budget forecasts</h2>{out}</div>"#
     )
+}
+
+/// A request's cost as a table shows it. A subscription request's is marked as an estimate: its seat is what is paid.
+fn cost_text(row: &gantry_core::insights::Row) -> String {
+    match row.cost_usd {
+        None => "-".into(),
+        Some(cost) if row.estimate => format!("~{} (est.)", money(cost)),
+        Some(cost) => money(cost),
+    }
 }

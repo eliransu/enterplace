@@ -2105,9 +2105,12 @@ async fn cli_token(State(console): State<Console>, body: String) -> Response {
         let _ = record(&console, &act, Some("keys_file"), Some(&err)).await;
         return cli_refused(StatusCode::CONFLICT, "keys_file", &err);
     }
+    // With a passthrough provider, Claude Code keeps its subscription login and the key only names the person.
+    let subscriptions = config::load(&console.config().policy, Some(&console.config().keys))
+        .is_ok_and(|l| l.providers.iter().any(|p| p.passthrough));
     json_answer(
         StatusCode::OK,
-        &json!({ "key": key, "name": pending.email, "team": pending.team, "expires": expires }),
+        &json!({ "key": key, "name": pending.email, "team": pending.team, "expires": expires, "subscriptions": subscriptions }),
     )
 }
 
@@ -2673,7 +2676,20 @@ async fn issued(
     admin: &Admin,
     name: &str,
     team: &str,
+    attributes: keyfile::Attributes,
+) -> Result<(String, bool), String> {
+    issued_as(console, admin, name, team, attributes, false).await
+}
+
+/// `issued`, or with `person_token` a person token (`gantry_u_...`): it names the person for Claude subscription
+/// passthrough and reaches no model on its own.
+async fn issued_as(
+    console: &Console,
+    admin: &Admin,
+    name: &str,
+    team: &str,
     mut attributes: keyfile::Attributes,
+    person_token: bool,
 ) -> Result<(String, bool), String> {
     // What the person's role may grant (`key_bounds:`): what the key leaves unset takes the bound.
     bound(console, Some(&admin.role), &mut attributes).await?;
@@ -2688,8 +2704,15 @@ async fn issued(
         let _ = record(console, &act, Some("invalid_request"), None).await;
         return Err("A name and a team use letters, digits, dots, dashes and underscores only, for example maya.cohen and payments.".into());
     }
-    let key = id::new_key()?;
+    let key = if person_token {
+        id::new_person_token()?
+    } else {
+        id::new_key()?
+    };
     act.target = json!({ "name": name, "team": team, "sha256_prefix": &id::sha256_hex(key.as_bytes())[..8], "admin": admin_key });
+    if person_token {
+        act.target["person_token"] = true.into();
+    }
     record(console, &act, None, None)
         .await
         .map_err(|()| NOT_RECORDED.to_string())?;

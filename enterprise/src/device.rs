@@ -694,8 +694,10 @@ fn classify(found: Vec<String>, gateway: &str) -> (&'static str, Vec<String>) {
 
 // ---- Desired file contents. Each takes the current text and returns the text it should be. ----
 
-/// Claude Code settings with env.ANTHROPIC_BASE_URL set to the gateway, other keys kept.
-fn claude_settings(current: &str, gateway: &str) -> Result<String, String> {
+/// Claude Code settings with env.ANTHROPIC_BASE_URL set to the gateway, other keys kept. With the person's Gantry key
+/// from `gantry login`, ANTHROPIC_CUSTOM_HEADERS names them in x-gantry-user, so a Claude subscription login sent
+/// through the gateway's passthrough provider is recorded under them. Claude Code's own login stays as it is.
+fn claude_settings(current: &str, gateway: &str, person: Option<&str>) -> Result<String, String> {
     let mut v: Value = if current.trim().is_empty() {
         json!({})
     } else {
@@ -708,6 +710,12 @@ fn claude_settings(current: &str, gateway: &str) -> Result<String, String> {
     }
     if let Some(env) = env.as_object_mut() {
         env.insert("ANTHROPIC_BASE_URL".into(), json!(gateway));
+        if let Some(person) = person {
+            env.insert(
+                "ANTHROPIC_CUSTOM_HEADERS".into(),
+                json!(format!("x-gantry-user: {person}")),
+            );
+        }
     }
     Ok(format!(
         "{}\n",
@@ -1052,9 +1060,13 @@ fn changes(p: &Paths, tool: &str, gateway: &str) -> Result<Vec<Change>, String> 
     let h = &p.home;
     let v1 = format!("{gateway}/v1");
     Ok(match tool {
-        "claude-code" => vec![plan(p.claude_settings.clone(), |c| {
-            claude_settings(c, gateway)
-        })?],
+        "claude-code" => {
+            // Only into the person's own settings: a managed file outside the home may be readable by others.
+            let person = saved(h, "key=").filter(|_| p.claude_settings.starts_with(h));
+            vec![plan(p.claude_settings.clone(), |c| {
+                claude_settings(c, gateway, person.as_deref())
+            })?]
+        }
         "codex" => vec![plan(h.join(".codex/config.toml"), |c| {
             Ok(codex_config(c, gateway))
         })?],
@@ -1705,13 +1717,23 @@ mod tests {
 
     #[test]
     fn claude_settings_keep_other_keys() -> Result<(), String> {
-        let out = claude_settings(r#"{"model":"opus","env":{"FOO":"1"}}"#, GW)?;
+        let out = claude_settings(r#"{"model":"opus","env":{"FOO":"1"}}"#, GW, None)?;
         let v: Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
         assert_eq!(v["model"], "opus");
         assert_eq!(v["env"]["FOO"], "1");
         assert_eq!(v["env"]["ANTHROPIC_BASE_URL"], GW);
-        assert_eq!(claude_settings(&out, GW)?, out, "idempotent");
-        assert!(claude_settings("not json", GW).is_err());
+        assert_eq!(claude_settings(&out, GW, None)?, out, "idempotent");
+        assert!(claude_settings("not json", GW, None).is_err());
+        let named = claude_settings(&out, GW, Some("gantry_maya"))?;
+        let v: Value = serde_json::from_str(&named).map_err(|e| e.to_string())?;
+        assert_eq!(
+            v["env"]["ANTHROPIC_CUSTOM_HEADERS"],
+            "x-gantry-user: gantry_maya"
+        );
+        assert!(
+            v["env"].get("ANTHROPIC_API_KEY").is_none(),
+            "the login stays Claude Code's own"
+        );
         Ok(())
     }
 

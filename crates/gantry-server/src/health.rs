@@ -231,6 +231,14 @@ pub(crate) async fn test_provider(state: &AppState, version: &Snapshot, index: u
     let Some(provider) = version.providers.get(index) else {
         return json!({ "ok": false, "outcome": "no_such_provider" });
     };
+    if provider.passthrough {
+        // No key of Gantry's to test: each person's own login is tested by their first request.
+        return json!({
+            "ok": true,
+            "outcome": "passthrough",
+            "message": "This provider sends each person's own Claude login. Gantry holds no key to test: the first request from Claude Code shows whether it works.",
+        });
+    }
     let started = Instant::now();
     let ids: Vec<String> = provider.pool.iter().map(|(_, id)| id.clone()).collect();
     let key = state.pool.key(

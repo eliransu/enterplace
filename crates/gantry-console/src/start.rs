@@ -43,6 +43,7 @@ pub(crate) fn routes() -> Router<Console> {
         .route("/start/connect", post(connect))
         .route("/start/demo", post(use_demo))
         .route("/start/first-key", post(first_key))
+        .route("/start/passthrough", post(turn_on_passthrough))
 }
 
 // ---------------------------------------------------------------- the five starting choices
@@ -136,7 +137,9 @@ impl Track {
     /// Connect a model and Send your first request come first on every track.
     fn steps(self) -> usize {
         match self {
-            Track::Coding | Track::Limit => 6,
+            // Claude subscriptions, the default way to pay: no model to connect and no first request with a key.
+            Track::Coding => 4,
+            Track::Limit => 6,
             _ => 5,
         }
     }
@@ -258,6 +261,8 @@ pub(crate) struct Facts {
     pub tries: Vec<Row>,
     /// Provider keys can be pasted here: a store or the sealed file keeps them.
     pub credentials_on: bool,
+    /// A provider sends Claude Code's own subscription logins on (`auth: passthrough`).
+    pub passthrough: bool,
 }
 
 impl Facts {
@@ -277,6 +282,25 @@ impl Facts {
     fn senders(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .sent_by_people()
+            .iter()
+            .map(|r| r.label("person").to_string())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Requests sent with a person's own Claude subscription login, by a person Gantry knows.
+    fn subscribed(&self) -> Vec<&Row> {
+        self.sent_by_people()
+            .into_iter()
+            .filter(|r| r.estimate)
+            .collect()
+    }
+
+    fn subscribers(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .subscribed()
             .iter()
             .map(|r| r.label("person").to_string())
             .collect();
@@ -328,7 +352,10 @@ pub(crate) async fn facts(console: &Console, admin: &Admin, base: String) -> Fac
     if let Ok(loaded) = config::load(&c.policy, Some(&c.keys)) {
         f.observe = loaded.policy.mode() == Mode::Observe;
         for p in &loaded.providers {
-            if p.kind == config::Kind::Demo {
+            if p.passthrough {
+                // Not a connected model: it holds no key, and a first request with a Gantry key cannot use it.
+                f.passthrough = true;
+            } else if p.kind == config::Kind::Demo {
                 f.demo_in_policy = true;
             } else {
                 f.connected.push((
@@ -651,6 +678,41 @@ pub(crate) struct Step {
     listen: String,
     done_text: String,
     open: Option<(&'static str, &'static str)>,
+    /// What "Copy for your agent" copies: the step as a prompt for Claude Code, Codex or Cursor.
+    agent: String,
+}
+
+/// A step as a prompt for the person's coding agent: the goal, the exact values, what to run or change, how to tell it
+/// worked, and the docs page as Markdown for anything else. Never an admin key: only what the step already shows.
+fn prompt(
+    base: &str,
+    goal: &str,
+    values: &[(&str, String)],
+    todo: &[String],
+    verify: &str,
+    doc: &str,
+) -> String {
+    let mut out = format!(
+        "Goal: {goal}, for the Gantry AI gateway at {base}.\n\nValues:\n- Gantry URL: {base}\n"
+    );
+    for (name, value) in values {
+        let _ = writeln!(out, "- {name}: {value}");
+    }
+    out.push_str("\nDo this:\n");
+    for line in todo {
+        let _ = writeln!(out, "{line}");
+    }
+    let _ = write!(
+        out,
+        "\nVerify: {verify} The step on {base}/console/start turns done by itself; requests show at {base}/console/requests.\n\nDocs (Markdown, read it for anything not covered here): {}\n\nDo not print, log or commit any key or token other than the values above, and ask me before changing anything else.\n",
+        md(doc)
+    );
+    out
+}
+
+/// A docs page's Markdown twin, which the docs site serves beside every page.
+pub(crate) fn md(path: &str) -> String {
+    format!("{DOCS}{}.md", path.trim_end_matches('/'))
 }
 
 impl Step {
@@ -666,7 +728,12 @@ impl Step {
             listen: String::new(),
             done_text: String::new(),
             open: None,
+            agent: String::new(),
         }
+    }
+    fn agent(mut self, text: String) -> Step {
+        self.agent = text;
+        self
     }
     fn listening(mut self, text: String, open: (&'static str, &'static str)) -> Step {
         self.listens = true;
@@ -705,6 +772,10 @@ struct Ctx<'a> {
     watch_token: Option<&'a str>,
     error: String,
     policy: String,
+    /// The Coding agents choice is paid with Anthropic API keys, not Claude subscriptions.
+    pay_api: bool,
+    /// How step 2 of Claude subscriptions sets Claude Code up: `shell` or `mdm`.
+    setup: String,
 }
 
 impl Ctx<'_> {
@@ -724,8 +795,13 @@ impl Ctx<'_> {
             pages::alert(&esc(&self.error))
         };
         format!(
-            r#"{error}<form class="g-check__form" method="post" action="/console/start/key"><input type="hidden" name="kind" value="{}">{}{}<button class="g-btn t-body" type="submit">Make key</button></form>"#,
+            r#"{error}<form class="g-check__form" method="post" action="/console/start/key"><input type="hidden" name="kind" value="{}">{}{}{}<button class="g-btn t-body" type="submit">Make key</button></form>"#,
             if workload { "workload" } else { "person" },
+            if self.pay_api && self.track == Track::Coding {
+                r#"<input type="hidden" name="pay" value="api">"#
+            } else {
+                ""
+            },
             field(&Field {
                 id: &format!("key-name-{n}"),
                 name: "name",
@@ -815,7 +891,16 @@ fn agent(r: &Row) -> String {
 fn cost(r: &Row) -> String {
     r.cost_usd.map_or_else(
         || "cost not known".into(),
-        |c| format!("${}", insights::money(c)),
+        |c| {
+            if r.estimate {
+                format!(
+                    "about ${} at API prices (an estimate: a subscription pays by the seat)",
+                    insights::money(c)
+                )
+            } else {
+                format!("${}", insights::money(c))
+            }
+        },
     )
 }
 
@@ -868,6 +953,9 @@ fn coding_lines(c: &Ctx<'_>, owner: Option<&KeyEntry>, tool: &str) -> Vec<String
 
 fn steps(c: &Ctx<'_>) -> Vec<Step> {
     let f = c.f;
+    if c.track == Track::Coding && !c.pay_api {
+        return subscriptions(c, f);
+    }
     let mut list = first_steps(c, f);
     list.extend(match c.track {
         Track::Coding => coding(c, f),
@@ -1027,6 +1115,31 @@ fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             r.status.filter(|s| *s >= 400).map_or_else(String::new, |s| format!(", the provider answered {s}"))
         )
     }));
+    let base = f.base.as_str();
+    let s1 = s1.agent(prompt(
+        base,
+        "Connect a model provider to Gantry",
+        &[("Policy file", f.policy_path.clone())],
+        &[
+            "1. Where the gateway runs, set the provider key in its environment before `gantry start`: OPENAI_PROVIDER_KEY, ANTHROPIC_PROVIDER_KEY or GEMINI_PROVIDER_KEY. I will paste the key value myself; never ask me for it in chat.".into(),
+            "2. Restart the gateway with `gantry start` in the same folder: it adds the provider to the policy.".into(),
+            "3. Or, for Claude Code on Claude subscriptions, no key is needed: see the Claude Code guide.".into(),
+        ],
+        "The console's first step shows the provider as connected.",
+        "/start/quickstart/",
+    ));
+    let s2 = s2.agent(prompt(
+        base,
+        "Send a first request through Gantry",
+        &[("Model", model.clone()), ("Gantry key", key.to_string())],
+        &[
+            "Run this in a terminal (if the key is $GANTRY_KEY, I set it to my Gantry key first):"
+                .into(),
+            first_lines(&f.base, key, &model, "curl").join("\n"),
+        ],
+        "The command prints an answer, or a refusal that names its cause.",
+        "/start/quickstart/",
+    ));
     vec![s1, s2]
 }
 
@@ -1125,6 +1238,266 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     )
     .finished("Someone made their own key through single sign-on.".into());
     s4.optional = true;
+    let base = f.base.as_str();
+    let s1 = s1.agent(prompt(
+        base,
+        "Make a Gantry key for the first developer",
+        &[],
+        &["On the machine that runs the gateway, in the folder of its policy, run: `gantry key new <name> --team <team>`. It prints the key once; send it to the developer through the company's secret manager.".into()],
+        "`gantry key list` shows the new key.",
+        "/integrations/claude-code/",
+    ));
+    let s2 = s2.agent(prompt(
+        base,
+        "Point my coding tool at Gantry with my Gantry key",
+        &[("Gantry key", c.key(first))],
+        &[
+            "Set these lines where the tool runs (my shell profile, or the tool's own settings), then send one prompt:".into(),
+            coding_lines(c, first, tool).join("\n"),
+        ],
+        "The prompt answers and shows in Requests under my name.",
+        "/integrations/claude-code/",
+    ));
+    let s3 = s3.agent(prompt(
+        base,
+        "Make a Gantry key for one more developer",
+        &[],
+        &["On the gateway's machine, run `gantry key new <name> --team <team>` and send the printed lines through the company's secret manager.".into()],
+        "Their first request shows in Requests.",
+        "/integrations/claude-code/",
+    ));
+    let s4 = s4.agent(prompt(
+        base,
+        "Get my own Gantry key through company single sign-on",
+        &[],
+        &[
+            format!("1. Run `gantry login {base}` and let me finish the sign-in in the browser."),
+            "2. Add the line it prints (`. ~/.config/gantry/env`) to my shell profile, then open a new shell.".into(),
+        ],
+        "`gantry login` prints that I am signed in.",
+        "/governance/single-sign-on/",
+    ));
+    vec![s1, s2, s3, s4]
+}
+
+/// Where Claude Code reads managed settings, by system, from its settings documentation.
+const MANAGED_SETTINGS: &str = "macOS /Library/Application Support/ClaudeCode/managed-settings.json, Linux /etc/claude-code/managed-settings.json, Windows C:\\Program Files\\ClaudeCode\\managed-settings.json";
+
+/// The person token to paste: the one just made, else a placeholder that names whose it is.
+fn person_token(c: &Ctx<'_>, owner: Option<&KeyEntry>) -> String {
+    match (c.made.filter(|m| !m.start), owner) {
+        (Some(m), _) => m.key.clone(),
+        (None, Some(k)) => format!("<person token of {}>", k.name),
+        (None, None) => "<person token>".into(),
+    }
+}
+
+/// The lines that point Claude Code at Gantry on a Claude subscription: the shell's, or managed settings for MDM.
+fn subscription_lines(base: &str, token: &str, mdm: bool) -> Vec<String> {
+    if mdm {
+        vec![
+            "{".into(),
+            "  \"env\": {".into(),
+            format!("    \"ANTHROPIC_BASE_URL\": \"{base}\","),
+            format!("    \"ANTHROPIC_CUSTOM_HEADERS\": \"x-gantry-user: {token}\""),
+            "  }".into(),
+            "}".into(),
+        ]
+    } else {
+        vec![
+            format!("export ANTHROPIC_BASE_URL={base}"),
+            format!("export ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: {token}\""),
+            "claude   # keep using your normal Claude login".into(),
+        ]
+    }
+}
+
+/// The form that makes a person token, or what to do without the right to.
+fn token_form(c: &Ctx<'_>, placeholders: (&str, &str)) -> String {
+    if !c.may_keys() {
+        return r#"<p class="t-small g-check__muted">Your role cannot make person tokens. Ask an admin to make this one.</p>"#.into();
+    }
+    let (n, t) = placeholders;
+    let error = if c.error.is_empty() {
+        String::new()
+    } else {
+        pages::alert(&esc(&c.error))
+    };
+    format!(
+        r#"{error}<form class="g-check__form" method="post" action="/console/start/key"><input type="hidden" name="kind" value="person_token">{}{}<button class="g-btn t-body" type="submit">Make person token</button></form>"#,
+        field(&Field {
+            id: &format!("token-name-{n}"),
+            name: "name",
+            label: "Name",
+            value: "",
+            mono: true,
+            extra: &format!(r#" placeholder="{n}" required autocomplete="off""#),
+            hint: "Free: it names the person and reaches no model on its own.",
+            error: "",
+        }),
+        field(&Field {
+            id: &format!("token-team-{n}"),
+            name: "team",
+            label: "Team",
+            value: "",
+            mono: true,
+            extra: &format!(r#" placeholder="{t}" required autocomplete="off""#),
+            hint: "",
+            error: "",
+        }),
+    )
+}
+
+/// Coding agents on Claude subscriptions (Pro, Max, Team, Enterprise): no Anthropic API key anywhere. Gantry sends
+/// each developer's own Claude login on, and a free person token names who sent it.
+fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
+    let base = f.base.as_str();
+    let may_policy = edit::edits_policy(c.admin) && !c.admin.confined();
+    let turn_on = if f.passthrough {
+        String::new()
+    } else if may_policy {
+        r#"<form method="post" action="/console/start/passthrough"><button class="g-btn t-body" type="submit">Turn on Claude subscriptions</button></form>"#.into()
+    } else {
+        r#"<span class="t-small g-check__muted">Your role cannot change the policy. Ask an admin to turn this on.</span>"#.into()
+    };
+    let provider: Vec<String> = gantry_core::catalog::subscription_provider(&|_| None)
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let s1 = Step::new(
+        "Turn on Claude subscriptions",
+        f.passthrough,
+        format!(
+            r#"<p class="t-body">Gantry sends each developer's own Claude login (Pro, Max, Team or Enterprise) to Anthropic unchanged, and never keeps it. Nobody makes an Anthropic API key. Gantry records tokens and an API-equivalent cost estimate, and every rule, guardrail and kill switch applies.</p>{}{}"#,
+            acts(&turn_on),
+            acts(&docs("Read Subscriptions", "/governance/subscriptions/"))
+        ),
+        "The policy has a provider with auth: passthrough.",
+        "Claude Code requests on Claude subscriptions go through Gantry.",
+    )
+    .finished(format!(
+        "On: provider {} sends each person's own Claude login. Gantry holds no Anthropic key for it.",
+        mono(gantry_core::catalog::SUBSCRIPTION_PROVIDER)
+    ))
+    .agent(prompt(
+        base,
+        "Turn on Claude subscription passthrough",
+        &[("Policy file", f.policy_path.clone())],
+        &[
+            "1. Unless the policy already has a provider with `auth: passthrough`, add this provider under `providers:` in the policy file (it holds no key):".into(),
+            provider.join("\n"),
+            "2. Run `gantry check <policy file>` and fix anything it reports. A running gateway reads the file within 2 seconds.".into(),
+        ],
+        "`gantry check` passes and the policy lists the provider.",
+        "/governance/subscriptions/",
+    ));
+    let first = f.newest(false).or_else(|| f.people.last());
+    let who = first.map_or("your first person".to_string(), |k| k.name.clone());
+    let token = person_token(c, first);
+    let mdm = c.setup == "mdm";
+    let seen = f.subscribed();
+    let first_seen = seen.last();
+    let s2 = Step::new(
+        "Point Claude Code at Gantry",
+        !seen.is_empty(),
+        format!(
+            r#"<p class="t-body">Make a person token, then paste the lines where Claude Code runs. Keep using your normal Claude login: there is no API key to set. The token only names the person to Gantry.</p>{}{}<p class="t-small g-check__muted">Leave ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset, or Claude Code stops using your subscription. For a rollout, put the managed settings on each machine with your MDM, one token per person: {}.</p>{}"#,
+            token_form(c, ("sarah.miller", "platform")),
+            block(
+                "lines-subscription",
+                &tabs_by("setup", "How to set it", 2, &[("shell", "Shell"), ("mdm", "Managed settings (MDM)")], if mdm { "mdm" } else { "shell" }),
+                &subscription_lines(base, &token, mdm)
+            ),
+            esc(MANAGED_SETTINGS),
+            acts(&docs("Read the Claude Code guide", "/integrations/claude-code/"))
+        ),
+        &format!("The first request from {who} on a Claude subscription arrives."),
+        "Requests shows each prompt with the person, model, tokens and an API-equivalent cost estimate.",
+    )
+    .listening(
+        format!("Listening for the first request from {}. This step turns done by itself.", esc(&who)),
+        ("Open Requests", "/console/requests"),
+    )
+    .finished(first_seen.map_or_else(String::new, |r| {
+        format!(
+            "First request at {} from {} on a Claude subscription: {}{}, {}.",
+            clock(&r.time),
+            mono(r.label("person")),
+            agent(r),
+            mono(r.label("model")),
+            r.cost_usd.map_or_else(|| "cost not known".into(), |c| format!("about ${} at API prices (an estimate)", insights::money(c)))
+        )
+    }))
+    .agent(prompt(
+        base,
+        "Route my Claude Code through the company's Gantry gateway while keeping my own Claude subscription login",
+        &[
+            ("ANTHROPIC_BASE_URL", base.to_string()),
+            ("ANTHROPIC_CUSTOM_HEADERS", format!("x-gantry-user: {token}")),
+        ],
+        &[
+            "1. Add these two lines to my shell profile (~/.zshrc or ~/.bashrc), replacing any earlier ANTHROPIC_BASE_URL or ANTHROPIC_CUSTOM_HEADERS lines:".into(),
+            subscription_lines(base, &token, false)[..2].join("\n"),
+            "   Or, if I use Claude Code's settings file instead, set the same two keys under \"env\" in ~/.claude/settings.json.".into(),
+            "2. Make sure ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN are not set anywhere (profile, settings.json, .env): Claude Code must keep using my Claude subscription login. Do not run claude /logout.".into(),
+            "3. Open a new shell and run `claude -p \"say hello\"`.".into(),
+        ],
+        "The prompt answers. If Gantry refuses it, the error names the cause and the fix.",
+        "/integrations/claude-code/",
+    ));
+    let subscribers = f.subscribers();
+    let second = subscribers.get(1).cloned();
+    let s3 = Step::new(
+        "Add a second person",
+        subscribers.len() >= 2,
+        format!(
+            r#"<p class="t-body">Make a person token for one more developer and send them the same lines. With two people, Analytics can compare them.</p>{}"#,
+            token_form(c, ("mike.johnson", "payments"))
+        ),
+        "A second person sends a request on their Claude subscription.",
+        "Analytics ranks by person and team.",
+    )
+    .finished(format!(
+        "{} sent a first request.",
+        mono(second.as_deref().unwrap_or("A second person"))
+    ))
+    .agent(prompt(
+        base,
+        "Make a Gantry person token for one more developer",
+        &[],
+        &[
+            "1. On the machine that runs the gateway, in the folder of its policy, run: `gantry key new <name> --team <team> --identity-only`.".into(),
+            "2. It prints the person token once with the two lines for Claude Code. Send them to the developer through the company's secret manager, not in chat.".into(),
+        ],
+        "The developer's first prompt shows under their name in Requests.",
+        "/integrations/claude-code/",
+    ));
+    let mut s4 = Step::new(
+        "Let people get their own token",
+        f.people.iter().any(|k| k.name.contains('@')),
+        format!(
+            r#"<p class="t-body">Connect single sign-on with <span class="t-mono">self_issue</span>, and each developer runs one command: it signs them in and sets Claude Code's lines for them.{}</p>{}{}"#,
+            if f.self_issue { " Single sign-on is set." } else { "" },
+            command("cmd-login", &format!("gantry login {base}")),
+            acts(&docs("Read Single sign-on", "/governance/single-sign-on/"))
+        ),
+        "Someone gets their own token through single sign-on.",
+        "People and workloads lists each person under their company email.",
+    )
+    .finished("Someone got their own token through single sign-on.".into())
+    .agent(prompt(
+        base,
+        "Sign in to Gantry with company single sign-on and set Claude Code up for my subscription",
+        &[],
+        &[
+            format!("1. Run `gantry login {base}` and finish the sign-in in the browser it opens (I will do the sign-in myself)."),
+            "2. Add the line it prints (`. ~/.config/gantry/env`) to my shell profile.".into(),
+            "3. Open a new shell and run `claude -p \"say hello\"`.".into(),
+        ],
+        "The prompt answers and shows under my email in Requests.",
+        "/governance/single-sign-on/",
+    ));
+    s4.optional = true;
     vec![s1, s2, s3, s4]
 }
 
@@ -1197,6 +1570,49 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         &format!("Spend shows {team} against $200, with the day it runs out at today's pace."),
     )
     .finished(format!("The policy has a budget for {}.", mono(&team)));
+    let base = f.base.as_str();
+    let budget = change(&format!("budget-team:{team}"))
+        .map(|ch| {
+            apply(&c.policy, &ch)
+                .1
+                .into_iter()
+                .map(|(_, l, _)| l)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    let s1 = s1.agent(prompt(
+        base,
+        "Make a Gantry workload key for the app",
+        &[],
+        &["On the gateway's machine, run `gantry key new <app name> --team <owning team>`. Keep the printed key in the app's secret store, never in code.".into()],
+        "`gantry key list` shows the key.",
+        "/integrations/connect-a-project/",
+    ));
+    let s2 = s2.agent(prompt(
+        base,
+        "Send this project's model calls through Gantry",
+        &[("Gantry key", c.key(app))],
+        &[
+            "1. Where the app reads its settings, set:".into(),
+            coding_lines(c, app, tool).join("\n"),
+            "2. Change no code where the SDK reads its base URL from the environment. Remove provider keys from code and committed files.".into(),
+            "3. Run the app once, or a single test call.".into(),
+        ],
+        "The call answers and shows in Requests under the app's name.",
+        "/integrations/connect-a-project/",
+    ));
+    let s3 = s3.agent(prompt(
+        base,
+        &format!("Set a monthly budget for team {team}"),
+        &[("Policy file", f.policy_path.clone())],
+        &[
+            "Add these lines to the policy file, then run `gantry check <policy file>`:".into(),
+            budget,
+        ],
+        "`gantry check` passes; the gateway reads the file within 2 seconds.",
+        "/governance/budgets-and-rate-limits/",
+    ));
     vec![s1, s2, s3]
 }
 
@@ -1229,7 +1645,7 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
                     f.base
                 )
             ),
-            acts(&glink("No key yet? Make one", "/console/start?track=coding#step-3", true))
+            acts(&glink("No key yet? Make one", "/console/start?track=coding&amp;pay=api#step-3", true))
         ),
         &format!("The first tool call arrives at {}/mcp.", f.base),
         "The audit log shows each tool call with the person, the tool and the decision.",
@@ -1263,6 +1679,50 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         "MCP approvals shows the waiting call with Approve and Deny.",
     )
     .finished("A call waited for approval and was answered.".into());
+    let base = f.base.as_str();
+    let plain = |name: &str| {
+        change(name)
+            .map(|ch| {
+                apply(&c.policy, &ch)
+                    .1
+                    .into_iter()
+                    .map(|(_, l, _)| l)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default()
+    };
+    let s1 = s1.agent(prompt(
+        base,
+        "Put an MCP server behind Gantry",
+        &[("Policy file", f.policy_path.clone())],
+        &[
+            "1. Add these lines to the policy file:".into(),
+            plain("mcp-server"),
+            "2. Where the gateway runs, set GITHUB_MCP_AUTHORIZATION to `Bearer <GitHub token>` (I set the token myself), then restart the gateway.".into(),
+        ],
+        "`gantry check <policy file>` passes and the console's MCP pages list the server.",
+        "/governance/mcp-gateway/",
+    ));
+    let s2 = s2.agent(prompt(
+        base,
+        "Connect Claude Code to Gantry's MCP gateway and call one tool",
+        &[],
+        &[
+            format!("1. With my Gantry key in GANTRY_KEY, run: claude mcp add --transport http gantry {base}/mcp --header \"Authorization: Bearer $GANTRY_KEY\""),
+            "2. Ask Claude Code to use one of the gantry tools.".into(),
+        ],
+        "The tool call answers and shows in the console's Audit log.",
+        "/governance/mcp-gateway/",
+    ));
+    let s3 = s3.agent(prompt(
+        base,
+        "Make a risky MCP tool wait for an admin's approval",
+        &[("Policy file", f.policy_path.clone())],
+        &["Add these lines to the first rule of the policy file, then run `gantry check <policy file>`:".into(), plain("approve")],
+        "A call to that tool waits in MCP approvals.",
+        "/governance/mcp-gateway/",
+    ));
     vec![s1, s2, s3]
 }
 
@@ -1334,6 +1794,57 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         "Refused requests show on the Audit log with the code and the date the budget starts again.",
     )
     .finished("Observe mode is off: budgets refuse.".into());
+    let base = f.base.as_str();
+    let plain = |name: &str| {
+        change(name)
+            .map(|ch| {
+                apply(&c.policy, &ch)
+                    .1
+                    .into_iter()
+                    .map(|(_, l, _)| l)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default()
+    };
+    let s1 = s1.agent(prompt(
+        base,
+        "Make a Gantry key",
+        &[],
+        &["On the gateway's machine, run `gantry key new <name> --team <team>`.".into()],
+        "`gantry key list` shows the key.",
+        "/governance/budgets-and-rate-limits/",
+    ));
+    let s2 = s2.agent(prompt(
+        base,
+        "Send requests through Gantry",
+        &[("Gantry key", c.key(first))],
+        &[
+            "Set these lines where the tool runs, then send one prompt:".into(),
+            coding_lines(c, first, tool).join("\n"),
+        ],
+        "The request shows in Spend.",
+        "/governance/budgets-and-rate-limits/",
+    ));
+    let s3 = s3.agent(prompt(
+        base,
+        "Set a monthly budget for each team",
+        &[("Policy file", f.policy_path.clone())],
+        &[
+            "Add these lines to the policy file, then run `gantry check <policy file>`:".into(),
+            plain("budget-all"),
+        ],
+        "Spend shows each team against its budget.",
+        "/governance/budgets-and-rate-limits/",
+    ));
+    let s4 = s4.agent(prompt(
+        base,
+        "Enforce the budgets",
+        &[("Policy file", f.policy_path.clone())],
+        &["Delete the line `mode: observe` from the policy file, then run `gantry check <policy file>`.".into()],
+        "A team over its budget is refused with budget_exceeded.",
+        "/start/step-3-limit/",
+    ));
     vec![s1, s2, s3, s4]
 }
 
@@ -1435,6 +1946,31 @@ fn watch(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             mono(r.label("model"))
         )
     }));
+    let base = f.base.as_str();
+    let s1 = s1.agent(prompt(
+        base,
+        "Turn on Gantry watch mode",
+        &[],
+        &["Where the gateway runs, set GANTRY_LICENSE (I paste the license myself) and DATABASE_URL, add `store: { postgres_url_env: DATABASE_URL }` to the policy, and restart the gateway.".into()],
+        "Watch appears in the console's navigation.",
+        "/integrations/claude-team/",
+    ));
+    let s2 = s2.agent(prompt(
+        base,
+        "Make a watch token",
+        &[],
+        &[format!("Open {base}/console/start?track=watch#step-2 and make the token there: it is shown once, inside the settings block.")],
+        "The settings block shows the token.",
+        "/integrations/claude-team/",
+    ));
+    let s3 = s3.agent(prompt(
+        base,
+        "Send Claude Code telemetry from Claude Team or Enterprise to Gantry",
+        &[],
+        &["As an Owner, open claude.ai, Organization settings, Claude Code, Managed settings, paste this block and save:".into(), settings.join("\n")],
+        "People appear in the console's Watch within minutes of their next Claude Code session.",
+        "/integrations/claude-team/",
+    ));
     vec![s1, s2, s3]
 }
 
@@ -1520,6 +2056,20 @@ fn checklist(steps: &[Step], states: &[&str], only_open: bool) -> String {
             esc(&s.when),
             esc(&s.then)
         );
+        let agent = if s.agent.is_empty() {
+            String::new()
+        } else {
+            format!(
+                r#"<pre id="agent-step-{n}" hidden>{}</pre>{}"#,
+                esc(&s.agent),
+                acts(&format!(
+                    r#"<button class="g-btn g-btn--quiet g-btn--sm t-small" type="button" data-copy="agent-step-{}" data-agent-prompt>{}Copy for your agent</button><span class="t-small g-check__muted">Paste it into Claude Code, Codex or Cursor, and it does this step.</span>"#,
+                    i + 1,
+                    icon("copy")
+                )),
+                n = i + 1
+            )
+        };
         let body = match *state {
             "done" => format!(
                 r#"<p class="t-small g-check__muted">{}</p>{}"#,
@@ -1528,9 +2078,9 @@ fn checklist(steps: &[Step], states: &[&str], only_open: bool) -> String {
                     .map(|(label, href)| acts(&glink(label, href, true)))
                     .unwrap_or_default()
             ),
-            "now" => format!("{}{terms}", s.now),
+            "now" => format!("{agent}{}{terms}", s.now),
             "listening" => format!(
-                r#"{}<p class="g-check__listen t-body" role="status"><span class="g-loading" aria-hidden="true"><i></i><i></i><i></i></span><span>{}</span></p>{}{terms}"#,
+                r#"{agent}{}<p class="g-check__listen t-body" role="status"><span class="g-loading" aria-hidden="true"><i></i><i></i><i></i></span><span>{}</span></p>{}{terms}"#,
                 s.now,
                 s.listen,
                 acts(&glink("Check now", "/console/start", true))
@@ -1882,6 +2432,8 @@ struct View<'a> {
     watch_token: Option<&'a str>,
     error: String,
     picking: bool,
+    pay_api: bool,
+    setup: String,
 }
 
 /// What state.json answers and the page carries: the track and each step's state. A change reloads the page.
@@ -1931,6 +2483,8 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
         watch_token: v.watch_token,
         error: v.error.clone(),
         policy: policy_text(console),
+        pay_api: v.pay_api,
+        setup: v.setup.clone(),
     };
     let list = steps(&ctx);
     let st = states(&list);
@@ -2037,6 +2591,28 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
         } else {
             checklist(&list, &st, false)
         };
+        // Coding agents first asks how the team pays: Claude subscriptions route with no API key at all.
+        let body = if track == Track::Coding {
+            let items: String = [
+                ("subscriptions", "Claude subscriptions (Pro, Max, Team, Enterprise)"),
+                ("api", "Anthropic API keys"),
+            ]
+            .iter()
+            .map(|(id, label)| {
+                let here = if (*id == "api") == v.pay_api {
+                    r#" aria-current="true""#
+                } else {
+                    ""
+                };
+                format!(r#"<a class="g-tab t-small" href="/console/start?track=coding&amp;pay={id}"{here}>{label}</a>"#)
+            })
+            .collect();
+            format!(
+                r#"<div class="g-stack" style="gap: var(--space-2)"><h2 class="t-sm">How does your team pay for Claude Code?</h2><div class="g-tabs" role="group" aria-label="How your team pays for Claude Code">{items}</div></div>{body}"#
+            )
+        } else {
+            body
+        };
         let banner = if finished && !viewing_other {
             r#"<form class="g-banner" method="post" action="/console/start/pick"><span class="t-body">All required steps are done. Next: the five steps of a rollout, starting with the one this choice leaves open.</span><input type="hidden" name="steps" value="1"><button class="g-btn t-body" type="submit">Show the five steps</button></form>"#.to_string()
         } else {
@@ -2044,7 +2620,8 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
         };
         let shown_once = v.made.map_or_else(String::new, |m| {
             format!(
-                r#"<div class="g-banner" role="status" tabindex="-1" data-focus><span class="t-body">Key made for {}, team {}. Shown once: Gantry keeps only its hash. Copy it now.</span>{}</div>"#,
+                r#"<div class="g-banner" role="status" tabindex="-1" data-focus><span class="t-body">{} made for {}, team {}. Shown once: Gantry keeps only its hash. Copy it now.</span>{}</div>"#,
+                if m.key.starts_with(gantry_core::id::PERSON_PREFIX) { "Person token" } else { "Key" },
                 mono(&m.name),
                 mono(&m.team),
                 value_pill("made-key", &m.key)
@@ -2074,6 +2651,8 @@ fn view_of<'a>(kept: &'a Kept, query: &Form) -> View<'a> {
         watch_token: None,
         error: String::new(),
         picking,
+        pay_api: query.get("pay") == "api",
+        setup: query.get("setup").to_string(),
     }
 }
 
@@ -2129,6 +2708,8 @@ async fn state_json(
                 watch_token: None,
                 error: String::new(),
                 policy: String::new(),
+                pay_api: query.get("pay") == "api",
+                setup: String::new(),
             };
             let list = steps(&ctx);
             (states(&list), complete(&list))
@@ -2225,6 +2806,7 @@ async fn make_key(
         form.get("team").trim().to_string(),
     );
     let workload = form.get("kind") == "workload";
+    let token = form.get("kind") == "person_token";
     let mut attributes = keyfile::Attributes {
         org: admin.org.clone().unwrap_or_default(),
         customer: match admin.customers.as_slice() {
@@ -2255,13 +2837,18 @@ async fn make_key(
     };
     let result = match error {
         Some(e) => Err(e),
-        None => crate::issued(&console, &admin, &name, &team, attributes).await,
+        None => crate::issued_as(&console, &admin, &name, &team, attributes, token).await,
     };
     let mut f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
     if let Err(err) = read_kept(&console) {
         f.problem = err;
     }
     let mut view = view_of(&kept, &Form(Vec::new()));
+    // The key form of Anthropic API keys says so; a person token is for Claude subscriptions.
+    view.pay_api = form.get("pay") == "api";
+    if token {
+        view.track = Some(Track::Coding);
+    }
     let made;
     let status;
     match result {
@@ -2453,8 +3040,20 @@ async fn connect_provider(
     else {
         return Err("Pick OpenAI, Anthropic or Google Gemini.".into());
     };
+    add_provider(console, admin, id, &policy, &lines).await
+}
+
+/// Adds a provider's lines to the policy: a new version in the store, or the file rewritten once the text loads.
+async fn add_provider(
+    console: &Console,
+    admin: &Admin,
+    id: &str,
+    policy: &str,
+    lines: &str,
+) -> Result<(), String> {
+    let c = console.config();
     let items: Vec<String> = lines.lines().map(str::to_string).collect();
-    let (text, _) = apply(&policy, &Change::List("providers", items));
+    let (text, _) = apply(policy, &Change::List("providers", items));
     let act = Act {
         action: "connect_provider",
         by: Some((&admin.name, &admin.team)),
@@ -2485,6 +3084,57 @@ async fn connect_provider(
         let _ = record(console, &act, Some("invalid_policy"), Some(err)).await;
     }
     written
+}
+
+/// Turn on Claude subscriptions: the passthrough provider goes into the policy. It holds no key, so nothing is sealed.
+async fn turn_on_passthrough(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    uri: Uri,
+    tls: Tls,
+) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    let Some(admin) = console.admin(&headers).await else {
+        return redirect("/console/sign-in");
+    };
+    let c = console.config();
+    let on = config::load(&c.policy, Some(&c.keys))
+        .is_ok_and(|l| l.providers.iter().any(|p| p.passthrough));
+    let result = if on {
+        Ok(())
+    } else if !edit::edits_policy(&admin) || admin.confined() {
+        read_only(&console, &admin, "connect_provider").await;
+        Err(
+            "Your role cannot change the policy. Ask an admin to turn on Claude subscriptions."
+                .to_string(),
+        )
+    } else {
+        let env = |name: &str| std::env::var(name).ok();
+        let lines = gantry_core::catalog::subscription_provider(&env);
+        add_provider(
+            &console,
+            &admin,
+            gantry_core::catalog::SUBSCRIPTION_PROVIDER,
+            &policy_text(&console),
+            &lines,
+        )
+        .await
+    };
+    match result {
+        Ok(()) => redirect("/console/start?track=coding#step-2"),
+        Err(err) => {
+            let f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
+            let kept = read_kept(&console).unwrap_or_default();
+            let mut view = view_of(&kept, &Form(Vec::new()));
+            view.track = Some(Track::Coding);
+            view.error = err;
+            let mut response = render(&console, &admin, &uri, &f, &view);
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            response
+        }
+    }
 }
 
 /// Writes the policy file, only if the new text loads: checked beside it, then moved into place.
@@ -2648,7 +3298,7 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
         "Point a tool at Gantry",
         "/console/start?track=coding#step-2",
     );
-    let key = ("Make a key", "/console/start?track=coding#step-3");
+    let key = ("Make a person token", "/console/start?track=coding#step-2");
     Some(match page {
         "Requests" => Empty {
             title: "No requests yet",
@@ -2687,7 +3337,7 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
         "Teams" => Empty {
             title: "No teams yet",
             body: "A team is set when you make a key, such as team payments for mike.johnson. Each team shows here with its people, its rule and its budget.".into(),
-            action: ("Make a key with a team", "/console/start?track=coding#step-3"),
+            action: ("Make a person token with a team", "/console/start?track=coding#step-2"),
             docs: "/governance/teams/",
             extra: String::new(),
         },

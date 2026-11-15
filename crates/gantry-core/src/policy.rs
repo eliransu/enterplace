@@ -754,6 +754,12 @@ pub struct Limits {
     pub check_stream_every: Option<u32>,
     /// Whether a caller may send their own provider key in `x-gantry-provider-key`.
     pub caller_provider_key: CallerKey,
+    /// Most tokens (prompt and answer) per calendar day (UTC), counted where the budget is. Subscription traffic is
+    /// not billed per call, so tokens are what a company limits it by.
+    pub tpd: Option<u32>,
+    /// `budget_basis: api_equivalent`: dollar budgets count subscription passthrough traffic at its estimated API
+    /// price. Without it they do not count it: the subscription, not the request, is what is paid for.
+    pub budget_api_equivalent: bool,
     /// Source addresses the rule's callers may send from. Empty allows any.
     pub from: Vec<Cidr>,
     /// Data residency: the regions an alias deployment must be labelled with. A request with no deployment in one
@@ -1027,6 +1033,8 @@ pub struct ScopeLimit {
     pub rph: Option<u32>,
     pub rpd: Option<u32>,
     pub tpm: Option<u32>,
+    /// Tokens per calendar day (UTC).
+    pub tpd: Option<u32>,
     pub parallel: Option<u32>,
     /// Until this UTC date or time the entry's limits only record what they would refuse (`would_refuse`).
     pub shadow_until: Option<String>,
@@ -1057,6 +1065,8 @@ pub enum Limit {
     Parallel(u32),
     /// Most requests in a period: an hour (`rph`), a day (`rpd`) or a session (`session_requests`).
     Requests(u32, Period),
+    /// Most tokens (prompt and answer) per calendar day (`tpd`).
+    Tpd(u32),
 }
 
 impl Limit {
@@ -1065,6 +1075,7 @@ impl Limit {
             Limit::Budget(_) => "budget",
             Limit::Rpm(_) => "rpm",
             Limit::Tpm(_) => "tpm",
+            Limit::Tpd(_) => "tpd",
             Limit::Parallel(_) => "parallel",
             Limit::Requests(_, per) if *per == Period::Hour => "rph",
             Limit::Requests(_, per) if *per == Period::Day => "rpd",
@@ -1768,6 +1779,7 @@ fn resolve(
         for (limit, value) in [
             (Limit::Rpm as fn(u32) -> Limit, entry.rpm),
             (Limit::Tpm, entry.tpm),
+            (Limit::Tpd, entry.tpd),
             (Limit::Parallel, entry.parallel),
         ] {
             if let Some(value) = value {
@@ -1891,6 +1903,7 @@ impl Policy {
                 "rpd",
             ),
             (rule.limits.tpm.map(Limit::Tpm), base.clone(), &whose, "tpm"),
+            (rule.limits.tpd.map(Limit::Tpd), base.clone(), &whose, "tpd"),
             (
                 rule.limits.parallel.map(Limit::Parallel),
                 base.clone(),
@@ -1921,6 +1934,7 @@ impl Policy {
             rph: None,
             rpd: None,
             tpm: who.tpm,
+            tpd: None,
             parallel: who.parallel,
             shadow_until: None,
         };
@@ -2210,7 +2224,11 @@ pub fn applied_json(a: &Applied) -> serde_json::Value {
                 };
                 fields.insert("per".into(), per.into());
             }
-            Limit::Rpm(n) | Limit::Tpm(n) | Limit::Parallel(n) | Limit::Requests(n, _) => {
+            Limit::Rpm(n)
+            | Limit::Tpm(n)
+            | Limit::Tpd(n)
+            | Limit::Parallel(n)
+            | Limit::Requests(n, _) => {
                 fields.insert("value".into(), n.into());
             }
         }
@@ -2523,6 +2541,7 @@ mod tests {
             rph: None,
             rpd: None,
             tpm: None,
+            tpd: None,
             parallel: None,
             shadow_until: None,
         }

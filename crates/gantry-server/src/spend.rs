@@ -557,6 +557,37 @@ impl Spend {
         }
     }
 
+    /// Gives back a counter's hold and counts what was used in its place: the tokens a request under a `tpd` limit
+    /// used, once its answer has said.
+    fn settle_counter(&self, reservation: &Reservation, used: f64) {
+        let used = if used.is_finite() { used.max(0.0) } else { 0.0 };
+        if let Some(store) = &self.store {
+            store.settle(vec![Change {
+                bucket: reservation.bucket(),
+                spent: used,
+                reserved: -reservation.usd,
+            }]);
+            return;
+        }
+        self.release(reservation);
+        if reservation.per.sliding {
+            Self::slot(
+                &mut locked(&self.slides),
+                &reservation.scope,
+                reservation.per,
+                &reservation.period,
+            )
+            .spent += used;
+        } else if let Some(bucket) = Self::bucket(
+            &mut locked(&self.ledger),
+            &reservation.scope,
+            reservation.per,
+            &reservation.period,
+        ) {
+            bucket.spent += used;
+        }
+    }
+
     /// Counts what a request cost against its person, its team and its key, for the day and the month of `time`,
     /// and every other budget counter it counted against.
     fn add(
@@ -1584,6 +1615,10 @@ pub(crate) struct Admitted {
     forwarded: bool,
     /// Sent with the caller's own provider key, and whether its spend counts against budgets.
     caller_paid: Option<bool>,
+    /// Sent with the caller's own subscription login: its cost is an estimate at API prices, never a bill.
+    subscription: bool,
+    /// Holds under `tpd` limits, settled with the tokens the answer used.
+    day_tokens: Vec<Reservation>,
     /// The counters of the person and the team, inside the key's organization.
     person_scope: String,
     team_scope: String,
@@ -1654,6 +1689,9 @@ impl Drop for Admitted {
         for (scope, held, grant) in self.tokens.drain(..) {
             self.spend.settle_tokens(&scope, held, None, grant);
         }
+        for reservation in self.day_tokens.drain(..) {
+            self.spend.release(&reservation);
+        }
         for hold in self.parallel.drain(..) {
             self.spend.release_parallel(&hold);
         }
@@ -1713,6 +1751,8 @@ pub(crate) struct Ask<'a> {
     pub free: bool,
     /// Sent with the caller's own provider key: `Some(true)` when its spend still counts against budgets.
     pub caller_paid: Option<bool>,
+    /// Sent with the caller's own subscription login (`auth: passthrough`).
+    pub subscription: bool,
     /// The request's embedding, for a rule with a semantic cache.
     pub probe: Option<Probe>,
     /// Every limit the request counts against, from `Policy::applied`.
@@ -1761,6 +1801,8 @@ pub(crate) async fn admit(
         tokens: Vec::new(),
         forwarded: false,
         caller_paid: ask.caller_paid,
+        subscription: ask.subscription,
+        day_tokens: Vec::new(),
         person_scope: ask.person.person_scope(),
         team_scope: ask.person.team_scope(),
         org: ask.person.org.clone(),
@@ -1881,6 +1923,9 @@ pub(crate) async fn admit(
     }
     count_rpm(spend, ask.applied, ask.rule, &mut observed).await?;
     count_requests(spend, ask.applied, ask.rule, &mut observed).await?;
+    if !ask.free {
+        admitted.day_tokens = count_day_tokens(spend, ask.applied, ask.rule, &mut observed).await?;
+    }
     let tpm_applied: Vec<&Applied> = ask
         .applied
         .iter()
@@ -2227,6 +2272,74 @@ async fn count_requests(
         }
     }
     Ok(())
+}
+
+/// Holds one token under each `tpd` limit, refusing once the day's tokens have reached it. What the request uses is
+/// counted when its answer says (`settle_counter`): a request that starts under the limit is let finish.
+async fn count_day_tokens(
+    spend: &Arc<Spend>,
+    applied_all: &[Applied],
+    rule: &Rule,
+    observed: &mut Vec<(Refusal, &'static str)>,
+) -> Result<Vec<Reservation>, Refusal> {
+    let now = audit::timestamp();
+    let mut held = Vec::new();
+    for applied in applied_all {
+        let Limit::Tpd(most) = applied.limit else {
+            continue;
+        };
+        let scope = format!("tpd:{}", applied.scope);
+        let hold = |limit: f64| {
+            let budget = Budget {
+                usd: limit,
+                per: Period::Day,
+            };
+            spend.reserve_shared(&scope, budget, 1.0, &now)
+        };
+        let over = match hold(f64::from(most)).await {
+            Ok(reservation) => {
+                held.push(reservation);
+                continue;
+            }
+            Err(Err(err)) => return Err(rate_store_unavailable(&err)),
+            Err(Ok(over)) => over,
+        };
+        let whose = if applied.of == "key" {
+            applied.whose.clone()
+        } else {
+            allows(applied, rule)
+        };
+        let wait = gantry_core::policy::unix_seconds(&now)
+            .map(|unix| (Period::Day.window(unix).1 - unix).max(1) as u64);
+        let mut refusal = Refusal::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            format!(
+                "Refused: {} tokens were used today, and {whose} allows {most} per day. The count starts again at {} (UTC). Ask a Gantry admin to raise tpd if this team needs more.",
+                over.spent.round() as u64,
+                resets(&period_of(&now, Period::Day), Period::Day)
+            ),
+        );
+        refusal.retry_after = wait;
+        refusal.record = Some(Box::new(limit_record(
+            applied,
+            serde_json::json!({ "kind": "tpd", "of": applied.of, "value": most }),
+        )));
+        let Some(by) = applied.shadow else {
+            for reservation in &held {
+                spend.release(reservation);
+            }
+            return Err(refusal);
+        };
+        observed.push((refusal, by));
+        // Observed: held all the same, so the day's count is the one enforcement will see.
+        match hold(f64::MAX).await {
+            Ok(reservation) => held.push(reservation),
+            Err(Err(err)) => return Err(rate_store_unavailable(&err)),
+            Err(Ok(_)) => {}
+        }
+    }
+    Ok(held)
 }
 
 /// The refusal of a request that would pass its session's budget.
@@ -2840,6 +2953,10 @@ impl Admitted {
             let counted = if hit { Some(0) } else { used.or(Some(held)) };
             self.spend.settle_tokens(&scope, held, counted, grant);
         }
+        for reservation in std::mem::take(&mut self.day_tokens) {
+            let counted = if hit { 0 } else { used.unwrap_or(0) };
+            self.spend.settle_counter(&reservation, counted as f64);
+        }
         let captured = self.keep_body(answer.as_ref().map(|(_, b)| b), &now);
         // Every budget reserved the same most-it-could-cost, so one of them says what was reserved.
         let reserved = self.reservations.first().map(|r| r.usd);
@@ -3108,6 +3225,12 @@ impl Admitted {
         record.insert("charged_usd".into(), charged.into());
         if let Some((_, usd)) = saved {
             record.insert("cache_saved_usd".into(), usd.into());
+        }
+        if self.subscription {
+            // A subscription is paid for by the seat, not the request: the cost above is what the same tokens would
+            // cost at API prices, an estimate.
+            record.insert("auth".into(), "passthrough".into());
+            record.insert("cost_basis".into(), "api_equivalent_estimate".into());
         }
         if let Some(counted) = self.caller_paid {
             record.insert("caller_paid".into(), true.into());

@@ -134,6 +134,9 @@ pub struct Row {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cost_usd: Option<f64>,
+    /// The cost is an estimate at API prices: the request went with the caller's own subscription login, which is
+    /// paid for by the seat.
+    pub estimate: bool,
     pub charged_usd: f64,
     pub latency_ms: Option<u64>,
     /// A redacted body was kept for it.
@@ -318,6 +321,7 @@ pub fn fact(line: &str, replica: &str, prev: Option<&str>) -> Option<Fact> {
             code: text(&record, "code"),
             rule: text(&record, "rule"),
             findings: kinds(record.get("guardrails")),
+            estimate: text(&record, "auth") == "passthrough",
             ..Row::default()
         }))
     };

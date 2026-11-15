@@ -73,6 +73,18 @@ pub fn issue_with(
     })
 }
 
+/// Makes a person token (`gantry_u_...`) and adds its entry: it names the person for subscription passthrough and
+/// reaches no provider on its own.
+pub fn issue_person_token(name: &str, team: &str, keys: &Path) -> Result<Issued, String> {
+    let key = id::new_person_token()?;
+    let rotated = add_with(name, team, &key, &Attributes::default(), keys)?;
+    Ok(Issued {
+        sha256: id::sha256_hex(key.as_bytes()),
+        key,
+        rotated,
+    })
+}
+
 /// Adds the entry of a key made by the caller. Returns whether the name already had a key.
 /// A save or another writer landing in the middle is retried for about a second: the key has not been shown yet,
 /// so trying again is safe. Anything else stops at once.

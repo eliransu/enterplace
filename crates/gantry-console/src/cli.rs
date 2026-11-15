@@ -24,6 +24,8 @@ pub struct LoggedIn {
     pub name: String,
     pub team: String,
     pub expires: String,
+    /// The gateway sends Claude Code's own subscription login on (`auth: passthrough`).
+    pub subscriptions: bool,
 }
 
 /// The gateway's address without a trailing slash, refused unless a key may be sent to it.
@@ -114,6 +116,7 @@ pub async fn login(gateway: &str, open: impl FnOnce(&str)) -> Result<LoggedIn, S
         name: text("name"),
         team: text("team"),
         expires: text("expires"),
+        subscriptions: answer["subscriptions"] == true,
     })
 }
 

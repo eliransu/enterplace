@@ -156,7 +156,13 @@ fn matches_nothing(
                     }
                 })
                 .collect();
-            if names.iter().any(|n| n == value) {
+            // Passthrough requests that name no person are the unknown person's, of team unknown.
+            let unknown = value == crate::UNKNOWN_PERSON
+                && version
+                    .providers
+                    .iter()
+                    .any(|p| p.passthrough && p.identity_optional);
+            if unknown || names.iter().any(|n| n == value) {
                 return None;
             }
             close(

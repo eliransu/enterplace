@@ -329,6 +329,28 @@ fn allowed_query(path: &str) -> &'static [Param] {
 const DECISION: HeaderName = HeaderName::from_static("x-gantry-decision");
 /// Where a caller sends their own provider key, on a rule with `caller_provider_key: allowed`.
 const CALLER_PROVIDER_KEY: &str = "x-gantry-provider-key";
+/// Where Claude Code (through ANTHROPIC_CUSTOM_HEADERS) names its person on a subscription passthrough request: a
+/// Gantry person token or key, while Authorization carries the person's own Claude login.
+const PERSON_HEADER: &str = "x-gantry-user";
+/// The name a passthrough request without x-gantry-user is recorded under, on a provider with `identity: optional`.
+pub const UNKNOWN_PERSON: &str = "unknown";
+
+/// A caller's own provider login (a Claude subscription's OAuth token) on its way to a provider with
+/// `auth: passthrough`: the header it came in and its value, exactly as sent. Taken off the request as soon as it is
+/// read, so no guardrail, plugin, trace or record ever sees it. Never stored, logged or hashed into a record.
+#[derive(Clone)]
+struct Login {
+    header: HeaderName,
+    value: HeaderValue,
+    /// Whether x-gantry-user named the person. Without it the request is an unknown person's.
+    identified: bool,
+}
+
+impl std::fmt::Debug for Login {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Login({}: [secret])", self.header)
+    }
+}
 
 /// How long the gateway waits at each point where the other side could stall it forever.
 #[derive(Clone, Debug)]
@@ -439,6 +461,10 @@ pub struct ProviderRoute {
     pub chat_as_responses: bool,
     /// OCI Generative AI: requests are signed with this API signing key instead of carrying a provider key.
     pub oci: Option<Arc<oci::Signer>>,
+    /// `auth: passthrough`: no key of Gantry's. Each request carries the caller's own login, sent on unchanged.
+    pub passthrough: bool,
+    /// A passthrough request without x-gantry-user is recorded as an unknown person, not refused.
+    pub identity_optional: bool,
 }
 
 /// What the server needs to start.
@@ -783,6 +809,8 @@ struct Upstream {
     project_id: Option<String>,
     chat_as_responses: bool,
     oci: Option<Arc<oci::Signer>>,
+    passthrough: bool,
+    identity_optional: bool,
 }
 
 /// A provider's HTTP proxy: where requests are tunnelled through (CONNECT), and its Basic credentials.
@@ -1013,6 +1041,8 @@ pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError
         project_id: route.project_id.clone(),
         chat_as_responses: route.chat_as_responses,
         oci: route.oci.clone(),
+        passthrough: route.passthrough,
+        identity_optional: route.identity_optional,
     })
 }
 
@@ -1064,6 +1094,8 @@ fn build(
             project_id: None,
             chat_as_responses: false,
             oci: None,
+            passthrough: false,
+            identity_optional: false,
         });
     }
     let console = config.console;
@@ -1903,6 +1935,8 @@ struct Seen<'a> {
     credential: Option<String>,
     /// The first 8 hex characters of the SHA-256 of a provider key the caller sent, never the key.
     caller_key: Option<String>,
+    /// A subscription passthrough request: whether x-gantry-user named its person. Never the login itself.
+    login: Option<bool>,
     /// The end customer the request is for, from its key or `x-gantry-customer`.
     customer: Option<String>,
     /// Its tags, from its key and `x-gantry-tags`.
@@ -2179,6 +2213,224 @@ fn caller_paid(rule: Option<&Rule>, kind: Option<Kind>, key: Option<&str>) -> Re
     }
 }
 
+/// The single value of a header, or the refusal when it is sent more than once: checking one and forwarding another is
+/// how a proxy gets bypassed.
+fn single<'h>(headers: &'h HeaderMap, name: &str) -> Result<Option<&'h HeaderValue>, Refusal> {
+    let mut values = headers.get_all(name).iter();
+    let first = values.next();
+    if values.next().is_some() {
+        return Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            "ambiguous_key",
+            format!("Refused: this request carries {name} more than once. Send it once."),
+        ));
+    }
+    Ok(first)
+}
+
+/// Subscription passthrough: when a provider has `auth: passthrough`, a request that names its person in
+/// x-gantry-user (or, on a provider with `identity: optional`, one whose credential is not Gantry's) carries the
+/// caller's own login. It is taken off the request here and returned with the person token, if any. A request of
+/// any other shape comes back untouched, with neither.
+fn subscription_login(
+    version: &Snapshot,
+    policy: &Policy,
+    headers: &mut HeaderMap,
+) -> Result<(Option<Login>, Option<String>), Refusal> {
+    let named = single(headers, PERSON_HEADER)?
+        .map(|v| v.to_str().map(|t| t.trim().to_string()))
+        .transpose()
+        .map_err(|_| {
+            Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "unknown_key",
+                "Refused: x-gantry-user holds characters a Gantry person token never has. Send the token alone, as ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <token>\".",
+            )
+        })?;
+    // A request whose credential is a Gantry key is a key request, as always. A device agent may also have named the
+    // same person in x-gantry-user: that is dropped; a different one is refused.
+    if let Ok(credential) = caller_key(headers)
+        && (credential.starts_with(id::KEY_PREFIX) || policy.identify(credential).is_some())
+    {
+        if named.as_deref().is_some_and(|n| n != credential) {
+            return Err(Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "ambiguous_key",
+                "Refused: this request carries a Gantry key as its login and another person token in x-gantry-user. With a Claude subscription, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN and keep x-gantry-user; with a Gantry key, remove x-gantry-user.",
+            ));
+        }
+        headers.remove(PERSON_HEADER);
+        return Ok((None, None));
+    }
+    if !version.providers.iter().any(|p| p.passthrough) {
+        return match named {
+            Some(_) => Err(Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "passthrough_off",
+                "Refused: x-gantry-user names a person for subscription passthrough, and no provider of this Gantry has auth: passthrough. Ask a Gantry admin to turn on Claude subscriptions (console, Start here, Coding agents), or send your Gantry key as your only credential.",
+            )),
+            None => Ok((None, None)),
+        };
+    }
+    let login = |headers: &HeaderMap| -> Result<Option<(HeaderName, HeaderValue)>, Refusal> {
+        let bearer = single(headers, "authorization")?.cloned();
+        let api_key = single(headers, "x-api-key")?.cloned();
+        match (bearer, api_key) {
+            (Some(_), Some(_)) => Err(Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "ambiguous_key",
+                "Refused: this request carries both Authorization and x-api-key. Send one login: in Claude Code, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN to use your Claude subscription.",
+            )),
+            (Some(value), None) => Ok(Some((header::AUTHORIZATION, value))),
+            (None, Some(value)) => Ok(Some((HeaderName::from_static("x-api-key"), value))),
+            (None, None) => Ok(None),
+        }
+    };
+    let gantrys = |value: &HeaderValue| {
+        let text = value.to_str().unwrap_or_default().trim();
+        let text = text
+            .get(..7)
+            .filter(|s| s.eq_ignore_ascii_case("bearer "))
+            .map_or(text, |_| text[7..].trim());
+        (
+            text.starts_with(id::KEY_PREFIX) || policy.identify(text).is_some(),
+            text.is_empty(),
+        )
+    };
+    let taken = match &named {
+        Some(token) => {
+            if token.is_empty() {
+                return Err(Refusal::new(
+                    StatusCode::UNAUTHORIZED,
+                    "no_key",
+                    "Refused: x-gantry-user is empty. Send your Gantry person token in it: ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <token>\". Get one from the console (Start here, Coding agents) or with gantry login.",
+                ));
+            }
+            let Some((name, value)) = login(headers)? else {
+                return Err(Refusal::new(
+                    StatusCode::UNAUTHORIZED,
+                    "no_login",
+                    "Refused: this request names its person in x-gantry-user and carries no Claude login to send on. Sign in to Claude Code with your Claude subscription (run claude, then /login), and keep ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset.",
+                ));
+            };
+            match gantrys(&value) {
+                (true, _) => {
+                    return Err(Refusal::new(
+                        StatusCode::BAD_REQUEST,
+                        "ambiguous_key",
+                        "Refused: this request carries a Gantry key as its login and a person token in x-gantry-user. With a Claude subscription, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN and keep x-gantry-user; with a Gantry key, remove x-gantry-user.",
+                    ));
+                }
+                (false, true) => {
+                    return Err(Refusal::new(
+                        StatusCode::UNAUTHORIZED,
+                        "no_login",
+                        "Refused: the login this request carries is empty. Sign in to Claude Code with your Claude subscription (run claude, then /login).",
+                    ));
+                }
+                (false, false) => {}
+            }
+            (name, value, true)
+        }
+        None => {
+            let Some((name, value)) = login(headers)? else {
+                return Ok((None, None));
+            };
+            let text = value.to_str().unwrap_or_default();
+            // A Gantry key or a JWT the policy trusts is read as always.
+            let jwt =
+                !policy.jwt().is_empty() && jwt::looks_like(text.trim_start_matches("Bearer "));
+            if gantrys(&value) != (false, false) || jwt {
+                return Ok((None, None));
+            }
+            if !version
+                .providers
+                .iter()
+                .any(|p| p.passthrough && p.identity_optional)
+            {
+                // Not a credential of Gantry's, so it is the caller's own login, and no provider takes one unnamed.
+                return Err(Refusal::new(
+                    StatusCode::UNAUTHORIZED,
+                    "person_needed",
+                    "Refused: this request carries a login that is not a Gantry key and does not name its person. With a Claude subscription, set ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <your person token>\" (from the console, Start here, Coding agents, or gantry login). Otherwise send your Gantry key.",
+                ));
+            }
+            (name, value, false)
+        }
+    };
+    if headers.contains_key(CALLER_PROVIDER_KEY) {
+        return Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            "ambiguous_key",
+            "Refused: this request carries a Claude login for subscription passthrough and a provider key in x-gantry-provider-key. Send one of them.",
+        ));
+    }
+    let (header, mut value, identified) = taken;
+    headers.remove(&header);
+    headers.remove(PERSON_HEADER);
+    value.set_sensitive(true);
+    Ok((
+        Some(Login {
+            header,
+            value,
+            identified,
+        }),
+        named,
+    ))
+}
+
+/// The person a passthrough request without x-gantry-user is recorded as: `unknown`, told apart by its session (Claude
+/// Code's session ID), or by a fingerprint of its login when it names none. Neither can be turned back into the login.
+fn unknown_person(headers: &HeaderMap, login: &Login) -> Principal {
+    let session = SESSION_HEADERS
+        .iter()
+        .find_map(|name| headers.get(*name)?.to_str().ok().filter(|v| !v.is_empty()));
+    let seed = match session {
+        Some(session) => format!("session\n{session}"),
+        None => format!("login\n{}", String::from_utf8_lossy(login.value.as_bytes())),
+    };
+    Principal {
+        name: UNKNOWN_PERSON.to_string(),
+        team: UNKNOWN_PERSON.to_string(),
+        key: id::sha256_hex(seed.as_bytes())[..8].to_string(),
+        ..Principal::default()
+    }
+}
+
+/// Whether a request's login, or the lack of one, may go to `provider`. A passthrough provider sends only the caller's
+/// own login and a keyed one only Gantry's key: one never stands in for the other.
+fn login_fits(provider: &Upstream, login: Option<&Login>, model: &str) -> Result<(), Refusal> {
+    match (provider.passthrough, login) {
+        (true, None) => Err(Refusal::new(
+            StatusCode::UNAUTHORIZED,
+            "login_needed",
+            format!(
+                "Refused: model \"{model}\" is served by provider \"{}\", which sends each caller's own Claude login and holds no key of Gantry's, and this request carries only a Gantry key. In Claude Code, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN, keep your normal Claude login, and send your person token with ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <token>\".",
+                provider.name
+            ),
+        )),
+        (false, Some(_)) => Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "login_not_accepted",
+            format!(
+                "Refused: this request carries your own Claude login, and model \"{model}\" is served by provider \"{}\", which uses Gantry's provider key. A login is never swapped for Gantry's key. Ask a Gantry admin to serve it from a provider with auth: passthrough, or send your Gantry key in place of the login.",
+                provider.name
+            ),
+        )),
+        (true, Some(login)) if !login.identified && !provider.identity_optional => {
+            Err(Refusal::new(
+                StatusCode::UNAUTHORIZED,
+                "person_needed",
+                format!(
+                    "Refused: provider \"{}\" needs each request to name its person, and this one carries no x-gantry-user. Set ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <your person token>\" (from the console, Start here, Coding agents, or gantry login).",
+                    provider.name
+                ),
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// What happens to a request that passed its check: it goes to a provider, or Gantry answers it itself.
 enum Next {
     Forward(Parts, Bytes, Held),
@@ -2198,20 +2450,33 @@ async fn check<'a>(
     let (mut parts, body) = request.into_parts();
     gemini_key(&mut parts)?;
     bedrock_key(&mut parts)?;
-    let key = caller_key(&parts.headers)?;
-    let provider_key = caller_provider_key(&parts.headers)?;
-    seen.credential = Some(key.to_string());
-    seen.caller_key = provider_key
-        .as_deref()
-        .map(|k| id::sha256_hex(k.as_bytes())[..8].to_string());
     // Read before the key's header is removed below: Anthropic's clients send their key in x-api-key.
     let anthropic_client =
         parts.headers.contains_key("x-api-key") || parts.headers.contains_key("anthropic-version");
+    // A caller's own Claude login leaves the headers here, before anything else can read them.
+    let (login, named) = subscription_login(version, policy, &mut parts.headers)?;
+    let key: String = match (named, &login) {
+        (Some(token), _) => token,
+        // An unknown person's: identify finds the person made below.
+        (None, Some(_)) => String::new(),
+        (None, None) => caller_key(&parts.headers)?.to_string(),
+    };
+    let provider_key = caller_provider_key(&parts.headers)?;
+    if !key.is_empty() {
+        seen.credential = Some(key.clone());
+    }
+    seen.caller_key = provider_key
+        .as_deref()
+        .map(|k| id::sha256_hex(k.as_bytes())[..8].to_string());
+    seen.login = login.as_ref().map(|l| l.identified);
+    if let Some(login) = login.as_ref().filter(|l| !l.identified) {
+        minted.get_or_init(|| unknown_person(&parts.headers, login));
+    }
     let identifying = Instant::now();
     let identified = identify(
         state,
         policy,
-        key,
+        &key,
         parts.uri.path(),
         client_ip,
         minted,
@@ -2220,8 +2485,15 @@ async fn check<'a>(
     .await;
     seen.stages.auth = identifying.elapsed();
     let (person, key_sha256) = identified?;
+    if login.is_none() && key.starts_with(id::PERSON_PREFIX) {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "person_token_only",
+            "Refused: this is a Gantry person token, which names a person for Claude subscription passthrough and reaches no model on its own. Send it in x-gantry-user (ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <token>\") beside your own Claude login, or ask a Gantry admin for a Gantry key.",
+        ));
+    }
     // The key must not travel on in any other header either, under whatever name the caller chose for it.
-    let (key, mut parts) = (key.to_string(), parts);
+    let mut parts = parts;
     // Taken out at once: nothing after this (guardrail webhooks, traces, the provider) can see it in the headers.
     parts.headers.remove(CALLER_PROVIDER_KEY);
     // Compared without regard to case, and on the random part alone as well, so a key that was upper-cased
@@ -2278,6 +2550,13 @@ async fn check<'a>(
         )));
     }
     if is_passthrough(parts.uri.path()) {
+        if login.is_some() {
+            return Err(Refusal::new(
+                StatusCode::FORBIDDEN,
+                "login_not_accepted",
+                "Refused: a Claude login for subscription passthrough goes to the messages routes (/v1/messages), not to /passthrough. Send this request with your Gantry key.",
+            ));
+        }
         let query_carries_key = parts.uri.query().is_some_and(|q| carries(q.as_bytes()));
         return passthrough(
             state,
@@ -2366,7 +2645,8 @@ async fn check<'a>(
             .ok()
             .and_then(|b| b["model"].as_str().map(str::to_string))
             .unwrap_or_default();
-        let kind = find_provider(version, &named).map(|(i, _)| version.providers[i].kind);
+        let kind =
+            find_provider(version, &named, login.is_some()).map(|(i, _)| version.providers[i].kind);
         if !matches!(kind, None | Some(Kind::OpenAi | Kind::Azure)) {
             let (messages, _) = to_messages(&to_chat_from_responses(&bytes)?)?;
             let mut messages = json_of(&messages, "a Responses request")?;
@@ -2484,6 +2764,7 @@ async fn check<'a>(
                 customer: seen.customer.clone(),
                 headers: &parts.headers,
                 body: &bytes,
+                login: login.is_some(),
             };
             let found = match targets(state, version, parts.uri.path(), model, &want, false) {
                 Err(refusal) if refusal.code == "region_not_allowed" => {
@@ -2550,6 +2831,9 @@ async fn check<'a>(
                 version.providers.get(chosen).map(|p| p.kind),
                 provider_key.as_deref(),
             )?;
+            if let Some(provider) = version.providers.get(chosen) {
+                login_fits(provider, login.as_ref(), &model)?;
+            }
             check_query(&parts.uri)?;
             // Translated here, before the record is written, so a field that cannot be carried across is a
             // recorded refusal and never a request sent with that field missing.
@@ -2663,6 +2947,7 @@ async fn check<'a>(
                 content,
                 passthrough: None,
                 caller_key: provider_key.map(Secret::new),
+                login,
                 fallbacks,
                 fallback_on,
                 body_api,
@@ -2934,6 +3219,8 @@ pub(crate) async fn identify<'a>(
     // A JWT from an issuer the policy trusts stands in for a key; it is checked before anything else is read too.
     let identified: Option<&'a Principal> = match policy.identify(key) {
         Some(person) => Some(person),
+        // A passthrough request without x-gantry-user: its unknown person was made from its session before this.
+        None if key.is_empty() => minted.get(),
         None if !policy.jwt().is_empty() && jwt::looks_like(key) => {
             seen.key = Some(id::sha256_hex(key.as_bytes())[..8].to_string());
             let person = jwt::verify(&state.client, &state.jwks, policy.jwt(), key)
@@ -2986,6 +3273,7 @@ pub(crate) async fn identify<'a>(
     // A JWT caller is named by its issuer and subject, as a key by its hash, so a key_prefix switch can stop it.
     let key_sha256 = match &person.jwt {
         Some(jwt) => id::sha256_hex(format!("{}\n{}", jwt.issuer, jwt.subject).as_bytes()),
+        None if key.is_empty() => id::sha256_hex(person.key.as_bytes()),
         None => id::sha256_hex(key.as_bytes()),
     };
     killed(state, person, &key_sha256, None)?;
@@ -3290,6 +3578,9 @@ async fn passthrough<'a>(
         None => native,
     };
     let model = model.unwrap_or_default();
+    if let Some(provider) = version.providers.get(index) {
+        login_fits(provider, None, &model)?;
+    }
     parts.extensions.insert(Plan {
         provider: index,
         model: model.clone(),
@@ -3304,6 +3595,7 @@ async fn passthrough<'a>(
         content: Vec::new(),
         passthrough: Some(target),
         caller_key: provider_key.map(Secret::new),
+        login: None,
         fallbacks: Vec::new(),
         fallback_on: Vec::new(),
         body_api: Kind::OpenAi,
@@ -3350,6 +3642,8 @@ struct Plan {
     passthrough: Option<String>,
     /// The caller's own provider key, sent in place of Gantry's, on a rule that allows it.
     caller_key: Option<Secret>,
+    /// The caller's own login, sent unchanged to a provider with `auth: passthrough`.
+    login: Option<Login>,
     /// An alias's `fallbacks`, each a chain of its own, tried in turn on a failure `fallback_on` names.
     fallbacks: Vec<Chain>,
     fallback_on: Vec<gantry_core::config::FallbackOn>,
@@ -3397,6 +3691,8 @@ struct Want<'a> {
     customer: Option<String>,
     headers: &'a HeaderMap,
     body: &'a [u8],
+    /// The request carries the caller's own login: a provider with `auth: passthrough` serves it before a keyed one.
+    login: bool,
 }
 
 /// One place a request may go: a provider by position, the model sent there, and, for an alias's deployment, its
@@ -3453,11 +3749,12 @@ fn targets(
             ));
         }
         let (index, shape, sent) = if across {
-            let (index, sent) = find_provider(version, model).ok_or_else(|| unserved(model))?;
+            let (index, sent) =
+                find_provider(version, model, want.login).ok_or_else(|| unserved(model))?;
             let shape = fits(&version.providers[index], path, &sent)?;
             (index, shape, sent)
         } else {
-            provider_for(version, path, model)?
+            provider_for(version, path, model, want.login)?
         };
         return Ok((vec![Hop::plain(index, sent)], shape, None));
     };
@@ -3892,19 +4189,23 @@ fn provider_for(
     version: &Snapshot,
     path: &str,
     model: &str,
+    login: bool,
 ) -> Result<(usize, Shape, String), Refusal> {
-    let (index, sent) = find_provider(version, model).ok_or_else(|| unserved(model))?;
+    let (index, sent) = find_provider(version, model, login).ok_or_else(|| unserved(model))?;
     fits(&version.providers[index], path, &sent).map(|shape| (index, shape, sent))
 }
 
 /// The provider that serves `model` and the name it is sent there by. An exact name wins over a pattern, and a
 /// pattern over `<provider>/<model>`.
-fn find_provider(version: &Snapshot, model: &str) -> Option<(usize, String)> {
-    version
-        .providers
-        .iter()
-        .position(|p| p.lists(model))
-        .or_else(|| version.providers.iter().position(|p| p.serves(model)))
+fn find_provider(version: &Snapshot, model: &str, login: bool) -> Option<(usize, String)> {
+    // A passthrough provider and a keyed one may serve the same model: the one the request's credential fits is
+    // looked for first. One that does not fit is still found, so its refusal says why.
+    let fit = |p: &Upstream| p.passthrough == login;
+    let first = |pick: &dyn Fn(&Upstream) -> bool| version.providers.iter().position(pick);
+    first(&|p| fit(p) && p.lists(model))
+        .or_else(|| first(&|p| fit(p) && p.serves(model)))
+        .or_else(|| first(&|p| p.lists(model)))
+        .or_else(|| first(&|p| p.serves(model)))
         .map(|index| (index, model.to_string()))
         .or_else(|| {
             let (name, rest) = model.split_once('/')?;
@@ -5061,6 +5362,19 @@ async fn decide(
         if let Some(raise) = seen.budget_raise.take() {
             record.insert("budget_raise".into(), raise);
         }
+        if let Some(identified) = seen.login {
+            // That the caller's own login was sent: never the login, nor anything made from it.
+            record.insert("auth".into(), "passthrough".into());
+            record.insert(
+                "identity".into(),
+                if identified {
+                    PERSON_HEADER
+                } else {
+                    UNKNOWN_PERSON
+                }
+                .into(),
+            );
+        }
         if let Some(prefix) = &seen.caller_key {
             // That the caller's own key was sent, and which: never the key.
             record.insert("caller_provider_key".into(), true.into());
@@ -5199,9 +5513,14 @@ async fn limit(
         body: bytes,
         free: matches!(parts.uri.path(), COUNT_TOKENS | INPUT_TOKENS)
             || gemini_native(parts.uri.path()).is_some_and(|(_, _, m)| m == "countTokens"),
-        caller_paid: plan
-            .and_then(|p| p.caller_key.as_ref())
-            .map(|_| rule.limits.caller_provider_key == CallerKey::AllowedBudgeted),
+        // A subscription is paid by the seat: dollar budgets count it at API prices only when the rule says so.
+        caller_paid: match plan {
+            Some(p) if p.login.is_some() => Some(rule.limits.budget_api_equivalent),
+            _ => plan
+                .and_then(|p| p.caller_key.as_ref())
+                .map(|_| rule.limits.caller_provider_key == CallerKey::AllowedBudgeted),
+        },
+        subscription: plan.is_some_and(|p| p.login.is_some()),
         probe: None,
     };
     if let (Some(semantic), Some((partition, text)), Some(credential)) = (
@@ -8258,7 +8577,13 @@ fn outbound(
             .entry(HeaderName::from_static("anthropic-version"))
             .or_insert(HeaderValue::from_static("2023-06-01"));
     }
+    // Each hop is checked, so no fallback sends a login to a keyed provider, or Gantry's key where a login belongs.
+    let login = plan.and_then(|p| p.login.as_ref());
+    if plan.is_some() {
+        login_fits(provider, login, model)?;
+    }
     let key = match plan.and_then(|p| p.caller_key.as_ref()) {
+        _ if provider.passthrough => login.map(|l| (l.header.clone(), l.value.clone())),
         Some(caller) => Some(key_header(provider.kind, caller).map_err(|_| {
             Refusal::new(
                 StatusCode::BAD_REQUEST,

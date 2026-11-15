@@ -2272,7 +2272,7 @@ fn start_writes_an_observe_policy_with_the_demo_model_and_the_env_keys() -> Test
     )?;
     assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
     assert!(
-        String::from_utf8(out.stdout)?.contains("1 rule, 1 key, 3 providers"),
+        String::from_utf8(out.stdout)?.contains("1 rule, 1 key, 4 providers"),
         "check"
     );
     Ok(())
@@ -2286,6 +2286,15 @@ fn start_needs_no_provider_key() -> TestResult {
     let policy = std::fs::read_to_string(dir.join("gantry.policy.yaml"))?;
     assert!(policy.contains("preset: demo\n"), "{policy}");
     assert!(!policy.contains("preset: openai"), "{policy}");
+    // Claude Code on the developers' own Claude subscriptions works with no Anthropic key at all.
+    for line in [
+        "auth: passthrough\n",
+        "identity: optional\n",
+        "url: https://api.anthropic.com\n",
+    ] {
+        assert!(policy.contains(line), "{line}: {policy}");
+    }
+    assert!(!policy.contains("key_env: ANTHROPIC"), "{policy}");
     assert_eq!(printed_keys(&String::from_utf8(out.stdout)?).len(), 1);
     let out = gantry(&["check", &path(&dir, "gantry.policy.yaml")], &[])?;
     assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
@@ -2685,5 +2694,68 @@ fn usage_prints_tables_or_csv_and_budget_status_says_what_a_key_has_left() -> Te
     let out = gantry(&["budget", "status"], &env[..2])?;
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8(out.stderr)?.contains("GANTRY_KEY"));
+    Ok(())
+}
+
+#[test]
+fn an_identity_only_token_is_a_person_token_with_the_claude_code_lines() -> TestResult {
+    let dir = workdir("person-token")?;
+    let keys = path(&dir, "gantry.keys.yaml");
+    let out = gantry(
+        &[
+            "key",
+            "new",
+            "maya.cohen",
+            "--team",
+            "payments",
+            "--identity-only",
+            "--keys",
+            &keys,
+            "--url",
+            "http://gw.internal:8080",
+        ],
+        &[],
+    )?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let stdout = String::from_utf8(out.stdout)?;
+    let token = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("gantry_u_"))
+        .ok_or("no person token was printed")?;
+    assert!(
+        stdout.contains("export ANTHROPIC_BASE_URL=http://gw.internal:8080"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "export ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: {token}\""
+        )),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("ANTHROPIC_API_KEY="),
+        "no API key: {stdout}"
+    );
+    let saved = std::fs::read_to_string(&keys)?;
+    assert!(!saved.contains(token));
+    assert!(saved.contains(&gantry_core::id::sha256_hex(token.as_bytes())));
+
+    let out = gantry(
+        &[
+            "key",
+            "new",
+            "dana",
+            "--team",
+            "payments",
+            "--identity-only",
+            "--admin",
+            "--keys",
+            &keys,
+        ],
+        &[],
+    )?;
+    assert!(!out.status.success());
+    assert!(String::from_utf8(out.stderr)?.contains("--identity-only makes a person token"));
     Ok(())
 }

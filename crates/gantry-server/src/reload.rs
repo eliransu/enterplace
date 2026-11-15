@@ -523,6 +523,8 @@ fn route(
         batch: provider.batch.clone(),
         project_id: provider.project_id.clone(),
         chat_as_responses: provider.chat_as_responses,
+        passthrough: provider.passthrough,
+        identity_optional: provider.identity_optional,
         oci: provider
             .oci_signing
             .as_ref()

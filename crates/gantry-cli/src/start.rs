@@ -1,5 +1,5 @@
-//! `gantry start`: step 1 of the five steps (See). Writes an observe policy with the demo model and any provider
-//! whose key is in the environment, an admin key and a master key, then runs the gateway. The gateway prints the
+//! `gantry start`: step 1 of the five steps (See). Writes an observe policy with the demo model, the passthrough
+//! provider for Claude Code on Claude subscriptions, and any provider whose key is in the environment, an admin key and a master key, then runs the gateway. The gateway prints the
 //! dashboard link that signs in once; providers are connected from the dashboard. No provider key is needed.
 
 use std::{
@@ -120,6 +120,7 @@ fn policy(chosen: &[Chosen], store: bool, env: &dyn Fn(&str) -> Option<String>) 
             text.push_str(&lines);
         }
     }
+    text.push_str(&gantry_core::catalog::subscription_provider(env));
     text.push_str(
         "rules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n",
     );

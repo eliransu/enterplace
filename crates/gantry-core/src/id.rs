@@ -39,6 +39,15 @@ pub fn new_key() -> Result<String, String> {
     Ok(format!("{KEY_PREFIX}{}", hex(&random)))
 }
 
+/// What a Gantry person token starts with. It names a person for subscription passthrough (`x-gantry-user`) and
+/// grants no provider access on its own: a request that sends it as its only credential is refused.
+pub const PERSON_PREFIX: &str = "gantry_u_";
+
+/// A new person token, as random as a key.
+pub fn new_person_token() -> Result<String, String> {
+    new_key().map(|key| format!("{PERSON_PREFIX}{}", &key[KEY_PREFIX.len()..]))
+}
+
 /// `n` random bytes as hex, for trace and span IDs. Without system randomness it falls back to a hash of a fresh
 /// decision ID: unique, not secret, which is all a trace ID needs.
 /// `n` random bytes as hex, for a secret: an error, never a weaker value, when the system gives no randomness.

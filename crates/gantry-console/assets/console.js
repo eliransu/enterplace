@@ -112,13 +112,14 @@ document.addEventListener("DOMContentLoaded", function () {
   if (!box || !window.fetch) return;
   var seen = box.getAttribute("data-start-poll");
   var track = new URLSearchParams(location.search).get("track");
-  var url = "/console/start/state.json" + (track ? "?track=" + encodeURIComponent(track) : "");
+  // The whole query, so a choice such as how the team pays for Claude Code is kept across the reload.
+  var url = "/console/start/state.json" + location.search;
   var timer = null;
   function tick() {
     if (document.hidden) { timer = null; return; }
     fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; })
       .then(function (state) {
-        if (state && state.signature !== seen) { location.href = "/console/start" + (track ? "?track=" + encodeURIComponent(track) : ""); return; }
+        if (state && state.signature !== seen) { location.href = "/console/start" + location.search; return; }
         timer = setTimeout(tick, 2000);
       })
       .catch(function () { timer = setTimeout(tick, 2000); });

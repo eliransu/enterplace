@@ -218,11 +218,15 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
         (
             "coding",
             &[
-                "Make a key for the first person",
-                "Point Claude Code at Gantry and send one prompt",
+                "How does your team pay for Claude Code?",
+                "Claude subscriptions (Pro, Max, Team, Enterprise)",
+                "Anthropic API keys",
+                "Turn on Claude subscriptions",
+                "Point Claude Code at Gantry",
                 "Add a second person",
-                "Let people make their own keys",
+                "Let people get their own token",
                 "Optional",
+                "Copy for your agent",
             ],
         ),
         (
@@ -291,18 +295,18 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
         post(
             "/console/start/key",
             &cookie,
-            "kind=person&name=sarah.miller&team=platform",
+            "kind=person&name=sarah.miller&team=platform&pay=api",
         )?,
     )
     .await?;
-    let (_, _, page) = send(&s.app, get("/console/start?track=coding", &cookie)?).await?;
+    let (_, _, page) = send(&s.app, get("/console/start?track=coding&pay=api", &cookie)?).await?;
     assert!(
         page.contains(&format!("export ANTHROPIC_BASE_URL={BASE}")),
         "{page}"
     );
     let (_, _, page) = send(
         &s.app,
-        get("/console/start?track=coding&tool=codex", &cookie)?,
+        get("/console/start?track=coding&pay=api&tool=codex", &cookie)?,
     )
     .await?;
     assert!(
@@ -324,13 +328,13 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
     )
     .await?;
     // Connect a model is done (the policy has a provider); Send your first request listens.
-    let (_, _, before) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    let (_, _, before) = send(&s.app, get("/console/start/state.json?pay=api", &cookie)?).await?;
     assert!(
         before.contains(r#""steps":["done","listening","ahead","ahead","ahead","ahead"]"#),
         "{before}"
     );
     request(&s, "01START0000000000000000000", "noa.bar", "platform")?;
-    let (_, _, before) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    let (_, _, before) = send(&s.app, get("/console/start/state.json?pay=api", &cookie)?).await?;
     assert!(
         before.contains(r#""steps":["done","done","now","ahead","ahead","ahead"]"#),
         "{before}"
@@ -341,7 +345,7 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
         post(
             "/console/start/key",
             &cookie,
-            "kind=person&name=sarah.miller&team=platform",
+            "kind=person&name=sarah.miller&team=platform&pay=api",
         )?,
     )
     .await?;
@@ -362,20 +366,20 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
         page.contains(r#"href="/console/start">Check now"#),
         "works without the script"
     );
-    let (_, _, later) = send(&s.app, get("/console/start", &cookie)?).await?;
+    let (_, _, later) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
     assert!(
         !later.contains("export ANTHROPIC_API_KEY=gantry_"),
         "shown once"
     );
     assert!(later.contains("&lt;key of sarah.miller&gt;"), "{later}");
 
-    let (_, _, waiting) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    let (_, _, waiting) = send(&s.app, get("/console/start/state.json?pay=api", &cookie)?).await?;
     assert!(
         waiting.contains(r#""steps":["done","done","done","listening","ahead","ahead"]"#),
         "{waiting}"
     );
     request(&s, "01START0000000000000000001", "sarah.miller", "platform")?;
-    let (_, _, arrived) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    let (_, _, arrived) = send(&s.app, get("/console/start/state.json?pay=api", &cookie)?).await?;
     assert!(
         arrived.contains(r#""steps":["done","done","done","done","now","ahead"]"#),
         "{arrived}"
@@ -387,7 +391,7 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
     );
 
     // The first data on Start here, with the next step under it.
-    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    let (_, _, page) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
     for part in [
         "Your first requests arrived",
         "First requests through Gantry",
@@ -409,10 +413,10 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
         ),
     )?;
     request(&s, "01START0000000000000000002", "mike.johnson", "payments")?;
-    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    let (_, _, page) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
     assert!(page.contains("Show the five steps"), "{page}");
     send(&s.app, post("/console/start/pick", &cookie, "steps=1")?).await?;
-    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    let (_, _, page) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
     for part in [
         "g-setup",
         "See",
@@ -437,7 +441,7 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
         (
             "/console/requests",
             "No requests yet",
-            "/console/start?track=coding#step-3",
+            "/console/start?track=coding#step-2",
             "/integrations/coding-tools/",
         ),
         (
@@ -455,13 +459,13 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
         (
             "/console/people",
             "Only your admin key so far",
-            "/console/start?track=coding#step-3",
+            "/console/start?track=coding#step-2",
             "/governance/keys/",
         ),
         (
             "/console/teams",
             "No teams yet",
-            "/console/start?track=coding#step-3",
+            "/console/start?track=coding#step-2",
             "/governance/teams/",
         ),
         (
@@ -505,6 +509,7 @@ async fn a_role_sees_only_the_actions_it_may_take() -> TestResult {
     request(&s, "01START0000000000000000000", "noa.bar", "platform")?;
     let viewer = sign_in(&s.app, VIEWER_KEY).await?;
     let (_, _, page) = send(&s.app, get("/console/start", &viewer)?).await?;
+    let (_, _, page) = send(&s.app, get("/console/start?pay=api", &viewer)?).await?;
     assert!(page.contains("Make a key for the first person"), "{page}");
     assert!(
         !page.contains(r#"action="/console/start/key""#),
@@ -512,6 +517,12 @@ async fn a_role_sees_only_the_actions_it_may_take() -> TestResult {
     );
     assert!(!page.contains("Change what to start with"), "{page}");
     assert!(page.contains("Your role cannot make keys"), "{page}");
+    let (_, _, page) = send(&s.app, get("/console/start", &viewer)?).await?;
+    assert!(
+        !page.contains(r#"action="/console/start/passthrough""#)
+            && !page.contains(r#"action="/console/start/key""#),
+        "no forms: {page}"
+    );
     // Its own forms are refused and recorded, whatever it sends.
     let (status, _, _) = send(
         &s.app,
@@ -529,7 +540,7 @@ async fn a_role_sees_only_the_actions_it_may_take() -> TestResult {
     let (_, _, page) = send(&s.app, get("/console/teams", &viewer)?).await?;
     assert!(
         page.contains("No teams yet")
-            && !page.contains(r#"href="/console/start?track=coding#step-3""#),
+            && !page.contains(r#"href="/console/start?track=coding#step-2""#),
         "{page}"
     );
     Ok(())
@@ -724,5 +735,153 @@ async fn the_start_link_signs_in_once_and_only_from_this_machine_and_a_pasted_ex
     );
     let (_, _, page) = send(&s.app, post("/console/sign-in", "", "key=sk-not-gantry")?).await?;
     assert!(page.contains("That is not a Gantry key"), "{page}");
+    Ok(())
+}
+
+/// A Claude Code request on `person`'s own Claude subscription, as the server records it.
+fn subscribed(s: &Setup, id: &str, person: &str, team: &str) -> TestResult {
+    let record = serde_json::json!({
+        "id": id,
+        "person": person,
+        "team": team,
+        "user_agent": "claude-cli/2.1.325 (external, cli)",
+        "method": "POST",
+        "path": "/v1/messages",
+        "model": "claude-sonnet-4-5",
+        "verdict": "allow",
+        "rule": "everyone",
+        "provider": "claude-subscriptions",
+        "auth": "passthrough",
+        "identity": "x-gantry-user",
+    });
+    let serde_json::Value::Object(map) = record else {
+        return Err("not an object".into());
+    };
+    s.log.append_record(&map)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent() -> TestResult {
+    let s = setup("subscriptions")?;
+    let cookie = sign_in(&s.app, ADMIN_KEY).await?;
+    send(
+        &s.app,
+        post("/console/start/pick", &cookie, "choice=coding")?,
+    )
+    .await?;
+
+    // Subscriptions are the default answer, and the first step turns them on with one click.
+    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    assert!(
+        page.contains(
+            r#"href="/console/start?track=coding&amp;pay=subscriptions" aria-current="true""#
+        ),
+        "{page}"
+    );
+    assert!(
+        page.contains(r#"action="/console/start/passthrough""#),
+        "{page}"
+    );
+    assert!(
+        !page.contains("ANTHROPIC_API_KEY="),
+        "no API key anywhere: {page}"
+    );
+    let (_, _, state) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    assert!(
+        state.contains(r#""steps":["now","ahead","ahead","ahead"]"#),
+        "{state}"
+    );
+    let (status, headers, _) =
+        send(&s.app, post("/console/start/passthrough", &cookie, "")?).await?;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location(&headers), "/console/start?track=coding#step-2");
+    let policy = std::fs::read_to_string(s.dir.join("gantry.policy.yaml"))?;
+    assert!(
+        policy.contains("auth: passthrough") && policy.contains("identity: optional"),
+        "{policy}"
+    );
+    let (_, _, state) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    assert!(
+        state.contains(r#""steps":["done","listening","ahead","ahead"]"#),
+        "{state}"
+    );
+
+    // A person token, not a key: the lines keep Claude Code's own login.
+    let (status, _, page) = send(
+        &s.app,
+        post(
+            "/console/start/key",
+            &cookie,
+            "kind=person_token&name=sarah.miller&team=platform",
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let token = page
+        .split("x-gantry-user: ")
+        .nth(1)
+        .and_then(|rest| rest.split(['&', '"', '<', '\n', ' ']).next())
+        .ok_or("no person token in the lines")?
+        .to_string();
+    assert!(token.starts_with("gantry_u_"), "{token}");
+    assert!(
+        page.contains(&format!("export ANTHROPIC_BASE_URL={BASE}"))
+            && page.contains(&format!(
+                "export ANTHROPIC_CUSTOM_HEADERS=&quot;x-gantry-user: {token}&quot;"
+            )),
+        "{page}"
+    );
+    assert!(
+        page.contains("keep using your normal Claude login"),
+        "{page}"
+    );
+    assert!(!page.contains("ANTHROPIC_API_KEY="), "{page}");
+    // Copy for your agent: the goal, the exact values and the docs as Markdown.
+    let prompt = page
+        .split(r#"<pre id="agent-step-2" hidden>"#)
+        .nth(1)
+        .and_then(|rest| rest.split("</pre>").next())
+        .ok_or("no agent prompt for step 2")?;
+    for part in [
+        BASE,
+        token.as_str(),
+        "x-gantry-user",
+        "https://gantry-docs.eliran.me/integrations/claude-code.md",
+        "claude -p",
+    ] {
+        assert!(prompt.contains(part), "{part}: {prompt}");
+    }
+    assert!(!prompt.contains(ADMIN_KEY), "never an admin key");
+    assert!(
+        page.contains(r#"data-copy="agent-step-2" data-agent-prompt"#),
+        "{page}"
+    );
+    // Managed settings for an MDM rollout.
+    let (_, _, page) = send(&s.app, get("/console/start?setup=mdm", &cookie)?).await?;
+    assert!(
+        page.contains("&quot;ANTHROPIC_CUSTOM_HEADERS&quot;: &quot;x-gantry-user:"),
+        "{page}"
+    );
+    assert!(page.contains("managed-settings.json"), "{page}");
+
+    // The step turns done when the first subscription request from that person arrives.
+    let keys = std::fs::read_to_string(s.dir.join("gantry.keys.yaml"))?;
+    assert!(keys.contains(&sha256_hex(token.as_bytes())), "{keys}");
+    subscribed(&s, "01SUB00000000000000000000", "sarah.miller", "platform")?;
+    let (_, _, state) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    assert!(
+        state.contains(r#""steps":["done","done","now","ahead"]"#),
+        "{state}"
+    );
+    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    assert!(
+        page.contains("Next step") && page.contains("Add a second person"),
+        "{page}"
+    );
+
+    // Anthropic API keys keep today's steps.
+    let (_, _, page) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
+    assert!(page.contains("Let people make their own keys"), "{page}");
     Ok(())
 }
