@@ -49,6 +49,20 @@ pub struct Device {
     /// The MCP servers its tools are configured with.
     #[serde(default)]
     pub mcp: Vec<DeviceMcp>,
+    /// The AI apps and command line tools found on it, each with what the device profile says of it.
+    #[serde(default)]
+    pub apps: Vec<DeviceApp>,
+}
+
+/// One AI app or command line tool installed on a device.
+#[derive(Clone, Debug, Deserialize)]
+pub struct DeviceApp {
+    pub app: String,
+    /// `allowed`, `denied` or `unlisted`, by the device profile's app lists.
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub running: bool,
 }
 
 /// One MCP server a tool on a device is configured with, and the admin's decision on it.
@@ -77,6 +91,52 @@ pub struct DeviceTool {
     /// Where a `direct` tool sends, as its configuration names it.
     #[serde(default)]
     pub endpoints: Vec<String>,
+    /// Why the agent cannot point the tool at the gateway, for a tool no documented file configures.
+    #[serde(default)]
+    pub note: String,
+}
+
+/// What one person's devices say: the tools pointed at Gantry, and what is there that should not be, each as
+/// `<name> on <hostname>`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Person {
+    pub team: String,
+    /// Tools configured to send through the gateway on at least one device.
+    pub gantry: BTreeSet<String>,
+    /// Tools configured to call a provider directly.
+    pub direct: BTreeSet<String>,
+    /// Installed apps the device profile denies.
+    pub denied_apps: BTreeSet<String>,
+    /// MCP servers an admin blocked that a tool still has, as `<server> in <tool> on <hostname>`.
+    pub blocked_mcp: BTreeSet<String>,
+}
+
+/// Each person's devices summed: what `gantry audit coverage --devices` and the console's Devices page show.
+pub fn people(devices: &[Device]) -> BTreeMap<String, Person> {
+    let mut out: BTreeMap<String, Person> = BTreeMap::new();
+    for device in devices {
+        let person = out.entry(device.person.clone()).or_default();
+        if person.team.is_empty() {
+            person.team.clone_from(&device.team);
+        }
+        let host = &device.hostname;
+        for tool in &device.tools {
+            match tool.state.as_str() {
+                "gantry" => person.gantry.insert(tool.tool.clone()),
+                "direct" => person.direct.insert(format!("{} on {host}", tool.tool)),
+                _ => false,
+            };
+        }
+        for app in device.apps.iter().filter(|a| a.status == "denied") {
+            person.denied_apps.insert(format!("{} on {host}", app.app));
+        }
+        for server in device.mcp.iter().filter(|m| m.decision == "blocked") {
+            person
+                .blocked_mcp
+                .insert(format!("{} in {} on {host}", server.server, server.tool));
+        }
+    }
+    out
 }
 
 /// Requests per person and tool from the request records of the log at `path` and its sealed segments.

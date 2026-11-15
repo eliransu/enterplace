@@ -377,7 +377,7 @@ fn audit_coverage_with_device_reports_counts_devices_and_tools_going_direct() ->
         serde_json::json!([
             {"person": "ana", "team": "payments", "device_id": "mbp:ana", "hostname": "mbp", "last_seen": "2026-11-14T06:00:00Z",
              "tools": [{"tool": "claude-code", "state": "gantry"}, {"tool": "codex", "state": "direct", "endpoints": ["https://api.openai.com/v1"]}],
-             "os": "macos", "mcp": [
+             "os": "macos", "apps": [{"app": "chatgpt", "status": "denied", "running": true}, {"app": "cursor", "status": "allowed"}], "mcp": [
                 {"tool": "cursor", "server": "github", "transport": "http", "target": "https://api.githubcopilot.com/mcp", "via_gantry": false, "decision": "blocked"},
                 {"tool": "claude-code", "server": "gantry", "transport": "http", "target": "https://gw.example.com/mcp", "via_gantry": true, "decision": "pending"}]},
             {"person": "ana", "team": "payments", "device_id": "air:ana", "hostname": "air", "last_seen": "2026-11-14T06:00:00Z",
@@ -422,6 +422,18 @@ fn audit_coverage_with_device_reports_counts_devices_and_tools_going_direct() ->
     );
     // An enrolled device with no tool installed still shows the person.
     assert!(lines.contains(&"dan\tweb\t-\t0\t0\tnever\t1\t0"), "{text}");
+    // Per person: tools through Gantry, tools going direct, denied apps, blocked MCP servers still configured.
+    assert!(
+        lines.contains(&"person\tteam\tvia_gantry\tdirect\tdenied_apps\tblocked_mcp"),
+        "{text}"
+    );
+    assert!(
+        lines.contains(
+            &"ana\tpayments\tclaude-code\tcodex on mbp\tchatgpt on mbp\tgithub in cursor on mbp"
+        ),
+        "{text}"
+    );
+    assert!(lines.contains(&"dan\tweb\t-\t-\t-\t-"), "{text}");
     // Then each device's MCP servers, and whether each goes through Gantry.
     assert!(
         lines
