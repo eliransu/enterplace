@@ -31,16 +31,17 @@ const ADMIN: &str = "gantry_admin_0123456789abcdef012345678";
 const EXPIRED: &str = "gantry_exa_0123456789abcdef0123456789ab";
 
 /// A provider that counts the requests it gets, on any path. Every answer reports 1000 prompt tokens and 1 output
-/// token. A request whose body says "slow" is answered after 1.5 seconds.
-async fn provider() -> Result<(Arc<AtomicUsize>, u16), Error> {
+/// token. A request whose body says "held" is answered only once the gate has a permit, so a test decides when.
+async fn provider() -> Result<(Arc<AtomicUsize>, Arc<tokio::sync::Semaphore>, u16), Error> {
     let hits = Arc::new(AtomicUsize::new(0));
-    let counted = hits.clone();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let (counted, held) = (hits.clone(), gate.clone());
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
     let app = Router::new().fallback(move |body: Bytes| async move {
         counted.fetch_add(1, Ordering::SeqCst);
-        if body.windows(4).any(|w| w == b"slow") {
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        if body.windows(4).any(|w| w == b"held") {
+            let _ = held.acquire().await;
         }
         axum::response::Response::builder()
             .header(header::CONTENT_TYPE, "application/json")
@@ -52,7 +53,7 @@ async fn provider() -> Result<(Arc<AtomicUsize>, u16), Error> {
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    Ok((hits, port))
+    Ok((hits, gate, port))
 }
 
 /// `m` costs $0.001 for each output token and nothing for input, so each answer costs $0.001.
@@ -97,11 +98,12 @@ struct Setup {
     policy: PathBuf,
     audit: PathBuf,
     hits: Arc<AtomicUsize>,
+    gate: Arc<tokio::sync::Semaphore>,
     port: u16,
 }
 
 async fn setup(name: &str, top: &str, rules: &str) -> Result<Setup, Error> {
-    let (hits, port) = provider().await?;
+    let (hits, gate, port) = provider().await?;
     let dir = std::env::temp_dir().join(format!("gantry-observe-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
@@ -124,6 +126,7 @@ async fn setup(name: &str, top: &str, rules: &str) -> Result<Setup, Error> {
         policy: path,
         audit: dir.join("gantry-audit.jsonl"),
         hits,
+        gate,
         port,
     })
 }
@@ -177,6 +180,17 @@ async fn charged(audit: &Path, id: &str) -> Result<(), Error> {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     Err(format!("no usage record for {id}").into())
+}
+
+/// Waits until the provider has had `n` requests.
+async fn reached(hits: &AtomicUsize, n: usize) -> Result<(), Error> {
+    for _ in 0..1500 {
+        if hits.load(Ordering::SeqCst) >= n {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    Err(format!("the provider never had {n} requests").into())
 }
 
 fn would_refuse(record: &Value) -> Vec<String> {
@@ -627,14 +641,14 @@ async fn observed_requests_count_against_tpm() -> TestResult {
     let s = setup("tpm", "mode: observe\n", &rules(1020)).await?;
     let app = &s.gw.router;
     // Each answer reports 1001 tokens and each request holds about 35: the second is over 1020 and observed.
-    // The usage is counted once the answer has ended, just after the caller has it.
-    let settle = || tokio::time::sleep(std::time::Duration::from_millis(200));
-    assert_eq!(send(app, chat(PAT, "m", "hi")?).await?.0, StatusCode::OK);
-    settle().await;
+    // The usage is counted once the answer has ended, just after the caller has it: each waits for its record.
+    let (status, _, id) = send(app, chat(PAT, "m", "hi")?).await?;
+    assert_eq!(status, StatusCode::OK);
+    charged(&s.audit, &id).await?;
     let (status, _, id) = send(app, chat(PAT, "m", "hi")?).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(would_refuse(&record(&s.audit, &id)?), ["rate_limited"]);
-    settle().await;
+    charged(&s.audit, &id).await?;
 
     // Enforced at 1100: the observed request's 1001 tokens count, so a third does not fit this minute.
     std::fs::write(&s.policy, policy(s.port, "", &rules(1100)))?;
@@ -661,13 +675,14 @@ async fn observed_requests_hold_a_parallel_place() -> TestResult {
     let s = setup("parallel", "mode: observe\n", &rules(1)).await?;
     let app = s.gw.router.clone();
     let slow = |app: Router| async move {
-        let request = chat(PAT, "m", "slow").map_err(|e| e.to_string())?;
+        let request = chat(PAT, "m", "held").map_err(|e| e.to_string())?;
         send(&app, request).await.map_err(|e| e.to_string())
     };
+    // Each is sent once the provider holds the one before, and both stay held until the gate opens below.
     let first = tokio::spawn(slow(app.clone()));
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    reached(&s.hits, 1).await?;
     let second = tokio::spawn(slow(app.clone()));
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    reached(&s.hits, 2).await?;
 
     // Enforced at 2 while both are in flight: the observed one holds its place, so a third is refused.
     std::fs::write(&s.policy, policy(s.port, "", &rules(2)))?;
@@ -680,6 +695,7 @@ async fn observed_requests_hold_a_parallel_place() -> TestResult {
         (status, code.as_str()),
         (StatusCode::TOO_MANY_REQUESTS, "parallel_limited")
     );
+    s.gate.add_permits(1);
     let (status, _, _) = first.await??;
     assert_eq!(status, StatusCode::OK);
     let (status, _, id) = second.await??;

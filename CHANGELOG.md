@@ -7,6 +7,19 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Tests that do not depend on timing
+
+- The audit lock reads its time from a clock: a holder's beats, the watch of another Gantry's lock and the fence
+  that stops records are all decided on it. Production uses the system clock with the same 5 second beat and the
+  same messages; the lock tests drive a clock they advance themselves, so each runs the exact sequence of beats
+  and checks with no real waiting.
+- Fixed: while a new Gantry watched another one's audit lock, it held a process-wide lock through each wait, so
+  every other audit log in the same process (an organization's chain, say) waited up to 40 seconds to open or close.
+- The store can be polled on request (`Store::poll_now`). The cross-gateway store tests for deployment limits,
+  rate limits and a database that goes away poll when they need to instead of waiting for the 500 ms poll.
+- The parallel-limit tests in access and observe hold a request at the mock provider until the test lets it go,
+  instead of relying on a slow answer; the observe tpm test waits for each usage record.
+
 ### Plugin events: guardrail contract v2
 
 - A new guardrail type, `events`, sends an outside service the whole conversation as typed events: `system_prompt`,

@@ -64,8 +64,13 @@ fn key_value(config: &tokio_postgres::Config, port: Option<u16>, database: &str)
     )
 }
 
+/// Requests for model `gated` wait here until a test adds a permit, so a test decides when one ends.
+static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(0);
+/// How many `gated` requests the provider has had.
+static GATED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// A provider whose every answer used 3 output tokens. Model `slow` answers after a second, `lag`
-/// after 150 ms.
+/// after 150 ms, `gated` once `GATE` has a permit.
 async fn provider() -> Result<u16, Error> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
@@ -74,6 +79,10 @@ async fn provider() -> Result<u16, Error> {
         post(|body: Bytes| async move {
             if body.windows(6).any(|w| w == b"\"slow\"") {
                 tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            if body.windows(7).any(|w| w == b"\"gated\"") {
+                GATED.fetch_add(1, Ordering::SeqCst);
+                let _ = GATE.acquire().await;
             }
             if body.windows(5).any(|w| w == b"\"lag\"") {
                 tokio::time::sleep(Duration::from_millis(150)).await;
@@ -106,7 +115,7 @@ providers:
     url: http://127.0.0.1:{port}
     allow_private: true
     key_env: MOCK_KEY
-    models: [m, free, slow, lag]
+    models: [m, free, slow, lag, gated]
   - name: mock2
     kind: openai
     url: http://127.0.0.1:{port}
@@ -140,7 +149,7 @@ aliases:
       - {{ provider: mock, model: free, rpm: 2 }}
   - name: single
     deployments:
-      - {{ provider: mock, model: slow, max_parallel: 1 }}
+      - {{ provider: mock, model: gated, max_parallel: 1 }}
 prices:
   m: {{ input: 0, output: 1000 }}
 rules:
@@ -730,36 +739,46 @@ async fn with_postgres_down_known_keys_work_and_budgeted_requests_are_refused() 
     assert_eq!(body["checks"]["store"]["ready"], true);
 
     relay.down.store(true, Ordering::SeqCst);
-    let start = Instant::now();
-    loop {
-        let (status, body) = answer(
-            &a.router,
-            request("POST", "/v1/chat/completions", PAT, BUDGETED)?,
-        )
-        .await?;
-        if status == StatusCode::SERVICE_UNAVAILABLE {
-            assert_eq!(code(&body), "store_unavailable", "{body}");
-            let message = body["error"]["message"].as_str().unwrap_or_default();
-            assert!(
-                message.contains("Postgres"),
-                "the refusal names the fix: {message}"
-            );
+    // Polled now rather than waited for: the relay drops its connections as it notices the cut, and the first poll
+    // after that finds the store gone.
+    let store =
+        gantry_core::store::attached(&a.loaded.keys_path).ok_or("the gateway has no store")?;
+    let poll = || {
+        let store = store.clone();
+        async move { tokio::task::spawn_blocking(move || store.poll_now()).await }
+    };
+    let mut noticed = false;
+    for _ in 0..500 {
+        if poll().await?.is_err() {
+            noticed = true;
             break;
         }
-        // Until the cut is noticed a request may still be served: it is never let through unreserved.
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "the outage was never noticed"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
     }
+    assert!(noticed, "the outage was never noticed");
+    let (status, body) = answer(
+        &a.router,
+        request("POST", "/v1/chat/completions", PAT, BUDGETED)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(code(&body), "store_unavailable", "{body}");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("Postgres"),
+        "the refusal names the fix: {message}"
+    );
     // Readiness says so: an orchestrator stops sending here while the store is away.
     let (status, body) = answer(&a.router, request("GET", "/readyz", ADMIN, "")?).await?;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["checks"]["store"]["ready"], false);
-    // Known keys keep working from memory, and the kill switch keeps its last state.
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    // Known keys keep working from memory, and the kill switch keeps its last state, however many polls fail.
+    for _ in 0..2 {
+        assert!(
+            poll().await?.is_err(),
+            "a poll reached a store that is cut off"
+        );
+    }
     // A request under a rate limit every replica shares cannot be counted, so it is refused as a budgeted one is.
     let (status, body) = answer(
         &a.router,
@@ -800,24 +819,15 @@ async fn with_postgres_down_known_keys_work_and_budgeted_requests_are_refused() 
     .await?;
     assert!(!status.is_success(), "{body}");
 
-    // Back again: budgeted requests are served once the poll has reconnected.
+    // Back again: budgeted requests are served once the poll has reconnected, which the first poll now does.
     relay.down.store(false, Ordering::SeqCst);
-    let start = Instant::now();
-    loop {
-        let (status, body) = answer(
-            &a.router,
-            request("POST", "/v1/chat/completions", PAT, BUDGETED)?,
-        )
-        .await?;
-        if status == StatusCode::OK {
-            break;
-        }
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "never served again: {body}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    poll().await??;
+    let (status, body) = answer(
+        &a.router,
+        request("POST", "/v1/chat/completions", PAT, BUDGETED)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "never served again: {body}");
     let (status, body) = answer(&a.router, request("GET", "/readyz", ADMIN, "")?).await?;
     assert_eq!(status, StatusCode::OK, "{body}");
     Ok(())
@@ -1284,17 +1294,38 @@ async fn three_gateways_never_admit_more_than_one_rpm_between_them() -> TestResu
         admitted <= 30,
         "{admitted} admitted: more than the rpm of 30"
     );
-    // A slice a gateway leased and has not used yet waits for its lease to end before another gateway may have it.
-    assert!(
-        admitted >= 27,
-        "only {admitted} admitted: the leases held back too much"
+    assert!(admitted > 0, "the burst admitted nothing");
+    // A slice a gateway leased and has not used yet goes back once its lease ends, and the poll hands it to the
+    // store. How much a burst leaves held back depends on how fast the burst runs; what must hold is that nothing
+    // stays held back: one request at a time, the rest of the 30 is admitted, then not one more.
+    let mut topped = 0;
+    for _ in 0..1500 {
+        if admitted + topped >= 30 {
+            break;
+        }
+        polled(&[&a, &b, &c]).await?;
+        let before = topped;
+        for gw in [&a, &b, &c] {
+            if admitted + topped < 30 {
+                topped += burst(&[gw], PAT, FREE, 1).await?;
+            }
+        }
+        if topped == before {
+            // Every gateway is waiting for a lease of its own to end.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    assert_eq!(
+        admitted + topped,
+        30,
+        "{admitted} then {topped}: the leases held some of the minute back for good"
     );
-    // A second burst inside the same minute is refused on every gateway.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // The minute is spent: a second burst is refused on every gateway, once each has polled.
+    polled(&[&a, &b, &c]).await?;
     let later = burst(&[&a, &b, &c], PAT, FREE, 9).await?;
-    assert!(
-        admitted + later <= 30,
-        "{admitted} then {later}: more than 30 in one minute"
+    assert_eq!(
+        later, 0,
+        "{admitted} then {topped} then {later}: more than 30 in one minute"
     );
     Ok(())
 }
@@ -1480,7 +1511,8 @@ async fn a_deployment_s_rpm_and_max_parallel_hold_across_gateways() -> TestResul
     let capped = r#"{"model":"capped","messages":[]}"#;
     send(&a, capped, None).await?;
     send(&a, capped, None).await?;
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    // a writes what it sent and b reads it, now rather than at their next polls.
+    polled(&[&a, &b]).await?;
     let (status, body) = answer(
         &b.router,
         request("POST", "/v1/chat/completions", MAYA, capped)?,
@@ -1489,27 +1521,53 @@ async fn a_deployment_s_rpm_and_max_parallel_hold_across_gateways() -> TestResul
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
     assert_eq!(code(&body), "deployment_limit", "{body}");
 
-    // One slow request in flight on a: b's is refused while it runs, and taken once it answered.
+    // One request held at the provider on a: b's is refused while it is in flight, and taken once it answered.
     let slow = r#"{"model":"single","messages":[]}"#;
+    let held = GATED.load(Ordering::SeqCst);
     let (first, second) = tokio::join!(
         answer(
             &a.router,
             request("POST", "/v1/chat/completions", MAYA, slow)?
         ),
         async {
-            tokio::time::sleep(Duration::from_millis(700)).await;
-            answer(
+            for _ in 0..1500 {
+                if GATED.load(Ordering::SeqCst) > held {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            polled(&[&a, &b]).await?;
+            let second = answer(
                 &b.router,
                 request("POST", "/v1/chat/completions", MAYA, slow)?,
             )
-            .await
+            .await;
+            GATE.add_permits(1);
+            second
         }
     );
     assert_eq!(first?.0, StatusCode::OK);
     let (status, body) = second?;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(
+        GATED.load(Ordering::SeqCst),
+        held + 1,
+        "b's request reached the provider"
+    );
+    // a's place was given back as its answer was read, and b reads that at the poll. The gate stays open: a
+    // request hands its permit back as it passes.
+    polled(&[&a, &b]).await?;
     send(&b, slow, None).await?;
+    Ok(())
+}
+
+/// Has each gateway's store run one poll now, in order: what one wrote is read by those after it.
+async fn polled(gateways: &[&Governed]) -> Result<(), Error> {
+    for gw in gateways {
+        let store =
+            gantry_core::store::attached(&gw.loaded.keys_path).ok_or("the gateway has no store")?;
+        tokio::task::spawn_blocking(move || store.poll_now()).await??;
+    }
     Ok(())
 }
 

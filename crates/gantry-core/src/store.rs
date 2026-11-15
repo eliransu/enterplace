@@ -265,6 +265,11 @@ pub trait Store: Send + Sync + std::fmt::Debug {
     fn policy_versions(&self) -> Result<Arc<Vec<PolicyVersion>>, String> {
         Err(NO_VERSIONS.into())
     }
+    /// Runs one poll of the store now, after any already under way: what this gateway has to share is written and
+    /// what the others wrote is read, without waiting for the next poll. A store with no poll has nothing to do.
+    fn poll_now(&self) -> Result<(), String> {
+        Ok(())
+    }
     /// Reads the policy versions from the database now instead of at the next poll: for a version another gateway
     /// saved a moment ago. Blocks until the database answers.
     fn refresh_policy(&self) -> Result<(), String> {
