@@ -193,8 +193,9 @@ def run(chrome: Chrome, base: str, key: str, gantry: str, folder: pathlib.Path, 
     chrome.js("document.getElementById('key').focus()")
     chrome.type(key)
     chrome.key("Enter")
-    chrome.wait("location.pathname === '/console/audit'", "the audit log after sign-in")
+    chrome.wait("location.pathname === '/console/start'", "Start here after sign-in")
     check(True, "an admin key signs in from a real browser form")
+    chrome.go(f"{base}/console/audit")
 
     # A record sheet takes focus, keeps Tab inside, closes on Escape, and gives focus back to the row's link.
     opener = chrome.js("(() => { const a = document.querySelector('table a[href*=\"record=\"]'); a.click(); return a.getAttribute('href') })()")

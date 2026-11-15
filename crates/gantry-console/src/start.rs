@@ -553,6 +553,15 @@ fn command(id: &str, text: &str) -> String {
     )
 }
 
+/// A value to copy that is not a command, such as a key: no prompt sign.
+fn value_pill(id: &str, text: &str) -> String {
+    format!(
+        r#"<span class="g-command g-command--value"><span class="g-command__text t-mono" id="{id}">{}</span>{}</span>"#,
+        esc(text),
+        copy_button(id)
+    )
+}
+
 /// Tabs that pick which lines a step shows. Links, so they work without a script.
 fn tabs(aria: &str, step: usize, options: &[(&str, &str)], selected: &str) -> String {
     let items: String = options
@@ -818,10 +827,9 @@ fn steps(c: &Ctx<'_>) -> Vec<Step> {
 fn made_text(c: &Ctx<'_>, k: Option<&KeyEntry>) -> String {
     match (c.made, k) {
         (Some(m), _) => format!(
-            r#"Key made for {}, team {}. It is shown once, here and in the lines below: copy it now.</p>{}<p class="t-small g-check__muted">Gantry keeps only its hash."#,
+            "Key made for {}, team {}. It is shown once, above and in the lines below.",
             mono(&m.name),
-            mono(&m.team),
-            command("made-key", &m.key)
+            mono(&m.team)
         ),
         (None, Some(k)) => format!(
             "Key made for {}, team {}. It was shown once.",
@@ -1307,7 +1315,7 @@ fn checklist(steps: &[Step], states: &[&str], only_open: bool) -> String {
             ),
             "now" => format!("{}{terms}", s.now),
             "listening" => format!(
-                r#"{}<p class="g-check__listen t-body" role="status"><span class="g-loading" aria-hidden="true"><i></i><i></i><i></i></span>{}</p>{}{terms}"#,
+                r#"{}<p class="g-check__listen t-body" role="status"><span class="g-loading" aria-hidden="true"><i></i><i></i><i></i></span><span>{}</span></p>{}{terms}"#,
                 s.now,
                 s.listen,
                 acts(&glink("Check now", "/console/start", true))
@@ -1371,12 +1379,11 @@ fn first_data(f: &Facts) -> String {
                 tag("allow", "Allowed", "")
             };
             format!(
-                r#"<tr><td class="t-mono-sm g-table__wide">{}</td><td class="t-mono-sm">{}<span class="g-table__sub t-mono-sm">{}</span></td><td class="t-mono-sm g-table__wide">{}</td><td class="t-mono-sm g-table__wide">{}</td><td class="t-mono-sm g-table__num g-table__wide">{}</td><td class="t-mono-sm g-table__num">{}</td><td class="g-table__wide">{decision}</td></tr>"#,
+                r#"<tr><td class="t-mono-sm g-table__wide">{}</td><td class="t-mono-sm">{}<span class="g-table__sub t-mono-sm">{}</span></td><td class="t-mono-sm g-table__wide">{}</td><td class="t-mono-sm g-table__num g-table__wide">{}</td><td class="t-mono-sm g-table__num">{}</td><td class="g-table__wide">{decision}</td></tr>"#,
                 esc(r.time.get(11..19).unwrap_or(&r.time)),
                 esc(r.label("person")),
                 esc(r.label("model")),
                 esc(r.label("agent").split('/').next().unwrap_or("")),
-                esc(r.label("model")),
                 crate::html::thousands(
                     usize::try_from(r.input_tokens.unwrap_or(0) + r.output_tokens.unwrap_or(0)).unwrap_or(0)
                 ),
@@ -1413,7 +1420,7 @@ fn first_data(f: &Facts) -> String {
         })
         .collect();
     format!(
-        r#"<div class="g-setup__cols"><section class="g-panel g-stack" style="align-content: start"><div class="g-stack" style="gap: var(--space-1)"><h2 class="t-sm">First requests through Gantry</h2><p class="t-small g-muted">Since {since}.</p></div><div class="g-stats">{}{}{}</div><div class="g-table-wrap"><table class="g-table g-table--stack"><thead><tr><th class="t-tag">Time (UTC)</th><th class="t-tag">Person</th><th class="t-tag g-table__wide">Tool</th><th class="t-tag g-table__wide">Model</th><th class="t-tag g-table__num g-table__wide">Tokens</th><th class="t-tag g-table__num">Cost</th><th class="t-tag g-table__wide">Decision</th></tr></thead><tbody>{body}</tbody></table></div>{}</section><section class="g-stack" style="align-content: start"><h2 class="t-sm">What you are seeing</h2><dl class="g-points">{dl}</dl></section></div>"#,
+        r#"<div class="g-setup__cols"><section class="g-panel g-stack" style="align-content: start"><div class="g-stack" style="gap: var(--space-1)"><h2 class="t-sm">First requests through Gantry</h2><p class="t-small g-muted">Since {since}.</p></div><div class="g-stats">{}{}{}</div><div class="g-table-wrap"><table class="g-table g-table--stack"><thead><tr><th class="t-tag">Time (UTC)</th><th class="t-tag">Person and model</th><th class="t-tag g-table__wide">Tool</th><th class="t-tag g-table__num g-table__wide">Tokens</th><th class="t-tag g-table__num">Cost</th><th class="t-tag g-table__wide">Decision</th></tr></thead><tbody>{body}</tbody></table></div>{}</section><section class="g-stack" style="align-content: start"><h2 class="t-sm">What you are seeing</h2><dl class="g-points">{dl}</dl></section></div>"#,
         stat(crate::html::thousands(f.requests.len()), "Requests"),
         stat(
             people.to_string(),
@@ -1821,8 +1828,16 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
         } else {
             String::new()
         };
+        let shown_once = v.made.map_or_else(String::new, |m| {
+            format!(
+                r#"<div class="g-banner" role="status" tabindex="-1" data-focus><span class="t-body">Key made for {}, team {}. Shown once: Gantry keeps only its hash. Copy it now.</span>{}</div>"#,
+                mono(&m.name),
+                mono(&m.team),
+                value_pill("made-key", &m.key)
+            )
+        });
         format!(
-            r#"<div class="g-stack" style="gap: var(--space-6)"{poll}>{}{problem}{}{viewing}{body}{banner}{}</div>"#,
+            r#"<div class="g-stack" style="gap: var(--space-6)"{poll}>{}{problem}{}{shown_once}{viewing}{body}{banner}{}</div>"#,
             observe_banner(f),
             head("Start here", &lead, &change),
             if finished { others() } else { String::new() }
