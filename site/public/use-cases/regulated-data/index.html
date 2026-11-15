@@ -106,18 +106,18 @@ gantry</a>
 <figure class="gate" data-gate aria-label="Four requests go through Gantry. Requests for the clinical team go to an EU deployment. One request is refused because no deployment in an allowed region can serve it.">
 <div class="gate-lanes" aria-hidden="true">
 <div class="lane"><span class="lane-from">ruth.adler<i>clinical</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">azure-eu, region eu</span></div>
-<div class="lane"><span class="lane-from">omer.katz<i>research</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">openai, region us</span></div>
-<div class="lane"><span class="lane-from">yael.ron<i>clinical</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">region_not_allowed</span></span><span class="lane-to">no eu deployment</span></div>
+<div class="lane"><span class="lane-from">mike.johnson<i>research</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">openai, region us</span></div>
+<div class="lane"><span class="lane-from">amanda.brown<i>clinical</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">region_not_allowed</span></span><span class="lane-to">no eu deployment</span></div>
 <div class="lane"><span class="lane-from">svc-notes<i>clinical</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">azure-eu, region eu</span></div>
 </div>
 <ol class="records" aria-label="Example audit records, newest first">
-<li><span>#41</span><span class="r-who">ruth.adler<i>clinical</i></span><span class="v v-allow">allow</span><span class="r-meta">clinical, region eu</span><span class="r-hash">4eacac &larr; 2f8010</span></li>
-<li><span>#40</span><span class="r-who">yael.ron<i>clinical</i></span><span class="v v-refused">refused</span><span class="r-meta">gpt-4o-mini, region_not_allowed</span><span class="r-hash">99f890 &larr; 4eacac</span></li>
-<li><span>#39</span><span class="r-who">svc-notes<i>clinical</i></span><span class="v v-allow">allow</span><span class="r-meta">clinical, region eu</span><span class="r-hash">c151ad &larr; 99f890</span></li>
-<li><span>#38</span><span class="r-who">omer.katz<i>research</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-4o, region us</span><span class="r-hash">000000 &larr; c151ad</span></li>
+<li><span>#41</span><span class="r-who">ruth.adler<i>clinical</i></span><span class="v v-allow">allow</span><span class="r-meta">clinical, region eu</span><span class="r-hash">9c8720 &larr; 33fe3e</span></li>
+<li><span>#40</span><span class="r-who">amanda.brown<i>clinical</i></span><span class="v v-refused">refused</span><span class="r-meta">gpt-4o-mini, region_not_allowed</span><span class="r-hash">fca66e &larr; 9c8720</span></li>
+<li><span>#39</span><span class="r-who">svc-notes<i>clinical</i></span><span class="v v-allow">allow</span><span class="r-meta">clinical, region eu</span><span class="r-hash">c067fb &larr; fca66e</span></li>
+<li><span>#38</span><span class="r-who">mike.johnson<i>research</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-4o, region us</span><span class="r-hash">000000 &larr; c067fb</span></li>
 </ol>
 <figcaption class="gate-foot"><span>Example requests. Team clinical may reach deployments labelled eu only.</span><button class="gate-pause" type="button" aria-pressed="false">Pause</button></figcaption>
-<script type="application/json">{"n": 41, "last": "2f8010", "seq": [[0, "ruth.adler", "clinical", "allow", "clinical, region eu"], [1, "omer.katz", "research", "allow", "gpt-4o, region us"], [3, "svc-notes", "clinical", "masked", "clinical, region eu, mrn masked"], [0, "ruth.adler", "clinical", "masked", "clinical, region eu, email masked"], [1, "omer.katz", "research", "allow", "gpt-4o, region us"], [3, "svc-notes", "clinical", "allow", "clinical, region eu"], [2, "yael.ron", "clinical", "refused", "gpt-4o-mini, region_not_allowed", "region_not_allowed"], [0, "ruth.adler", "clinical", "allow", "clinical, region eu"]]}</script>
+<script type="application/json">{"n": 41, "last": "33fe3e", "seq": [[0, "ruth.adler", "clinical", "allow", "clinical, region eu"], [1, "mike.johnson", "research", "allow", "gpt-4o, region us"], [3, "svc-notes", "clinical", "masked", "clinical, region eu, mrn masked"], [0, "ruth.adler", "clinical", "masked", "clinical, region eu, email masked"], [1, "mike.johnson", "research", "allow", "gpt-4o, region us"], [3, "svc-notes", "clinical", "allow", "clinical, region eu"], [2, "amanda.brown", "clinical", "refused", "gpt-4o-mini, region_not_allowed", "region_not_allowed"], [0, "ruth.adler", "clinical", "allow", "clinical, region eu"]]}</script>
 </figure>
 </section>
 

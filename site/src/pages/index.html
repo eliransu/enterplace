@@ -16,18 +16,18 @@ description: Gantry is a self-hosted AI gateway. Every call from coding tools, a
 {{gate
 label: Four callers send requests through the Gantry gate. Allowed requests pass to the provider. One request is refused because its team is over budget. Each request writes an audit record.
 foot: Example requests. Each record carries the hash of the one before it.
-lane: maya.cohen | Claude Code | Anthropic
+lane: sarah.miller | Claude Code | Anthropic
 lane: svc-invoice-bot | internal app | OpenAI
-lane: dana.levi | Codex | OpenAI
+lane: emily.davis | Codex | OpenAI
 lane: ci.release | CI job | Anthropic
-req: 0 | maya.cohen | payments | allow | claude-sonnet-5-5, rule payments-team
+req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
 req: 3 | ci.release | platform | blocked | claude-haiku-5-5, aws_access_key | aws_access_key
 req: 1 | svc-invoice-bot | finance | allow | gpt-5-mini, rule finance-apps
-req: 0 | maya.cohen | payments | allow | claude-haiku-5-5, rule payments-team
+req: 0 | sarah.miller | payments | allow | claude-haiku-5-5, rule payments-team
 req: 1 | svc-invoice-bot | finance | masked | gpt-5-mini, credit_card masked
 req: 3 | ci.release | platform | allow | claude-haiku-5-5, rule platform
-req: 2 | dana.levi | interns | refused | gpt-5, budget_exceeded | budget_exceeded
-req: 0 | maya.cohen | payments | allow | claude-sonnet-5-5, rule payments-team
+req: 2 | emily.davis | interns | refused | gpt-5, budget_exceeded | budget_exceeded
+req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
 }}
 </section>
 

@@ -13,18 +13,18 @@ nav: use-cases
 {{gate
 label: Four developers on three coding tools send requests through Gantry. Three are allowed. One is refused because that person reached the daily budget.
 foot: Example requests. Three tools, one policy.
-lane: maya.cohen | Claude Code | Anthropic
-lane: omer.katz | Codex | OpenAI
-lane: dana.levi | Claude Code | Anthropic
-lane: noa.bar | Gemini CLI | Gemini
-req: 0 | maya.cohen | payments | allow | claude-sonnet-5-5, rule engineering
-req: 1 | omer.katz | payments | allow | gpt-5-codex, rule engineering
-req: 3 | noa.bar | platform | allow | Gemini API, rule engineering
-req: 0 | maya.cohen | payments | allow | claude-haiku-5-5, rule engineering
-req: 1 | omer.katz | payments | allow | gpt-5-codex, rule engineering
-req: 3 | noa.bar | platform | allow | Gemini API, rule engineering
-req: 2 | dana.levi | interns | refused | claude-sonnet-5-5, budget_exceeded | budget_exceeded
-req: 0 | maya.cohen | payments | allow | claude-sonnet-5-5, rule engineering
+lane: sarah.miller | Claude Code | Anthropic
+lane: mike.johnson | Codex | OpenAI
+lane: emily.davis | Claude Code | Anthropic
+lane: josh.taylor | Gemini CLI | Gemini
+req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule engineering
+req: 1 | mike.johnson | payments | allow | gpt-5-codex, rule engineering
+req: 3 | josh.taylor | platform | allow | Gemini API, rule engineering
+req: 0 | sarah.miller | payments | allow | claude-haiku-5-5, rule engineering
+req: 1 | mike.johnson | payments | allow | gpt-5-codex, rule engineering
+req: 3 | josh.taylor | platform | allow | Gemini API, rule engineering
+req: 2 | emily.davis | interns | refused | claude-sonnet-5-5, budget_exceeded | budget_exceeded
+req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule engineering
 }}
 </section>
 

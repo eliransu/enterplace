@@ -13,18 +13,18 @@ nav: use-cases
 {{gate
 label: Four teams send requests through Gantry. Three are inside their budget. Team support is refused because it reached its monthly budget.
 foot: Example requests. Team support reached its 500 USD monthly budget.
-lane: maya.cohen | payments | 212 of 500 USD
+lane: sarah.miller | payments | 212 of 500 USD
 lane: svc-triage-agent | support | 500 of 500 USD
-lane: omer.katz | research | 88 of 500 USD
-lane: dana.levi | interns | 6 of 20 USD today
-req: 0 | maya.cohen | payments | allow | claude-sonnet-5-5, rule payments-team
-req: 2 | omer.katz | research | allow | gpt-5, rule research
-req: 3 | dana.levi | interns | allow | gpt-5-mini, rule everyone
-req: 0 | maya.cohen | payments | allow | claude-haiku-5-5, cache hit
-req: 2 | omer.katz | research | allow | gpt-5, rule research
-req: 3 | dana.levi | interns | allow | gpt-5-mini, rule everyone
+lane: mike.johnson | research | 88 of 500 USD
+lane: emily.davis | interns | 6 of 20 USD today
+req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
+req: 2 | mike.johnson | research | allow | gpt-5, rule research
+req: 3 | emily.davis | interns | allow | gpt-5-mini, rule everyone
+req: 0 | sarah.miller | payments | allow | claude-haiku-5-5, cache hit
+req: 2 | mike.johnson | research | allow | gpt-5, rule research
+req: 3 | emily.davis | interns | allow | gpt-5-mini, rule everyone
 req: 1 | svc-triage-agent | support | refused | claude-sonnet-5-5, budget_exceeded | budget_exceeded
-req: 0 | maya.cohen | payments | allow | claude-sonnet-5-5, rule payments-team
+req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
 }}
 </section>
 

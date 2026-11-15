@@ -13,18 +13,18 @@ nav: use-cases
 {{gate
 label: Four developers send coding agent requests through Gantry. Three are allowed. One is refused because that person is over the daily budget.
 foot: Example requests from four developers.
-lane: maya.cohen | Claude Code | Anthropic
-lane: omer.katz | Codex | OpenAI
-lane: dana.levi | Claude Code | Anthropic
-lane: noa.bar | OpenCode | OpenAI
-req: 0 | maya.cohen | engineering | allow | claude-sonnet-5-5, rule engineering
-req: 1 | omer.katz | engineering | allow | gpt-5-codex, rule engineering
-req: 3 | noa.bar | platform | blocked | gpt-5, database_url | database_url
-req: 0 | maya.cohen | engineering | allow | claude-haiku-5-5, rule engineering
-req: 1 | omer.katz | engineering | allow | gpt-5-codex, rule engineering
-req: 3 | noa.bar | platform | allow | gpt-5, rule engineering
-req: 2 | dana.levi | interns | refused | claude-sonnet-5-5, budget_exceeded | budget_exceeded
-req: 0 | maya.cohen | engineering | allow | claude-sonnet-5-5, rule engineering
+lane: sarah.miller | Claude Code | Anthropic
+lane: mike.johnson | Codex | OpenAI
+lane: emily.davis | Claude Code | Anthropic
+lane: josh.taylor | OpenCode | OpenAI
+req: 0 | sarah.miller | engineering | allow | claude-sonnet-5-5, rule engineering
+req: 1 | mike.johnson | engineering | allow | gpt-5-codex, rule engineering
+req: 3 | josh.taylor | platform | blocked | gpt-5, database_url | database_url
+req: 0 | sarah.miller | engineering | allow | claude-haiku-5-5, rule engineering
+req: 1 | mike.johnson | engineering | allow | gpt-5-codex, rule engineering
+req: 3 | josh.taylor | platform | allow | gpt-5, rule engineering
+req: 2 | emily.davis | interns | refused | claude-sonnet-5-5, budget_exceeded | budget_exceeded
+req: 0 | sarah.miller | engineering | allow | claude-sonnet-5-5, rule engineering
 }}
 </section>
 
@@ -70,7 +70,7 @@ export ANTHROPIC_API_KEY=gantry_...</pre></figure>
         <a class="more" href="docs:/governance/single-sign-on/">Single sign-on in the docs {{> arrow}}</a>
       </div>
       <figure class="code"><figcaption>Either of these</figcaption><pre><span class="c"># an admin issues a key</span>
-gantry key new maya.cohen --team payments
+gantry key new sarah.miller --team payments
 
 <span class="c"># or the developer signs in</span>
 gantry login https://gantry.example.com</pre></figure>
@@ -121,7 +121,7 @@ rules:
 
 <span class="c"># the admin asks which rule and limits apply</span>
 gantry explain gantry.policy.yaml \
-  --key dana.levi --model claude-sonnet-5-5</pre></figure>
+  --key emily.davis --model claude-sonnet-5-5</pre></figure>
   </div>
 </section>
 

@@ -105,19 +105,19 @@ gantry</a>
 <section class="wrap sec" style="padding-top: 40px">
 <figure class="gate" data-gate aria-label="Four developers send coding agent requests through Gantry. Three are allowed. One is refused because that person is over the daily budget.">
 <div class="gate-lanes" aria-hidden="true">
-<div class="lane"><span class="lane-from">maya.cohen<i>Claude Code</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
-<div class="lane"><span class="lane-from">omer.katz<i>Codex</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">OpenAI</span></div>
-<div class="lane"><span class="lane-from">dana.levi<i>Claude Code</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">budget_exceeded</span></span><span class="lane-to">Anthropic</span></div>
-<div class="lane"><span class="lane-from">noa.bar<i>OpenCode</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">OpenAI</span></div>
+<div class="lane"><span class="lane-from">sarah.miller<i>Claude Code</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
+<div class="lane"><span class="lane-from">mike.johnson<i>Codex</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">OpenAI</span></div>
+<div class="lane"><span class="lane-from">emily.davis<i>Claude Code</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">budget_exceeded</span></span><span class="lane-to">Anthropic</span></div>
+<div class="lane"><span class="lane-from">josh.taylor<i>OpenCode</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">OpenAI</span></div>
 </div>
 <ol class="records" aria-label="Example audit records, newest first">
-<li><span>#41</span><span class="r-who">maya.cohen<i>engineering</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule engineering</span><span class="r-hash">cf822f &larr; 0ce685</span></li>
-<li><span>#40</span><span class="r-who">dana.levi<i>interns</i></span><span class="v v-refused">refused</span><span class="r-meta">claude-sonnet-5-5, budget_exceeded</span><span class="r-hash">b99742 &larr; cf822f</span></li>
-<li><span>#39</span><span class="r-who">noa.bar<i>platform</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-5, rule engineering</span><span class="r-hash">7cda32 &larr; b99742</span></li>
-<li><span>#38</span><span class="r-who">omer.katz<i>engineering</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-5-codex, rule engineering</span><span class="r-hash">000000 &larr; 7cda32</span></li>
+<li><span>#41</span><span class="r-who">sarah.miller<i>engineering</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule engineering</span><span class="r-hash">f501b1 &larr; 92234a</span></li>
+<li><span>#40</span><span class="r-who">emily.davis<i>interns</i></span><span class="v v-refused">refused</span><span class="r-meta">claude-sonnet-5-5, budget_exceeded</span><span class="r-hash">b9155a &larr; f501b1</span></li>
+<li><span>#39</span><span class="r-who">josh.taylor<i>platform</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-5, rule engineering</span><span class="r-hash">0096cd &larr; b9155a</span></li>
+<li><span>#38</span><span class="r-who">mike.johnson<i>engineering</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-5-codex, rule engineering</span><span class="r-hash">000000 &larr; 0096cd</span></li>
 </ol>
 <figcaption class="gate-foot"><span>Example requests from four developers.</span><button class="gate-pause" type="button" aria-pressed="false">Pause</button></figcaption>
-<script type="application/json">{"n": 41, "last": "0ce685", "seq": [[0, "maya.cohen", "engineering", "allow", "claude-sonnet-5-5, rule engineering"], [1, "omer.katz", "engineering", "allow", "gpt-5-codex, rule engineering"], [3, "noa.bar", "platform", "blocked", "gpt-5, database_url", "database_url"], [0, "maya.cohen", "engineering", "allow", "claude-haiku-5-5, rule engineering"], [1, "omer.katz", "engineering", "allow", "gpt-5-codex, rule engineering"], [3, "noa.bar", "platform", "allow", "gpt-5, rule engineering"], [2, "dana.levi", "interns", "refused", "claude-sonnet-5-5, budget_exceeded", "budget_exceeded"], [0, "maya.cohen", "engineering", "allow", "claude-sonnet-5-5, rule engineering"]]}</script>
+<script type="application/json">{"n": 41, "last": "92234a", "seq": [[0, "sarah.miller", "engineering", "allow", "claude-sonnet-5-5, rule engineering"], [1, "mike.johnson", "engineering", "allow", "gpt-5-codex, rule engineering"], [3, "josh.taylor", "platform", "blocked", "gpt-5, database_url", "database_url"], [0, "sarah.miller", "engineering", "allow", "claude-haiku-5-5, rule engineering"], [1, "mike.johnson", "engineering", "allow", "gpt-5-codex, rule engineering"], [3, "josh.taylor", "platform", "allow", "gpt-5, rule engineering"], [2, "emily.davis", "interns", "refused", "claude-sonnet-5-5, budget_exceeded", "budget_exceeded"], [0, "sarah.miller", "engineering", "allow", "claude-sonnet-5-5, rule engineering"]]}</script>
 </figure>
 </section>
 
@@ -166,7 +166,7 @@ export ANTHROPIC_API_KEY=gantry_...</pre></figure>
 </a>
       </div>
       <figure class="code"><figcaption>Either of these</figcaption><pre><span class="c"># an admin issues a key</span>
-gantry key new maya.cohen --team payments
+gantry key new sarah.miller --team payments
 
 <span class="c"># or the developer signs in</span>
 gantry login https://gantry.example.com</pre></figure>
@@ -220,7 +220,7 @@ rules:
 
 <span class="c"># the admin asks which rule and limits apply</span>
 gantry explain gantry.policy.yaml \
-  --key dana.levi --model claude-sonnet-5-5</pre></figure>
+  --key emily.davis --model claude-sonnet-5-5</pre></figure>
   </div>
 </section>
 

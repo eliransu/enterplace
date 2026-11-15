@@ -105,19 +105,19 @@ gantry</a>
 <section class="wrap sec" style="padding-top: 40px">
 <figure class="gate" data-gate aria-label="Four callers send requests through Gantry. Requests to local models pass. A request from the legal team for a hosted model is refused because the rule lists local models only.">
 <div class="gate-lanes" aria-hidden="true">
-<div class="lane"><span class="lane-from">lior.avni<i>legal</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">vLLM, on-prem</span></div>
-<div class="lane"><span class="lane-from">maya.cohen<i>payments</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Ollama, on-prem</span></div>
+<div class="lane"><span class="lane-from">chris.walker<i>legal</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">vLLM, on-prem</span></div>
+<div class="lane"><span class="lane-from">sarah.miller<i>payments</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Ollama, on-prem</span></div>
 <div class="lane"><span class="lane-from">tal.shor<i>legal</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">model_not_allowed</span></span><span class="lane-to">hosted</span></div>
-<div class="lane"><span class="lane-from">omer.katz<i>research</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
+<div class="lane"><span class="lane-from">mike.johnson<i>research</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
 </div>
 <ol class="records" aria-label="Example audit records, newest first">
-<li><span>#41</span><span class="r-who">lior.avni<i>legal</i></span><span class="v v-allow">allow</span><span class="r-meta">local-llm, rule legal-local</span><span class="r-hash">692c59 &larr; 0ac77f</span></li>
-<li><span>#40</span><span class="r-who">tal.shor<i>legal</i></span><span class="v v-refused">refused</span><span class="r-meta">claude-sonnet-5-5, model_not_allowed</span><span class="r-hash">31b81e &larr; 692c59</span></li>
-<li><span>#39</span><span class="r-who">omer.katz<i>research</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-haiku-5-5, rule research</span><span class="r-hash">20e6d8 &larr; 31b81e</span></li>
-<li><span>#38</span><span class="r-who">maya.cohen<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-oss:20b, rule everyone</span><span class="r-hash">000000 &larr; 20e6d8</span></li>
+<li><span>#41</span><span class="r-who">chris.walker<i>legal</i></span><span class="v v-allow">allow</span><span class="r-meta">local-llm, rule legal-local</span><span class="r-hash">0a8aeb &larr; fb09a2</span></li>
+<li><span>#40</span><span class="r-who">tal.shor<i>legal</i></span><span class="v v-refused">refused</span><span class="r-meta">claude-sonnet-5-5, model_not_allowed</span><span class="r-hash">d0e677 &larr; 0a8aeb</span></li>
+<li><span>#39</span><span class="r-who">mike.johnson<i>research</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-haiku-5-5, rule research</span><span class="r-hash">597b09 &larr; d0e677</span></li>
+<li><span>#38</span><span class="r-who">sarah.miller<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-oss:20b, rule everyone</span><span class="r-hash">000000 &larr; 597b09</span></li>
 </ol>
 <figcaption class="gate-foot"><span>Example requests. Team legal may use local models only.</span><button class="gate-pause" type="button" aria-pressed="false">Pause</button></figcaption>
-<script type="application/json">{"n": 41, "last": "0ac77f", "seq": [[0, "lior.avni", "legal", "allow", "local-llm, rule legal-local"], [1, "maya.cohen", "payments", "allow", "gpt-oss:20b, rule everyone"], [3, "omer.katz", "research", "allow", "claude-sonnet-5-5, rule research"], [0, "lior.avni", "legal", "allow", "local-llm, rule legal-local"], [1, "maya.cohen", "payments", "allow", "gpt-oss:20b, rule everyone"], [3, "omer.katz", "research", "allow", "claude-haiku-5-5, rule research"], [2, "tal.shor", "legal", "refused", "claude-sonnet-5-5, model_not_allowed", "model_not_allowed"], [0, "lior.avni", "legal", "allow", "local-llm, rule legal-local"]]}</script>
+<script type="application/json">{"n": 41, "last": "fb09a2", "seq": [[0, "chris.walker", "legal", "allow", "local-llm, rule legal-local"], [1, "sarah.miller", "payments", "allow", "gpt-oss:20b, rule everyone"], [3, "mike.johnson", "research", "allow", "claude-sonnet-5-5, rule research"], [0, "chris.walker", "legal", "allow", "local-llm, rule legal-local"], [1, "sarah.miller", "payments", "allow", "gpt-oss:20b, rule everyone"], [3, "mike.johnson", "research", "allow", "claude-haiku-5-5, rule research"], [2, "tal.shor", "legal", "refused", "claude-sonnet-5-5, model_not_allowed", "model_not_allowed"], [0, "chris.walker", "legal", "allow", "local-llm, rule legal-local"]]}</script>
 </figure>
 </section>
 

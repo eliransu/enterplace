@@ -105,19 +105,19 @@ gantry</a>
 <section class="wrap sec" style="padding-top: 40px">
 <figure class="gate" data-gate aria-label="Four developers on three coding tools send requests through Gantry. Three are allowed. One is refused because that person reached the daily budget.">
 <div class="gate-lanes" aria-hidden="true">
-<div class="lane"><span class="lane-from">maya.cohen<i>Claude Code</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
-<div class="lane"><span class="lane-from">omer.katz<i>Codex</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">OpenAI</span></div>
-<div class="lane"><span class="lane-from">dana.levi<i>Claude Code</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">budget_exceeded</span></span><span class="lane-to">Anthropic</span></div>
-<div class="lane"><span class="lane-from">noa.bar<i>Gemini CLI</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Gemini</span></div>
+<div class="lane"><span class="lane-from">sarah.miller<i>Claude Code</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
+<div class="lane"><span class="lane-from">mike.johnson<i>Codex</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">OpenAI</span></div>
+<div class="lane"><span class="lane-from">emily.davis<i>Claude Code</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">budget_exceeded</span></span><span class="lane-to">Anthropic</span></div>
+<div class="lane"><span class="lane-from">josh.taylor<i>Gemini CLI</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Gemini</span></div>
 </div>
 <ol class="records" aria-label="Example audit records, newest first">
-<li><span>#41</span><span class="r-who">maya.cohen<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule engineering</span><span class="r-hash">4d22df &larr; e848d1</span></li>
-<li><span>#40</span><span class="r-who">dana.levi<i>interns</i></span><span class="v v-refused">refused</span><span class="r-meta">claude-sonnet-5-5, budget_exceeded</span><span class="r-hash">4e950e &larr; 4d22df</span></li>
-<li><span>#39</span><span class="r-who">noa.bar<i>platform</i></span><span class="v v-allow">allow</span><span class="r-meta">Gemini API, rule engineering</span><span class="r-hash">04f3aa &larr; 4e950e</span></li>
-<li><span>#38</span><span class="r-who">omer.katz<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-5-codex, rule engineering</span><span class="r-hash">000000 &larr; 04f3aa</span></li>
+<li><span>#41</span><span class="r-who">sarah.miller<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule engineering</span><span class="r-hash">e8cdd9 &larr; 091585</span></li>
+<li><span>#40</span><span class="r-who">emily.davis<i>interns</i></span><span class="v v-refused">refused</span><span class="r-meta">claude-sonnet-5-5, budget_exceeded</span><span class="r-hash">2ad164 &larr; e8cdd9</span></li>
+<li><span>#39</span><span class="r-who">josh.taylor<i>platform</i></span><span class="v v-allow">allow</span><span class="r-meta">Gemini API, rule engineering</span><span class="r-hash">dc0a56 &larr; 2ad164</span></li>
+<li><span>#38</span><span class="r-who">mike.johnson<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-5-codex, rule engineering</span><span class="r-hash">000000 &larr; dc0a56</span></li>
 </ol>
 <figcaption class="gate-foot"><span>Example requests. Three tools, one policy.</span><button class="gate-pause" type="button" aria-pressed="false">Pause</button></figcaption>
-<script type="application/json">{"n": 41, "last": "e848d1", "seq": [[0, "maya.cohen", "payments", "allow", "claude-sonnet-5-5, rule engineering"], [1, "omer.katz", "payments", "allow", "gpt-5-codex, rule engineering"], [3, "noa.bar", "platform", "allow", "Gemini API, rule engineering"], [0, "maya.cohen", "payments", "allow", "claude-haiku-5-5, rule engineering"], [1, "omer.katz", "payments", "allow", "gpt-5-codex, rule engineering"], [3, "noa.bar", "platform", "allow", "Gemini API, rule engineering"], [2, "dana.levi", "interns", "refused", "claude-sonnet-5-5, budget_exceeded", "budget_exceeded"], [0, "maya.cohen", "payments", "allow", "claude-sonnet-5-5, rule engineering"]]}</script>
+<script type="application/json">{"n": 41, "last": "091585", "seq": [[0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule engineering"], [1, "mike.johnson", "payments", "allow", "gpt-5-codex, rule engineering"], [3, "josh.taylor", "platform", "allow", "Gemini API, rule engineering"], [0, "sarah.miller", "payments", "allow", "claude-haiku-5-5, rule engineering"], [1, "mike.johnson", "payments", "allow", "gpt-5-codex, rule engineering"], [3, "josh.taylor", "platform", "allow", "Gemini API, rule engineering"], [2, "emily.davis", "interns", "refused", "claude-sonnet-5-5, budget_exceeded", "budget_exceeded"], [0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule engineering"]]}</script>
 </figure>
 </section>
 

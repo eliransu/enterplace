@@ -105,19 +105,19 @@ gantry</a>
 <section class="wrap sec" style="padding-top: 40px">
 <figure class="gate" data-gate aria-label="Four teams send requests through Gantry. Three are inside their budget. Team support is refused because it reached its monthly budget.">
 <div class="gate-lanes" aria-hidden="true">
-<div class="lane"><span class="lane-from">maya.cohen<i>payments</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">212 of 500 USD</span></div>
+<div class="lane"><span class="lane-from">sarah.miller<i>payments</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">212 of 500 USD</span></div>
 <div class="lane"><span class="lane-from">svc-triage-agent<i>support</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">budget_exceeded</span></span><span class="lane-to">500 of 500 USD</span></div>
-<div class="lane"><span class="lane-from">omer.katz<i>research</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">88 of 500 USD</span></div>
-<div class="lane"><span class="lane-from">dana.levi<i>interns</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">6 of 20 USD today</span></div>
+<div class="lane"><span class="lane-from">mike.johnson<i>research</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">88 of 500 USD</span></div>
+<div class="lane"><span class="lane-from">emily.davis<i>interns</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">6 of 20 USD today</span></div>
 </div>
 <ol class="records" aria-label="Example audit records, newest first">
-<li><span>#41</span><span class="r-who">maya.cohen<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule payments-team</span><span class="r-hash">c8e22e &larr; fd08a6</span></li>
-<li><span>#40</span><span class="r-who">svc-triage-agent<i>support</i></span><span class="v v-refused">refused</span><span class="r-meta">claude-sonnet-5-5, budget_exceeded</span><span class="r-hash">7edbe5 &larr; c8e22e</span></li>
-<li><span>#39</span><span class="r-who">dana.levi<i>interns</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-5-mini, rule everyone</span><span class="r-hash">ab1654 &larr; 7edbe5</span></li>
-<li><span>#38</span><span class="r-who">omer.katz<i>research</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-5, rule research</span><span class="r-hash">000000 &larr; ab1654</span></li>
+<li><span>#41</span><span class="r-who">sarah.miller<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule payments-team</span><span class="r-hash">e0d4e5 &larr; 62a08b</span></li>
+<li><span>#40</span><span class="r-who">svc-triage-agent<i>support</i></span><span class="v v-refused">refused</span><span class="r-meta">claude-sonnet-5-5, budget_exceeded</span><span class="r-hash">782ea3 &larr; e0d4e5</span></li>
+<li><span>#39</span><span class="r-who">emily.davis<i>interns</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-5-mini, rule everyone</span><span class="r-hash">09d714 &larr; 782ea3</span></li>
+<li><span>#38</span><span class="r-who">mike.johnson<i>research</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-5, rule research</span><span class="r-hash">000000 &larr; 09d714</span></li>
 </ol>
 <figcaption class="gate-foot"><span>Example requests. Team support reached its 500 USD monthly budget.</span><button class="gate-pause" type="button" aria-pressed="false">Pause</button></figcaption>
-<script type="application/json">{"n": 41, "last": "fd08a6", "seq": [[0, "maya.cohen", "payments", "allow", "claude-sonnet-5-5, rule payments-team"], [2, "omer.katz", "research", "allow", "gpt-5, rule research"], [3, "dana.levi", "interns", "allow", "gpt-5-mini, rule everyone"], [0, "maya.cohen", "payments", "allow", "claude-haiku-5-5, cache hit"], [2, "omer.katz", "research", "allow", "gpt-5, rule research"], [3, "dana.levi", "interns", "allow", "gpt-5-mini, rule everyone"], [1, "svc-triage-agent", "support", "refused", "claude-sonnet-5-5, budget_exceeded", "budget_exceeded"], [0, "maya.cohen", "payments", "allow", "claude-sonnet-5-5, rule payments-team"]]}</script>
+<script type="application/json">{"n": 41, "last": "62a08b", "seq": [[0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule payments-team"], [2, "mike.johnson", "research", "allow", "gpt-5, rule research"], [3, "emily.davis", "interns", "allow", "gpt-5-mini, rule everyone"], [0, "sarah.miller", "payments", "allow", "claude-haiku-5-5, cache hit"], [2, "mike.johnson", "research", "allow", "gpt-5, rule research"], [3, "emily.davis", "interns", "allow", "gpt-5-mini, rule everyone"], [1, "svc-triage-agent", "support", "refused", "claude-sonnet-5-5, budget_exceeded", "budget_exceeded"], [0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule payments-team"]]}</script>
 </figure>
 </section>
 
