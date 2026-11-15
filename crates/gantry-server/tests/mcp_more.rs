@@ -137,6 +137,7 @@ impl http_body::Body for Stream {
     }
 }
 
+#[cfg(unix)]
 type Legacy = Arc<(
     Seen,
     Mutex<Option<tokio::sync::mpsc::UnboundedSender<Bytes>>>,
@@ -144,6 +145,7 @@ type Legacy = Arc<(
 
 /// A mock of the older HTTP+SSE transport: `GET /sse` opens the stream and names `/messages`, where each message is
 /// posted; its answer comes on the stream.
+#[cfg(unix)]
 async fn legacy_sse() -> Result<(u16, Legacy), Error> {
     let state: Legacy = Arc::default();
     let app = Router::new()
@@ -392,6 +394,8 @@ async fn servers_are_added_changed_and_removed_without_a_restart_and_sessions_ar
     Ok(())
 }
 
+// The stdio server is a /bin/sh script, so this test runs where there is one.
+#[cfg(unix)]
 const SCRIPT: &str = r#"while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
   case "$line" in
@@ -402,6 +406,7 @@ const SCRIPT: &str = r#"while IFS= read -r line; do
 done
 "#;
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_legacy_sse_server_and_a_stdio_server_serve_tools_beside_streamable_http() -> TestResult {
     let (new, _) = streamable("new", None).await?;
