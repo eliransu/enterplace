@@ -1136,7 +1136,7 @@ fn watch(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
                     "export DATABASE_URL=postgres://gantry@db.example.com/gantry".into(),
                 ]
             ),
-            acts(&docs("Read License", "/deploy/license/"))
+            acts(&docs("Read the license setup", "/deploy/overview/"))
         ),
         "The license includes watch and the store answers.",
         "Watch appears in the nav.",

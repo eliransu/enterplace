@@ -69,6 +69,14 @@ gantry serve gantry.policy.yaml
 
 With no admin key yet, `gantry serve` prints a one-time link, `http://127.0.0.1:8080/console/setup/<token>`. Open it, give your name and team, and it makes your admin key (shown once), shows the lines that point Claude Code and the OpenAI SDKs at Gantry, and a `curl` to try. The link works once, and the setup is recorded in the audit log. `gantry providers` lists the providers `--provider` takes.
 
+### Then the console takes you through the rest
+
+Sign in to `http://127.0.0.1:8080/console` with the admin key. On an empty install the console opens on one question, **What do you want to start with?**, with five answers: coding agents, your own apps and agents, MCP tools, a spend limit for the team, or Claude Team seats you can only watch (Gantry Enterprise). The answer picks a short checklist on **Start here**, the console's home and the first entry in its nav. The choice is kept (in the store when the policy has one, else in `gantry-start.json` beside the audit log) and can be changed at any time.
+
+Each step of the checklist is one action with the exact lines to paste, built from this gateway: its address, the key you just made on the page (shown once), the variables for Claude Code, Codex, Cursor or an SDK, the policy lines for a budget or an MCP server, the `claude mcp add` command, or the managed settings for Claude Code. Each step says what **turns it done** and what you **then see**. Gantry watches its own records for that: a key that is not an admin key, the first request from that key, a second person, a budget in the policy, a first MCP tool call, the first watch export. While a step waits for traffic the page checks every 2 seconds, and the step turns done by itself when the request arrives; without JavaScript, **Check now** does the same.
+
+The first requests then show on Start here, with what each part of a row means and the next step under them. Once the checklist is done, Start here shows the five steps of a rollout (See, Know, Limit, Protect, Prove, the same as the [Start here](/start/why/) pages), with the current one's next action, and the other starting choices one click away. Every console page that has no data yet says what fills it, and its button opens the Start here step that does it.
+
 The steps below do the same by hand, and say what each part of the policy means.
 
 ## 2. Write a policy

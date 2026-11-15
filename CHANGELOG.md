@@ -7,6 +7,29 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Console: Start here, the first run
+
+- **Start here** is the console's new home, first in the nav; the Gantry mark, the console root and every sign-in
+  open it (they opened the Audit log). On an empty install it asks **What do you want to start with?**: coding
+  agents, our own apps and agents, MCP tools, a spend limit for the team, or Claude Team seats we can only watch
+  (Enterprise). The choice is recorded (`start_choice`), kept in the store (new store migration 7,
+  `gantry_settings`) or else in `gantry-start.json` beside the audit log, and can be changed or skipped.
+- Each choice has a checklist built from the gateway's real configuration: its address, the key made on the page
+  (through the People issue flow, shown once), the lines for Claude Code, Codex, Cursor and the SDKs, the policy
+  lines (a draft in the editor with `policy_from: store`, else Copy and the file's path), the `claude mcp add`
+  command and the Claude Code managed settings with a watch token made on the page. Every step says what turns it
+  done and what you then see, computed from Gantry's records; a waiting step polls `GET /console/start/state.json`
+  every 2 seconds while the tab is visible, with a **Check now** link without JavaScript.
+- The first requests show on Start here with a reading of each part and the next step. Once a choice is done, the
+  five-step strip (See, Know, Limit, Protect, Prove) shows the current step's next action, with the other choices
+  one click away.
+- Requests, Analytics, Spend, People and workloads, Teams, Policy, Audit log, MCP approvals (now listed when the
+  policy has no MCP server), Alerts, Devices and a new **Watch** page (Enterprise) say what fills them when empty,
+  with one action that opens the Start here step and the docs link. People who may not act see the docs link only.
+- Extensions: `gantry_console::Extension::watch` lets a binary make and count watch tokens for Start here;
+  `gantry_console::empty_page` and `request_base` draw an extension page's empty state.
+- `scripts/onboarding_check.py` walks the whole first run in Chrome against a mock provider.
+
 ### Plugin events: guardrail contract v2
 
 - A new guardrail type, `events`, sends an outside service the whole conversation as typed events: `system_prompt`,
