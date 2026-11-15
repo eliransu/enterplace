@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (gantry-core, gantry-server, gantry-cli, gantry-console), Astro Starlight docs, static landing page.
 
-**Spec:** /Users/lasso/Documents/private/gantry/worktrees/educate/docs/superpowers/specs/2026-11-14-five-steps-design.md
+**Spec:** docs/superpowers/specs/2026-11-14-five-steps-design.md
 
 ## Global Constraints
 
