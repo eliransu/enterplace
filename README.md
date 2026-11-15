@@ -30,55 +30,37 @@ Everything outside `enterprise/` is Apache 2.0. The enterprise features in `ente
 ## Quickstart
 
 ```bash
+docker run --name gantry -p 8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY=sk-... ghcr.io/eliransu/gantry
+```
+
+The image is public. The first start writes an observe-mode policy (nothing is blocked, every request is recorded) and
+an admin key to the `gantry-data` volume, prints the key once as `export GANTRY_KEY=gantry_...`, and serves on
+`http://localhost:8080`. `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` work too.
+
+Send a request through it:
+
+```bash
+export GANTRY_KEY=gantry_...
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $GANTRY_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hello."}]}'
+```
+
+Every request is now in `/var/lib/gantry/gantry-audit.jsonl` on the volume. Prove nothing was changed:
+
+```bash
+docker exec gantry /gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+```
+
+With Postgres, for a team: the [Docker Compose](https://gantry-docs.eliran.me/deploy/docker/) guide. From source:
+
+```bash
 git clone https://github.com/eliransu/gantry.git && cd gantry
 cargo build --release
-export PATH="$PWD/target/release:$PATH"
+OPENAI_API_KEY=sk-... target/release/gantry start
 ```
 
-Write `gantry.policy.yaml`:
-
-```yaml
-version: 1
-providers:
-  - name: anthropic
-    kind: anthropic
-    url: https://api.anthropic.com
-    key_env: ANTHROPIC_PROVIDER_KEY
-    models: [claude-sonnet-5-5, claude-haiku-5-5]
-rules:
-  - name: engineering
-    principals: { team: engineering }
-    models: [claude-sonnet-5-5, claude-haiku-5-5]
-    budget: { usd: 2000, per: month }
-    rate: { rpm: 600 }
-  - name: everyone-else
-    principals: { any: true }
-    models: []
-```
-
-Check it, issue a key, start the gateway:
-
-```bash
-gantry check gantry.policy.yaml
-gantry key new maya.cohen --team engineering
-ANTHROPIC_PROVIDER_KEY=sk-ant-... gantry serve gantry.policy.yaml
-```
-
-Point Claude Code at it:
-
-```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_API_KEY=gantry_...
-claude
-```
-
-Every request is now in `gantry-audit.jsonl`. Prove nothing was changed:
-
-```bash
-gantry audit verify gantry-audit.jsonl
-```
-
-Full walkthrough, including Docker: [Quickstart](https://gantry-docs.eliran.me/getting-started/quickstart/).
+Full walkthrough: [Quickstart](https://gantry-docs.eliran.me/getting-started/quickstart/).
 
 ## Features
 

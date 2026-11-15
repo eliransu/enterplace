@@ -14,8 +14,7 @@ The Helm chart ships inside the `gantry` image, so it always matches the version
 - A cluster on Kubernetes 1.27 or later, with a default StorageClass that offers `ReadWriteOnce` volumes. EKS, GKE and AKS all do.
 - `kubectl` pointed at the cluster, `helm` 3 or later, and Docker, to copy the chart out of the image.
 - Postgres 16 that the cluster can reach, with a database `gantry` and a user that has `CREATE` on it. Gantry creates its tables on first start. Use the cloud's managed Postgres.
-- The registry token Gantry gave you with your license, which reads `ghcr.io/eliransu/gantry`.
-- Your license key, a provider key (OpenAI in this guide), and the image version you were given.
+- Your license key, a provider key (OpenAI in this guide), and the image version you will run.
 
 ## Install
 
@@ -25,7 +24,6 @@ The Helm chart ships inside the `gantry` image, so it always matches the version
 
    ```bash
    export GANTRY_VERSION=<version>
-   docker login ghcr.io -u <your user name>
    docker create --name gantry-files ghcr.io/eliransu/gantry:$GANTRY_VERSION
    docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
    kubectl create namespace gantry
@@ -35,13 +33,6 @@ The Helm chart ships inside the `gantry` image, so it always matches the version
    Or install the chart from the registry, where each release publishes it as a signed OCI artifact: `helm install gantry oci://ghcr.io/eliransu/charts/gantry --version $GANTRY_VERSION` in place of the local path below. Check the image and the chart first with `scripts/verify_release.sh $GANTRY_VERSION` ([Verify a release](/operations/verify-release/)).
 
 2. Create the secrets. The chart reads secret values only from Secrets you make: none goes in a values file.
-
-   The image pull secret, because the registry is private:
-
-   ```bash
-   kubectl create secret docker-registry ghcr --docker-server=ghcr.io \
-     --docker-username=<your user name> --docker-password=<registry token>
-   ```
 
    The gateway's environment: one entry per provider `key_env`, the license, and the database:
 
@@ -76,8 +67,6 @@ The Helm chart ships inside the `gantry` image, so it always matches the version
 
    ```yaml title="gantry-values.yaml"
    replicaCount: 2
-   imagePullSecrets:
-     - name: ghcr
    envFromSecrets:
      - gantry-secrets
    policy: |

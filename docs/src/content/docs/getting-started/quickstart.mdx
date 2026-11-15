@@ -1,263 +1,95 @@
 ---
 title: Quickstart
-description: Build Gantry, write a policy, issue a key and send your first governed request in about five minutes.
+description: Start Gantry with one docker command, send a governed request and verify the audit log in about two minutes.
 sidebar:
   order: 1
 ---
 
-import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
 
-This guide takes you from source to a governed request: one policy, one key, one request, one verified audit record. To run Gantry Enterprise for a team, with Postgres and more than one replica, follow a [deploy guide](/deploy/overview/) instead.
+One command starts Gantry with a provider key: every request gets an identity, a policy decision and a hash-chained audit record. You need Docker and a key for one provider (OpenAI in this guide).
 
-## Prerequisites
-
-- Rust 1.88 or later. The repository pins it in `rust-toolchain.toml`, so `rustup` installs it on the first build.
-- Docker, if you want to run the container image instead of the binary.
-- A key for at least one provider (OpenAI in this guide).
-
-## 1. Install
-
-<Tabs syncKey="install">
-<TabItem label="From source">
+## Run the image
 
 ```bash
-git clone https://github.com/eliransu/gantry.git
-cd gantry
-cargo build --release
+docker run --name gantry -p 8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY=sk-... ghcr.io/eliransu/gantry
 ```
 
-The binary is `target/release/gantry`, the open source edition (Apache 2.0). Put it on your `PATH`:
-
-```bash
-export PATH="$PWD/target/release:$PATH"
-gantry version
-```
-
-</TabItem>
-<TabItem label="Docker">
-
-```bash
-git clone https://github.com/eliransu/gantry.git
-cd gantry
-scripts/release.sh image
-```
-
-This builds a static musl binary into an image tagged `gantry:local`. The image holds the binary and nothing else and runs as user `65532`. Its binary is the enterprise build (`enterprise/`, commercial license): with no license key it is the open source gateway this guide uses.
-
-To see Gantry work before writing anything, run the image with only a provider key:
-
-```bash
-docker run -p 127.0.0.1:8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY gantry:local
-```
-
-The first start writes a policy in observe mode (every key may use every model, nothing is blocked, every request is recorded) and an admin key to the `gantry-data` volume, prints the admin key once with the settings for Claude Code, Codex, Cursor and the OpenAI SDKs, and serves on `http://localhost:8080`. `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` work the same way, alone or together. Later starts on the same volume serve that policy and keys and print no new key. The key stays in the container's log (`docker logs`) until the container is removed: copy it to your secret manager and remove the container once you have it. A published release is `ghcr.io/eliransu/gantry:<version>` in place of `gantry:local`.
-
-With a policy mounted at `/etc/gantry/gantry.policy.yaml` (step 4 below), the image serves that policy instead and writes nothing.
-
-</TabItem>
-</Tabs>
-
-## The short way: gantry init
-
-Two commands and a link take you to a governed request:
-
-```bash
-gantry init --provider openai          # writes gantry.policy.yaml; --models a,b for other providers
-export OPENAI_PROVIDER_KEY=sk-...
-gantry serve gantry.policy.yaml
-```
-
-With no admin key yet, `gantry serve` prints a one-time link, `http://127.0.0.1:8080/console/setup/<token>`. Open it, give your name and team, and it makes your admin key (shown once), shows the lines that point Claude Code and the OpenAI SDKs at Gantry, and a `curl` to try. The link works once, and the setup is recorded in the audit log. `gantry providers` lists the providers `--provider` takes.
-
-The steps below do the same by hand, and say what each part of the policy means.
-
-## 2. Write a policy
-
-Save this as `gantry.policy.yaml`. It defines one provider and two rules: the `payments` team may use `gpt-4o-mini`, everyone else may use nothing.
-
-```yaml title="gantry.policy.yaml"
-version: 1
-providers:
-  - name: openai
-    kind: openai
-    url: https://api.openai.com
-    key_env: OPENAI_PROVIDER_KEY
-    models: [gpt-4o-mini, gpt-4o]
-rules:
-  - name: payments-team
-    principals: { team: payments }
-    models: [gpt-4o-mini]
-  - name: everyone-else
-    principals: { any: true }
-    models: []
-```
-
-The provider key never appears in the policy. `key_env` names the environment variable that holds it.
-
-<Tabs syncKey="install">
-<TabItem label="From source">
-
-```bash
-gantry check gantry.policy.yaml
-```
-
-</TabItem>
-<TabItem label="Docker">
-
-```bash
-docker run --rm -v "$PWD:/work" -w /work gantry:local check gantry.policy.yaml
-```
-
-</TabItem>
-</Tabs>
+The image is public: no login. The first start writes a policy in observe mode (every key may use every model, nothing is blocked, every request is recorded) and an admin key to the `gantry-data` volume, then serves on `http://localhost:8080`. It prints the admin key once, with the settings for Claude Code, Codex, Cursor and the OpenAI SDKs:
 
 ```text
-gantry.policy.yaml is valid: 2 rules, 0 keys, 1 provider: openai (openai) at https://api.openai.com.
+Wrote /var/lib/gantry/gantry.policy.yaml: observe mode and one rule that lets every key use every model of openai. Nothing is blocked, and every request is recorded.
+
+Admin key, shown once and kept nowhere (only its hash is in /var/lib/gantry/gantry.keys.yaml):
+
+  export GANTRY_KEY=gantry_3f9c...
+
+The same key signs in to the console at http://localhost:8080/console.
 ```
 
-Any mistake is reported with its file, line and the fix. Unknown fields are errors, not warnings.
-
-## 3. Issue a key
-
-<Tabs syncKey="install">
-<TabItem label="From source">
-
-```bash
-gantry key new maya.cohen --team payments
-```
-
-</TabItem>
-<TabItem label="Docker">
-
-```bash
-mkdir -p keys
-docker run --rm -v "$PWD/keys:/work" -w /work --user "$(id -u)" \
-  gantry:local key new maya.cohen --team payments --keys /work/gantry.keys.yaml
-```
-
-</TabItem>
-</Tabs>
-
-The key (`gantry_` followed by 64 hex characters) is printed once, together with the environment variables that point Claude Code and the OpenAI SDKs at Gantry. Only its SHA-256 is written to `gantry.keys.yaml`.
+`ANTHROPIC_API_KEY` and `GEMINI_API_KEY` work the same way, alone or together. Later starts on the same volume serve that policy and keys and print no new key.
 
 <Aside type="caution">
-Hand keys over through your secret manager. Gantry cannot show a key again: lose it and issue a new one.
+The admin key stays in the container's log until the container is removed. Copy it to your password manager, then read it back with `docker logs gantry 2>&1 | grep GANTRY_KEY` only if you lost it.
 </Aside>
 
-## 4. Start the gateway
+## Send a request
 
-<Tabs syncKey="install">
-<TabItem label="From source">
-
-```bash
-OPENAI_PROVIDER_KEY=sk-... gantry serve gantry.policy.yaml
-```
-
-```text
-gantry 0.0.1 listening on http://127.0.0.1:8080
-Console: http://127.0.0.1:8080/console (sign in with an admin key)
-Audit log: gantry-audit.jsonl is new. The chain starts at record 1.
-2 rules, 1 key, 1 provider: openai (openai) at https://api.openai.com.
-```
-
-</TabItem>
-<TabItem label="Docker">
-
-In the container the audit log must live on the volume, because `/etc/gantry` is mounted read-only. Add this line to `gantry.policy.yaml`:
-
-```yaml
-audit: { path: /var/lib/gantry/gantry-audit.jsonl }
-```
+In a second terminal, export the key the container printed and call the OpenAI API through Gantry:
 
 ```bash
-docker run --rm -p 127.0.0.1:8080:8080 \
-  -v "$PWD/gantry.policy.yaml:/etc/gantry/gantry.policy.yaml:ro" \
-  -v "$PWD/keys:/etc/gantry/keys" \
-  -v gantry-audit:/var/lib/gantry \
-  -e OPENAI_PROVIDER_KEY \
-  gantry:local \
-  serve /etc/gantry/gantry.policy.yaml --keys /etc/gantry/keys/gantry.keys.yaml --listen 0.0.0.0:8080
-```
-
-On Linux, give user `65532` the keys folder first: `sudo chown -R 65532 keys`.
-
-</TabItem>
-</Tabs>
-
-Gantry listens on `127.0.0.1:8080` by default. It refuses to start if a provider's `key_env` variable is not set.
-
-## 5. Send a request
-
-<Tabs syncKey="lang">
-<TabItem label="curl">
-
-```bash
-curl http://127.0.0.1:8080/v1/chat/completions \
+export GANTRY_KEY=gantry_...
+curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer $GANTRY_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Say hello."}]}'
 ```
 
-</TabItem>
-<TabItem label="Python">
+The answer is the provider's, unchanged, with an `X-Gantry-Decision` header added. Open `http://localhost:8080/console` and sign in with the same key to see the request.
+
+## Verify the audit log
+
+The audit log is `/var/lib/gantry/gantry-audit.jsonl`, on the `gantry-data` volume beside the policy and the keys file. Check its chain with the image's own binary:
 
 ```bash
-export OPENAI_BASE_URL=http://127.0.0.1:8080/v1
-export OPENAI_API_KEY=gantry_...
-```
-
-```python
-from openai import OpenAI
-
-client = OpenAI()  # reads OPENAI_BASE_URL and OPENAI_API_KEY
-answer = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Say hello."}],
-)
-print(answer.choices[0].message.content)
-```
-
-</TabItem>
-<TabItem label="TypeScript">
-
-```bash
-export OPENAI_BASE_URL=http://127.0.0.1:8080/v1
-export OPENAI_API_KEY=gantry_...
-```
-
-```ts
-import OpenAI from "openai";
-
-const client = new OpenAI(); // reads OPENAI_BASE_URL and OPENAI_API_KEY
-const answer = await client.chat.completions.create({
-  model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "Say hello." }],
-});
-console.log(answer.choices[0].message.content);
-```
-
-</TabItem>
-</Tabs>
-
-The answer is the provider's, unchanged, with an `X-Gantry-Decision` header added. Now ask for `gpt-4o` with the same key: Gantry refuses with `model_not_allowed`, because the `payments-team` rule allows only `gpt-4o-mini`. The refusal message carries the decision ID, so the person can quote it and an admin can find the record.
-
-## 6. Verify the audit log
-
-```bash
-gantry audit verify gantry-audit.jsonl
+docker exec gantry /gantry audit verify /var/lib/gantry/gantry-audit.jsonl
 ```
 
 ```text
-gantry-audit.jsonl: 2 records in an unbroken chain from record 1 to record 2.
-Last hash: 1ae338b7...
+/var/lib/gantry/gantry-audit.jsonl: 3 records in an unbroken chain from record 1 to record 3.
+1 request, 1 configuration record, 0 admin records, 1 usage record.
+Last hash: 9be869bf...
 ```
 
-Both requests are in the log: the allowed one and the refused one. Keep the last hash somewhere the Gantry host cannot write, and check it later with `--expect-last`. See [Audit log](/governance/audit-log/).
+Stop the gateway with Ctrl-C and start it again with `docker start -a gantry`. See [Audit log](/governance/audit-log/).
+
+## With Postgres: Docker Compose
+
+For a team, keys, kill switches and budgets live in Postgres, so they are shared and survive the container. The [Docker Compose](/deploy/docker/) guide holds the two files: `docker-compose.yml` (the gateway and Postgres 16) and `.env`. Save both in an empty folder, fill in `.env`, then:
+
+```bash
+docker compose up -d
+docker compose logs gantry | grep 'First run'
+```
+
+The second line prints a one-time link that makes the first admin key in the console. The guide goes on to issue keys and verify the audit log.
+
+## From source
+
+You need Rust 1.88 or later. The repository pins it in `rust-toolchain.toml`, so `rustup` installs it on the first build.
+
+```bash
+git clone https://github.com/eliransu/gantry.git
+cd gantry
+cargo build --release
+OPENAI_API_KEY=sk-... target/release/gantry start
+```
+
+`gantry start` does what the image does, in the current folder: it writes `gantry.policy.yaml` and `gantry.keys.yaml`, prints the admin key and serves on `http://127.0.0.1:8080`. The audit log is `gantry-audit.jsonl` beside the policy: `target/release/gantry audit verify gantry-audit.jsonl` checks it. This binary is the open source edition (Apache 2.0). The image runs the enterprise build, which without a license key is the same open source gateway.
 
 ## Next steps
 
 - [Connect Claude Code](/integrations/claude-code/) and route your team's coding sessions through Gantry.
-- [Policy file](/governance/policy/): budgets, rate limits, guardrails and caching per rule.
-- [Keys and identity](/governance/keys/): expiry, budgets per key, and self-service keys with `gantry login`.
-- [Deployment](/operations/deployment/): run Gantry on a shared host with TLS.
+- [Policy file](/governance/policy/): rules per team and model, budgets, rate limits and guardrails, then `mode: enforce`.
+- [Keys and identity](/governance/keys/): a key per person and workload, and self-service keys with `gantry login`.
 - [Deploy Gantry Enterprise](/deploy/overview/): Docker Compose, Kubernetes, AWS, Google Cloud or Azure, from nothing to a production gateway.

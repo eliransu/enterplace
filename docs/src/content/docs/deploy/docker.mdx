@@ -7,18 +7,11 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-One Compose file runs the gateway and Postgres 16 on one machine, each with a named volume: `gantry-data` for the audit log and `postgres-data` for the database. It fits a trial on a laptop and a team on one VM. You need Docker, a login to the registry, and the two files on this page. Nothing is cloned or built.
+One Compose file runs the gateway and Postgres 16 on one machine, each with a named volume: `gantry-data` for the audit log and `postgres-data` for the database. It fits a trial on a laptop and a team on one VM. You need Docker and the two files on this page. Nothing is cloned or built.
 
 ## Prerequisites
 
 - Docker with Compose 2.23 or later (`docker compose version`).
-- The registry token Gantry gave you with your license. Log in once on this machine:
-
-  ```bash
-  docker login ghcr.io -u <your GitHub user or the user name Gantry gave you>
-  ```
-
-  Paste the token as the password. It reads `ghcr.io/eliransu/gantry` and nothing else.
 - Your license key, and a key for at least one provider (OpenAI in this guide).
 
 ## From nothing to a governed call
@@ -126,7 +119,7 @@ One Compose file runs the gateway and Postgres 16 on one machine, each with a na
    # Optional. Encrypts the secrets of SIEM export destinations (license feature siem). 64 hex characters,
    # `openssl rand -hex 32`. Empty: only destinations that need no secret can be saved.
    GANTRY_EXPORT_KEY=
-   # The image. Pin the version you were given, or a commit SHA, in production.
+   # The image. Pin a release version, or a commit SHA, in production.
    GANTRY_IMAGE=ghcr.io/eliransu/gantry:latest
    # Where Gantry listens on this machine.
    GANTRY_BIND=127.0.0.1
@@ -269,7 +262,7 @@ Then run steps 3 to 6. The governed call answers `pong`. To switch to OpenAI, de
 
 <Steps>
 
-1. **Pin the image.** Set `GANTRY_IMAGE` in `.env` to the version you were given, or a commit SHA, never `latest`, so an upgrade happens only when you choose it.
+1. **Pin the image.** Set `GANTRY_IMAGE` in `.env` to a release version, or a commit SHA, never `latest`, so an upgrade happens only when you choose it.
 
    ```bash title=".env"
    GANTRY_IMAGE=ghcr.io/eliransu/gantry:<version>

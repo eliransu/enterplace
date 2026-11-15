@@ -32,8 +32,7 @@ The Terraform module `gcp-cloud-run`, which ships inside the `gantry` image, run
 - Terraform 1.6 or later, Docker, and the `gcloud` command line signed in to the project with Application Default Credentials for Terraform: `gcloud auth application-default login`.
 - A Google Cloud project with billing on, and a role that can enable APIs and create Cloud Run, Cloud SQL, Filestore, Secret Manager secrets, service accounts and project IAM bindings (Owner, or Editor with Project IAM Admin and Secret Manager Admin).
 - A VPC network with a subnetwork in your region. The project's `default` network has one.
-- The registry token Gantry gave you with your license, which reads `ghcr.io/eliransu/gantry`, and the user name that goes with it.
-- Your license key, a provider key, and the image version you were given.
+- Your license key, a provider key, and the image version you will run.
 
 The service URL comes with a Google-managed certificate, so the first deploy needs no certificate of your own.
 
@@ -48,7 +47,6 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
    gcloud services enable artifactregistry.googleapis.com secretmanager.googleapis.com
    gcloud artifacts repositories create gantry --repository-format=docker --location=europe
    gcloud auth configure-docker europe-docker.pkg.dev
-   docker login ghcr.io -u <your user name>
    docker buildx imagetools create \
      --tag europe-docker.pkg.dev/my-project/gantry/gantry:<version> \
      ghcr.io/eliransu/gantry:<version>
@@ -67,7 +65,6 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
 
    ```bash
    mkdir gantry-gcp && cd gantry-gcp
-   docker login ghcr.io -u <your user name>
    docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
    docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
    ```

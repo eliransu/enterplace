@@ -30,14 +30,14 @@ podDisruptionBudget:
 
 image:
   repository: ghcr.io/eliransu/gantry
-  # The newest build of main. Pin the commit SHA or version you were given for production.
+  # The newest build of main. Pin a release version or a commit SHA for production.
   tag: "latest"
   pullPolicy: IfNotPresent
 
-# The registry is private. Make a docker-registry Secret with a token that can read the package, for example:
-#   kubectl create secret docker-registry ghcr --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
+# ghcr.io/eliransu/gantry is public and needs none. For a private mirror, make a docker-registry Secret, for example:
+#   kubectl create secret docker-registry mirror --docker-server=<registry> --docker-username=<user> --docker-password=<token>
 imagePullSecrets: []
-#  - name: ghcr
+#  - name: mirror
 
 # The policy file, mounted read-only at /etc/gantry/gantry.policy.yaml. `helm upgrade` with a new policy does not
 # restart the pods: the kubelet updates the mounted file (within about a minute) and Gantry checks it and uses it

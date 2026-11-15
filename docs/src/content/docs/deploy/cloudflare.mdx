@@ -32,8 +32,7 @@ The wrangler template `cloudflare`, which ships inside the `gantry` image, runs 
 - A Cloudflare account on the Workers Paid plan, which Containers need, with R2 enabled and a zone for the gateway's hostname.
 - Node.js 20 or later, and Docker running: wrangler builds the image locally for `linux/amd64`.
 - A Postgres database reachable over TLS from the internet, and its connection string with `sslmode=require`.
-- The registry token Gantry gave you with your license, which reads `ghcr.io/eliransu/gantry`, and the user name that goes with it.
-- Your license key, a provider key, and the image version you were given.
+- Your license key, a provider key, and the image version you will run.
 
 ## Deploy
 
@@ -42,7 +41,6 @@ The wrangler template `cloudflare`, which ships inside the `gantry` image, runs 
 1. Copy the template out of the image you will run, and install wrangler beside it.
 
    ```bash
-   docker login ghcr.io -u <your user name>
    docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
    docker cp gantry-files:/deploy/cloudflare ./gantry-cloudflare && docker rm gantry-files
    cd gantry-cloudflare

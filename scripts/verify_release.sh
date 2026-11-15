@@ -5,8 +5,8 @@
 #
 #   scripts/verify_release.sh X.Y.Z
 #
-# Prints the image digest to pin. Needs cosign 2.4 or later, and python3. Log in to ghcr.io first
-# (`docker login ghcr.io` or `cosign login ghcr.io`) with a token that can read the packages.
+# Prints the image digest to pin. Needs cosign 2.4 or later, and python3. The image and the chart are
+# public: no login.
 #
 # Environment:
 #   IMAGE    the image repository (default ghcr.io/eliransu/gantry)

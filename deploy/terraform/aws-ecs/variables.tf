@@ -10,7 +10,7 @@ variable "image" {
 }
 
 variable "image_pull_secret_arn" {
-  description = "Secrets Manager ARN of registry credentials ({\"username\":...,\"password\":...}) for a private registry such as ghcr.io. Null for a public registry or ECR."
+  description = "Secrets Manager ARN of registry credentials ({\"username\":...,\"password\":...}) for a private registry, such as your own mirror of the image. Null for ghcr.io/eliransu/gantry (public) or ECR."
   type        = string
   default     = null
 }

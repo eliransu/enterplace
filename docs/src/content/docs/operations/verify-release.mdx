@@ -27,17 +27,11 @@ Keyless signatures are recorded in Sigstore's public transparency log (Rekor). T
 
 ## Check a version
 
-You need [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) 3.0 or later, python3, and a token that can read the packages.
+You need [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) 3.0 or later, and python3. The image and the chart are public, so no login is needed.
 
 <Steps>
 
-1. Log in to the registry.
-
-   ```bash
-   docker login ghcr.io -u <your user name>
-   ```
-
-2. Run the check, from a checkout of the repository at any version (or copy the script).
+1. Run the check, from a checkout of the repository at any version (or copy the script).
 
    ```bash
    scripts/verify_release.sh 0.2.0

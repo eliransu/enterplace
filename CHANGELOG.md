@@ -7,6 +7,15 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Public image and one-command quickstart
+
+- The image `ghcr.io/eliransu/gantry` and the chart `oci://ghcr.io/eliransu/charts/gantry` are public: no
+  `docker login` or `helm registry login`, and no image pull secret. The deploy guides, the Helm chart README and
+  `scripts/verify_release.sh` no longer ask for a registry token. The Terraform registry credential variables stay,
+  for a private mirror, and default to none.
+- The quickstart opens with one command, `docker run --name gantry -p 8080:8080 -v gantry-data:/var/lib/gantry -e
+  OPENAI_API_KEY=sk-... ghcr.io/eliransu/gantry`, then Docker Compose with Postgres, then a build from source.
+
 ### Plugin events: guardrail contract v2
 
 - A new guardrail type, `events`, sends an outside service the whole conversation as typed events: `system_prompt`,

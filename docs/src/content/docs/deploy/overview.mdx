@@ -8,13 +8,13 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry Enterprise runs in your own network or cloud account. These guides take you from nothing to a gateway that answers governed requests, with the console signed in and the audit log verified, and then through what production needs. You need Docker and the registry token Gantry gives you with your license: the image carries everything else, and the Compose file is on the [Docker Compose](/deploy/docker/) page.
+Gantry Enterprise runs in your own network or cloud account. These guides take you from nothing to a gateway that answers governed requests, with the console signed in and the audit log verified, and then through what production needs. You need Docker: the image is public and carries everything else, and the Compose file is on the [Docker Compose](/deploy/docker/) page.
 
 ## What you deploy
 
 | Part | What it is | Where it lives |
 |---|---|---|
-| The image | `ghcr.io/eliransu/gantry`: one static binary, `/gantry`, built `FROM scratch`, running as user `65532`. It serves the gateway, the console, the admin API and the enterprise features | Your registry or ghcr.io, which is private: your license comes with read access |
+| The image | `ghcr.io/eliransu/gantry`: one static binary, `/gantry`, built `FROM scratch`, running as user `65532`. It serves the gateway, the console, the admin API and the enterprise features | ghcr.io, public, or your own registry mirroring it |
 | Postgres | The store: keys, kill switches and spend, shared by every replica. The Compose stack and the Terraform modules run Postgres 16 | A managed database (RDS, Cloud SQL, Azure Database for PostgreSQL) or the Compose container |
 | A volume per replica | `/var/lib/gantry`, holding that replica's hash-chained audit log. Two replicas never share one, because each writes its own chain | A Docker volume, a PersistentVolumeClaim, EFS, Filestore or Azure Files. On Cloudflare, the container's own disk, sealed into R2 every minute |
 | The policy | One YAML file at `/etc/gantry/gantry.policy.yaml`: providers, rules, guardrails. It holds no secrets | Version control, then a ConfigMap, a parameter or a secret mount |
@@ -45,7 +45,7 @@ store: { postgres_url_env: DATABASE_URL }
 
 ### The image tags
 
-Each build of `main` is pushed tagged with its full commit SHA and as `latest`, and each release with its version, such as `0.1.0`. `latest` is for a first try. Pin the version you were given in every production deploy file: a moving tag makes a rollback guesswork.
+Each build of `main` is pushed tagged with its full commit SHA and as `latest`, and each release with its version, such as `0.1.0`. `latest` is for a first try. Pin a release version in every production deploy file: a moving tag makes a rollback guesswork.
 
 ### The command line
 

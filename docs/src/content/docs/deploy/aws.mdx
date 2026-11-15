@@ -30,18 +30,16 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
 - An AWS account and credentials for Terraform, given as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the environment. They need to create ECS, Elastic Load Balancing, EFS, RDS and RDS Proxy, Secrets Manager, SSM, IAM roles and policies, CloudWatch Logs and EC2 security groups.
 - A VPC with at least two private subnets and two public subnets, in two availability zones. The private subnets need outbound HTTPS through a NAT gateway: the tasks pull the image from ghcr.io and busybox from `public.ecr.aws`, and call the model providers.
 - A domain name you control, and an ACM certificate for it in the same region. Request it in the console under **Certificate Manager**, **Request**, with DNS validation, and wait until its status is **Issued**.
-- The registry token Gantry gave you with your license, which reads `ghcr.io/eliransu/gantry`, and the user name that goes with it.
-- Your license key, a provider key, and the image version you were given.
+- Your license key, a provider key, and the image version you will run.
 
 ## Deploy
 
 <Steps>
 
-1. Put the secrets in Secrets Manager. The module only references them by ARN, so their values never enter Terraform state. In the console, open **Secrets Manager**, **Store a new secret**, **Other type of secret**, and make three:
+1. Put the secrets in Secrets Manager. The module only references them by ARN, so their values never enter Terraform state. In the console, open **Secrets Manager**, **Store a new secret**, **Other type of secret**, and make two:
 
    | Secret name | Value | Becomes |
    |---|---|---|
-   | `ghcr-pull` | Key/value: `username` your user name, `password` the registry token | The registry credentials ECS pulls the image with |
    | `gantry-license` | Plaintext: the license key | `GANTRY_LICENSE` |
    | `openai` | Plaintext: the OpenAI key | `OPENAI_PROVIDER_KEY` |
 
@@ -53,7 +51,6 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
 
    ```bash
    mkdir gantry-aws && cd gantry-aws
-   docker login ghcr.io -u <your user name>
    docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
    docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
    ```
@@ -100,7 +97,6 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
      certificate_arn    = "arn:aws:acm:eu-west-1:123456789012:certificate/..."
      domain_name        = "gantry.example.com"
 
-     image_pull_secret_arn    = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:ghcr-pull-..."
      license_secret_arn       = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:gantry-license-..."
      provider_key_secret_arns = { OPENAI_PROVIDER_KEY = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:openai-..." }
    }
@@ -147,7 +143,7 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
 | `replicas` | `2` | One ECS service, one task and one EFS access point each |
 | `cpu`, `memory` | `512`, `1024` | Fargate CPU units and MiB per task |
 | `cpu_architecture` | `X86_64` | Or `ARM64`. The image is built for both |
-| `image_pull_secret_arn` | `null` | Registry credentials, for ghcr.io |
+| `image_pull_secret_arn` | `null` | Registry credentials, for a private mirror of the image. ghcr.io needs none |
 | `license_secret_arn` | `null` | Becomes `GANTRY_LICENSE`. Null runs the open source features only |
 | `provider_key_secret_arns` | `{}` | The variable each `key_env` names, mapped to a secret ARN |
 | `bedrock_resource_arns` | `[]` | Bedrock foundation-model and inference-profile ARNs the task role may invoke. Empty or null makes no task role |
@@ -253,7 +249,7 @@ A cross-region inference profile (`us.`, `eu.`) also needs the foundation model'
 ## Production checklist
 
 - **TLS.** At the load balancer, with the ACM certificate; port 80 redirects. ACM renews a DNS-validated certificate while its validation record stays in place.
-- **Secrets.** Provider keys, the license and registry credentials in Secrets Manager, referenced by ARN. `DATABASE_URL`, and the master and export keys unless you bring them, are Secrets Manager secrets the module writes. Keep the Terraform state encrypted: it holds the database password and those keys. Every gateway must keep the same master key: never rotate it in place, since the credentials sealed with it would no longer open. A changed secret is read when a task starts: in the console, **ECS**, the service, **Update service**, **Force new deployment**.
+- **Secrets.** Provider keys and the license in Secrets Manager, referenced by ARN. `DATABASE_URL`, and the master and export keys unless you bring them, are Secrets Manager secrets the module writes. Keep the Terraform state encrypted: it holds the database password and those keys. Every gateway must keep the same master key: never rotate it in place, since the credentials sealed with it would no longer open. A changed secret is read when a task starts: in the console, **ECS**, the service, **Update service**, **Force new deployment**.
 - **Backups.** RDS keeps 7 days of automated backups with point-in-time restore. EFS has its AWS Backup policy on. Keep each gateway's last hash off AWS.
 - **Monitoring.** Set `metrics_port = 9464` and `metrics_cidrs` to your Prometheus's range. Alarm in CloudWatch on the target group's `UnHealthyHostCount` and the load balancer's `HTTPCode_Target_5XX_Count`. For traces, add `OTEL_EXPORTER_OTLP_ENDPOINT` as a secret in `provider_key_secret_arns`: the map sets any variable from a secret.
 - **Upgrades.** Take a manual RDS snapshot in the console (**RDS**, the database, **Actions**, **Take snapshot**), then change `image` and apply. A newer Gantry may update the schema; an older one refuses a database a newer one has written.

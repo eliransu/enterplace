@@ -28,8 +28,7 @@ The Terraform module `azure-container-apps`, which ships inside the `gantry` ima
 - Terraform 1.6 or later, Docker, and the Azure CLI signed in (`az login`). Terraform uses its sign-in.
 - A subscription where you can create resource groups, networks, Container Apps, PostgreSQL Flexible Servers, storage accounts, managed identities and role assignments (Owner, or Contributor with User Access Administrator).
 - A Key Vault with RBAC authorization, outside the resource group the module creates, where you hold Key Vault Secrets Officer: the module adds `DATABASE_URL`, and the master and export keys unless you bring them, to it.
-- The registry token Gantry gave you with your license, which reads `ghcr.io/eliransu/gantry`, and the user name that goes with it.
-- Your license key, a provider key, and the image version you were given.
+- Your license key, a provider key, and the image version you will run.
 
 The app's address comes with a managed certificate, so the first deploy needs no certificate of your own.
 
@@ -47,7 +46,6 @@ The app's address comes with a managed certificate, so the first deploy needs no
      --scope "$(az keyvault show --name acme-gantry-kv --query id -o tsv)"
    az keyvault secret set --vault-name acme-gantry-kv --name openai-key --value 'sk-...'
    az keyvault secret set --vault-name acme-gantry-kv --name gantry-license --value 'eyJjdXN0b21lciI6...'
-   az keyvault secret set --vault-name acme-gantry-kv --name ghcr-token --value '<registry token>'
    az keyvault show --name acme-gantry-kv --query id -o tsv
    ```
 
@@ -57,7 +55,6 @@ The app's address comes with a managed certificate, so the first deploy needs no
 
    ```bash
    mkdir gantry-azure && cd gantry-azure
-   docker login ghcr.io -u <your user name>
    docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
    docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
    ```
@@ -103,7 +100,6 @@ The app's address comes with a managed certificate, so the first deploy needs no
      key_vault_id         = "/subscriptions/.../resourceGroups/gantry-secrets/providers/Microsoft.KeyVault/vaults/acme-gantry-kv"
      license_secret       = "gantry-license"
      provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key" }
-     registry             = { server = "ghcr.io", username = "<your user name>", password_secret = "ghcr-token" }
    }
 
    output "gateway_url" {
@@ -140,12 +136,12 @@ The app's address comes with a managed certificate, so the first deploy needs no
 | `resource_group_name` | required | The resource group the module creates |
 | `image` | required | The image, pinned to a version |
 | `policy` | required | The policy as text. A change makes a new revision |
-| `key_vault_id` | required | The vault holding the provider keys, the license and the registry token |
+| `key_vault_id` | required | The vault holding the provider keys and the license |
 | `provider_key_secrets` | `{}` | The variable each `key_env` names, mapped to a secret name in the vault |
 | `license_secret` | `null` | Secret name of the license. Null runs the open source features only |
 | `master_key_secret` | `null` | Optional. Your own master key's secret name in the vault (`GANTRY_MASTER_KEY`). Null makes `<name>-master-key` |
 | `export_key_secret` | `null` | Optional. Your own export key's secret name in the vault (`GANTRY_EXPORT_KEY`). Null makes `<name>-export-key` |
-| `registry` | `null` | `server`, `username` and `password_secret` (a secret name in the vault), for ghcr.io |
+| `registry` | `null` | `server`, `username` and `password_secret` (a secret name in the vault), for a private mirror of the image. ghcr.io needs none |
 | `internal` | `false` | An environment reachable only inside the virtual network |
 | `allowed_cidrs` | `[]` | Address ranges that may reach the app. Empty allows all |
 | `cpu`, `memory` | `1`, `2Gi` | On Consumption, memory is twice the CPU |
@@ -225,7 +221,7 @@ The app's address comes with a managed certificate, so the first deploy needs no
 ## Production checklist
 
 - **TLS.** The app's address has a managed certificate. For your own name, add a custom domain with a managed certificate to the Container App in the portal (**Custom domains**), or put Front Door in front.
-- **Secrets.** Provider keys, the license and the registry token in Key Vault, referenced by name. A new version of a secret is read when the replica restarts:
+- **Secrets.** Provider keys and the license in Key Vault, referenced by name. A new version of a secret is read when the replica restarts:
 
   ```bash
   az containerapp revision restart --name gantry --resource-group gantry \
