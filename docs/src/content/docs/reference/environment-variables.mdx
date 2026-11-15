@@ -58,6 +58,11 @@ If `client_secret_env` is not set, Gantry starts with a warning, and every singl
 | `GANTRY_MASTER_KEY` | none | 64 hex characters (`openssl rand -hex 32`): the key provider credentials in the store are sealed with. The same on every gateway on one store. Without it (or the file), credentials are off |
 | `GANTRY_MASTER_KEY_FILE` | none | Instead of `GANTRY_MASTER_KEY`: a file that holds it. Setting both stops the start |
 | `GANTRY_METRICS_BUDGET_SCOPES` | `global,org,team,model` | The scope kinds of `limits:` whose budgets `/metrics` shows as `gantry_budget_remaining_usd`, comma-separated, or `none`. Add `person`, `key`, `customer` or `tag` only when their number is small: each is one series per entry. See [Observability](/operations/observability/#label-cardinality) |
+| `GANTRY_METRICS_DIMENSIONS` | none | Names of `x-gantry-dim-<name>` request headers to count in `gantry_requests_by_dimension_total`, comma-separated, up to 8. See [Labels from request headers](/operations/observability/#labels-from-request-headers) |
+| `GANTRY_METRICS_PUSH_URL` | none | A Prometheus Pushgateway address, job included, that Gantry pushes its metrics to. See [Push to a Pushgateway](/operations/observability/#push-to-a-pushgateway) |
+| `GANTRY_METRICS_PUSH_SECONDS` | `15` | How often it pushes |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/json` | How traces are exported: `http/json`, `http/protobuf` or `grpc`. `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` sets it for traces alone. See [Traces](/operations/observability/#traces) |
+| `GANTRY_TRACE_PROPAGATION` | `caller,provider` | Which sides of a trace Gantry connects: `caller` joins the trace a caller's `traceparent` names, `provider` sends a `traceparent` to the provider, `none` neither |
 
 Read once, at start, by `gantry serve`, and by `gantry check` to check credential names. See [Provider credentials](/governance/provider-credentials/).
 

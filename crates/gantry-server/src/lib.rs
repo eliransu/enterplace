@@ -4764,10 +4764,7 @@ struct BudgetNow {
 }
 
 /// Each budget among `applied`, read now from the counters every gateway on the store shares.
-async fn budgets_now(
-    state: &AppState,
-    applied: &[gantry_core::policy::Applied],
-) -> Vec<BudgetNow> {
+async fn budgets_now(state: &AppState, applied: &[gantry_core::policy::Applied]) -> Vec<BudgetNow> {
     let now = gantry_core::audit::timestamp();
     let mut out = Vec::new();
     for a in applied {
@@ -4807,11 +4804,7 @@ async fn me(State(state): State<AppState>, request: Request) -> Response {
             return Err(unknown_route());
         };
         let key = caller_key(&parts.headers)?;
-        let client_ip = client_ip(
-            policy,
-            parts.extensions.get::<ClientAddr>(),
-            &parts.headers,
-        );
+        let client_ip = client_ip(policy, parts.extensions.get::<ClientAddr>(), &parts.headers);
         let minted = std::sync::OnceLock::new();
         let mut seen = Seen::default();
         let path = parts.uri.path();

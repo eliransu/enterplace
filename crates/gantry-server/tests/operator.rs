@@ -588,7 +588,10 @@ async fn usage_is_exported_as_a_focus_cost_file() -> TestResult {
     let file = send(&g.gw.router, admin("GET", "/admin/usage?format=focus")?).await?;
     assert_eq!(file.status, StatusCode::OK, "{}", file.body);
     assert!(file.header("content-type").starts_with("text/csv"));
-    assert!(file.header("content-disposition").contains("gantry-focus.csv"));
+    assert!(
+        file.header("content-disposition")
+            .contains("gantry-focus.csv")
+    );
     let mut lines = file.body.lines();
     let header: Vec<&str> = lines.next().ok_or("no header")?.split(',').collect();
     for column in [
@@ -617,14 +620,30 @@ async fn usage_is_exported_as_a_focus_cost_file() -> TestResult {
         assert!(header.contains(&column), "{column} missing from the header");
     }
     let rows: Vec<&str> = lines.collect();
-    assert_eq!(rows.len(), 1, "one line per day, team, provider and model: {rows:?}");
+    assert_eq!(
+        rows.len(),
+        1,
+        "one line per day, team, provider and model: {rows:?}"
+    );
     let row = rows[0];
     let today = &gantry_core::audit::timestamp()[..10];
     // Two requests of 1,000 tokens in and 500 out: $0.004, 3,000 tokens.
-    assert!(row.starts_with("0.004,\"default\",\"default\",USD,"), "{row}");
-    assert!(row.contains(&format!("Usage-Based,{today}T00:00:00Z,")), "{row}");
-    assert!(row.contains(",3000,Tokens,0.004,0.004,\"mock\",0.004,Standard,"), "{row}");
-    assert!(row.contains("\"AI and Machine Learning\",\"mock\",\"m\",\"payments\",\"payments\","), "{row}");
+    assert!(
+        row.starts_with("0.004,\"default\",\"default\",USD,"),
+        "{row}"
+    );
+    assert!(
+        row.contains(&format!("Usage-Based,{today}T00:00:00Z,")),
+        "{row}"
+    );
+    assert!(
+        row.contains(",3000,Tokens,0.004,0.004,\"mock\",0.004,Standard,"),
+        "{row}"
+    );
+    assert!(
+        row.contains("\"AI and Machine Learning\",\"mock\",\"m\",\"payments\",\"payments\","),
+        "{row}"
+    );
     assert!(row.ends_with(",2,2000,1000"), "{row}");
     // A filter narrows it as it narrows the JSON answer.
     let none = send(

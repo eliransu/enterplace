@@ -65,7 +65,9 @@ The admin API exists only when Gantry serves from a keys file. Under `gantry ser
 | `GET` | `/admin/policy/versions[/<n>]` | `list_policy_versions`, `show_policy_version` | The versions, and one with its diff |
 | `POST` | `/admin/policy/versions/<n>/approve`, `/reject`, `/rollback` | `approve_policy`, `reject_policy`, `rollback_policy` | Decides a pending version, or makes an earlier one live |
 | `POST` | `/admin/policy/dry-run?hours=<n>` | `dry_run_policy` | The recent requests a draft decides differently |
-| `GET` | `/admin/usage` | `usage` | Spend, tokens and requests grouped by a dimension, day or hour ([below](#get-adminusage)) |
+| `GET` | `/admin/usage` | `usage` | Spend, tokens and requests grouped by a dimension, day or hour, or as a [FOCUS cost file](/operations/cost-export/) ([below](#get-adminusage)) |
+| `GET` | `/admin/deployments` | `list_deployments` | Each alias deployment's state, probe, limits, load, latency and error rate, and each provider's key pool. See [Deployment health](/operations/deployment-health/) |
+| `POST` | `/admin/providers/<name>/test` | `test_provider` | Tests the connection to a provider with its model list. Needs `edit_policy`. See [Deployment health](/operations/deployment-health/#test-a-providers-connection) |
 | `GET` | `/admin/teams` | `list_teams` | Lists the teams, from `teams:` and from keys, with their keys |
 | `GET` | `/admin/teams/<name>` | `show_team` | One team |
 | `POST` | `/admin/teams` | `create_team` | Adds a team to `teams:`, as a new policy version |
@@ -329,7 +331,7 @@ Spend, tokens and requests of the requests that match, summed by one dimension, 
 | `group_by` | `day` (default), `hour`, or a dimension: `org`, `team`, `person`, `key`, `customer`, `tag`, `model`, `provider`, `agent`. A request with several tags counts under each |
 | `from`, `to` | A date (`2026-11-01`, `to` takes the whole day) or a time (`2026-11-14T09:30:00Z`), UTC |
 | `team`, `model`, ... | Any dimension as a filter, as the request log takes it, and `outcome`, `code`, `min_cost`, `max_cost`, `min_ms`, `max_ms` |
-| `format` | `csv` for CSV; or send `Accept: text/csv`. JSON otherwise |
+| `format` | `csv` for CSV; or send `Accept: text/csv`. `focus` for a [FOCUS cost file](/operations/cost-export/), where `group_by` does not apply. JSON otherwise |
 
 ```bash
 curl "http://127.0.0.1:8080/admin/usage?group_by=team&from=2026-11-01&to=2026-11-30" -H "Authorization: Bearer $GANTRY_ADMIN_KEY"

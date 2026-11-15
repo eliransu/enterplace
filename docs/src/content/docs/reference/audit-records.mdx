@@ -141,6 +141,8 @@ Written when a forwarded request's answer ends: its whole body sent, its stream 
 | `reserved_usd` | number or null | What the request reserved against its budget. `null` without one |
 | `charged_usd` | number | What counts against budgets (below) |
 | `latency_ms` | integer | Milliseconds from the decision to the end of the answer |
+| `stages_ms` | object | Where the request's time went inside Gantry, in milliseconds with microsecond precision, in the order it passed them: `auth`, `read`, `policy`, `guardrails`, `cache`, `audit`, `connect`, `first_byte`, `stream`. See [Time by stage](/operations/observability/#time-by-stage). Absent on a cache hit and on usage records written outside a live request (batches, probes, realtime) |
+| `guardrail_ms` | object | The time of each guardrail call on the request, by guardrail name: `builtin` for the built-in detectors, `events` for events plugins. Absent when none was called |
 | `body` | string | `captured` when the rule's `capture:` kept the redacted request and answer. Absent otherwise |
 | `policy_sha256`, `keys_sha256` | string | The version that decided the request |
 

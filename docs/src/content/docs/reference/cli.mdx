@@ -197,6 +197,64 @@ Makes a new key with the same settings and prints it once. The old key works unt
 
 `key info`, `key update` and `key rotate` need an admin key in `GANTRY_ADMIN_KEY` (or the saved `gantry login` key, if it is an admin's) and the gateway in `--url`, `GANTRY_URL` or the saved login, as `gantry kill` does.
 
+## usage
+
+```text
+gantry usage [--since <7d|24h|2026-11-01>] [--group-by <team|person|model|provider|key|tag|org|customer|day|hour>] [--csv] [--url <gantry url>]
+```
+
+Spend, tokens and requests of a running gateway, from [`GET /admin/usage`](/reference/admin-api/#get-adminusage): across every gateway with a store, this gateway's own audit log without one. With no `--group-by` it prints three tables, by team, by person and by model. `--since` is how far back (`30d` unless given; `m`, `h` or `d`) or a UTC date. `--csv` prints one CSV in place of the tables. It needs a key whose role may see spend, in `GANTRY_ADMIN_KEY`, as `key info` does.
+
+```bash
+gantry usage --since 7d
+```
+
+```text
+Usage since 2026-11-08T09:12:44.512Z (UTC), counted by store.
+
+By team:
+team      requests  refused  errors  tokens in  tokens out   tokens  spend USD  p50 ms  p95 ms
+payments      1203        4       1    3900100      610300  4510400    30.1100     790    3900
+platform       637        8       2    1220300      211800  1432100    11.1600     850    4300
+total         1840       12       3    5120400      822100  5942500    41.2700     820    4100
+```
+
+```bash
+gantry usage --since 2026-11-01 --group-by model --csv
+```
+
+```text
+group_by,value,requests,refused,errors,input_tokens,output_tokens,total_tokens,spend_usd,latency_p50_ms,latency_p95_ms
+model,"gpt-4o-mini",1203,4,1,3900100,610300,4510400,30.11,790,3900
+```
+
+## budget status
+
+```text
+gantry budget status [--model <model>] [--short] [--url <gantry url>]
+```
+
+What each budget your own key counts against has left and when it resets, from `GET /v1/gantry/me`. It uses your key, not an admin's: `GANTRY_KEY` or the key `gantry login` saved, and the gateway in `--url`, `GANTRY_URL` or the saved login. `--model` adds the budgets of that model. `--short` prints one line, for a [status line](/integrations/claude-code/#budget-in-the-status-line).
+
+```bash
+gantry budget status
+```
+
+```text
+maya.cohen (team payments), rule payments
+  team "payments": $412.37 left of $500.00 a month, $86.20 spent, $1.43 held by requests in flight, resets 2026-12-01 00:00 UTC
+```
+
+```bash
+gantry budget status --short
+```
+
+```text
+$412.37 left (resets 2026-12-01 00:00 UTC)
+```
+
+A key no budget applies to prints `no budget`.
+
 ## key list
 
 Lists the keys in the keys file. Never a key.

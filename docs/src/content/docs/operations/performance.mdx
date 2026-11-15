@@ -37,7 +37,7 @@ gantry-bench --rps 5000 --secs 10
 gantry-bench --rps 5000 --secs 120 --upstream-ms 1500
 ```
 
-**Against Bifrost's published figures.** Bifrost's documentation states a mean overhead of 59 us on an AWS t3.medium and 11 us on a t3.xlarge at 5,000 requests a second, measured inside the gateway and leaving out JSON marshalling and the HTTP calls. Gantry's closest figure in the same setup is its self-time: 298 us at p50, on different hardware, with the load generator and mock on the same machine, and counting a guardrail scan and a synced audit write that Bifrost's figure does not have. That is a larger number, not a smaller one, and the two do not measure the same work. Nothing here shows Gantry faster than Bifrost. `gantry-bench` prints percentiles and no mean, so there is no mean to set beside Bifrost's.
+**Against Bifrost's published figures.** Bifrost's [benchmark pages](https://docs.getbifrost.ai/benchmarking/getting-started) and its [README](https://github.com/maximhq/bifrost), read on 2026-11-15, state an overhead of 59 us on an AWS t3.medium and 11 us on a t3.xlarge at 5,000 requests a second with a 100% success rate, on mocked OpenAI calls, in its words excluding "JSON marshalling and HTTP calls, which are required in any implementation". Gantry's closest figure in the same setup is its self-time: 298 us at p50, on different hardware, with the load generator and mock on the same machine, and counting a guardrail scan and a synced audit write that Bifrost's figure does not have. That is a larger number, not a smaller one, and the two do not measure the same work. Nothing here shows Gantry faster than Bifrost. Bifrost's pages give one figure per instance and do not say whether it is a mean or a percentile; `gantry-bench` prints percentiles, so the two are not the same statistic either.
 
 ## The two methods
 
@@ -45,17 +45,17 @@ gantry-bench --rps 5000 --secs 120 --upstream-ms 1500
 |---|---|---|
 | Rate | 5,000 requests a second | 1,000 requests a second (the CI gate) and 5,000 |
 | Mock upstream | Answers after about 1.5 s | Answers at once |
-| Payload | A short chat request; an answer of about 1.4 KB (t3.medium) or 10 KB (t3.xlarge) | A short chat request; an answer of about 250 bytes |
-| Figure | Mean time inside the gateway, excluding JSON marshalling and the HTTP calls | Added latency at p50 and p99 as the client sees it, plus Gantry's self-time |
+| Payload | A request of about 0.13 KB; an answer of about 1.4 KB (t3.medium, 1.37 KB) or 10 KB (t3.xlarge, 10.32 KB) | A short chat request; an answer of about 250 bytes |
+| Figure | Time inside the gateway, excluding JSON marshalling and the HTTP calls; mean or percentile is not stated | Added latency at p50 and p99 as the client sees it, plus Gantry's self-time |
 | Hardware | AWS t3.medium (2 vCPU, 4 GB) and t3.xlarge (4 vCPU, 16 GB) | The machine the run is on, stated with the numbers |
 
-Bifrost's documentation does not state the mock's latency. Its measured HTTP request time was 1.56 s on t3.medium and 1.50 s on t3.xlarge, so 1.5 s reproduces it. It publishes means only, no percentiles, and does not name the load generator behind the published figures.
+Bifrost's per-instance pages ([t3.medium](https://docs.getbifrost.ai/benchmarking/t3.medium), [t3.xlarge](https://docs.getbifrost.ai/benchmarking/t3.xl), read on 2026-11-15) do not state the mock's latency or the run's length. Their measured HTTP request time was 1.56 s on t3.medium and 1.50 s on t3.xlarge, so 1.5 s reproduces it. They publish no percentiles, label only the total latency and the payload sizes as averages, and do not name the load generator behind the published figures. Bifrost's page on running your own benchmarks names its tools (a `benchmark` program, the `hitter` load generator and the `mocker` mock provider) without saying they produced these numbers.
 
 ## What each figure includes
 
 | Figure | Includes | Excludes |
 |---|---|---|
-| Bifrost overhead | Queue wait, key selection, message formatting, parameter and body preparation, request setup, error handling | JSON marshalling, the HTTP call to the provider, network |
+| Bifrost overhead | Not listed by Bifrost. The timings its pages print from queue wait to error handling (queue wait, key selection, message formatting, parameter and body preparation, request setup, error handling) add up to about 59 us on t3.medium, so the figure is read here as their sum | JSON marshalling and the HTTP calls, as its footnote says; response parsing (11.30 ms on t3.medium, 2.11 ms on t3.xlarge) is also outside that sum |
 | Gantry self-time (`Server-Timing: gantry;dur=`) | Identifying the key, deciding against a policy of 1,000 keys, the secrets guardrail on the request, and the synced audit write | The wait for the provider, streaming the answer back |
 | Gantry added latency | Everything between the client and the mock: parsing, the decision, the guardrail, the audit write, both HTTP hops, forwarding the answer | Nothing: it is latency through Gantry minus latency to the mock alone |
 

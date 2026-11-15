@@ -38,6 +38,8 @@ Each form saves a new version. A form edit writes the policy without its comment
 
 On `/console/people`, **Edit** beside a key changes what it may do: admin, expiry, its own budget, the models it may use (within its rule's) and its tokens per minute. The key itself does not change and is never shown again. **Issue a key** shows the new key once; **Revoke key** removes it. The last admin key keeps its admin flag, so someone can always sign in.
 
+The same page rotates the key: **Rotate the key** makes a new key with the same settings and shows it once, and the old key keeps working for the grace you write (`24h` unless changed; `48h`, `30m`, `7d`, at most `90d`, or `0` to end it now). Requests made with the old key until then are recorded with `key_rotated`, so the request log shows who still uses it. It is the change `gantry key rotate` and `POST /admin/keys/<prefix>/rotate` make, recorded as `rotate_key`. Only an admin of the whole install rotates an admin key or a key with a role. See [Rotate a key](/governance/keys/#rotate-a-key).
+
 ## Teams
 
 `/console/teams` lists each team with its people and workloads, their role (Admin may sign in here and use the admin API, Member sends requests), the rule that decides for the team and its budget. Teams come from the keys. A binary that adds a members feature shows its own roles on its own pages.

@@ -167,6 +167,34 @@ The difference is given back when the answer ends. While it is held, a small bud
 
 See [Budgets and rate limits](/governance/budgets-and-rate-limits/).
 
+### Budget in the status line
+
+Claude Code's [status line](https://code.claude.com/docs/en/statusline) runs a command and shows what it prints. `gantry budget status --short` prints what your own key has left, so a small script puts it under the prompt:
+
+```sh title="~/.claude/gantry-statusline.sh"
+#!/bin/sh
+input=$(cat)
+model=$(printf '%s' "$input" | jq -r '.model.display_name // "Claude"' 2>/dev/null)
+budget=$(gantry budget status --short 2>/dev/null) || budget="budget unknown"
+printf '[%s] Gantry: %s\n' "${model:-Claude}" "$budget"
+```
+
+```json title="~/.claude/settings.json"
+{
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/gantry-statusline.sh",
+    "refreshInterval": 60
+  }
+}
+```
+
+```text
+[Sonnet] Gantry: $412.37 left (resets 2026-12-01 00:00 UTC)
+```
+
+Make the script executable (`chmod +x`). It needs `jq` and the `gantry` binary on your PATH, and your key in `GANTRY_KEY` (or a `gantry login`) with the gateway in `GANTRY_URL`. `statusLine`, `type`, `command` and `refreshInterval` are Claude Code's own settings; `refreshInterval` re-runs the command every that many seconds, so the figure stays current while a session is idle. The script is in the repository at `examples/claude-code/gantry-statusline.sh`. The call it makes (`GET /v1/gantry/me`) costs nothing and writes no audit record.
+
 ## Related
 
 <CardGrid>
