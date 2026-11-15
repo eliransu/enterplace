@@ -254,6 +254,85 @@ Under a budget, Gantry refuses a request whose cost it cannot bound:
 
 Every model a budgeted rule reaches must have a price. `gantry check` refuses a file that breaks this.
 
+## Requests per hour and per day
+
+`rph` and `rpd` limit requests per calendar hour and per calendar day, in UTC, beside `rpm`. In a rule they count each person; in a `limits:` entry they count the scope.
+
+```yaml
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+    rate: { rpm: 60, rph: 500, rpd: 2000 }
+limits:
+  - { team: "*", rate: { rpd: 20000 } }
+```
+
+A request over one is refused with `rate_limited` (429) and a `Retry-After` of the seconds until the hour or the day turns. With a [store](/operations/store/#budget-leases) every replica counts in one counter and a restart forgets nothing. Without one, the counts are in memory and start again when the gateway does.
+
+## Model groups
+
+`model_groups:` names a set of models. Write `group:<name>` wherever a list of models goes: a rule's `models`, a key's `models`, a budget's `models` and `key_bounds.models`. A `limits:` entry with `model_group:` gives the whole group one budget or rate.
+
+```yaml
+model_groups:
+  small: [gpt-4o-mini, claude-haiku-*]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["group:small"]
+limits:
+  - { model_group: small, budget: { usd: 500, per: month } }
+```
+
+A request counts against a group when the model it names, or the deployment it is sent to, is in it. The counter is `model_group:<name>`, shown by `GET /admin/explain`.
+
+## Session budgets
+
+A rule can cap what one session spends and how many requests it sends, so a runaway agent stops at its own limit and not at its person's.
+
+```yaml
+rules:
+  - name: agents
+    principals: { team: agents }
+    models: ["*"]
+    budget:
+      - { usd: 2000, per: month }
+      - { usd: 5, per: session }
+    rate: { session_requests: 200 }
+```
+
+The session is the one on the request's record: `x-gantry-session`, `x-session-id`, Claude Code's or Codex's own marker, `prompt_cache_key`, or the first message (see [audit records](/reference/audit-records/)). Over the budget a request is refused with `session_budget_exceeded` (429), over the count with `session_requests_exceeded` (429); both name the session. A new session starts from zero.
+
+## Budget raises
+
+A person asks for more room until a date, an admin approves it for an amount and a window, and it ends by itself.
+
+<Steps>
+
+1. The person asks, with their own key:
+
+   ```bash
+   gantry budget raise request --usd 500 --until 2026-12-31 --reason "quarter-end backfill"
+   ```
+
+   Or `POST /v1/budget/raises` with `{"usd": 500, "until": "2026-12-31", "reason": "..."}`. The raise is for the team's budget when the caller's rule counts by team, else for the person's; `"scope": "team" | "person" | "key"` picks another.
+
+2. An admin with `issue_keys` lists and decides:
+
+   ```bash
+   gantry budget raise list
+   gantry budget raise approve raise_1a2b3c4d5e6f --usd 300 --until 2026-12-15
+   ```
+
+   `reject` turns it down. `gantry budget raise add --scope team:payments --usd 500 --until 2026-12-31 --reason "..."` raises a scope at once.
+
+3. Until `until` (a UTC date or time), every budget of that scope is larger by the amount. Then it is the policy's again.
+
+</Steps>
+
+`GET /admin/explain` shows a raised budget with its raised amount and the raise in `source`. The request is on the audit log as a decision record with `budget_raise`, and each decision as an admin record (`add_budget_raise`, `approve_budget_raise`, `reject_budget_raise`), so an [alert rule](/operations/alerting/) or a SIEM export can act on them. A role kept to teams decides raises of those teams only. With a store every replica applies a raise within a second; without one it is kept in `gantry-raises.json` beside the keys file.
+
 ## How rate limits are counted
 
 **`rpm`** allows each person (or, in a `limits:` entry, the scope) at most that many requests in any 60 seconds. A request answered from the cache does not count.
@@ -280,6 +359,8 @@ The record of a refusal by a limit names it in `limit`, for example `{"kind": "t
 | `key_budget_exceeded` | 429 | no | The key's own budget would be passed. |
 | `rate_limited` | 429 | yes, after `Retry-After` | An `rpm` or `tpm` limit. |
 | `parallel_limited` | 429 | yes, after `Retry-After` | A `parallel` limit. |
+| `session_budget_exceeded` | 429 | no | The session's budget (`per: session`) would be passed. |
+| `session_requests_exceeded` | 429 | no | The session has sent `session_requests` requests. |
 | `customer_not_allowed` | 403 | no | `x-gantry-customer` names a customer the rule does not list, or another than the key's. |
 | `tag_not_allowed` | 403 | no | `x-gantry-tags` holds a tag the rule does not list. |
 | `bad_header` | 400 | no | `x-gantry-customer` or `x-gantry-tags` is sent twice, holds a name Gantry does not accept, or carries more than 16 tags. |

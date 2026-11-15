@@ -84,7 +84,11 @@ Fields present only in some cases:
 | `ip_not_allowed` | string | An `ip_not_allowed` refusal: `key` or `rule`, whichever `from` list refused it |
 | `outcome` | string | `would_refuse`: the request was forwarded, and observe mode or a `shadow_until` let through at least one decision against it. See [`would_refuse`](#would_refuse) |
 | `would_refuse` | array | What would have refused it: one entry per decision. See [`would_refuse`](#would_refuse) |
-| `session`, `turn` | string | The rule has an [events guardrail](/governance/plugin-events/): the conversation's session and turn. On the `usage` record too |
+| `session` | string | The session the request belongs to, on every request Gantry forwards or answers from the cache, and on its `usage` record: read from `x-gantry-session`, `x-session-id`, Claude Code's or Codex's marker, `prompt_cache_key`, else from the first message, as an [events guardrail](/governance/plugin-events/) reads it. A request that names its session costs no second read of its body. Absent for a body with no text |
+| `turn` | string | The rule has an [events guardrail](/governance/plugin-events/): the conversation's turn. On the `usage` record too |
+| `required_missing` | array | On a `required_missing` refusal: each header and body field the rule's `require:` asks for and the request lacks |
+| `guardrail_check` | string | On `POST /v1/guardrails/check`: `request` or `answer`, the side checked. `cost_usd` is 0 |
+| `budget_raise` | object | On `POST /v1/budget/raises`: the raise asked for, with its `id`, `scope`, `usd`, `until` and `reason` |
 | `events` | array | One entry per events guardrail: `guardrail`, `mode`, `events` (how many were sent), `action`, and `findings` by `kind`, `event_index`, `event_kind`, `event_id` and `severity`. Never content. See [What is recorded](/governance/plugin-events/#what-is-recorded) |
 | `guardrails` | array or string | The rule has guardrails. One entry per guardrail and kind found; an empty list means they ran and found nothing. The string `not_run: the body is audio` for a transcription |
 

@@ -96,7 +96,10 @@ This copies every key of the file, and the kill switches in `gantry.kills.json` 
 | Kill switches, with their reason, who set them and when. | Prompts and answers. Gantry never stores them, here or anywhere. |
 | Spend and reservations, per team, person and key, per day and month. | The audit log. Each replica keeps its own hash-chained file. |
 | Provider credentials, sealed with AES-256-GCM under the master key, with their name, vendor, last 4 characters and who added and rotated them. | The master key. It stays in each replica's environment or a file it names. |
-| Rate-limit leases: how much of each `rpm` and `tpm` each replica took, for the last minute. | The answer cache. Each replica keeps its own (see below). |
+| Rate-limit leases: how much of each `rpm` and `tpm` each replica took, for the last minute. | The answer cache, unless `answer_cache: true` (see below). |
+| Request counts per hour, day and session (`rph`, `rpd`, `session_requests`), beside spend. | |
+| Budget raises: the scope, amount, end, reason, who asked and who decided. | |
+| Each replica's heartbeat: its name, host, version, schema, when it started and when it last wrote. | |
 | Session pins: the SHA-256 of the person and session, the deployment, and when it last sent. Never the session ID itself. | |
 | Each replica's last 32 times to first byte per alias deployment, for `lowest_latency`. | |
 | Cooldowns of alias deployments that failed, until when. | Requests in flight per deployment, for `least_busy`. Each replica counts its own. |
@@ -108,7 +111,26 @@ Spend in the store counts requests under a budget (a rule's or a key's). Request
 
 Keys and kill switches are read from memory, as without a store. Each replica polls a version row every 500 ms and reloads them when the version changes, so a request never waits on the database for its key or a switch. A change reaches every replica, the one that made it included, within about a second.
 
-A request under a budget reserves the most it could cost with one atomic statement, which fails when the reservation would pass the budget. Two replicas reserving at the same moment are ordered by Postgres, so they cannot both pass. When the answer ends, a second statement replaces the reservation with what the request cost. A request with no budget makes no database call. In tests against a local Postgres, a budgeted request took about 0.3 ms longer than the same request without a budget.
+A request under a budget reserves the most it could cost with one atomic statement, which fails when the reservation would pass the budget. Two replicas reserving at the same moment are ordered by Postgres, so they cannot both pass. When the answer ends, a second statement replaces the reservation with what the request cost, off the request path. A request with no budget makes no database call.
+
+### Budget leases
+
+Most budgeted requests make no database call either. A replica reserves eight requests' worth of a budget in one statement, admits the next requests from that lease in memory, and gives back what it did not use after one second. What a lease holds is reserved in Postgres like any request's reservation, so:
+
+- **Overshoot: none.** All replicas together never reserve more than the budget. A test sends 340 requests at once through two replicas against a budget that fits 300, and exactly 300 are admitted.
+- **Lease size.** Eight times what the request could cost, and never more than 1% of the budget. A request that could cost more than 1% of its budget is reserved exactly, with no lease.
+- **Near the limit.** When a lease does not fit, the replica reserves exactly what each request needs for the next 5 seconds, so the budget is spent to its last request.
+- **Cost.** A replica can hold up to 1% of a budget unused for up to a second. A request can be refused with `budget_exceeded` while other replicas hold that much each; it is never let past the budget.
+
+Hourly, daily and session request counts (`rph`, `rpd`, `session_requests`) are counted the same way, in the same table.
+
+### Budget raises
+
+A [budget raise](/governance/budgets-and-rate-limits/#budget-raises) asked for or decided on one replica is read by the others with the 500 ms poll, from memory, so a request never waits on the database for it. The table is `gantry_raises`, in the migration namespace `gantry_ha`.
+
+### Heartbeats
+
+Each replica writes a row to `gantry_replicas` every 2 seconds: a name that is new at each start, its host name (`HOSTNAME`), its Gantry version, the store schema it knows by namespace, when it started and when it last wrote. A replica counts as healthy for 10 seconds after its last write, and its row is deleted a day after it. An embedding binary reads the list through the store interface (`Store::replicas`).
 
 ### Rate limits
 
@@ -142,7 +164,27 @@ A console session is a row in the store, read on every console page. A session o
 
 ### The answer cache
 
-The answer cache stays per replica, on purpose. A shared cache would keep answers in Postgres, and Gantry never stores prompt or answer text. A hit from memory takes microseconds; one from Postgres would take a round trip, about 0.3 ms against a local database and more over a network. With N replicas, an answer is cached on each replica the request reaches, so the first identical request on each still goes to the provider. Each hit follows the same rules on every replica.
+The answer cache is per replica unless you share it. By default no answer is written to Postgres, and with N replicas the first identical request on each still goes to the provider.
+
+```yaml
+store:
+  postgres_url_env: DATABASE_URL
+  answer_cache: true
+```
+
+With `answer_cache: true`, every answer a rule caches is also kept in the store, and a replica that misses its own memory asks the store before the provider.
+
+- **Scope.** A row is read back only under the cache key and the scope it was written for (the rule, and the person or team). The scope is kept as its SHA-256.
+- **Guardrails.** Nothing changes: request guardrails run before the lookup, an answer waits for the answer guardrails' pass before it is kept, and a hit is checked again.
+- **Semantic cache.** Embeddings are stored beside the answers. A lookup reads the newest 512 of its partition and compares them in the gateway.
+- **Bounds.** A row is deleted when its `ttl_seconds` run out. Past 1 GiB of answers, the least recently used go first.
+- **Cost.** A hit in memory takes microseconds. A miss in memory adds one round trip, on rules with `cache:` only.
+
+<Aside type="caution">
+`answer_cache: true` writes model answers to Postgres as the provider returned them, for at most `ttl_seconds`. They are not sealed with the master key. Leave it off where answers must not be at rest outside the audit trail's own controls.
+</Aside>
+
+The tables are `gantry_answer_cache` and `gantry_answer_vectors`, in the migration namespace `gantry_ha`.
 
 ## Several replicas
 

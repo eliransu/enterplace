@@ -7,6 +7,45 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### High availability: shared answer cache, budget leases, heartbeats
+
+- `store: { answer_cache: true }` keeps cached answers, and a semantic cache's embeddings, in Postgres as well as
+  in each gateway's memory, so an answer cached on one replica is served by all. Scope, TTL and guardrails are as
+  before: a row is read back only under its rule and person or team, expires with `ttl_seconds`, and an answer the
+  answer guardrails have not passed is never kept. Past 1 GiB the least recently used answers go first. Off unless
+  set: answers are then written to the database, unsealed.
+- Budgets are leased. With a store, a gateway reserves eight requests' worth of a budget in one statement (never
+  more than 1% of it) and admits the next requests from memory, so most budgeted requests make no store round trip.
+  A budget is never passed: near its limit each request is reserved exactly. A gateway may hold up to 1% of a budget
+  unused for up to a second.
+- Each gateway writes a heartbeat to the store every 2 seconds (`gantry_replicas`): its name, host, version, store
+  schema, start time and last write. The store interface lists them (`Store::replicas`).
+- A new migration namespace, `gantry_ha`, holds the heartbeats, the answer cache and budget raises.
+
+### Governance: required fields, default and per-key guardrails, key bounds, model groups, raises, sessions
+
+- `require: { headers: [...], body: [...] }` on a rule refuses a request that lacks a listed header or body field
+  with `required_missing` (400).
+- `default_guardrails:` at the top level runs guardrails on every rule, before its own. `guardrails:` on a key adds
+  guardrails to its rule's, and never removes one.
+- `POST /v1/guardrails/check` runs the caller's rule's guardrails on text the caller sends and answers with what
+  they found and the masked text. No model is called, nothing is charged, and each check is recorded.
+- `key_bounds:` (top level, and per role) caps what a key may be issued with: `max_days`, `max_budget` and
+  `models`. A key issued without one of them gets the bound; one over a bound is refused with
+  `key_bounds_exceeded` (403). Keys from `gantry login` hold to the top-level bounds.
+- `model_groups:` names sets of models: `group:<name>` in a rule's, a key's or a budget's `models`, and
+  `{ model_group: <name>, budget, rate }` in `limits:` for one budget or rate over the whole group.
+- `rate: { rph, rpd }` limits requests per calendar hour and day (UTC), in a rule and in `limits:` entries, shared
+  across replicas on a store.
+- Budget raises: `POST /v1/budget/raises` (or `gantry budget raise request`) asks for more room until a date,
+  `/admin/budget/raises` and `gantry budget raise list | approve | reject | add` decide it, and while it runs every
+  budget of its scope is that much larger. It ends by itself, shows in `GET /admin/explain`, and every request and
+  decision is on the audit log.
+- Session budgets: `budget: { usd, per: session }` and `rate: { session_requests }` on a rule cap what one session
+  spends and sends. New refusal codes: `session_budget_exceeded`, `session_requests_exceeded`.
+- Every request record and usage record carries `session`, with or without an events guardrail, read the same
+  way. A request that names its session is placed without a second read of its body.
+
 ### Plugin events: guardrail contract v2
 
 - A new guardrail type, `events`, sends an outside service the whole conversation as typed events: `system_prompt`,

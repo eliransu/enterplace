@@ -58,6 +58,17 @@ Commands:
         unless given), and every request made with it until then is recorded as made with a rotated key.
         info, update and rotate go through the admin API: an admin key in GANTRY_ADMIN_KEY (or the saved login
         key, if it is an admin's), and --url, GANTRY_URL or the saved login for the gateway.
+  budget raise request --usd <n> --until <date> --reason <text> [--scope team|person|key] [--url <gantry url>]
+        Ask for more room on your budget until a UTC date or time. It waits for an admin, and ends by itself.
+  budget raise list [--url <gantry url>]
+        The raises an admin may decide, the ones waiting first.
+  budget raise approve <id> [--usd <n>] [--until <date>] [--url <gantry url>]
+  budget raise reject <id> [--url <gantry url>]
+        Decide a raise a person asked for. An approval is for what was asked unless --usd or --until say otherwise.
+  budget raise add --scope <team:payments> --usd <n> --until <date> --reason <text> [--url <gantry url>]
+        Raise the budgets of a scope at once, as an admin. Every raise and decision is in the audit log.
+        The budget commands call a running gateway: --url, GANTRY_URL or the saved login, with the key in
+        GANTRY_ADMIN_KEY or the saved login key.
   key prune [--keys <file>]
         Remove the entries whose expiry has passed, such as old `gantry login` keys. Each is removed
         as `DELETE /admin/keys` removes one, safe while Gantry runs; every other line is kept.
@@ -379,6 +390,19 @@ pub async fn run(args: &[String]) -> ExitCode {
             }
             _ => None,
         },
+        ["budget", "raise", action, rest @ ..] => {
+            match options(rest, &["--usd", "--until", "--reason", "--scope", "--url"]) {
+                Some((positional, named)) => match budget_raise_call(action, &positional, &named) {
+                    Some(call) => Some(
+                        budget_raise(call, &named)
+                            .await
+                            .map_or_else(fail, |()| ExitCode::SUCCESS),
+                    ),
+                    None => None,
+                },
+                None => None,
+            }
+        }
         ["key", "info", rest @ ..] => match options(rest, &["--url"]) {
             Some((positional, named)) if positional.len() == 1 => Some(
                 key_info(positional[0], &named)
@@ -602,6 +626,9 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["check", ..] => Some("gantry check <policy> [--keys <file>]"),
             ["explain", ..] => Some(
                 "gantry explain <policy> --key <hash prefix or name> --model <model> [--customer <name>] [--tags <a,b>] [--keys <file>]",
+            ),
+            ["budget", ..] => Some(
+                "gantry budget raise request --usd <n> --until <date> --reason <text> [--scope team|person|key] | list | approve <id> [--usd <n>] [--until <date>] | reject <id> | add --scope <team:payments> --usd <n> --until <date> --reason <text>, each with [--url <gantry url>]",
             ),
             ["key", "list", ..] => Some("gantry key list [--keys <file>] [--policy <file>]"),
             ["key", "prune", ..] => Some("gantry key prune [--keys <file>] [--policy <file>]"),
@@ -2024,6 +2051,69 @@ async fn admin_call(
             .map_or_else(|| format!("Gantry answered HTTP {status}."), str::to_string));
     }
     Ok(answer)
+}
+
+/// `gantry budget raise <action>`: the method, path and body of the call it makes, or `None` when its arguments
+/// do not fit.
+fn budget_raise_call(
+    action: &str,
+    positional: &[&str],
+    named: &HashMap<&str, &str>,
+) -> Option<(&'static str, String, serde_json::Value)> {
+    let mut body = serde_json::Map::new();
+    for (option, field) in [
+        ("--until", "until"),
+        ("--reason", "reason"),
+        ("--scope", "scope"),
+    ] {
+        if let Some(value) = named.get(option) {
+            body.insert(field.into(), (*value).into());
+        }
+    }
+    if let Some(usd) = named.get("--usd") {
+        body.insert("usd".into(), usd.parse::<f64>().ok()?.into());
+    }
+    let has = |options: &[&str]| options.iter().all(|o| named.contains_key(o));
+    let (method, path) = match (action, positional) {
+        ("request", []) if has(&["--usd", "--until", "--reason"]) => {
+            ("POST", "/v1/budget/raises".to_string())
+        }
+        ("add", []) if has(&["--scope", "--usd", "--until", "--reason"]) => {
+            ("POST", "/admin/budget/raises".to_string())
+        }
+        ("list", []) => ("GET", "/admin/budget/raises".to_string()),
+        ("approve" | "reject", [id]) => ("POST", format!("/admin/budget/raises/{id}/{action}")),
+        _ => return None,
+    };
+    Some((method, path, serde_json::Value::Object(body)))
+}
+
+/// Makes a budget raise call and prints each raise it answers with on a line.
+async fn budget_raise(
+    (method, path, body): (&str, String, serde_json::Value),
+    named: &HashMap<&str, &str>,
+) -> Result<(), String> {
+    let sent = (method == "POST").then_some(&body);
+    let answer = admin_call(method, &path, named, sent).await?;
+    let line = |raise: &serde_json::Value| {
+        let text = |field: &str| raise[field].as_str().unwrap_or("").to_string();
+        println!(
+            "{}  {}  {}  ${} until {}  asked by {}: {}",
+            text("id"),
+            text("state"),
+            text("scope"),
+            raise["usd"].as_f64().unwrap_or(0.0),
+            text("until"),
+            text("requested_by"),
+            text("reason")
+        );
+    };
+    match answer["raises"].as_array() {
+        Some(list) if list.is_empty() => println!("No budget raises."),
+        Some(list) => list.iter().for_each(line),
+        None => line(&answer),
+    }
+    Ok(())
 }
 
 async fn key_info(prefix: &str, named: &HashMap<&str, &str>) -> Result<(), String> {

@@ -32,8 +32,8 @@ use gantry_core::{
     kill::Kill,
     policy::{Budget, Period},
     store::{
-        self as core_store, Bucket, Change, Credential, DeploymentLoad, LEASE, Lease, NewVersion,
-        Pending, PolicyVersion, Reserve, Store, VersionError,
+        self as core_store, Bucket, CachedAnswer, Change, Credential, DeploymentLoad, LEASE, Lease,
+        NewVersion, Pending, PolicyVersion, Raise, Replica, Reserve, Store, VersionError,
     },
 };
 
@@ -218,6 +218,49 @@ CREATE TABLE gantry_deployment_load (
 );
 "];
 
+/// What gateways share for high availability beyond the tables above, in a namespace of its own (`gantry_ha`): each
+/// gateway's heartbeat, the answer cache with its embeddings, and budget raises. Never edit an entry that has
+/// shipped: add one.
+const HA_MIGRATIONS: &[&str] = &["
+CREATE TABLE gantry_replicas (
+    gateway text PRIMARY KEY,
+    host text NOT NULL,
+    version text NOT NULL,
+    schema text NOT NULL,
+    started timestamptz NOT NULL,
+    seen timestamptz NOT NULL
+);
+CREATE TABLE gantry_answer_cache (
+    key bytea PRIMARY KEY,
+    scope text NOT NULL,
+    status integer NOT NULL,
+    content_type text,
+    body bytea NOT NULL,
+    origin text NOT NULL,
+    cost float8 NOT NULL,
+    expires timestamptz NOT NULL,
+    used timestamptz NOT NULL
+);
+CREATE INDEX gantry_answer_cache_expires ON gantry_answer_cache (expires);
+CREATE TABLE gantry_answer_vectors (
+    key bytea PRIMARY KEY REFERENCES gantry_answer_cache (key) ON DELETE CASCADE,
+    partition bytea NOT NULL,
+    vector real[] NOT NULL,
+    created timestamptz NOT NULL
+);
+CREATE INDEX gantry_answer_vectors_partition ON gantry_answer_vectors (partition, created DESC);
+CREATE TABLE gantry_raises (id text PRIMARY KEY, body text NOT NULL);
+INSERT INTO gantry_versions VALUES ('raises', 0) ON CONFLICT (name) DO NOTHING;
+"];
+
+/// Most bytes of answers the store keeps. Past it the least recently used go first, at the next clean-up.
+// ponytail: one fixed size. A setting when someone needs another.
+const SHARED_CACHE_BYTES: i64 = 1024 * 1024 * 1024;
+
+/// A gateway writes its heartbeat every this many polls (2 seconds), and counts as healthy for 10 seconds after.
+const HEARTBEAT_EVERY: u64 = 4;
+const HEALTHY_FOR_SECS: f64 = 10.0;
+
 /// The version of the sessions events plugins ended, in a namespace of its own (`gantry_events`). The sessions
 /// themselves are rows of `gantry_sessions` whose `who` starts with `events:`, under a key no console session has.
 /// Never edit an entry that has shipped: add one.
@@ -329,6 +372,11 @@ struct Inner {
     /// Every other gateway's load on each deployment, summed.
     load: RwLock<Arc<HashMap<String, DeploymentLoad>>>,
     polls: std::sync::atomic::AtomicU64,
+    /// Budget raises, and the version of them last read.
+    raises: RwLock<Arc<Vec<Raise>>>,
+    raises_seen: Mutex<Option<i64>>,
+    /// Set from `store.answer_cache`: cached answers are kept in the database.
+    shares_cache: AtomicBool,
 }
 
 /// A session pin: the deployment, when the session last sent, and when the pin was last written.
@@ -393,6 +441,9 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         load_out: Mutex::default(),
         load: RwLock::default(),
         polls: std::sync::atomic::AtomicU64::new(0),
+        raises: RwLock::default(),
+        raises_seen: Mutex::new(None),
+        shares_cache: AtomicBool::new(false),
     });
     let store = PgStore {
         handle: runtime.handle().clone(),
@@ -409,6 +460,7 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         migrate_namespace(&mut client, "gantry_policy", POLICY_MIGRATIONS).await?;
         migrate_namespace(&mut client, "gantry_routing", ROUTING_MIGRATIONS).await?;
         migrate_namespace(&mut client, "gantry_events", EVENTS_MIGRATIONS).await?;
+        migrate_namespace(&mut client, "gantry_ha", HA_MIGRATIONS).await?;
         write(&first.client, Some(Arc::new(client)));
         first.refresh().await.map_err(|err| {
             format!("the store's keys and kill switches could not be read: {err}. Check the database and start again.")
@@ -424,6 +476,7 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
             inner.poll().await;
             inner.flush_returns().await;
             inner.flush_routing().await;
+            inner.heartbeat().await;
         }
     });
     Ok(Arc::new(store))
@@ -1004,7 +1057,69 @@ impl Inner {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ended);
         }
+        let raises = version("raises");
+        let seen = *self
+            .raises_seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if seen != Some(raises) {
+            let rows = client
+                .query("SELECT body FROM gantry_raises ORDER BY id", &[])
+                .await
+                .map_err(|err| err.to_string())?;
+            let all: Vec<Raise> = rows
+                .iter()
+                .filter_map(|row| row.try_get::<_, &str>(0).ok())
+                .filter_map(|body| serde_json::from_str(body).ok())
+                .collect();
+            write(&self.raises, Arc::new(all));
+            *self
+                .raises_seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(raises);
+        }
         self.read_routing(&client).await
+    }
+
+    /// Writes this gateway's heartbeat, and now and then clears what ran out: gateways gone for a day, answers
+    /// past their time, and the least recently used answers beyond the cache's size.
+    async fn heartbeat(&self) {
+        let polls = self.polls.load(Ordering::Relaxed);
+        if polls % HEARTBEAT_EVERY != 0 {
+            return;
+        }
+        let Ok(client) = self.client() else {
+            return;
+        };
+        let host = std::env::var("HOSTNAME").unwrap_or_default();
+        let schema = PgStore::migration_lists()
+            .iter()
+            .map(|(namespace, list)| format!("{namespace} {}", list.len()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = tokio::time::timeout(
+            WAIT,
+            client.execute(
+                "INSERT INTO gantry_replicas VALUES ($1, $2, $3, $4, clock_timestamp(), clock_timestamp()) \
+                 ON CONFLICT (gateway) DO UPDATE SET seen = excluded.seen",
+                &[&self.gateway, &host, &gantry_core::VERSION, &schema],
+            ),
+        )
+        .await;
+        if polls % CLEAN_EVERY != 0 {
+            return;
+        }
+        let _ = tokio::time::timeout(
+            WAIT,
+            client.batch_execute(&format!(
+                "DELETE FROM gantry_replicas WHERE seen < clock_timestamp() - interval '1 day'; \
+                 DELETE FROM gantry_answer_cache WHERE expires < clock_timestamp(); \
+                 DELETE FROM gantry_answer_cache WHERE key IN (SELECT key FROM (SELECT key, \
+                   sum(octet_length(body)) OVER (ORDER BY used DESC, key) AS total FROM gantry_answer_cache) t \
+                   WHERE total > {SHARED_CACHE_BYTES});"
+            )),
+        )
+        .await;
     }
 
     /// Reads the pins written since the last read (another gateway's sessions) and every gateway's latency.
@@ -1742,6 +1857,7 @@ impl PgStore {
             ("core", MIGRATIONS),
             ("gantry_policy", POLICY_MIGRATIONS),
             ("gantry_routing", ROUTING_MIGRATIONS),
+            ("gantry_ha", HA_MIGRATIONS),
             (crate::batch::NAMESPACE, crate::batch::MIGRATIONS),
             (crate::insights::NAMESPACE, crate::insights::MIGRATIONS),
             ("mcp", crate::mcp::keep::MIGRATIONS),
@@ -1993,7 +2109,184 @@ impl PgStore {
     }
 }
 
+impl PgStore {
+    /// Keeps cached answers in the database (`store.answer_cache`), so every gateway on it serves them.
+    pub fn share_cache(&self, yes: bool) {
+        self.inner.shares_cache.store(yes, Ordering::Relaxed);
+    }
+}
+
+fn key32(bytes: Vec<u8>) -> Option<[u8; 32]> {
+    bytes.try_into().ok()
+}
+
 impl Store for PgStore {
+    fn raises(&self) -> Option<Arc<Vec<Raise>>> {
+        Some(read(&self.inner.raises))
+    }
+
+    fn put_raise(&self, raise: &Raise) -> Result<(), String> {
+        let (id, body) = (
+            raise.id.clone(),
+            serde_json::to_string(raise).map_err(|err| err.to_string())?,
+        );
+        self.change("budget raise", move |client| {
+            Box::pin(async move {
+                client
+                    .execute(
+                        "WITH put AS (INSERT INTO gantry_raises VALUES ($1, $2) \
+                           ON CONFLICT (id) DO UPDATE SET body = excluded.body RETURNING 1) \
+                         UPDATE gantry_versions SET version = version + 1 \
+                           WHERE name = 'raises' AND EXISTS (SELECT 1 FROM put)",
+                        &[&id, &body],
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_err(|err| err.to_string())
+            })
+        })
+    }
+
+    fn replicas(&self) -> Pending<Vec<Replica>> {
+        let inner = self.inner.clone();
+        self.ask(async move {
+            const TIME: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
+            let rows = inner
+                .client()?
+                .query(
+                    &format!(
+                        "SELECT gateway, host, version, schema, to_char(started AT TIME ZONE 'UTC', {TIME}), \
+                         to_char(seen AT TIME ZONE 'UTC', {TIME}), \
+                         seen > clock_timestamp() - $1 * interval '1 second' \
+                         FROM gantry_replicas ORDER BY started DESC, gateway"
+                    ),
+                    &[&HEALTHY_FOR_SECS],
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+            rows.iter()
+                .map(|row| {
+                    let field = |err: tokio_postgres::Error| err.to_string();
+                    Ok(Replica {
+                        gateway: row.try_get(0).map_err(field)?,
+                        host: row.try_get(1).map_err(field)?,
+                        version: row.try_get(2).map_err(field)?,
+                        schema: row.try_get(3).map_err(field)?,
+                        started: row.try_get(4).map_err(field)?,
+                        seen: row.try_get(5).map_err(field)?,
+                        healthy: row.try_get(6).map_err(field)?,
+                    })
+                })
+                .collect()
+        })
+    }
+
+    fn shares_cache(&self) -> bool {
+        self.inner.shares_cache.load(Ordering::Relaxed)
+    }
+
+    fn cache_get(&self, key: [u8; 32], scope: String) -> Pending<Option<CachedAnswer>> {
+        let inner = self.inner.clone();
+        self.ask(async move {
+            // The scope is checked beside the key that already holds it, as the cache in memory does. Kept as its
+            // hash: a scope holds a zero byte between the rule and the person, which Postgres text cannot.
+            let hashed = id::sha256_hex(scope.as_bytes());
+            let row = inner
+                .client()?
+                .query_opt(
+                    "UPDATE gantry_answer_cache SET used = clock_timestamp() \
+                     WHERE key = $1 AND scope = $2 AND expires > clock_timestamp() \
+                     RETURNING status, content_type, body, origin, cost, \
+                       extract(epoch FROM expires - clock_timestamp())::float8",
+                    &[&&key[..], &hashed],
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            let field = |err: tokio_postgres::Error| err.to_string();
+            let status: i32 = row.try_get(0).map_err(field)?;
+            let left: f64 = row.try_get(5).map_err(field)?;
+            Ok(Some(CachedAnswer {
+                key,
+                scope,
+                status: u16::try_from(status).unwrap_or(200),
+                content_type: row.try_get(1).map_err(field)?,
+                body: row.try_get(2).map_err(field)?,
+                origin: row.try_get(3).map_err(field)?,
+                cost: row.try_get(4).map_err(field)?,
+                ttl: Duration::try_from_secs_f64(left).unwrap_or_default(),
+                vector: None,
+            }))
+        })
+    }
+
+    fn cache_put(&self, answer: CachedAnswer) {
+        let inner = self.inner.clone();
+        // Not retried: an answer that is not kept is asked of the provider again, which is what no cache does.
+        self.handle.spawn(async move {
+            let Ok(client) = inner.client() else {
+                return;
+            };
+            let (status, ttl) = (i32::from(answer.status), answer.ttl.as_secs_f64());
+            let key = &answer.key[..];
+            let scope = id::sha256_hex(answer.scope.as_bytes());
+            let params: [&(dyn tokio_postgres::types::ToSql + Sync); 8] = [
+                &key,
+                &scope,
+                &status,
+                &answer.content_type,
+                &answer.body,
+                &answer.origin,
+                &answer.cost,
+                &ttl,
+            ];
+            let put = client.execute(
+                "INSERT INTO gantry_answer_cache VALUES ($1, $2, $3, $4, $5, $6, $7, \
+                   clock_timestamp() + $8 * interval '1 second', clock_timestamp()) \
+                 ON CONFLICT (key) DO UPDATE SET scope = excluded.scope, status = excluded.status, \
+                   content_type = excluded.content_type, body = excluded.body, origin = excluded.origin, \
+                   cost = excluded.cost, expires = excluded.expires, used = excluded.used",
+                &params,
+            );
+            if !matches!(tokio::time::timeout(WAIT, put).await, Ok(Ok(_))) {
+                return;
+            }
+            if let Some((partition, vector)) = &answer.vector {
+                let _ = tokio::time::timeout(
+                    WAIT,
+                    client.execute(
+                        "INSERT INTO gantry_answer_vectors VALUES ($1, $2, $3, clock_timestamp()) \
+                         ON CONFLICT (key) DO UPDATE SET partition = excluded.partition, \
+                           vector = excluded.vector, created = excluded.created",
+                        &[&&answer.key[..], &&partition[..], vector],
+                    ),
+                )
+                .await;
+            }
+        });
+    }
+
+    fn cache_vectors(&self, partition: [u8; 32]) -> Pending<Vec<([u8; 32], Vec<f32>)>> {
+        let inner = self.inner.clone();
+        self.ask(async move {
+            let rows = inner
+                .client()?
+                .query(
+                    "SELECT v.key, v.vector FROM gantry_answer_vectors v JOIN gantry_answer_cache c USING (key) \
+                     WHERE v.partition = $1 AND c.expires > clock_timestamp() ORDER BY v.created DESC LIMIT $2",
+                    &[&&partition[..], &core_store::MAX_SHARED_VECTORS],
+                )
+                .await
+                .map_err(|err| err.to_string())?;
+            Ok(rows
+                .iter()
+                .filter_map(|row| Some((key32(row.try_get(0).ok()?)?, row.try_get(1).ok()?)))
+                .collect())
+        })
+    }
+
     fn keys_text(&self) -> String {
         read(&self.inner.keys)
     }

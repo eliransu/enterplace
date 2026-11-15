@@ -67,6 +67,9 @@ pub struct KeyOptions {
     /// MCP tools this key may use, within its rule's `tools:` (`<server>.<tool>`, `<server>.*`, `!` to deny). Empty
     /// leaves the rule's list as it is: the list only narrows, never widens.
     pub mcp_tools: Vec<String>,
+    /// Guardrails this key adds to its rule's, by the name the policy's `guardrails:` defines each under. They
+    /// only add: a key never runs fewer guardrails than its rule.
+    pub guardrails: Vec<String>,
 }
 
 impl KeyOptions {
@@ -313,6 +316,16 @@ impl Period {
     pub const Hour: Period = Period {
         every: 1,
         unit: Unit::Hour,
+        tz: None,
+        sliding: false,
+    };
+    /// What a session's counters are kept under: a session has no calendar, so its counter lasts as long as any
+    /// counter may.
+    // ponytail: a session still running at 00:00 UTC on 1 January starts its counters again. A period of its own
+    // when a session outlives a year.
+    pub const Session: Period = Period {
+        every: 1,
+        unit: Unit::Year,
         tz: None,
         sliding: false,
     };
@@ -608,8 +621,8 @@ impl Period {
         local - self.offset(local - self.offset(local))
     }
 
-    /// A sliding window's length in minutes.
-    fn minutes(self) -> i64 {
+    /// The period's length in minutes (a month as 31 days, a year as 366).
+    pub fn minutes(self) -> i64 {
         i64::from(self.every) * self.unit.minutes() as i64
     }
 
@@ -710,6 +723,17 @@ pub struct Limits {
     pub inherited: Vec<(&'static str, String)>,
     /// Requests per minute, per person.
     pub rpm: Option<u32>,
+    /// Requests per calendar hour and per calendar day (UTC), per person.
+    pub rph: Option<u32>,
+    pub rpd: Option<u32>,
+    /// `budget: { usd, per: session }`: the most one session may spend.
+    pub session_budget: Option<Budget>,
+    /// `rate: { session_requests }`: the most requests one session may send.
+    pub session_requests: Option<u32>,
+    /// `require.headers`: headers every request must carry, lower case.
+    pub require_headers: Vec<String>,
+    /// `require.body`: body fields every request must carry, as dotted paths (`metadata.ticket`).
+    pub require_body: Vec<String>,
     /// Tokens per minute (prompt and answer), counted where the budget is: per team for a team rule, per person
     /// otherwise.
     pub tpm: Option<u32>,
@@ -963,6 +987,8 @@ pub enum ScopeKind {
     Customer,
     Tag,
     Model,
+    /// A named group of models from `model_groups:`.
+    ModelGroup,
 }
 
 impl ScopeKind {
@@ -976,6 +1002,7 @@ impl ScopeKind {
             ScopeKind::Customer => "customer",
             ScopeKind::Tag => "tag",
             ScopeKind::Model => "model",
+            ScopeKind::ModelGroup => "model_group",
         }
     }
 }
@@ -993,6 +1020,9 @@ pub struct ScopeLimit {
     pub line: usize,
     pub budgets: Vec<Budget>,
     pub rpm: Option<u32>,
+    /// Requests per calendar hour and per calendar day (UTC).
+    pub rph: Option<u32>,
+    pub rpd: Option<u32>,
     pub tpm: Option<u32>,
     pub parallel: Option<u32>,
     /// Until this UTC date or time the entry's limits only record what they would refuse (`would_refuse`).
@@ -1022,6 +1052,8 @@ pub enum Limit {
     Rpm(u32),
     Tpm(u32),
     Parallel(u32),
+    /// Most requests in a period: an hour (`rph`), a day (`rpd`) or a session (`session_requests`).
+    Requests(u32, Period),
 }
 
 impl Limit {
@@ -1031,8 +1063,23 @@ impl Limit {
             Limit::Rpm(_) => "rpm",
             Limit::Tpm(_) => "tpm",
             Limit::Parallel(_) => "parallel",
+            Limit::Requests(_, per) if *per == Period::Hour => "rph",
+            Limit::Requests(_, per) if *per == Period::Day => "rpd",
+            Limit::Requests(..) => "session_requests",
         }
     }
+}
+
+/// What a role's holders may grant when they issue a key, and what a key from `gantry login` may hold.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeyBounds {
+    /// The longest a key may work, in days. A key issued without `expires` gets this many.
+    pub max_days: Option<u32>,
+    /// The most a key may spend: its budget may not spend faster. A key issued without a budget gets this one.
+    pub max_budget: Option<Budget>,
+    /// The models a key may be given (patterns as in a rule's `models:`). Empty bounds none. A key issued without
+    /// `models` gets this list.
+    pub models: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1241,6 +1288,12 @@ pub struct Policy {
     /// `cors:`: the browser origins that may call the gateway's routes. None, the default, answers no origin.
     cors: Option<Cors>,
     mode: Mode,
+    /// Every guardrail the policy's `guardrails:` defines, for the ones a key adds by name.
+    guardrail_defs: Vec<Guardrail>,
+    /// `model_groups:`: each group's name and the models (or patterns) in it.
+    model_groups: Vec<(String, Vec<String>)>,
+    /// `key_bounds:` by role name; the empty name is the one for every role without its own, and for `gantry login`.
+    key_bounds: Vec<(String, KeyBounds)>,
 }
 
 /// `cors:` in the policy: pages served from these origins may call Gantry from the browser.
@@ -1339,6 +1392,88 @@ impl Policy {
             rules,
             ..Self::default()
         }
+    }
+
+    pub fn with_guardrail_defs(mut self, defs: Vec<Guardrail>) -> Self {
+        self.guardrail_defs = defs;
+        self
+    }
+
+    /// The guardrails a request of `who` under `rule` runs: the rule's, then each the key adds that the rule does
+    /// not already run. Borrowed when the key adds none, so the common request clones nothing.
+    pub fn guardrails_for<'a>(
+        &self,
+        who: &Principal,
+        rule: &'a Rule,
+    ) -> std::borrow::Cow<'a, [Guardrail]> {
+        let added: Vec<Guardrail> = who
+            .options
+            .guardrails
+            .iter()
+            .filter(|name| !rule.guardrails.iter().any(|g| g.name == **name))
+            .filter_map(|name| self.guardrail_defs.iter().find(|g| g.name == *name))
+            .cloned()
+            .collect();
+        if added.is_empty() {
+            return std::borrow::Cow::Borrowed(&rule.guardrails);
+        }
+        let mut all = rule.guardrails.clone();
+        all.extend(added);
+        std::borrow::Cow::Owned(all)
+    }
+
+    /// Whether the policy defines a guardrail of this name.
+    pub fn defines_guardrail(&self, name: &str) -> bool {
+        self.guardrail_defs.iter().any(|g| g.name == name)
+    }
+
+    pub fn with_model_groups(mut self, groups: Vec<(String, Vec<String>)>) -> Self {
+        self.model_groups = groups;
+        self
+    }
+
+    pub fn model_groups(&self) -> &[(String, Vec<String>)] {
+        &self.model_groups
+    }
+
+    pub fn with_key_bounds(mut self, bounds: Vec<(String, KeyBounds)>) -> Self {
+        self.key_bounds = bounds;
+        self
+    }
+
+    /// What a holder of `role` may grant: the role's own bounds, else the policy's. `None` bounds nothing.
+    pub fn key_bounds(&self, role: Option<&str>) -> Option<&KeyBounds> {
+        let of = |name: &str| {
+            self.key_bounds
+                .iter()
+                .find(|(r, _)| r == name)
+                .map(|(_, b)| b)
+        };
+        role.and_then(of).or_else(|| of(""))
+    }
+
+    /// The limits a rule sets on one session, for a request in `session`: its budget and its request count.
+    pub fn session_limits(&self, rule: &Rule, session: &str) -> Vec<Applied> {
+        let shadow = shadow_by(self.mode == Mode::Observe, rule.shadow_until.as_deref());
+        let limits = [
+            rule.limits.session_budget.map(Limit::Budget),
+            rule.limits
+                .session_requests
+                .map(|n| Limit::Requests(n, Period::Session)),
+        ];
+        limits
+            .into_iter()
+            .flatten()
+            .map(|limit| Applied {
+                of: "session",
+                scope: format!("session:{session}"),
+                whose: format!("session \"{session}\""),
+                limit,
+                source: rule.label(),
+                overrides: Vec::new(),
+                shadow,
+            })
+            .collect()
     }
 
     /// Sets the `limits:` list, for the loader and for embedders that build a policy in code.
@@ -1636,6 +1771,11 @@ fn resolve(
                 fields.push((limit(value), source));
             }
         }
+        for (per, value) in [(Period::Hour, entry.rph), (Period::Day, entry.rpd)] {
+            if let Some(value) = value {
+                fields.push((Limit::Requests(value, per), source));
+            }
+        }
     }
     // A field is a limit's kind, and for a budget its period: a daily budget does not override a monthly one.
     let field = |limit: &Limit| match limit {
@@ -1676,6 +1816,8 @@ impl Policy {
         if self.limits.is_empty()
             && l.budgets.is_empty()
             && l.rpm.is_none()
+            && l.rph.is_none()
+            && l.rpd.is_none()
             && l.tpm.is_none()
             && l.parallel.is_none()
             && who.budget.is_none()
@@ -1733,6 +1875,18 @@ impl Policy {
                 &person_whose,
                 "rpm",
             ),
+            (
+                rule.limits.rph.map(|n| Limit::Requests(n, Period::Hour)),
+                who.person_scope(),
+                &person_whose,
+                "rph",
+            ),
+            (
+                rule.limits.rpd.map(|n| Limit::Requests(n, Period::Day)),
+                who.person_scope(),
+                &person_whose,
+                "rpd",
+            ),
             (rule.limits.tpm.map(Limit::Tpm), base.clone(), &whose, "tpm"),
             (
                 rule.limits.parallel.map(Limit::Parallel),
@@ -1761,6 +1915,8 @@ impl Policy {
             line: 0,
             budgets: who.budget.into_iter().collect(),
             rpm: who.options.rpm,
+            rph: None,
+            rpd: None,
             tpm: who.tpm,
             parallel: who.parallel,
             shadow_until: None,
@@ -1920,6 +2076,28 @@ impl Policy {
             let whose = format!("model \"{name}\"");
             resolve("model", &scope, &whose, entries, observe, &mut out);
         }
+        // A group counts every model in it together, whichever of them the request names or is sent to.
+        for (group, members) in &self.model_groups {
+            let holds = |model: &str| {
+                !model.is_empty()
+                    && members
+                        .iter()
+                        .any(|m| crate::config::model_matches(m, model))
+            };
+            if !holds(ctx.sent) && !holds(ctx.model) {
+                continue;
+            }
+            let scope = format!("model_group:{}", who.within(group));
+            let whose = format!("model group \"{group}\"");
+            resolve(
+                "model_group",
+                &scope,
+                &whose,
+                of_kind(ScopeKind::ModelGroup, &[group]),
+                observe,
+                &mut out,
+            );
+        }
         out
     }
 
@@ -1970,7 +2148,12 @@ impl Policy {
             }
         }
         let limits: Vec<serde_json::Value> = rule
-            .map(|rule| self.applied(who, rule, ctx))
+            .map(|rule| {
+                let mut applied = self.applied(who, rule, ctx);
+                // Each session has its own counters: shown once, for any session.
+                applied.extend(self.session_limits(rule, "*"));
+                applied
+            })
             .unwrap_or_default()
             .iter()
             .map(applied_json)
@@ -2017,9 +2200,14 @@ pub fn applied_json(a: &Applied) -> serde_json::Value {
         match a.limit {
             Limit::Budget(b) => {
                 fields.insert("usd".into(), b.usd.into());
-                fields.insert("per".into(), b.per.word().into());
+                let per = if a.of == "session" {
+                    "session".to_string()
+                } else {
+                    b.per.word()
+                };
+                fields.insert("per".into(), per.into());
             }
-            Limit::Rpm(n) | Limit::Tpm(n) | Limit::Parallel(n) => {
+            Limit::Rpm(n) | Limit::Tpm(n) | Limit::Parallel(n) | Limit::Requests(n, _) => {
                 fields.insert("value".into(), n.into());
             }
         }
@@ -2329,6 +2517,8 @@ mod tests {
             line,
             budgets: Vec::new(),
             rpm: None,
+            rph: None,
+            rpd: None,
             tpm: None,
             parallel: None,
             shadow_until: None,

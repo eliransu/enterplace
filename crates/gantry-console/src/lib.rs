@@ -1884,7 +1884,21 @@ async fn cli_token(State(console): State<Console>, body: String) -> Response {
     };
     let later =
         std::time::SystemTime::now() + Duration::from_secs(u64::from(pending.days) * 86_400);
-    let expires = format!("{}Z", &audit::rfc3339(later)[..19]);
+    let mut attributes = keyfile::Attributes {
+        expires: Some(format!("{}Z", &audit::rfc3339(later)[..19])),
+        ..keyfile::Attributes::default()
+    };
+    // A key a person gives themselves holds to the policy's key_bounds: never longer than max_days, and with the
+    // budget and models the bounds set.
+    if let Err(first) = bound(&console, None, &mut attributes).await {
+        attributes.expires = None;
+        if let Err(problem) = bound(&console, None, &mut attributes).await {
+            return cli_refused(StatusCode::FORBIDDEN, "key_bounds_exceeded", &problem);
+        }
+        // Only the lifetime was over the bound: the key gets the longest one allowed.
+        let _ = first;
+    }
+    let expires = attributes.expires.clone().unwrap_or_default();
     let target = json!({
         "via": "gantry login",
         "name": pending.email,
@@ -1911,10 +1925,6 @@ async fn cli_token(State(console): State<Console>, body: String) -> Response {
         pending.team.clone(),
         key.clone(),
     );
-    let attributes = keyfile::Attributes {
-        expires: Some(expires.clone()),
-        ..keyfile::Attributes::default()
-    };
     let added = tokio::task::spawn_blocking(move || {
         keyfile::add_with(&name, &team, &k, &attributes, &keys)
     })
@@ -2454,13 +2464,41 @@ async fn issue(State(console): State<Console>, headers: HeaderMap, body: String)
 
 /// Makes a key and adds it to the keys file, recorded first: the record names the key by its hash prefix, so the
 /// key is made before the record and shown only after both.
+/// Holds a key about to be issued to the policy's `key_bounds:` for `role` (`None`: a key from `gantry login`).
+async fn bound(
+    console: &Console,
+    role: Option<&str>,
+    attributes: &mut keyfile::Attributes,
+) -> Result<(), String> {
+    let (policy, keys) = (
+        console.config().policy.clone(),
+        console.config().keys.clone(),
+    );
+    let loaded = tokio::task::spawn_blocking(move || config::load(&policy, Some(&keys)))
+        .await
+        .map_err(|_| {
+            "the policy could not be read to check the key's bounds. Try again.".to_string()
+        })?
+        .map_err(|problems| problems.join("\n"))?;
+    config::bound_key(
+        &loaded.policy,
+        role,
+        &mut attributes.expires,
+        &mut attributes.budget,
+        &mut attributes.models,
+    )
+    .map_err(|problem| format!("{}{}.", problem[..1].to_uppercase(), &problem[1..]))
+}
+
 async fn issued(
     console: &Console,
     admin: &Admin,
     name: &str,
     team: &str,
-    attributes: keyfile::Attributes,
+    mut attributes: keyfile::Attributes,
 ) -> Result<(String, bool), String> {
+    // What the person's role may grant (`key_bounds:`): what the key leaves unset takes the bound.
+    bound(console, Some(&admin.role), &mut attributes).await?;
     let admin_key = attributes.admin;
     let mut act = Act {
         action: "issue_key",

@@ -54,14 +54,17 @@ pub(crate) struct Spend {
     rates: Mutex<HashMap<String, VecDeque<Instant>>>,
     // Tokens used within the last minute, and held by requests in flight, per team, person or key.
     tokens: Mutex<HashMap<String, Tokens>>,
-    // ponytail: the cache stays per process even with a store. Answers are never written to the database (slice 7),
-    // and a hit from memory takes microseconds where one from Postgres would take a round trip.
+    // The cache of this process. With `store.answer_cache: true` an answer is kept in the store as well, and a
+    // request this cache misses asks the store before the provider: a round trip where the provider takes seconds.
     cache: Mutex<Cache>,
     /// The semantic cache's embeddings, each pointing at an answer in `cache`. Kept in memory for the same reason.
     vectors: Mutex<Vectors>,
     /// With a store: this gateway's lease on each rate-limit scope. One lease asked for at a time per scope, so a
     /// burst waits for it instead of leasing the whole limit in pieces.
     leases: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Leased>>>>,
+    /// With a store: what this gateway holds of each budget counter ahead of its requests, so most of them are
+    /// admitted from memory. Shared with the tasks that give back what a lease did not use.
+    budget_leases: Arc<Mutex<BTreeMap<Counter, BudgetLease>>>,
     pub(crate) metrics: Arc<crate::metrics::Metrics>,
     /// Shared with other gateways when the policy has `store:`: budgets are then reserved and settled there, and
     /// the ledger above only counts for this process.
@@ -130,6 +133,29 @@ struct Leased {
 /// A lease is this part of the limit, or what the request needs if more: a gateway leases about once every three
 /// seconds of traffic at the limit's pace, and holds at most a twentieth of it unused for a lease's second.
 const LEASE_PARTS: u64 = 20;
+
+/// What a gateway holds of one budget counter in the store, reserved there and not yet a request's.
+#[derive(Default)]
+struct BudgetLease {
+    left: f64,
+    /// When what is left goes back to the store.
+    until: Option<Instant>,
+    /// A lease is being asked for: the requests that come meanwhile reserve their own, so a burst leases once.
+    asking: bool,
+    /// The store had no room for a lease: until then each request reserves exactly what it needs.
+    exact_until: Option<Instant>,
+}
+
+/// A budget lease is what this many requests like the one that asks could cost, and never more than
+/// [`BUDGET_LEASE_PART`] of the budget.
+const BUDGET_LEASE_REQUESTS: f64 = 8.0;
+
+/// The most of a budget one gateway holds unused: a hundredth, for at most [`LEASE`]. A budget is never passed;
+/// what a lease costs is that a request may be refused while other gateways hold up to this much each.
+pub(crate) const BUDGET_LEASE_PART: f64 = 0.01;
+
+/// How long a counter that had no room for a lease is reserved from request by request.
+const EXACT_FOR: Duration = Duration::from_secs(5);
 
 /// Why a request was not given what it needs from a shared rate limit.
 enum Short {
@@ -377,19 +403,112 @@ impl Spend {
             per: budget.per,
             period: period.clone(),
         };
-        match store.reserve(bucket, usd, budget.usd).await {
-            Ok(Reserve::Done) => Ok(Reservation {
-                scope: scope.to_string(),
-                per: budget.per,
-                period,
-                usd,
-            }),
-            Ok(Reserve::Over { spent, reserved }) => Err(Ok(Over {
-                spent,
-                reserved,
-                resets: resets(&period, budget.per),
-            })),
-            Err(err) => Err(Err(err)),
+        let reservation = || Reservation {
+            scope: scope.to_string(),
+            per: budget.per,
+            period: period.clone(),
+            usd,
+        };
+        // A lease: several requests' worth reserved in one round trip, so the next ones are admitted from memory.
+        // Everything leased is reserved in the store, so no gateway is ever granted past the budget.
+        let chunk = (usd * BUDGET_LEASE_REQUESTS).min(budget.usd * BUDGET_LEASE_PART);
+        let mut own = 0.0;
+        let mut ask = false;
+        if usd > 0.0 {
+            let at = Instant::now();
+            let mut leases = locked(&self.budget_leases);
+            let lease = leases.entry(bucket.clone()).or_default();
+            // Within a billionth of a dollar: eight requests of a cent are a lease of eight cents, whatever the
+            // floating point sum says.
+            if lease.until.is_some_and(|until| until > at) && lease.left >= usd - 1e-9 {
+                lease.left = (lease.left - usd).max(0.0);
+                return Ok(reservation());
+            }
+            ask = chunk > usd && !lease.asking && lease.exact_until.is_none_or(|until| until <= at);
+            if ask {
+                lease.asking = true;
+            } else {
+                // Reserved exactly: what is left of the lease is part of it, so the two together still fit.
+                own = std::mem::take(&mut lease.left);
+            }
+        }
+        if ask {
+            let until = Instant::now() + LEASE;
+            let answer = store.reserve(bucket.clone(), chunk, budget.usd).await;
+            let mut leases = locked(&self.budget_leases);
+            let lease = leases.entry(bucket.clone()).or_default();
+            lease.asking = false;
+            match answer {
+                Ok(Reserve::Done) => {
+                    lease.left += chunk - usd;
+                    lease.until = Some(until);
+                    let (leases, store, bucket) =
+                        (self.budget_leases.clone(), store.clone(), bucket.clone());
+                    tokio::spawn(async move {
+                        tokio::time::sleep_until(tokio::time::Instant::from_std(until)).await;
+                        let back = {
+                            let mut leases = locked(&leases);
+                            let Some(lease) = leases.get_mut(&bucket) else {
+                                return;
+                            };
+                            // A newer lease on the counter gives back what is left then.
+                            if lease.until.is_some_and(|u| u > Instant::now()) {
+                                return;
+                            }
+                            let back = std::mem::take(&mut lease.left);
+                            if !lease.asking {
+                                leases.remove(&bucket);
+                            }
+                            back
+                        };
+                        if back > 0.0 {
+                            store.settle(vec![Change {
+                                bucket,
+                                spent: 0.0,
+                                reserved: -back,
+                            }]);
+                        }
+                    });
+                    return Ok(reservation());
+                }
+                // No room for a lease: near its limit a counter is reserved from exactly, request by request.
+                Ok(Reserve::Over { .. }) => {
+                    lease.exact_until = Some(Instant::now() + EXACT_FOR);
+                    own = std::mem::take(&mut lease.left);
+                }
+                Err(err) => return Err(Err(err)),
+            }
+        }
+        let give_back = |own: f64| {
+            if own > 0.0 {
+                store.settle(vec![Change {
+                    bucket: bucket.clone(),
+                    spent: 0.0,
+                    reserved: -own,
+                }]);
+            }
+        };
+        match store
+            .reserve(bucket.clone(), (usd - own).max(0.0), budget.usd)
+            .await
+        {
+            Ok(Reserve::Done) => {
+                // More was left of the lease than the request needs (it ran out of time, not of money).
+                give_back(own - usd);
+                Ok(reservation())
+            }
+            Ok(Reserve::Over { spent, reserved }) => {
+                give_back(own);
+                Err(Ok(Over {
+                    spent,
+                    reserved: (reserved - own).max(0.0),
+                    resets: resets(&period, budget.per),
+                }))
+            }
+            Err(err) => {
+                give_back(own);
+                Err(Err(err))
+            }
         }
     }
 
@@ -1003,6 +1122,63 @@ fn cosine(a: &[f32], b: &[f32]) -> Option<f64> {
     }
     let norms = na.sqrt() * nb.sqrt();
     (norms > 0.0 && dot.is_finite()).then(|| dot / norms)
+}
+
+/// The answer another gateway cached, from the store (`store.answer_cache: true`): the one for the same request,
+/// else, for a rule with a semantic cache, the closest one at or above the threshold among the partition's newest
+/// embeddings. Read only in the request's own scope, and kept in this process's cache for the next request. A
+/// store that cannot be asked is a miss: the provider answers.
+async fn shared_answer(
+    spend: &Spend,
+    key: &[u8; 32],
+    scope: &str,
+    probe: Option<&Probe>,
+) -> Option<(Found, &'static str, Option<f64>)> {
+    let store = spend.store.as_ref().filter(|s| s.shares_cache())?;
+    let read = |key: [u8; 32]| async move {
+        let answer = store.cache_get(key, scope.to_string()).await.ok()??;
+        let cached = Cached {
+            status: StatusCode::from_u16(answer.status).ok()?,
+            content_type: answer
+                .content_type
+                .as_deref()
+                .and_then(|v| HeaderValue::from_str(v).ok()),
+            body: Bytes::from(answer.body),
+            expires: Instant::now() + answer.ttl,
+            used: 0,
+            scope: answer.scope,
+            origin: answer.origin,
+            cost: answer.cost,
+        };
+        let found = Found {
+            status: cached.status,
+            content_type: cached.content_type.clone(),
+            body: cached.body.clone(),
+            origin: cached.origin.clone(),
+            cost: cached.cost,
+        };
+        locked(&spend.cache).put(key, cached, CACHE_BYTES);
+        Some(found)
+    };
+    if let Some(found) = read(*key).await {
+        return Some((found, "exact", None));
+    }
+    let probe = probe?;
+    let mut near: Vec<([u8; 32], f64)> = store
+        .cache_vectors(probe.partition)
+        .await
+        .ok()?
+        .into_iter()
+        .filter_map(|(key, vector)| Some((key, cosine(&vector, &probe.vector)?)))
+        .filter(|(_, score)| *score >= probe.threshold)
+        .collect();
+    near.sort_by(|a, b| b.1.total_cmp(&a.1));
+    for (key, score) in near {
+        if let Some(found) = read(key).await {
+            return Some((found, "semantic", Some(score)));
+        }
+    }
+    None
 }
 
 /// A request's embedding, made through Gantry's embeddings route, to compare it with cached ones.
@@ -1646,6 +1822,10 @@ pub(crate) async fn admit(
                     }),
                 }
             };
+            let found = match found {
+                Some(found) => Some(found),
+                None => shared_answer(spend, &key, &scope, probe.as_ref()).await,
+            };
             if let Some((found, matched, similarity)) = found {
                 let mut response = (found.status, found.body).into_response();
                 if let Some(content_type) = found.content_type {
@@ -1677,6 +1857,7 @@ pub(crate) async fn admit(
         }
     }
     count_rpm(spend, ask.applied, ask.rule, &mut observed).await?;
+    count_requests(spend, ask.applied, ask.rule, &mut observed).await?;
     let tpm_applied: Vec<&Applied> = ask
         .applied
         .iter()
@@ -1954,6 +2135,106 @@ pub(crate) async fn admit(
     ))
 }
 
+/// Counts one request against every hourly, daily and session request limit in `applied`. Each is a counter of
+/// its calendar hour or day (UTC), or of its session, kept where budgets are: in the store when there is one, so
+/// every gateway counts in it and a restart forgets nothing.
+// ponytail: without a store the counts are in memory and start again when the gateway does, as rpm windows do.
+async fn count_requests(
+    spend: &Arc<Spend>,
+    applied_all: &[Applied],
+    rule: &Rule,
+    observed: &mut Vec<(Refusal, &'static str)>,
+) -> Result<(), Refusal> {
+    let now = audit::timestamp();
+    for applied in applied_all {
+        let Limit::Requests(most, per) = applied.limit else {
+            continue;
+        };
+        let word = applied.limit.word();
+        let scope = format!("{word}:{}", applied.scope);
+        let count = |limit: f64| {
+            let budget = Budget { usd: limit, per };
+            spend.reserve_shared(&scope, budget, 1.0, &now)
+        };
+        // Reserved and never given back: a request counts whether or not it is answered.
+        match count(f64::from(most)).await {
+            Ok(_) => continue,
+            Err(Err(err)) => return Err(rate_store_unavailable(&err)),
+            Err(Ok(_)) => {}
+        }
+        let session = applied.of == "session";
+        let mut refusal = if session {
+            Refusal::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "session_requests_exceeded",
+                format!(
+                    "Refused: {} has sent {most} requests, the most {} allows one session. Start a new session (a new conversation in your tool), or ask a Gantry admin to raise session_requests.",
+                    applied.whose,
+                    allows(applied, rule)
+                ),
+            )
+        } else {
+            let wait = gantry_core::policy::unix_seconds(&now)
+                .map(|unix| (per.window(unix).1 - unix).max(1) as u64);
+            let mut refusal = Refusal::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                format!(
+                    "Refused: {} has sent {most} requests this {}, the most {} allows. The count starts again at {}.",
+                    applied.whose,
+                    per.describe(),
+                    allows(applied, rule),
+                    resets(&period_of(&now, per), per)
+                ),
+            );
+            refusal.retry_after = wait;
+            refusal
+        };
+        refusal.record = Some(Box::new(limit_record(
+            applied,
+            serde_json::json!({ "kind": word, "of": applied.of, "value": most }),
+        )));
+        let Some(by) = applied.shadow else {
+            return Err(refusal);
+        };
+        observed.push((refusal, by));
+        // Observed: counted all the same, so the count is the one enforcement will see.
+        if let Err(Err(err)) = count(f64::MAX).await {
+            return Err(rate_store_unavailable(&err));
+        }
+    }
+    Ok(())
+}
+
+/// The refusal of a request that would pass its session's budget.
+fn over_session_budget(
+    over: &Over,
+    whose: &str,
+    budget: Budget,
+    rule: &Rule,
+    most: f64,
+) -> Refusal {
+    Refusal::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "session_budget_exceeded",
+        format!(
+            "Refused: {whose} has spent {} of the {} rule \"{}\" allows one session{}. This request could cost up to {}, which would pass it. Start a new session (a new conversation in your tool), or ask a Gantry admin to raise the session budget.",
+            dollars(over.spent),
+            dollars(budget.usd),
+            rule.name,
+            if over.reserved > 0.0 {
+                format!(
+                    ", and requests in flight hold {} more",
+                    dollars(over.reserved)
+                )
+            } else {
+                String::new()
+            },
+            dollars(most),
+        ),
+    )
+}
+
 /// The shadow every limit in `applied` is under, when each is: `None` when one of them is enforced, or none applies.
 pub(crate) fn all_shadowed(applied: &[&Applied]) -> Option<&'static str> {
     let first = applied.first()?.shadow?;
@@ -2147,6 +2428,14 @@ pub(crate) async fn reserve_budgets(
         let Limit::Budget(budget) = applied.limit else {
             continue;
         };
+        let over_budget =
+            |over: &Over, code, whose: &str, budget, under: &str, most, what: &str| {
+                if applied.of == "session" {
+                    over_session_budget(over, whose, budget, rule, most)
+                } else {
+                    over_budget(over, code, whose, budget, under, most, what)
+                }
+            };
         let (code, under) = match applied.of {
             "rule" => ("budget_exceeded", format!(" under rule \"{}\"", rule.name)),
             "key" => ("key_budget_exceeded", String::new()),
@@ -2648,6 +2937,23 @@ impl Admitted {
             };
             let (key, vector) = (keep.key, keep.vector);
             let commit: Commit = Box::new(move || {
+                if let Some(store) = spend.store.as_ref().filter(|s| s.shares_cache()) {
+                    store.cache_put(gantry_core::store::CachedAnswer {
+                        key,
+                        scope: cached.scope.clone(),
+                        status: cached.status.as_u16(),
+                        content_type: cached
+                            .content_type
+                            .as_ref()
+                            .and_then(|v| v.to_str().ok())
+                            .map(str::to_string),
+                        body: cached.body.to_vec(),
+                        origin: cached.origin.clone(),
+                        cost: cached.cost,
+                        ttl: cached.expires.saturating_duration_since(Instant::now()),
+                        vector: vector.clone(),
+                    });
+                }
                 locked(&spend.cache).put(key, cached, CACHE_BYTES);
                 if let Some((partition, vector)) = vector {
                     locked(&spend.vectors).push(Vector {
@@ -2685,7 +2991,10 @@ impl Admitted {
         }
         if let Some((session, turn)) = &self.session {
             record.insert("session".into(), session.as_str().into());
-            record.insert("turn".into(), turn.as_str().into());
+            // A session read without an events guardrail has no turn.
+            if !turn.is_empty() {
+                record.insert("turn".into(), turn.as_str().into());
+            }
         }
         record.insert("model".into(), self.model.as_str().into());
         record.insert("provider".into(), self.provider.as_str().into());
@@ -3527,6 +3836,137 @@ mod tests {
             "{} {}",
         ] {
             assert!(hints(bad.as_bytes()).is_err(), "{bad}");
+        }
+        Ok(())
+    }
+
+    /// A store that counts in memory as Postgres does in a row, and how many reservations it was asked for.
+    #[derive(Debug, Default)]
+    struct Counting {
+        row: Mutex<(f64, f64)>,
+        asked: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Store for Counting {
+        fn keys_text(&self) -> String {
+            String::new()
+        }
+        fn kills(&self) -> Arc<Vec<gantry_core::kill::Kill>> {
+            Arc::default()
+        }
+        fn add_key(&self, _: &gantry_core::config::KeyEntry) -> Result<bool, String> {
+            Ok(false)
+        }
+        fn revoke(&self, _: &str) -> Result<Option<gantry_core::keyfile::Revoked>, String> {
+            Ok(None)
+        }
+        fn set_kill(
+            &self,
+            _: &gantry_core::kill::Kill,
+        ) -> Result<Option<gantry_core::kill::Kill>, String> {
+            Ok(None)
+        }
+        fn clear_kill(&self, _: &str, _: &str) -> Result<Option<gantry_core::kill::Kill>, String> {
+            Ok(None)
+        }
+        fn reserve(
+            &self,
+            _: Counter,
+            usd: f64,
+            limit: f64,
+        ) -> gantry_core::store::Pending<Reserve> {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut row = locked(&self.row);
+            let found = if row.0 + row.1 + usd <= limit {
+                row.1 += usd;
+                Reserve::Done
+            } else {
+                Reserve::Over {
+                    spent: row.0,
+                    reserved: row.1,
+                }
+            };
+            Box::pin(async move { Ok(found) })
+        }
+        fn settle(&self, changes: Vec<Change>) {
+            let mut row = locked(&self.row);
+            for change in changes {
+                row.0 += change.spent;
+                row.1 += change.reserved;
+            }
+        }
+        fn lease(&self, _: String, _: u64, _: u64, _: u64) -> gantry_core::store::Pending<Lease> {
+            Box::pin(async { Ok(Lease::Over { wait: 1 }) })
+        }
+        fn give_back(&self, _: i64, _: i64) {}
+        fn cooling(&self) -> Arc<HashMap<String, Instant>> {
+            Arc::default()
+        }
+        fn cooled(&self, _: &str, _: Duration) {}
+        fn warmed(&self, _: &str) {}
+        fn open_session(
+            &self,
+            _: String,
+            _: String,
+            _: Duration,
+        ) -> gantry_core::store::Pending<()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn session(&self, _: String) -> gantry_core::store::Pending<Option<String>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn end_session(&self, _: String) {}
+    }
+
+    #[tokio::test]
+    async fn a_leased_budget_is_reserved_from_memory_and_exactly_near_its_limit()
+    -> Result<(), String> {
+        let store = Arc::new(Counting::default());
+        let spend = Spend {
+            store: Some(store.clone()),
+            ..Spend::default()
+        };
+        let asked = || store.asked.load(std::sync::atomic::Ordering::SeqCst);
+        let now = audit::timestamp();
+        let budget = Budget {
+            usd: 100.0,
+            per: Period::Day,
+        };
+        let reserve = |usd: f64| spend.reserve_shared("team:a", budget, usd, &now);
+        // Far from the limit: eight requests of a cent are one round trip, and the store holds all eight.
+        for _ in 0..8 {
+            assert!(reserve(0.01).await.is_ok());
+        }
+        assert_eq!(asked(), 1, "eight requests, one reservation in the store");
+        assert!((locked(&store.row).1 - 0.08).abs() < 1e-9);
+        // A lease is never more than a hundredth of the budget, however large the request.
+        assert!(reserve(0.5).await.is_ok());
+        assert!(
+            (locked(&store.row).1 - 1.08).abs() < 1e-9,
+            "0.5 and 0.5 leased"
+        );
+        // What a lease did not use goes back when its second is over.
+        tokio::time::sleep(LEASE + Duration::from_millis(100)).await;
+        assert!((locked(&store.row).1 - 0.58).abs() < 1e-9);
+        // A request too large for a lease is reserved exactly.
+        assert!(reserve(2.0).await.is_ok());
+        assert!((locked(&store.row).1 - 2.58).abs() < 1e-9);
+        // Near the limit: no room for a lease, so each request reserves what it needs and not a cent more, and
+        // the budget is spent to its last request (half a cent is left, less than one).
+        locked(&store.row).0 = 97.395;
+        let before = asked();
+        for _ in 0..2 {
+            assert!(reserve(0.01).await.is_ok());
+        }
+        assert_eq!(
+            asked(),
+            before + 3,
+            "a lease that did not fit, then two exact ones"
+        );
+        assert!((locked(&store.row).1 - 2.6).abs() < 1e-9);
+        match reserve(0.01).await {
+            Err(Ok(over)) => assert!((over.spent + over.reserved - 99.995).abs() < 1e-9),
+            _ => return Err("a request past the budget was admitted".into()),
         }
         Ok(())
     }

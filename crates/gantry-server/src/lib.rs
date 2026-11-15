@@ -38,6 +38,7 @@ mod cloud_batch;
 mod cors;
 mod credentials;
 mod events;
+mod govern;
 pub mod insights;
 mod jwt;
 mod manage;
@@ -630,6 +631,8 @@ struct AppState {
     transform: Option<Arc<dyn Transform>>,
     // Events plugins: the binary's own, the queues of observing guardrails, and the sessions plugins ended.
     events: Arc<events::Plugins>,
+    // Budget raises: asked for, decided, and added to budgets while they run (govern.rs).
+    raises: Arc<govern::Raises>,
 }
 
 /// The client every call out is made with.
@@ -1056,6 +1059,12 @@ fn build(
         admin_api: config.extension.admin.clone(),
         transform: config.extension.transform.clone(),
         events: Arc::new(events::Plugins::new(config.extension.events.clone())),
+        raises: Arc::new(govern::Raises::open(
+            config.store.clone(),
+            reloader
+                .as_ref()
+                .map(|r| r.keys_path().with_file_name("gantry-raises.json")),
+        )),
     };
     let keep = Arc::new(state.clone());
     batch::spawn_poller(Arc::downgrade(&keep));
@@ -1409,6 +1418,9 @@ fn strip_hop_by_hop(headers: &mut HeaderMap) {
 /// The one field of the request the policy needs. Everything else in the body is left alone.
 struct Peek {
     model: String,
+    /// The fields a session is read from (`metadata`, `prompt_cache_key`, `user`), taken in the same pass, so a
+    /// request that names its session is placed in it without its body being read again.
+    session_fields: serde_json::Map<String, serde_json::Value>,
 }
 
 impl<'de> serde::Deserialize<'de> for Peek {
@@ -1424,6 +1436,7 @@ impl<'de> serde::Deserialize<'de> for Peek {
             fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Peek, A::Error> {
                 use serde::de::Error;
                 let mut model = None;
+                let mut session_fields = serde_json::Map::new();
                 while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
                     if key == "model" {
                         if model.replace(map.next_value::<String>()?).is_some() {
@@ -1433,12 +1446,17 @@ impl<'de> serde::Deserialize<'de> for Peek {
                         // Some servers read JSON keys without regard to case. A second spelling of "model"
                         // would let the policy check one model while the provider runs another.
                         return Err(A::Error::custom("a second spelling of the model key"));
+                    } else if matches!(&*key, "metadata" | "prompt_cache_key" | "user") {
+                        session_fields.insert(key.into_owned(), map.next_value()?);
                     } else {
                         map.next_value::<serde::de::IgnoredAny>()?;
                     }
                 }
                 model
-                    .map(|model| Peek { model })
+                    .map(|model| Peek {
+                        model,
+                        session_fields,
+                    })
                     .ok_or_else(|| A::Error::missing_field("model"))
             }
         }
@@ -1732,6 +1750,45 @@ struct Seen<'a> {
     rotated: Option<serde_json::Value>,
     /// What observe mode or a shadow period let through: one entry per decision that would have refused it.
     would_refuse: Vec<serde_json::Value>,
+    /// The body fields a session is read from, when the body was read as JSON.
+    session_fields: Option<serde_json::Value>,
+    /// The session the request belongs to, for its records and its rule's session limits.
+    session: Option<String>,
+    /// A budget raise asked for with `POST /v1/budget/raises`, for its record.
+    budget_raise: Option<serde_json::Value>,
+}
+
+/// `POST /v1/guardrails/check`: runs the caller's rule's guardrails on text the caller sends, and answers with what
+/// they found. No model is called and nothing is charged.
+const GUARDRAILS_CHECK: &str = "/v1/guardrails/check";
+
+/// Marks a guardrail check on its way through the request path, which it leaves before anything is sent.
+#[derive(Clone, Copy)]
+struct GuardCheck {
+    /// Run the guardrails the rule runs on answers, not on requests.
+    answer: bool,
+}
+
+/// The session of a request on a rule with no events guardrail, read as an events plugin's is
+/// (`gantry_core::events::session_id`). A request that names its session (a header, Claude Code's or Codex's
+/// marker, `prompt_cache_key`) is placed from what was read with its model. Only one that names none has its body
+/// read once more, for its first message. `None` for a body with no text.
+fn record_session(
+    person: &Principal,
+    markers: &gantry_core::events::Markers,
+    fields: Option<&serde_json::Value>,
+    bytes: &Bytes,
+) -> Option<String> {
+    use gantry_core::events::session_id;
+    let named = fields.unwrap_or(&serde_json::Value::Null);
+    let (session, source) = session_id(&person.name, &person.key, markers, named, "");
+    if !matches!(source, "metadata.user_id" | "user" | "first_message") {
+        return Some(session);
+    }
+    let body: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let conversation = gantry_core::events::conversation(&body);
+    let first = conversation.first_message();
+    (!first.is_empty()).then(|| session_id(&person.name, &person.key, markers, &body, first).0)
 }
 
 const CUSTOMER: &str = "x-gantry-customer";
@@ -2067,6 +2124,47 @@ async fn check<'a>(
         )
         .await;
     }
+    if parts.uri.path() == govern::RAISES && matches!(parts.method, Method::GET | Method::POST) {
+        let (bytes, _permit) = read_body(Some(&person.name), state, &parts.headers, body).await?;
+        let (raises, method, who) = (state.raises.clone(), parts.method.clone(), person.clone());
+        let policy_now = policy.clone();
+        // The store or the file is written on a blocking thread, as every admin change is.
+        let (status, answer, kept) =
+            admin::blocking(move || govern::requested(&raises, &policy_now, &who, &method, &bytes))
+                .await??;
+        seen.budget_raise = kept;
+        return Ok(Next::Answer(admin::json_response(status, &answer)));
+    }
+    if parts.uri.path() == GUARDRAILS_CHECK && parts.method == Method::POST {
+        // The caller's own rule's guardrails: a caller no rule names has none to run.
+        let rule = policy.rule_for(person).ok_or_else(|| no_rule(person))?;
+        seen.rule = Some(rule);
+        let (bytes, permit) = read_body(Some(&person.name), state, &parts.headers, body).await?;
+        let sent: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        let texts: Vec<&str> = match &sent["text"] {
+            serde_json::Value::String(text) => vec![text.as_str()],
+            serde_json::Value::Array(list) => list.iter().filter_map(|t| t.as_str()).collect(),
+            _ => Vec::new(),
+        };
+        let side = sent["on"].as_str().unwrap_or("request");
+        if texts.is_empty()
+            || sent["text"]
+                .as_array()
+                .is_some_and(|l| l.len() != texts.len())
+            || !matches!(side, "request" | "answer")
+        {
+            return Err(Refusal::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Refused: send {\"text\": \"...\"} or {\"text\": [\"...\", \"...\"]}, and optionally \"on\": \"request\" (the default: the guardrails your rule runs on requests) or \"answer\" (the ones it runs on answers).",
+            ));
+        }
+        let shown = Bytes::from(serde_json::json!({ "input": texts }).to_string());
+        parts.extensions.insert(GuardCheck {
+            answer: side == "answer",
+        });
+        return Ok(Next::Forward(parts, shown, permit));
+    }
     let Some(route) = route_kind(&parts.method, parts.uri.path()) else {
         return Err(unknown_route());
     };
@@ -2094,6 +2192,7 @@ async fn check<'a>(
         gemini_body_model(&bytes, model)?;
         Peek {
             model: model.to_string(),
+            session_fields: serde_json::Map::new(),
         }
     } else if is_form(parts.uri.path()) {
         form_model(&parts.headers, &bytes)?
@@ -2130,9 +2229,38 @@ async fn check<'a>(
         seen.model = Some(peek.model.clone());
         let by = policy.observing(rule.shadow_until.as_deref());
         customer_and_tags(&mut parts.headers, person, rule, seen, by)?;
+        if !rule.limits.require_headers.is_empty() || !rule.limits.require_body.is_empty() {
+            let missing = required_missing(rule, &parts.headers, &bytes);
+            if !missing.is_empty() {
+                let mut refusal = Refusal::new(
+                    StatusCode::BAD_REQUEST,
+                    "required_missing",
+                    format!(
+                        "Refused: rule \"{}\" requires every request to carry {}, and this one lacks {}. Send it with a value that is not empty.",
+                        rule.name,
+                        rule.limits
+                            .require_headers
+                            .iter()
+                            .map(|h| format!("header {h}"))
+                            .chain(
+                                rule.limits
+                                    .require_body
+                                    .iter()
+                                    .map(|f| format!("body field {f}"))
+                            )
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        missing.join(" and ")
+                    ),
+                );
+                refusal.record = Some(Box::new(serde_json::json!({ "required_missing": missing })));
+                enforce(seen, refusal, by)?;
+            }
+        }
     }
     // A copy of its own, so seen can still take what is observed below.
     seen.model = Some(peek.model.clone());
+    seen.session_fields = Some(serde_json::Value::Object(peek.session_fields));
     let model = &peek.model;
     killed(state, person, &key_sha256, Some(model))?;
     // UX12-1: a switch on a model also stops each alias that can send to it.
@@ -2495,6 +2623,50 @@ pub(crate) fn enforce(
         }
         None => Err(refusal),
     }
+}
+
+/// The guardrails a request of `person` under `rule` runs: the rule's and the ones the person's key adds, each as
+/// observe mode runs it when the policy observes.
+pub(crate) fn guards_of(
+    policy: &Policy,
+    person: Option<&Principal>,
+    rule: &Rule,
+) -> Vec<Guardrail> {
+    let all = match person {
+        Some(person) => policy.guardrails_for(person, rule),
+        None => std::borrow::Cow::Borrowed(rule.guardrails.as_slice()),
+    };
+    observed_guards(policy, &all).unwrap_or_else(|| all.into_owned())
+}
+
+/// What a rule's `require:` asks for and the request lacks: its headers, then its body fields.
+fn required_missing(rule: &Rule, headers: &HeaderMap, body: &[u8]) -> Vec<String> {
+    let limits = &rule.limits;
+    let mut missing: Vec<String> = limits
+        .require_headers
+        .iter()
+        .filter(|name| {
+            headers
+                .get(name.as_str())
+                .is_none_or(|v| v.as_bytes().iter().all(u8::is_ascii_whitespace))
+        })
+        .map(|name| format!("header {name}"))
+        .collect();
+    if !limits.require_body.is_empty() {
+        let parsed = serde_json::from_slice::<serde_json::Value>(body).unwrap_or_default();
+        for field in &limits.require_body {
+            let pointer = format!("/{}", field.replace('.', "/"));
+            let present = parsed.pointer(&pointer).is_some_and(|v| match v {
+                serde_json::Value::Null => false,
+                serde_json::Value::String(s) => !s.trim().is_empty(),
+                _ => true,
+            });
+            if !present {
+                missing.push(format!("body field {field}"));
+            }
+        }
+    }
+    missing
 }
 
 /// The caller's rule. With none, observe mode forwards under a rule that allows everything, and `refused` goes on
@@ -2982,6 +3154,7 @@ fn form_model(headers: &HeaderMap, bytes: &[u8]) -> Result<Peek, Refusal> {
         .map_err(|_| unreadable("the model field is not text"))?;
     Ok(Peek {
         model: model.to_string(),
+        session_fields: serde_json::Map::new(),
     })
 }
 
@@ -4085,7 +4258,31 @@ async fn decide(
     }
     // What the guardrails found, when the rule has any: an empty list says they ran and found nothing.
     let mut found = None;
-    let mut guards = seen.rule.map_or(&[][..], |rule| rule.guardrails.as_slice());
+    // The rule's guardrails, and the ones the caller's key adds to them.
+    let with_key = match (seen.person, seen.rule) {
+        (Some(person), Some(rule)) => policy.guardrails_for(person, rule),
+        _ => std::borrow::Cow::Borrowed(&[][..]),
+    };
+    let mut guards: &[Guardrail] = &with_key;
+    // A guardrail check stops before anything is sent: it runs the guardrails and answers with what they found.
+    let guard_check = match &outcome {
+        Ok(Next::Forward(parts, _, _)) => parts.extensions.get::<GuardCheck>().copied(),
+        _ => None,
+    };
+    // Asked for the answer side: the guardrails the rule runs on answers, run here on the text sent.
+    let on_answers: Vec<Guardrail>;
+    if guard_check.is_some_and(|check| check.answer) {
+        on_answers = guards
+            .iter()
+            .filter(|g| g.on.answer)
+            .cloned()
+            .map(|mut g| {
+                g.on.request = true;
+                g
+            })
+            .collect();
+        guards = &on_answers;
+    }
     // In observe mode every guardrail runs as in its shadow period: it records what it finds, and neither blocks nor
     // masks. A block it would have made goes on the record as would_refuse.
     let shadowed = observed_guards(policy, guards);
@@ -4228,6 +4425,7 @@ async fn decide(
     let conversational = matches!(path.as_str(), CHAT | MESSAGES | RESPONSES) || generates;
     let mut plugins = events::Requested::default();
     if events::active(state, guards)
+        && guard_check.is_none()
         && let (Some(person), Some(rule)) = (seen.person, seen.rule)
         && let Ok(Next::Forward(parts, bytes, _)) = &mut outcome
     {
@@ -4269,6 +4467,14 @@ async fn decide(
     if let Some(refusal) = plugins.refusal.take() {
         outcome = Err(refusal);
     }
+    // Every request has its session on its records, with or without an events guardrail.
+    seen.session = match (&plugins.session, seen.person, &outcome) {
+        (Some((session, _)), _, _) => Some(session.clone()),
+        (None, Some(person), Ok(Next::Forward(_, bytes, _))) if guard_check.is_none() => {
+            record_session(person, &markers, seen.session_fields.as_ref(), bytes)
+        }
+        _ => None,
+    };
     if !plugins.audit.is_empty() {
         found
             .get_or_insert_with(Vec::new)
@@ -4301,6 +4507,29 @@ async fn decide(
         }
         other => other,
     };
+    if guard_check.is_some() {
+        let findings =
+            serde_json::to_value(found.as_deref().unwrap_or_default()).unwrap_or_default();
+        outcome = match outcome {
+            Ok(Next::Forward(_, bytes, _)) => {
+                // The text as the guardrails leave it: masked where one masked it.
+                let texts = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .map(|mut shown| shown["input"].take())
+                    .unwrap_or_default();
+                Ok(Next::Answer(admin::json_response(
+                    StatusCode::OK,
+                    &serde_json::json!({ "blocked": false, "text": texts, "findings": findings }),
+                )))
+            }
+            Err(refusal) if refusal.code == guard::BLOCKED_CODE => {
+                Ok(Next::Answer(admin::json_response(
+                    StatusCode::OK,
+                    &serde_json::json!({ "blocked": true, "message": refusal.message, "findings": findings }),
+                )))
+            }
+            other => other,
+        };
+    }
     // Guardrails on the answer travel with the request (or a cached answer) to the end, where the answer is whole.
     let on_answer: Vec<Guardrail> = guards.iter().filter(|g| g.on.answer).cloned().collect();
     // The turn travels with the request to its answer, for the plugins and for the usage record.
@@ -4323,6 +4552,18 @@ async fn decide(
             }
             if let Some(carry) = plugins.carry.take() {
                 response.extensions_mut().insert(carry);
+            }
+        }
+        (Ok(Next::Forward(parts, _, _)), None) => {
+            if let (Some(meter), Some(session)) =
+                (parts.extensions.get::<spend::Meter>(), &seen.session)
+            {
+                meter.session(&(session.clone(), String::new()));
+            }
+        }
+        (Ok(Next::Answer(_)), None) if seen.cache == Some("hit") => {
+            if let (Some(hit), Some(session)) = (seen.hit.as_mut(), &seen.session) {
+                hit.session = Some((session.clone(), String::new()));
             }
         }
         _ => {}
@@ -4440,9 +4681,22 @@ async fn decide(
         if let Some((session, turn)) = &plugins.session {
             record.insert("session".into(), session.as_str().into());
             record.insert("turn".into(), turn.as_str().into());
+        } else if let Some(session) = &seen.session {
+            record.insert("session".into(), session.as_str().into());
         }
         if !plugins.entries.is_empty() {
             record.insert("events".into(), std::mem::take(&mut plugins.entries).into());
+        }
+        if let Some(check) = guard_check {
+            // Text checked for an application: no model was called and nothing is charged.
+            record.insert(
+                "guardrail_check".into(),
+                if check.answer { "answer" } else { "request" }.into(),
+            );
+            record.insert("cost_usd".into(), 0.into());
+        }
+        if let Some(raise) = seen.budget_raise.take() {
+            record.insert("budget_raise".into(), raise);
         }
         if let Some(prefix) = &seen.caller_key {
             // That the caller's own key was sent, and which: never the key.
@@ -4550,6 +4804,11 @@ async fn limit(
             tags: &seen.tags,
         },
     );
+    let mut applied = applied;
+    if let Some(session) = &seen.session {
+        applied.extend(policy.session_limits(rule, session));
+    }
+    state.raises.apply(&mut applied);
     let mut ask = spend::Ask {
         applied: &applied,
         customer: seen.customer.as_deref(),

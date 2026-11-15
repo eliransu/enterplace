@@ -242,6 +242,19 @@ const KNOWN: &[&str] = &[
     "latency",
     "errors",
     "cost",
+    "default_guardrails",
+    "model_groups",
+    "model_group",
+    "key_bounds",
+    "max_days",
+    "max_budget",
+    "require",
+    "headers",
+    "body",
+    "rph",
+    "rpd",
+    "session_requests",
+    "answer_cache",
     // Last, so a misspelled "models" (one letter off both) is still offered "models", the word far more often meant.
     "mode",
 ];
@@ -256,6 +269,7 @@ const FREE_MAPS: &[&str] = &[
     "patterns",
     "keywords",
     "metadata",
+    "model_groups",
 ];
 /// The most retries a provider may ask for. Each one can wait the whole first-byte timeout.
 pub const MAX_RETRIES: u32 = 5;
@@ -305,6 +319,37 @@ struct PolicyFile {
     /// The applications rules name in `applications:`, each with what it is for.
     #[serde(default)]
     applications: Vec<ApplicationFile>,
+    /// Guardrails every rule runs, before its own.
+    #[serde(default)]
+    default_guardrails: Vec<String>,
+    /// Named groups of models: `group:<name>` in a rule's, a key's or a budget's `models`, and `model_group:` in
+    /// a `limits:` entry.
+    #[serde(default)]
+    model_groups: BTreeMap<String, Vec<String>>,
+    /// What every role may grant when it issues a key, unless the role has its own.
+    #[serde(default)]
+    key_bounds: Option<KeyBoundsFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyBoundsFile {
+    #[serde(default)]
+    max_days: Option<i64>,
+    #[serde(default)]
+    max_budget: Option<BudgetFile>,
+    #[serde(default)]
+    models: Vec<String>,
+}
+
+/// `require:` on a rule: what every request must carry.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequireFile {
+    #[serde(default)]
+    headers: Vec<String>,
+    #[serde(default)]
+    body: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -372,6 +417,8 @@ struct LimitFile {
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
+    model_group: Option<String>,
+    #[serde(default)]
     budget: Option<BudgetsFile>,
     #[serde(default)]
     rate: Option<RateFile>,
@@ -414,6 +461,9 @@ struct RoleFile {
     customers: Vec<String>,
     #[serde(default)]
     sso_values: Vec<String>,
+    /// What its holders may grant when they issue a key.
+    #[serde(default)]
+    key_bounds: Option<KeyBoundsFile>,
 }
 
 /// A team: its owner, its members by email, and the identity provider groups that put people in it.
@@ -472,6 +522,8 @@ struct StoreFile {
     policy_from: Option<String>,
     #[serde(default)]
     approval: bool,
+    #[serde(default)]
+    answer_cache: bool,
 }
 
 /// Where several gateways keep what they share while they run, as `store:` in the policy sets it.
@@ -486,6 +538,9 @@ pub struct StoreSetting {
     /// A new policy version waits for a second admin to approve it before it goes live. Read from the live version,
     /// so turning it off is itself a change that needs an approval.
     pub approval: bool,
+    /// Cached answers are kept in the store too, so every gateway serves them. Off unless set: answers are then
+    /// written to the database.
+    pub answer_cache: bool,
 }
 
 /// Which one is the source of the policy when the store is set. Never both: see `store.policy_from`.
@@ -991,6 +1046,8 @@ struct RuleFile {
     containers: Option<ContainersFile>,
     #[serde(default)]
     shadow_until: Option<String>,
+    #[serde(default)]
+    require: Option<RequireFile>,
 }
 
 #[derive(Deserialize)]
@@ -1076,6 +1133,159 @@ struct RateFile {
     rpm: Option<i64>,
     #[serde(default)]
     tpm: Option<i64>,
+    /// Requests per calendar hour and per calendar day, UTC.
+    #[serde(default)]
+    rph: Option<i64>,
+    #[serde(default)]
+    rpd: Option<i64>,
+    /// In a rule: the most requests one session may send.
+    #[serde(default)]
+    session_requests: Option<i64>,
+}
+
+/// A count of requests (`rph`, `rpd`, `session_requests`), or what is wrong with it.
+fn requests_of(n: Option<i64>, name: &str, at: &str, errors: &mut Vec<String>) -> Option<u32> {
+    match u32::try_from(n?) {
+        Ok(n) if (1..=1_000_000_000).contains(&n) => Some(n),
+        _ => {
+            errors.push(format!(
+                "{at}: {name} is a number of requests, 1 to 1000000000, for example rate: {{ {name}: 500 }}. To set no limit, remove it."
+            ));
+            None
+        }
+    }
+}
+
+/// `group:<name>` entries of a model list replaced by the group's models; every other entry as written.
+fn with_groups(
+    models: &[String],
+    groups: &BTreeMap<String, Vec<String>>,
+    at: &str,
+    errors: &mut Vec<String>,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for model in models {
+        let members = match model.strip_prefix("group:") {
+            None => std::slice::from_ref(model),
+            Some(name) => match groups.get(name) {
+                Some(members) => members.as_slice(),
+                None => {
+                    errors.push(format!(
+                        "{at}: \"{model}\" names a model group that model_groups does not define. Define it there (model_groups: {{ {name}: [<model>, ...] }}), or check the spelling. The groups are: {}.",
+                        names_or_none(groups.keys().map(String::as_str))
+                    ));
+                    continue;
+                }
+            },
+        };
+        for member in members {
+            if !out.contains(member) {
+                out.push(member.clone());
+            }
+        }
+    }
+    out
+}
+
+/// `key_bounds:` checked.
+fn key_bounds_of(
+    file: &KeyBoundsFile,
+    groups: &BTreeMap<String, Vec<String>>,
+    at: &str,
+    errors: &mut Vec<String>,
+) -> crate::policy::KeyBounds {
+    let max_days = match file.max_days.map(u32::try_from) {
+        None => None,
+        Some(Ok(days @ 1..=3660)) => Some(days),
+        Some(_) => {
+            errors.push(format!(
+                "{at}: max_days is the longest a key may work, 1 to 3660 days, for example key_bounds: {{ max_days: 90 }}."
+            ));
+            None
+        }
+    };
+    if file.max_days.is_none() && file.max_budget.is_none() && file.models.is_empty() {
+        errors.push(format!(
+            "{at}: key_bounds sets no bound. Give max_days, max_budget or models, for example key_bounds: {{ max_days: 90, max_budget: {{ usd: 100, per: month }} }}, or remove it."
+        ));
+    }
+    crate::policy::KeyBounds {
+        max_days,
+        max_budget: file
+            .max_budget
+            .as_ref()
+            .and_then(|b| budget_of(b, at, errors)),
+        models: with_groups(&file.models, groups, at, errors),
+    }
+}
+
+/// Holds a key about to be issued by a holder of `role` (or by `gantry login`, with none) to the policy's
+/// `key_bounds`: what it leaves unset is set to the bound, and what passes a bound is refused, naming the fix.
+pub fn bound_key(
+    policy: &Policy,
+    role: Option<&str>,
+    expires: &mut Option<String>,
+    budget: &mut Option<Budget>,
+    models: &mut Option<Vec<String>>,
+) -> Result<(), String> {
+    let Some(bounds) = policy.key_bounds(role) else {
+        return Ok(());
+    };
+    let by = match role {
+        Some(role) => format!("key_bounds allows role \"{role}\""),
+        None => "key_bounds allows".to_string(),
+    };
+    if let Some(days) = bounds.max_days {
+        let later =
+            std::time::SystemTime::now() + std::time::Duration::from_secs(u64::from(days) * 86_400);
+        let last = format!("{}Z", &crate::audit::rfc3339(later)[..19]);
+        match &*expires {
+            None => *expires = Some(last),
+            // A bare date starts at 00:00 UTC, and compares as text with a time on the same day.
+            Some(expires) if expires.as_str() > last.as_str() => {
+                return Err(format!(
+                    "expires is {expires}, and {by} a key at most {days} days, until {}. Give an earlier expires, or leave it out to get the longest allowed",
+                    &last[..10]
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    if let Some(most) = bounds.max_budget {
+        let rate = |b: Budget| b.usd / b.per.minutes() as f64;
+        match *budget {
+            None => *budget = Some(most),
+            Some(budget) if rate(budget) > rate(most) * (1.0 + 1e-9) => {
+                return Err(format!(
+                    "the budget is ${} a {}, and {by} a key at most ${} a {}. Give a smaller budget, or leave it out to get the largest allowed",
+                    budget.usd,
+                    budget.per.describe(),
+                    most.usd,
+                    most.per.describe()
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    if !bounds.models.is_empty() {
+        match &*models {
+            None => *models = Some(bounds.models.clone()),
+            Some(models) => {
+                if let Some(over) = models.iter().find(|m| {
+                    !bounds
+                        .models
+                        .iter()
+                        .any(|allowed| model_matches(allowed, m))
+                }) {
+                    return Err(format!(
+                        "models names \"{over}\", and {by} only {}. Remove it, or leave models out to get every one allowed",
+                        bounds.models.join(", ")
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1557,6 +1767,9 @@ struct KeyFile {
     replaced_by: Option<String>,
     #[serde(default)]
     mcp_tools: Vec<String>,
+    /// Guardrails this key adds to its rule's, by name.
+    #[serde(default)]
+    guardrails: Vec<String>,
 }
 
 /// One entry of a keys file, as checked.
@@ -1623,6 +1836,11 @@ pub fn key_options_problem(options: &KeyOptions) -> Option<String> {
     {
         return Some(format!(
             "mcp_tools lists at most {MAX_LIST} MCP tools, each <server>.<tool>, <server>.* or *, or !<server>.<tool> to deny one, for example mcp_tools: [github.*, \"!github.delete_repo\"]"
+        ));
+    }
+    if options.guardrails.len() > MAX_LIST || options.guardrails.iter().any(|g| !valid_name(g)) {
+        return Some(format!(
+            "guardrails lists at most {MAX_LIST} guardrails this key adds to its rule's, each by the name it has under guardrails in the policy, for example guardrails: [no-secrets]"
         ));
     }
     if options.metadata.len() > MAX_LIST
@@ -1803,6 +2021,7 @@ fn budget_of(budget: &BudgetFile, at: &str, errors: &mut Vec<String>) -> Option<
 /// would be one counter with two limits: refused.
 fn caps_of(
     budgets: &BudgetsFile,
+    groups: &BTreeMap<String, Vec<String>>,
     at: &str,
     path: &str,
     from: Option<&str>,
@@ -1814,11 +2033,20 @@ fn caps_of(
             BudgetsFile::One(_) => format!("{path}.shadow_until"),
             BudgetsFile::Many(_) => format!("{path}[{j}].shadow_until"),
         };
+        if file.per.text() == "session" {
+            // A rule's session budget is read by `limits`. Anywhere else it has no session to count.
+            if !path.starts_with("rules[") {
+                errors.push(format!(
+                    "{at}: per: session belongs on a rule's budget: it counts each session of the rule's callers. Move it to the rule."
+                ));
+            }
+            continue;
+        }
         let shadow_until = shadow_of(&file.shadow_until, at, &path, errors);
         let Some(budget) = budget_of(file, at, errors) else {
             continue;
         };
-        let mut models = file.models.clone();
+        let mut models = with_groups(&file.models, groups, at, errors);
         models.sort();
         if caps
             .iter()
@@ -2753,9 +2981,15 @@ fn policy_rules(
                 )),
             }
         }
+        let own_models = with_groups(&own_models, &parsed.model_groups, &at("models"), errors);
         let mut all_models = own_models.clone();
         for profile in &profiles {
-            for model in &profile.models {
+            for model in &with_groups(
+                &profile.models,
+                &parsed.model_groups,
+                &at("profiles"),
+                errors,
+            ) {
                 if !all_models.contains(model) {
                     all_models.push(model.clone());
                 }
@@ -2773,10 +3007,16 @@ fn policy_rules(
         } else {
             Models::Only(all_models)
         };
-        let mut limits = limits(rule, i, &at, errors);
+        let mut limits = limits(rule, i, &parsed.model_groups, &at, errors);
         let mut overrides = Vec::new();
         for profile in &profiles {
-            merge_profile(profile, &mut limits, &mut overrides, &at("profiles"));
+            merge_profile(
+                profile,
+                &parsed.model_groups,
+                &mut limits,
+                &mut overrides,
+                &at("profiles"),
+            );
         }
         let mut tools = rule.tools.clone();
         for profile in &profiles {
@@ -2894,6 +3134,7 @@ fn check_org(orgs: &[String], org: &str, at: &str, errors: &mut Vec<String>) {
 /// overridden; between profiles, the first listed wins.
 fn merge_profile(
     profile: &ProfileFile,
+    groups: &BTreeMap<String, Vec<String>>,
     limits: &mut Limits,
     overrides: &mut Vec<String>,
     at: &str,
@@ -2903,7 +3144,14 @@ fn merge_profile(
     // repeat its problems, so they go nowhere here.
     let mut quiet = Vec::new();
     if let Some(budgets) = &profile.budget {
-        for cap in caps_of(budgets, at, "budget", Some(&profile.name), &mut quiet) {
+        for cap in caps_of(
+            budgets,
+            groups,
+            at,
+            "budget",
+            Some(&profile.name),
+            &mut quiet,
+        ) {
             match limits
                 .budgets
                 .iter()
@@ -2984,7 +3232,14 @@ fn check_profiles(file: &Path, text: &str, parsed: &PolicyFile, errors: &mut Vec
             ));
         }
         if let Some(budgets) = &profile.budget {
-            caps_of(budgets, &at, &format!("profiles[{i}].budget"), None, errors);
+            caps_of(
+                budgets,
+                &parsed.model_groups,
+                &at,
+                &format!("profiles[{i}].budget"),
+                None,
+                errors,
+            );
         }
         if let Some(n) = profile.parallel {
             parallel_of(n, &at, errors);
@@ -3022,6 +3277,7 @@ fn scope_limits(
             (ScopeKind::Customer, &entry.customer),
             (ScopeKind::Tag, &entry.tag),
             (ScopeKind::Model, &entry.model),
+            (ScopeKind::ModelGroup, &entry.model_group),
         ];
         let named: Vec<(ScopeKind, &String)> = kinds
             .iter()
@@ -3055,6 +3311,12 @@ fn scope_limits(
         if kind == ScopeKind::Org && name != "*" {
             check_org(&parsed.orgs, &name, &at, errors);
         }
+        if kind == ScopeKind::ModelGroup && !parsed.model_groups.contains_key(&name) {
+            errors.push(format!(
+                "{at}: model_group names \"{name}\", which model_groups does not define. Define it there, or check the spelling. The groups are: {}.",
+                names_or_none(parsed.model_groups.keys().map(String::as_str))
+            ));
+        }
         if let Some(org) = &org {
             check_org(&parsed.orgs, org, &at, errors);
         }
@@ -3063,7 +3325,7 @@ fn scope_limits(
             .as_ref()
             .map(|b| scope_budgets(b, &at, errors))
             .unwrap_or_default();
-        let (mut rpm, mut tpm) = (None, None);
+        let (mut rpm, mut tpm, mut rph, mut rpd) = (None, None, None, None);
         if let Some(rate) = &entry.rate {
             if let Some(n) = rate.rpm {
                 match u32::try_from(n) {
@@ -3074,6 +3336,13 @@ fn scope_limits(
                 }
             }
             tpm = rate.tpm.and_then(|n| tpm_of(n, &at, errors));
+            rph = requests_of(rate.rph, "rph", &at, errors);
+            rpd = requests_of(rate.rpd, "rpd", &at, errors);
+            if rate.session_requests.is_some() {
+                errors.push(format!(
+                    "{at}: session_requests belongs on a rule's rate: it counts each session of the rule's callers. Move it to the rule."
+                ));
+            }
         }
         let parallel = entry.parallel.and_then(|n| parallel_of(n, &at, errors));
         if entry.budget.is_none() && entry.rate.is_none() && entry.parallel.is_none() {
@@ -3081,7 +3350,7 @@ fn scope_limits(
                 "{at}: this limits entry sets no limit. Give it budget, rate or parallel, or remove it."
             ));
         }
-        if kind == ScopeKind::Key && rpm.is_some() {
+        if kind == ScopeKind::Key && (rpm.is_some() || rph.is_some() || rpd.is_some()) {
             errors.push(format!(
                 "{at}: a key's requests per minute are its person's: use person: <name> for rpm, and tpm, budget or parallel on the key."
             ));
@@ -3102,6 +3371,8 @@ fn scope_limits(
             line,
             budgets,
             rpm,
+            rph,
+            rpd,
             tpm,
             parallel,
             shadow_until: shadow_of(
@@ -3339,7 +3610,7 @@ fn rule_guardrails(
     parsed: &PolicyFile,
     rules: &mut [Rule],
     errors: &mut Vec<String>,
-) {
+) -> Vec<Guardrail> {
     let def_lines = list_lines(text, "guardrails");
     let line_of = |i: usize| def_lines.get(i).copied().unwrap_or(0);
     let before = errors.len();
@@ -3353,7 +3624,7 @@ fn rule_guardrails(
         }
     }
     if errors.len() > before {
-        return;
+        return Vec::new();
     }
     // Each one alone is fine, so what is left is a name used twice.
     let defined: Vec<Guardrail> = match guard::guardrails(&parsed.guardrails) {
@@ -3364,13 +3635,13 @@ fn rule_guardrails(
                     .into_iter()
                     .map(|p| format!("{}: {p}", file.display())),
             );
-            return;
+            return Vec::new();
         }
     };
     let (lines, end) = rule_lines(text);
     for (i, rule) in parsed.rules.iter().enumerate() {
-        // A profile's guardrails run before the rule's own, each once.
-        let mut names: Vec<String> = Vec::new();
+        // The policy's default guardrails run first, then a profile's, then the rule's own, each once.
+        let mut names: Vec<String> = parsed.default_guardrails.clone();
         for profile in parsed
             .profiles
             .iter()
@@ -3444,30 +3715,102 @@ fn rule_guardrails(
             ));
         }
     }
+    defined
 }
 
 /// The budget, rate and cache of one rule, each checked. `at` gives the place of a key in the rule.
 fn limits(
     rule: &RuleFile,
     i: usize,
+    groups: &BTreeMap<String, Vec<String>>,
     at: &dyn Fn(&str) -> String,
     errors: &mut Vec<String>,
 ) -> Limits {
     let mut limits = Limits::default();
     if let Some(budgets) = &rule.budget {
         let path = format!("rules[{i}].budget");
-        limits.budgets = caps_of(budgets, &at("budget"), &path, None, errors);
+        limits.budgets = caps_of(budgets, groups, &at("budget"), &path, None, errors);
+        for file in budgets.list().iter().filter(|b| b.per.text() == "session") {
+            if !file.usd.is_finite()
+                || file.usd <= 0.0
+                || !file.models.is_empty()
+                || file.tz.is_some()
+            {
+                errors.push(format!(
+                    "{}: a session budget is usd above 0 and per: session, with no models or tz, for example budget: {{ usd: 5, per: session }}.",
+                    at("budget")
+                ));
+            } else if limits.session_budget.is_some() {
+                errors.push(format!(
+                    "{}: two budgets are per: session. Keep one.",
+                    at("budget")
+                ));
+            } else {
+                limits.session_budget = Some(Budget {
+                    usd: file.usd,
+                    per: Period::Session,
+                });
+            }
+        }
+    }
+    if let Some(require) = &rule.require {
+        let header_ok = |h: &String| {
+            !h.is_empty()
+                && h.len() <= 100
+                && h.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        };
+        let field_ok = |f: &String| {
+            !f.is_empty()
+                && f.len() <= 200
+                && f.split('.').all(|part| {
+                    !part.is_empty()
+                        && part
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                })
+        };
+        if (require.headers.is_empty() && require.body.is_empty())
+            || require.headers.len() + require.body.len() > MAX_LIST
+            || !require.headers.iter().all(header_ok)
+            || !require.body.iter().all(field_ok)
+        {
+            errors.push(format!(
+                "{}: require lists the headers and the body fields every request under the rule must carry, at most {MAX_LIST} together: header names, and body fields as dotted paths, for example require: {{ headers: [X-Tenant-ID], body: [metadata.ticket] }}. To require nothing, remove it.",
+                at("require")
+            ));
+        } else {
+            limits.require_headers = require
+                .headers
+                .iter()
+                .map(|h| h.to_ascii_lowercase())
+                .collect();
+            limits.require_body = require.body.clone();
+        }
     }
     if let Some(n) = rule.parallel {
         limits.parallel = parallel_of(n, &at("parallel"), errors);
     }
     if let Some(rate) = &rule.rate {
-        if rate.rpm.is_none() && rate.tpm.is_none() {
+        if rate.rpm.is_none()
+            && rate.tpm.is_none()
+            && rate.rph.is_none()
+            && rate.rpd.is_none()
+            && rate.session_requests.is_none()
+        {
             errors.push(format!(
                 "{}: rate sets no limit. Give rpm, tpm or both, for example rate: {{ rpm: 600, tpm: 200000 }}, or remove the line.",
                 at("rate")
             ));
         }
+        limits.rph = requests_of(rate.rph, "rph", &at("rate"), errors);
+        limits.rpd = requests_of(rate.rpd, "rpd", &at("rate"), errors);
+        limits.session_requests = requests_of(
+            rate.session_requests,
+            "session_requests",
+            &at("rate"),
+            errors,
+        );
         if let Some(rpm) = rate.rpm {
             match u32::try_from(rpm) {
                 Ok(rpm) if (1..=1_000_000).contains(&rpm) => limits.rpm = Some(rpm),
@@ -5011,6 +5354,7 @@ fn keys(file: &Path, text: &str, errors: &mut Vec<String>) -> Vec<KeyEntry> {
             from,
             replaced_by: entry.replaced_by.map(|p| p.to_ascii_lowercase()),
             mcp_tools: entry.mcp_tools,
+            guardrails: entry.guardrails,
         };
         if let Some(problem) = key_options_problem(&options) {
             errors.push(format!("{at}: {problem}."));
@@ -5177,6 +5521,7 @@ fn store_setting(
         postgres_url_env: env.clone(),
         policy_from,
         approval: store.approval,
+        answer_cache: store.answer_cache,
     })
 }
 
@@ -5279,7 +5624,48 @@ pub fn load_texts(
     presets(policy_path, policy_text, &mut parsed.providers, &mut errors);
     let providers = providers(policy_path, policy_text, &parsed, &mut errors);
     let mut rules = policy_rules(policy_path, policy_text, &parsed, &mut errors);
-    rule_guardrails(policy_path, policy_text, &parsed, &mut rules, &mut errors);
+    let guardrail_defs =
+        rule_guardrails(policy_path, policy_text, &parsed, &mut rules, &mut errors);
+    for (name, members) in &parsed.model_groups {
+        if !valid_name(name)
+            || members.is_empty()
+            || members
+                .iter()
+                .any(|m| m.trim().is_empty() || m.starts_with("group:"))
+        {
+            errors.push(format!(
+                "{}:{}: model group \"{name}\" needs a name in letters, digits, dots, dashes, underscores and @, and a list of at least one model (a name, or a pattern such as gpt-*; not another group), for example model_groups: {{ cheap: [gpt-4o-mini, claude-haiku-*] }}.",
+                policy_path.display(),
+                line_of_key(policy_text, "model_groups", 1, usize::MAX)
+            ));
+        }
+    }
+    let mut key_bounds = Vec::new();
+    if let Some(bounds) = &parsed.key_bounds {
+        let at = format!(
+            "{}:{}",
+            policy_path.display(),
+            line_of_key(policy_text, "key_bounds", 1, usize::MAX)
+        );
+        key_bounds.push((
+            String::new(),
+            key_bounds_of(bounds, &parsed.model_groups, &at, &mut errors),
+        ));
+    }
+    let role_lines = list_lines(policy_text, "roles");
+    for (i, role) in parsed.roles.iter().enumerate() {
+        if let Some(bounds) = &role.key_bounds {
+            let at = format!(
+                "{}:{}",
+                policy_path.display(),
+                role_lines.get(i).copied().unwrap_or(0)
+            );
+            key_bounds.push((
+                role.name.clone(),
+                key_bounds_of(bounds, &parsed.model_groups, &at, &mut errors),
+            ));
+        }
+    }
     rule_passthrough(policy_path, policy_text, &rules, &providers, &mut errors);
     check_prices(
         policy_path,
@@ -5320,12 +5706,27 @@ pub fn load_texts(
     let saml = console_saml(policy_path, policy_text, &parsed, &mut errors);
     // A key's org and role must be ones the policy has: a misspelled org would be a tenant with no rules, and a
     // misspelled role a key that cannot sign in.
-    for entry in &keys {
+    let mut keys = keys;
+    for entry in &mut keys {
         let line = keys_text
             .lines()
             .position(|l| l.contains(&entry.sha256))
             .map_or(0, |i| i + 1);
         let at = format!("{}:{line}", keys_file.display());
+        if let Some(models) = &entry.models {
+            entry.models = Some(with_groups(models, &parsed.model_groups, &at, &mut errors));
+        }
+        if let Some(missing) = entry
+            .options
+            .guardrails
+            .iter()
+            .find(|name| !guardrail_defs.iter().any(|g| g.name == **name))
+        {
+            errors.push(format!(
+                "{at}: the key adds guardrail \"{missing}\", which is not defined under guardrails in the policy. Define it there, or check the spelling. The guardrails are: {}.",
+                names_or_none(guardrail_defs.iter().map(|g| g.name.as_str()))
+            ));
+        }
         if !entry.org.is_empty() {
             check_org(&parsed.orgs, &entry.org, &at, &mut errors);
         }
@@ -5378,6 +5779,9 @@ pub fn load_texts(
                 .with_jwt(jwt)
                 .with_trusted_proxies(trusted_proxies)
                 .with_cors(cors)
+                .with_guardrail_defs(guardrail_defs)
+                .with_model_groups(parsed.model_groups.clone().into_iter().collect())
+                .with_key_bounds(key_bounds)
                 .with_mode(mode),
             providers,
             audit_path,
@@ -5590,6 +5994,143 @@ rules:
             .err()
             .map(|e| e.join("\n"))
             .ok_or("the file was accepted")
+    }
+
+    #[test]
+    fn groups_bounds_requirements_and_session_limits_load_and_their_mistakes_name_the_fix()
+    -> TestResult {
+        let good = format!(
+            "{GOOD}guardrails:\n  - name: no-secrets\n    type: secrets\n    action: block\ndefault_guardrails: [no-secrets]\nmodel_groups:\n  small: [gpt-4o-mini]\nkey_bounds:\n  max_days: 90\n  models: [\"group:small\"]\nlimits:\n  - {{ model_group: small, rate: {{ rpd: 100, rph: 10 }} }}\n"
+        )
+        .replace(
+            "    models: [gpt-4o-mini]\n",
+            "    models: [\"group:small\"]\n    require: { headers: [X-Tenant-ID], body: [metadata.ticket] }\n    budget: { usd: 5, per: session }\n    rate: { session_requests: 20, rpd: 500 }\n",
+        );
+        let loaded = check("gov-good", &good, None)?.map_err(|e| e.join("\n"))?;
+        let rules = loaded.policy.rule_list();
+        let (first, second) = (&rules[0], &rules[1]);
+        assert!(first.allows("gpt-4o-mini") && !first.allows("gpt-4o"));
+        assert_eq!(first.limits.require_headers, ["x-tenant-id"]);
+        assert_eq!(first.limits.require_body, ["metadata.ticket"]);
+        assert_eq!(first.limits.session_budget.map(|b| b.usd), Some(5.0));
+        assert_eq!(
+            (first.limits.session_requests, first.limits.rpd),
+            (Some(20), Some(500))
+        );
+        assert!(
+            first.limits.budgets.is_empty(),
+            "a session budget is no calendar budget"
+        );
+        // The default guardrail runs on a rule that lists none.
+        assert_eq!(second.guardrails.len(), 1);
+        let bounds = loaded.policy.key_bounds(Some("admin")).ok_or("no bounds")?;
+        assert_eq!(
+            (bounds.max_days, bounds.models.as_slice()),
+            (Some(90), &["gpt-4o-mini".to_string()][..])
+        );
+
+        for (name, from, to, word) in [
+            (
+                "group",
+                "[\"group:small\"]\n    require",
+                "[\"group:tiny\"]\n    require",
+                "model_groups does not define",
+            ),
+            (
+                "limit-group",
+                "model_group: small",
+                "model_group: tiny",
+                "model_groups does not define",
+            ),
+            (
+                "guard",
+                "default_guardrails: [no-secrets]",
+                "default_guardrails: [nope]",
+                "nope",
+            ),
+            (
+                "require",
+                "headers: [X-Tenant-ID]",
+                "headers: [\"bad header\"]",
+                "require lists the headers",
+            ),
+            (
+                "session",
+                "{ usd: 5, per: session }",
+                "{ usd: 5, per: session, tz: UTC }",
+                "a session budget is usd above 0",
+            ),
+            ("rpd", "rpd: 500", "rpd: 0", "rpd is a number of requests"),
+            (
+                "bounds",
+                "max_days: 90",
+                "max_days: 0",
+                "max_days is the longest a key may work",
+            ),
+        ] {
+            assert!(good.contains(from), "{from}");
+            let found = errors(check(
+                &format!("gov-{name}"),
+                &good.replace(from, to),
+                None,
+            )?)?;
+            assert!(found.contains(word), "{name}: {found}");
+        }
+        // A key may add only guardrails the policy defines.
+        let keys = "keys:\n  - name: bot\n    team: payments\n    sha256: 0000000000000000000000000000000000000000000000000000000000000001\n    guardrails: [GUARD]\n";
+        check("gov-key", &good, Some(&keys.replace("GUARD", "no-secrets")))?
+            .map_err(|e| e.join("\n"))?;
+        let found = errors(check(
+            "gov-key-bad",
+            &good,
+            Some(&keys.replace("GUARD", "other")),
+        )?)?;
+        assert!(
+            found.contains("adds guardrail \"other\", which is not defined"),
+            "{found}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_key_is_held_to_its_issuer_s_bounds() -> TestResult {
+        let policy = format!(
+            "{GOOD}model_groups:\n  small: [gpt-4o-mini]\nkey_bounds:\n  max_days: 30\n  max_budget: {{ usd: 100, per: month }}\n  models: [\"group:small\"]\nroles:\n  - name: lead\n    permissions: [issue_keys]\n    key_bounds:\n      max_days: 7\n"
+        );
+        let loaded = check("bounds", &policy, None)?.map_err(|e| e.join("\n"))?;
+        let day = Budget {
+            usd: 5.0,
+            per: Period::Day,
+        };
+        // Unset fields take the bound; the role's own bounds replace the policy's for its holders.
+        let (mut expires, mut budget, mut models) = (None, None, None);
+        bound_key(&loaded.policy, None, &mut expires, &mut budget, &mut models)?;
+        assert_eq!(budget.map(|b| b.usd), Some(100.0));
+        assert_eq!(models, Some(vec!["gpt-4o-mini".to_string()]));
+        let month = expires.ok_or("no expiry")?;
+        let (mut week, mut none, mut any) = (None, None, None);
+        bound_key(&loaded.policy, Some("lead"), &mut week, &mut none, &mut any)?;
+        assert!(week.ok_or("no expiry")? < month && none.is_none() && any.is_none());
+        // $5 a day is $155 a month: faster than $100 a month.
+        let over = bound_key(&loaded.policy, None, &mut None, &mut Some(day), &mut None);
+        assert!(over.is_err_and(|e| e.contains("at most $100 a month")));
+        let over = bound_key(
+            &loaded.policy,
+            None,
+            &mut Some("2099-01-01".into()),
+            &mut None,
+            &mut None,
+        );
+        assert!(over.is_err_and(|e| e.contains("at most 30 days")));
+        let over = bound_key(
+            &loaded.policy,
+            None,
+            &mut None,
+            &mut None,
+            &mut Some(vec!["gpt-4o".into()]),
+        );
+        assert!(over.is_err_and(|e| e.contains("only gpt-4o-mini")));
+        Ok(())
     }
 
     #[test]

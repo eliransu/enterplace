@@ -736,6 +736,7 @@ async fn allow(
             let mut explained = policy.explain(who, ctx);
             // What each budget has spent and holds in its period now.
             if let Some(limits) = explained["limits"].as_array_mut() {
+                state.raises.explain(limits);
                 for limit in limits {
                     let per = limit["per"]
                         .as_str()
@@ -1143,6 +1144,22 @@ async fn allow(
             call.target = Some(
                 json!({ "name": new.name, "team": new.team, "sha256_prefix": &id::sha256_hex(key.as_bytes())[..8] }),
             );
+            // What the issuer's role may grant: what the key leaves unset takes the bound.
+            let mut budget = budget;
+            config::bound_key(
+                policy,
+                Some(&role.name),
+                &mut new.expires,
+                &mut budget,
+                &mut new.models,
+            )
+            .map_err(|problem| {
+                refused(
+                    StatusCode::FORBIDDEN,
+                    "key_bounds_exceeded",
+                    format!("Refused: {problem}."),
+                )
+            })?;
             Ok(Plan::Issue {
                 name: new.name,
                 team: new.team,

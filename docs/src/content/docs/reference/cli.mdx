@@ -197,6 +197,18 @@ Makes a new key with the same settings and prints it once. The old key works unt
 
 `key info`, `key update` and `key rotate` need an admin key in `GANTRY_ADMIN_KEY` (or the saved `gantry login` key, if it is an admin's) and the gateway in `--url`, `GANTRY_URL` or the saved login, as `gantry kill` does.
 
+## budget raise
+
+```text
+gantry budget raise request --usd <n> --until <date> --reason <text> [--scope team|person|key] [--url <gantry url>]
+gantry budget raise list [--url <gantry url>]
+gantry budget raise approve <id> [--usd <n>] [--until <date>] [--url <gantry url>]
+gantry budget raise reject <id> [--url <gantry url>]
+gantry budget raise add --scope <team:payments> --usd <n> --until <date> --reason <text> [--url <gantry url>]
+```
+
+`request` asks for more room on the caller's budget until a UTC date or time; it waits for an admin. `list`, `approve`, `reject` and `add` are an admin's, with `issue_keys` (`list`: `see_spend`). Each calls a running gateway with the key in `GANTRY_ADMIN_KEY` or the saved `gantry login` key. See [Budget raises](/governance/budgets-and-rate-limits/#budget-raises).
+
 ## key list
 
 Lists the keys in the keys file. Never a key.
