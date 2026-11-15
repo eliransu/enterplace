@@ -66,6 +66,8 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`no_rule`](#no_rule) | 403 | `permission_error` |
 | [`tool_not_allowed`](#tool_not_allowed) | 200 (MCP) | |
 | [`unknown_tool`](#unknown_tool) | 200 (MCP) | |
+| [`mcp_client_not_allowed`](#mcp_client_not_allowed) | 200 (MCP) | |
+| [`session_revoked`](#session_revoked) | 200 (MCP) | |
 | [`model_not_allowed`](#model_not_allowed) | 403 | `permission_error` |
 | [`caller_provider_key_not_allowed`](#caller_provider_key_not_allowed) | 403 | `invalid_request_error` |
 | [`caller_provider_key_unsupported`](#caller_provider_key_unsupported) | 400 | `invalid_request_error` |
@@ -245,6 +247,18 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 **JSON-RPC error on `/mcp`.** The rule allows the name, and it is not `<server>.<tool>` of a server the policy lists.
 
 **Fix:** run `tools/list` for the names.
+
+### mcp_client_not_allowed
+
+**JSON-RPC error on `/mcp`.** The caller's rule has `mcp_clients`, and the MCP client is not one of them. The message names the clients the rule lets connect and what this client called itself.
+
+**Fix:** use a client the rule names, or ask an admin to add this one. See [Client allowlist](/governance/mcp-gateway/#client-allowlist).
+
+### session_revoked
+
+**JSON-RPC error on `/mcp`.** An admin ended this MCP session.
+
+**Fix:** connect the MCP client again. See [Sessions](/governance/mcp-gateway/#sessions).
 
 ### model_not_allowed
 

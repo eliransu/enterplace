@@ -14,7 +14,17 @@ use std::{
 };
 
 /// The forms a reference takes, as a variable's value.
-pub const SCHEMES: [&str; 4] = ["vault://", "aws-sm://", "gcp-sm://", "azure-kv://"];
+pub const SCHEMES: [&str; 8] = [
+    "vault://",
+    "aws-sm://",
+    "gcp-sm://",
+    "azure-kv://",
+    "conjur://",
+    // A value encrypted with a cloud key, such as a KMS-wrapped master key: decrypted by the key's own service.
+    "aws-kms://",
+    "gcp-kms://",
+    "azure-kv-key://",
+];
 
 /// Whether a variable's value points at a secret manager rather than holding the secret.
 pub fn is_reference(value: &str) -> bool {

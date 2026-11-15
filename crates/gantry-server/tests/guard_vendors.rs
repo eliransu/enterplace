@@ -127,6 +127,28 @@ fn vendor_answer(path: &str, headers: &HeaderMap, body: &Value, key: &str) -> Op
         "/aporia/validate" if header("x-aporia-api-key") == key => {
             Some(json!({"action": if bad { "block" } else { "passthrough" }}))
         }
+        "/v1/scan/sync/request" if header("x-pan-token") == key => Some(json!({
+            "action": if bad { "block" } else { "allow" }, "category": if bad { "malicious" } else { "benign" },
+            "prompt_detected": {"injection": bad, "dlp": false}, "tr_id": body["tr_id"]
+        })),
+        "/guardrails/detect" if header("apikey") == key => Some(json!({
+            // The detectors' own names hold the bad word: only the text decides.
+            "summary": {"injection_attack": i32::from(body["text"].as_str().unwrap_or("").contains(BAD)), "toxicity": [], "nsfw": 0}, "details": {}
+        })),
+        "/cygnal/monitor" if header("grayswan-api-key") == key && body["policy_id"] == "pol1" => {
+            Some(json!({
+                "violation": if bad { 0.97 } else { 0.02 }, "violated_rules": if bad { json!([2]) } else { json!([]) },
+                "ipi": false, "error": false
+            }))
+        }
+        "/api/v1/inspect/chat" if header("x-cisco-ai-defense-api-key") == key => Some(json!({
+            "is_safe": !bad, "classifications": if bad { json!(["SECURITY_VIOLATION"]) } else { json!([]) },
+            "rules": if bad { json!([{"rule_name": "Prompt Injection"}]) } else { json!([]) }
+        })),
+        "/mistral/v1/chat/moderations" if bearer => Some(json!({
+            "id": "m1", "model": "mistral-moderation-latest",
+            "results": [{"categories": {"violence_and_threats": bad, "pii": false}}]
+        })),
         "/v1/chat/completions" if bearer => Some(json!({
             "choices": [{"message": {"role": "assistant", "content": if bad { "unsafe\nS1" } else { "safe" }}}]
         })),
@@ -190,6 +212,11 @@ struct Setup {
 }
 
 fn setup(name: &str, policy: &str) -> Result<Setup, Error> {
+    setup_with(name, policy, "")
+}
+
+/// `setup` with more entries in the keys file.
+fn setup_with(name: &str, policy: &str, more_keys: &str) -> Result<Setup, Error> {
     let dir = std::env::temp_dir().join(format!("gantry-vendors-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
@@ -198,7 +225,7 @@ fn setup(name: &str, policy: &str) -> Result<Setup, Error> {
     std::fs::write(
         dir.join("gantry.keys.yaml"),
         format!(
-            "keys:\n  - name: maya.cohen\n    team: payments\n    sha256: {}\n",
+            "keys:\n  - name: maya.cohen\n    team: payments\n    sha256: {}\n{more_keys}",
             sha256_hex(MAYA.as_bytes())
         ),
     )?;
@@ -313,6 +340,36 @@ async fn each_vendor_is_asked_in_its_own_api_and_blocks_or_allows() -> TestResul
             format!("    url: {base}/aporia\n    key_env: {KEY_ENV}\n"),
             "/aporia/validate",
             "aporia_policy",
+        ),
+        (
+            "prisma_airs",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n    profile_name: gantry\n"),
+            "/v1/scan/sync/request",
+            "injection",
+        ),
+        (
+            "enkrypt",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n"),
+            "/guardrails/detect",
+            "injection_attack",
+        ),
+        (
+            "grayswan",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n    policy_id: pol1\n"),
+            "/cygnal/monitor",
+            "rule_2",
+        ),
+        (
+            "cisco_ai_defense",
+            format!("    url: {base}\n    key_env: {KEY_ENV}\n    region: eu\n"),
+            "/api/v1/inspect/chat",
+            "prompt_injection",
+        ),
+        (
+            "mistral_moderation",
+            format!("    url: {base}/mistral/v1\n    key_env: {KEY_ENV}\n"),
+            "/mistral/v1/chat/moderations",
+            "violence_and_threats",
         ),
     ];
     for (kind, fields, path, finding) in cases {
@@ -501,5 +558,129 @@ async fn bedrock_guardrail_signs_with_sigv4_from_the_environment() -> TestResult
         [true, true]
     );
     assert!(!std::fs::read_to_string(&s.audit)?.contains(SECRET));
+    Ok(())
+}
+
+/// A judge asks a model through Gantry itself, with a key of its own: the call is governed and charged to that key's
+/// person and team, the verdict is a finding named for the rubric, and the same conversation is judged once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_judge_asks_a_model_through_gantry_charged_to_its_own_key_and_cached() -> TestResult {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let judge_key = std::env::var(KEY_ENV)?;
+    let judged = Arc::new(AtomicUsize::new(0));
+    let counted = judged.clone();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let provider_port = listener.local_addr()?.port();
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |body: Bytes| {
+            let counted = counted.clone();
+            async move {
+                let body: Value = serde_json::from_slice(&body).unwrap_or_default();
+                let content = if body["model"] == "judge-model" {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    if body.to_string().contains("lease") { "FAIL" } else { "PASS" }
+                } else {
+                    "Hi"
+                };
+                json!({"id": "c1", "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1000, "completion_tokens": 1, "total_tokens": 1001}})
+                    .to_string()
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let gantry = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let gantry_port = gantry.local_addr()?.port();
+    let policy = format!(
+        "version: 1
+providers:
+  - name: mock-openai
+    kind: openai
+    url: http://127.0.0.1:{provider_port}
+    allow_private: true
+    key_env: MOCK_KEY
+    models: [model-a, judge-model]
+prices:
+  judge-model: {{ input: 1, output: 1 }}
+guardrails:
+  - name: legal
+    type: judge
+    url: http://127.0.0.1:{gantry_port}/v1
+    key_env: {KEY_ENV}
+    model: judge-model
+    rubric: No legal advice.
+    on_failure: fail_closed
+    timeout_ms: 5000
+rules:
+  - name: everyone
+    principals: {{ any: true }}
+    models: [\"*\"]
+    guardrails: [legal]
+"
+    );
+    // The judge's own key, in its own team: the scope its calls are charged to.
+    let s = setup_with(
+        "judge",
+        &policy,
+        &format!(
+            "  - name: legal.judge\n    team: guardrails\n    sha256: {}\n",
+            sha256_hex(judge_key.as_bytes())
+        ),
+    )?;
+    let served =
+        s.gw.router
+            .clone()
+            .into_make_service_with_connect_info::<std::net::SocketAddr>();
+    tokio::spawn(async move {
+        let _ = axum::serve(gantry, served).await;
+    });
+
+    let (status, body) = chat(&s.gw, "hello").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(judged.load(Ordering::SeqCst), 1);
+    // The same conversation again: the verdict is reused, the judge is not asked.
+    let (status, body) = chat(&s.gw, "hello").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(judged.load(Ordering::SeqCst), 1);
+
+    let (status, body) = chat(&s.gw, "Can I break my lease?").await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(judged.load(Ordering::SeqCst), 2);
+    let record = last(&s)?;
+    assert_eq!(record["code"], "guardrail_blocked");
+    assert_eq!(record["person"], "maya.cohen");
+    assert_eq!(record["guardrails"][0]["detector"], "judge");
+    assert_eq!(record["guardrails"][0]["kind"], "rubric");
+
+    // Each judge call is a governed request of the judge's key, priced, and not judged again.
+    let log = std::fs::read_to_string(&s.audit)?;
+    assert!(
+        !log.contains("lease") && !log.contains(&judge_key),
+        "the log holds text or the key"
+    );
+    let records: Vec<Value> = log
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let charged: Vec<&Value> = records
+        .iter()
+        .filter(|r| r["event"] == "usage" && r["person"] == "legal.judge")
+        .collect();
+    assert_eq!(charged.len(), 2, "{log}");
+    assert!(
+        charged
+            .iter()
+            .all(|u| u["team"] == "guardrails" && u["cost_usd"].as_f64().unwrap_or(0.0) > 0.0),
+        "{log}"
+    );
+    assert!(
+        records
+            .iter()
+            .filter(|r| r["event"].is_null() && r["person"] == "legal.judge")
+            .all(|r| r["guardrails"].is_null()),
+        "the judge's own call was judged: {log}"
+    );
     Ok(())
 }

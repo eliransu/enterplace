@@ -49,7 +49,7 @@ Guardrails are defined once at the top level and named by rules. A change applie
 |---|---|---|
 | Built in | `secrets`, `pii` | Inside Gantry, no network call. |
 | Custom | `regex`, `keywords` | Your patterns and word lists, inside Gantry, no network call. |
-| Vendor | `openai_moderation`, `presidio`, `lakera`, `bedrock_guardrail`, `azure_content_safety`, `azure_prompt_shield`, `llama_guard`, `model_armor` | Gantry calls the vendor's own API. No adapter needed. |
+| Vendor | `openai_moderation`, `presidio`, `lakera`, `bedrock_guardrail`, `azure_content_safety`, `azure_prompt_shield`, `llama_guard`, `model_armor`, `pangea`, `nemo_guardrails`, `hiddenlayer`, `lasso`, `guardrails_ai`, `aporia`, `prisma_airs`, `enkrypt`, `grayswan`, `cisco_ai_defense`, `mistral_moderation`, `judge` | Gantry calls the vendor's own API. No adapter needed. |
 | Webhook | `webhook` | Your service, speaking [Gantry's contract](/governance/guardrail-webhooks/). |
 | Events | `events` | Your service, sent the whole conversation as [typed events](/governance/plugin-events/) with a session and a turn: tool calls, tool results, reasoning, MCP calls. |
 
@@ -549,9 +549,115 @@ guardrails:
 ```
 
 </TabItem>
+<TabItem label="Prisma AIRS">
+
+Palo Alto Networks Prisma AIRS AI Runtime. Calls `POST {url}/v1/scan/sync/request`. Default `url` `https://service.api.aisecurity.paloaltonetworks.com`. `key_env` and `profile_name` (the API security profile, which sets what is scanned for) required; the key goes in `x-pan-token`.
+
+The request's text goes as `prompt`, an answer's as `response`, with the decision ID as `tr_id` and the person as `app_user`. `action: block` blocks; each detection set to true in `prompt_detected` or `response_detected` is a finding (`injection`, `dlp`, `url_cats`, `toxic_content`, `db_security`...). `action: allow` passes and records any detections. Cannot mask.
+
+```yaml
+guardrails:
+  - name: airs
+    type: prisma_airs
+    key_env: PRISMA_AIRS_API_KEY
+    profile_name: gantry-prod
+    on: [request, answer]
+    on_failure: fail_closed
+```
+
+</TabItem>
+<TabItem label="Enkrypt AI">
+
+Calls `POST {url}/guardrails/detect`. Default `url` `https://api.enkryptai.com`. `key_env` required, sent as `apikey`.
+
+The messages go as one text with the `injection_attack`, `toxicity`, `nsfw` and `pii` (PII and secrets) detectors on. Each detector its `summary` marks is a finding of its name; toxicity names each category it found (`insult`, `threat`). Anything found blocks. Cannot mask.
+
+```yaml
+guardrails:
+  - name: enkrypt
+    type: enkrypt
+    key_env: ENKRYPT_API_KEY
+    on_failure: fail_open
+```
+
+</TabItem>
+<TabItem label="Gray Swan Cygnal">
+
+Calls `POST {url}/cygnal/monitor`. Default `url` `https://api.grayswan.ai`. `key_env` and `policy_id` required (Cygnal applies no default policy); the key goes in `grayswan-api-key`.
+
+The messages go as chat messages. A `violation` score of 0.5 or more blocks, as does `ipi: true` (indirect prompt injection); each violated rule is a finding `rule_<id>`. An answer with `error: true` counts as a service failure. Cannot mask.
+
+```yaml
+guardrails:
+  - name: cygnal
+    type: grayswan
+    key_env: GRAYSWAN_API_KEY
+    policy_id: your-policy-id
+    on_failure: fail_closed
+```
+
+</TabItem>
+<TabItem label="Cisco AI Defense">
+
+Calls `POST {url}/api/v1/inspect/chat`. Default `url` `https://<region>.api.inspect.aidefense.security.cisco.com`, `region` `us`, `eu` or `ap` (default `us`). `key_env` required, sent as `X-Cisco-AI-Defense-API-Key`. The rules applied are the ones the key's application has in AI Defense.
+
+The messages go as chat messages, with the person as `metadata.user` and the decision ID as `client_transaction_id`. `is_safe: false` blocks; each rule that fired is a finding (`prompt_injection`, `pii`), or each classification when none is named. Cannot mask.
+
+```yaml
+guardrails:
+  - name: ai-defense
+    type: cisco_ai_defense
+    key_env: AI_DEFENSE_API_KEY
+    region: eu
+    on_failure: fail_closed
+```
+
+</TabItem>
+<TabItem label="Mistral moderation">
+
+Calls `POST {url}/chat/moderations`. Default `url` `https://api.mistral.ai/v1`. `key_env` required, sent as `Authorization: Bearer`. Optional `model` (default `mistral-moderation-latest`).
+
+The messages go as a conversation. Each category set to true is a finding (`selfharm`, `violence_and_threats`, `pii`), and any finding blocks. Cannot mask.
+
+```yaml
+guardrails:
+  - name: mistral-moderation
+    type: mistral_moderation
+    key_env: MISTRAL_API_KEY
+    on_failure: fail_open
+```
+
+</TabItem>
 </Tabs>
 
-Not built in: Prompt Security and Pillar Security publish no API reference without an account, so connect them with a [webhook](/governance/guardrail-webhooks/) that calls their API. Anthropic documents no hosted moderation endpoint: its guide classifies with Claude itself, which you can do with a `llama_guard` guardrail whose `url` is a Gantry and whose `prompt` asks for `safe` or `unsafe`.
+### LLM as a judge
+
+`type: judge` asks a model whether the conversation breaks a rubric you write. The model is called through Gantry's own `POST /v1/chat/completions`, with a Gantry key of the judge's own, so each judge call is a governed request: decided by that key's rule, recorded, priced and charged to that key's person and team. Mint the key for a scope such as a `guardrails` team and give it a budget to cap what judging costs.
+
+```yaml
+guardrails:
+  - name: no-legal-advice
+    type: judge
+    url: http://127.0.0.1:8080/v1      # this Gantry
+    key_env: GANTRY_JUDGE_KEY          # a Gantry key, team guardrails
+    model: gpt-5-mini
+    rubric: The assistant must not give legal advice or interpret contracts.
+    cache_seconds: 300
+    on_failure: fail_closed
+    timeout_ms: 5000
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `url` | required | Gantry's own address with `/v1`. |
+| `key_env` | required | The variable holding the judge's Gantry key. |
+| `model` | required | The judging model, as the policy names it. |
+| `rubric` | required | What the judge refuses, in plain words. |
+| `cache_seconds` | `300` | How long a verdict on the same conversation, rubric and model is reused without asking again. `0` asks every time; at most `86400`. |
+
+The judge is told to answer `PASS` or `FAIL`. `FAIL` blocks with the finding `rubric`; the record never holds the model's words, which may quote the conversation. Any other answer counts as a service failure and follows `on_failure`. A judge does not run on requests made with its own key, so its calls are never judged again, even when the judge's key falls under the same rule. Cached verdicts are kept per process.
+
+Not built in: Prompt Security, Pillar Security, Noma, Qualifire and Zscaler AI Guard publish no API reference with the request and answer fields without an account, so connect them with a [webhook](/governance/guardrail-webhooks/) that calls their API. Anthropic documents no hosted moderation endpoint: its guide classifies with Claude itself, which you can do with a `llama_guard` guardrail whose `url` is a Gantry and whose `prompt` asks for `safe` or `unsafe`.
 
 ## Requests and answers
 

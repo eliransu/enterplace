@@ -63,9 +63,11 @@ Gemini finish reasons that mean the answer failed, such as `MALFORMED_FUNCTION_C
 
 `reasoning_effort` becomes `generationConfig.thinkingConfig`: a `thinkingBudget` of 1024, 4096 or 16384 tokens for `low`, `medium` and `high` on Gemini 2.5 (0 for `none`), and the same `thinkingLevel` on Gemini 3. See [Reasoning across providers](/providers/overview/#reasoning-across-providers).
 
-## Embeddings and Responses
+## Embeddings, images and Responses
 
 `POST /v1/embeddings` for a Gemini embeddings model (`gemini-embedding-001`) goes to `<url>/models/<model>:batchEmbedContents`, one request per text, and comes back as OpenAI's embeddings list. `input_type` (`search_document`, `search_query`, `classification`, `clustering`) becomes Gemini's `taskType`, and `dimensions` its `outputDimensionality`. The Gemini API counts no tokens for embeddings, so the bytes of the texts stand in for them: never fewer than were sent, at `gemini-embedding-001`'s price.
+
+`POST /v1/images/generations` for an Imagen model (`imagen-4.0-generate-001`) goes to `<url>/models/<model>:predict` (`n` as `sampleCount`, `size` as `aspectRatio`); for a Gemini model that writes images (`gemini-2.5-flash-image`) it goes to `:generateContent` with image output. The images come back as OpenAI's `data` list of `b64_json`. `response_format: url` and fields with no equivalent are refused by name. Imagen is charged `per_image` for each image; a Gemini image model by its tokens. The `vertex` kind draws the same way.
 
 `POST /v1/responses` reaches Gemini models translated to chat, then to generateContent. See [Translation](/routing/translation/#responses-to-chat-codex-on-any-provider).
 

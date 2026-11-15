@@ -68,10 +68,13 @@ async fn openai_session(mut socket: WebSocket) {
 
 async fn provider() -> Result<u16, Error> {
     let upgrade = |ws: WebSocketUpgrade| async move { ws.on_upgrade(openai_session) };
-    let app = Router::new().route("/v1/realtime", get(upgrade)).route(
-        "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
-        get(upgrade),
-    );
+    let app = Router::new()
+        .route("/v1/realtime", get(upgrade))
+        .route("/custom/live", get(upgrade))
+        .route(
+            "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+            get(upgrade),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     tokio::spawn(async move {
@@ -714,5 +717,79 @@ rules:
         "{head}"
     );
     assert!(head.contains("Basic Z3c6czNjcmV0"), "{head}");
+    Ok(())
+}
+
+/// A provider's own WebSocket API, reached on `/passthrough/<provider>/<path>` on a path the rule lists: decided at
+/// connect, relayed frame for frame with the provider's key, screened by the rule's guardrails, and recorded.
+#[tokio::test]
+async fn a_websocket_passthrough_is_relayed_on_listed_paths_only_and_recorded() -> Result<(), Error>
+{
+    let top = "guardrails:\n  - name: no-secrets\n    type: secrets\n    action: block\n";
+    let gw = gateway_with(
+        "ws-passthrough",
+        top,
+        "    guardrails: [no-secrets]\n    passthrough:\n      - { provider: mock, paths: [/custom/live] }\n",
+    )
+    .await?;
+    let mut socket = connect(gw.port, "/passthrough/mock/custom/live?voice=alloy", DANA).await?;
+    socket
+        .send(Message::Text(r#"{"type":"anything","text":"hi"}"#.into()))
+        .await?;
+    let relayed = next_text(&mut socket).await?.ok_or("nothing relayed")?;
+    assert!(relayed.contains("response.output_audio.delta"), "{relayed}");
+    // A frame with a secret ends the session: an unknown protocol has no error event to answer with.
+    socket
+        .send(Message::Text(
+            r#"{"type":"anything","text":"AKIAIOSFODNN7EXAMPLE"}"#.into(),
+        ))
+        .await?;
+    while next_text(&mut socket).await?.is_some() {}
+    let session = wait_for(&gw.audit, |r| r["event"] == "realtime_session").await?;
+    assert_eq!(
+        (
+            session["api"].as_str(),
+            session["path"].as_str(),
+            session["person"].as_str(),
+            session["ended_by"].as_str()
+        ),
+        (
+            Some("websocket_passthrough"),
+            Some("/custom/live"),
+            Some("dana"),
+            Some("guardrail")
+        )
+    );
+    let decision = wait_for(&gw.audit, |r| {
+        r["path"] == "/passthrough/mock/custom/live" && r["event"].is_null()
+    })
+    .await?;
+    assert_eq!(decision["verdict"], "allow");
+    let text = std::fs::read_to_string(&gw.audit)?;
+    assert!(
+        !text.contains("AKIA") && !text.contains("alloy"),
+        "no content or query is recorded"
+    );
+
+    // A path the rule does not list, and an unknown key, are refused before the provider is dialled.
+    assert_eq!(
+        refused_with(connect(gw.port, "/passthrough/mock/other", DANA).await),
+        Some(403)
+    );
+    assert_eq!(
+        refused_with(connect(gw.port, "/passthrough/mock/custom/../live", DANA).await),
+        Some(403)
+    );
+    assert_eq!(
+        refused_with(
+            connect(
+                gw.port,
+                "/passthrough/mock/custom/live",
+                "gantry_nobody_000000000000"
+            )
+            .await
+        ),
+        Some(401)
+    );
     Ok(())
 }

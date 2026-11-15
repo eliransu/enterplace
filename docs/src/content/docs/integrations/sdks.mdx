@@ -15,12 +15,14 @@ OpenAI's and Anthropic's SDKs reach Gantry through their base URL. Give the clie
 |---|---|---|---|
 | OpenAI | `http://127.0.0.1:8080/v1` | `OPENAI_BASE_URL`, `OPENAI_API_KEY` | `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/models`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank` |
 | Anthropic | `http://127.0.0.1:8080` | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` | `/v1/messages`, `/v1/messages/count_tokens` |
+| Azure OpenAI | `http://127.0.0.1:8080` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` | The OpenAI routes; the key goes in `api-key` |
+| AWS (boto3, the AWS SDKs) | `http://127.0.0.1:8080` | `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`, `AWS_BEARER_TOKEN_BEDROCK` | `/model/<id>/converse`, `/converse-stream`, `/invoke`, `/invoke-with-response-stream`, `/count-tokens` |
 
 The OpenAI SDKs take the address with `/v1`. The Anthropic SDKs take it without, because they add `/v1/messages` themselves.
 
 ## What every client needs
 
-- **Key.** Gantry reads the key from `Authorization: Bearer gantry_...` or from `x-api-key: gantry_...`. If both are sent they must hold the same value, or the request is refused with `ambiguous_key`. A provider key (one that starts with `sk-`) is refused with `unknown_key` and a hint.
+- **Key.** Gantry reads the key from `Authorization: Bearer gantry_...`, from `x-api-key: gantry_...`, or from `api-key: gantry_...` (what Azure OpenAI's SDKs send). If more than one is sent they must hold the same value, or the request is refused with `ambiguous_key`. A provider key (one that starts with `sk-`) is refused with `unknown_key` and a hint.
 - **Route.** The model must be on a provider the route fits. Chat requests reach `openai`, `azure`, `gemini` and `vertex` providers. Responses and embeddings reach `openai` only. Messages requests reach `anthropic`, `bedrock` and `vertex_anthropic`. Any other pairing is refused with `wrong_route`, which names the right route, unless the provider opts in to [translation](/routing/translation/).
 - **Anthropic headers.** The Anthropic SDKs send `api_key` (`ANTHROPIC_API_KEY`) as `x-api-key` and `auth_token` (`ANTHROPIC_AUTH_TOKEN`) as `Authorization: Bearer`. Set only one of them, to the Gantry key.
 

@@ -101,6 +101,7 @@ const KNOWN: &[&str] = &[
     "storage_url",
     "per_second",
     "per_call",
+    "per_page",
     "above_prompt_tokens",
     "price",
     "console",
@@ -145,6 +146,10 @@ const KNOWN: &[&str] = &[
     "recipe",
     "config_id",
     "guard_name",
+    "profile_name",
+    "policy_id",
+    "rubric",
+    "cache_seconds",
     "case_sensitive",
     "whole_word",
     "shadow_until",
@@ -175,6 +180,16 @@ const KNOWN: &[&str] = &[
     "approve_tools",
     "tool_action",
     "approval_timeout_seconds",
+    "mcp_clients",
+    "transport",
+    "command",
+    "args",
+    "env",
+    "resource",
+    "call_price_usd",
+    "tool_prices",
+    "token_url",
+    "audience",
     "user_auth",
     "user_headers",
     "oauth_client_id",
@@ -271,6 +286,9 @@ const FREE_MAPS: &[&str] = &[
     "keywords",
     "metadata",
     "model_groups",
+    // An MCP server's priced tools by name, and a stdio server's variables.
+    "tool_prices",
+    "env",
 ];
 /// The most retries a provider may ask for. Each one can wait the whole first-byte timeout.
 pub const MAX_RETRIES: u32 = 5;
@@ -1034,6 +1052,8 @@ struct RuleFile {
     approve_tools: Vec<String>,
     #[serde(default)]
     approval_timeout_seconds: Option<i64>,
+    #[serde(default)]
+    mcp_clients: Vec<String>,
     #[serde(default)]
     caller_provider_key: Option<String>,
     #[serde(default)]
@@ -3048,6 +3068,7 @@ fn policy_rules(
                 resources: &rule.resources,
                 approve_tools: &rule.approve_tools,
                 approval_timeout_seconds: rule.approval_timeout_seconds,
+                mcp_clients: &rule.mcp_clients,
             },
             &parsed.mcp,
             errors,
@@ -5820,12 +5841,6 @@ pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
     if old.audit_per_org != new.audit_per_org {
         reasons.push(
             "audit per_org changed. Which chain each organization's records go to is set when the audit log opens: restart Gantry to change it.".to_string(),
-        );
-    }
-    // Each server's credentials are read from the environment at start, like a provider key.
-    if old.mcp != new.mcp {
-        reasons.push(
-            "the mcp servers changed. Their credentials are read at start: restart Gantry to apply it. A rule's tools may change without one.".to_string(),
         );
     }
     // The connection to the store is made once, at start, and the source of the policy is chosen then. Approval

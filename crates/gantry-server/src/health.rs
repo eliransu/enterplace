@@ -561,6 +561,7 @@ mod tests {
             aliases: Vec::new(),
             policy_sha256: String::new(),
             keys_sha256: String::new(),
+            mcp: Arc::default(),
         };
         let a = json!({"deployments": {"p/m": {"cooling_ms": 0, "cooldowns": 1, "errors": 0.2, "latency": [10, 20, 30], "in_flight": 1, "requests": 4, "tokens": 100,
             "probe": {"up": true, "outcome": "200", "time": "2026-11-15T10:00:00.000Z"}}}, "keys": {}});

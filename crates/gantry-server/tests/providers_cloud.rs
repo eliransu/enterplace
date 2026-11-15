@@ -42,6 +42,7 @@ enum Reply {
     Json(Value),
     Bytes(&'static str, Vec<u8>),
     Headed(Value, &'static str, &'static str),
+    Status(u16),
 }
 
 #[derive(Default)]
@@ -118,6 +119,9 @@ fn answer(reply: Reply) -> Response {
             [(header::CONTENT_TYPE, "application/json")],
             body.to_string(),
         )
+            .into_response(),
+        Reply::Status(status) => StatusCode::from_u16(status)
+            .unwrap_or(StatusCode::NOT_FOUND)
             .into_response(),
         Reply::Bytes(content_type, body) => {
             ([(header::CONTENT_TYPE, content_type)], body).into_response()
@@ -2604,5 +2608,580 @@ async fn triton_generate_through_passthrough_is_metered_from_its_token_counts() 
     assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
     assert!(text.contains("no_price"), "{text}");
     assert_eq!(triton.hits.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+// 9. The provider long tail: images beyond OpenAI, Bedrock rerank, token counts everywhere, OCR, the api-key header.
+
+fn with_price(model: &str, price: gantry_core::usage::Price) -> Policy {
+    let mut map = gantry_core::usage::PriceOverrides::default();
+    map.insert(model.to_string(), price);
+    everyone().with_prices(map)
+}
+
+#[tokio::test]
+async fn images_are_drawn_by_gemini_vertex_and_bedrock_and_priced_by_the_image() -> TestResult {
+    let google = mock(vec![
+        Reply::Json(
+            json!({"predictions": [{"bytesBase64Encoded": "QQ==", "mimeType": "image/png"}, {"bytesBase64Encoded": "Qg=="}]}),
+        ),
+        Reply::Json(
+            json!({"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "Qw=="}}]}}], "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 1290}}),
+        ),
+    ])
+    .await?;
+    let bedrock = mock(vec![
+        Reply::Json(json!({"images": ["RA=="]})),
+        Reply::Json(json!({"images": ["RQ=="], "finish_reasons": [null]})),
+    ])
+    .await?;
+    let mut policy = with_price(
+        "imagen-4.0-generate-001",
+        gantry_core::usage::Price {
+            per_image: Some(0.04),
+            ..priced(0.0, 0.0, 0)
+        },
+    );
+    policy = policy.with_rule("everyone", Who::Any, Models::Any);
+    let gw = gateway(
+        "images-tail",
+        vec![
+            route(
+                "gemini",
+                Kind::Gemini,
+                google.url(""),
+                &["imagen-4.0-generate-001", "gemini-2.5-flash-image"],
+            ),
+            converse(
+                bedrock.url(""),
+                &[
+                    ("nova-canvas", "amazon.nova-canvas-v1:0"),
+                    ("sd3", "stability.sd3-5-large-v1:0"),
+                    ("nova-pro", "amazon.nova-pro-v1:0"),
+                ],
+            ),
+        ],
+        policy,
+    )?;
+    // Imagen: predict, two images, each charged.
+    let (status, headers, text) = post(
+        &gw,
+        "/v1/images/generations",
+        &json!({"model": "imagen-4.0-generate-001", "prompt": "a red kite", "n": 2, "size": "1024x1024"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, sent, body) = google.first()?;
+    assert_eq!(target, "/v1beta/models/imagen-4.0-generate-001:predict");
+    assert_eq!(sent["x-goog-api-key"], "gemini-provider-key");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body)?,
+        json!({"instances": [{"prompt": "a red kite"}], "parameters": {"sampleCount": 2, "aspectRatio": "1:1"}})
+    );
+    let answer: Value = serde_json::from_str(&text)?;
+    assert_eq!(
+        answer["data"],
+        json!([{"b64_json": "QQ=="}, {"b64_json": "Qg=="}])
+    );
+    let (decision, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(decision["path"], "/v1/images/generations");
+    assert!(close(cost(&usage), 0.08), "{usage}");
+
+    // A Gemini model that writes images: generateContent.
+    let (status, _, text) = post(
+        &gw,
+        "/v1/images/generations",
+        &json!({"model": "gemini-2.5-flash-image", "prompt": "a blue kite"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, _, body) = google.nth(1)?;
+    assert_eq!(
+        target,
+        "/v1beta/models/gemini-2.5-flash-image:generateContent"
+    );
+    let body: Value = serde_json::from_slice(&body)?;
+    assert_eq!(body["contents"][0]["parts"][0]["text"], "a blue kite");
+    assert_eq!(
+        body["generationConfig"]["responseModalities"],
+        json!(["TEXT", "IMAGE"])
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)?["data"][0]["b64_json"],
+        "Qw=="
+    );
+
+    // Nova Canvas and Stability AI on Bedrock: InvokeModel, signed.
+    let (status, _, text) = post(
+        &gw,
+        "/v1/images/generations",
+        &json!({"model": "nova-canvas", "prompt": "a kite", "size": "1280x720", "quality": "hd"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, sent, body) = bedrock.first()?;
+    assert_eq!(target, "/model/amazon.nova-canvas-v1%3A0/invoke");
+    assert!(
+        sent[header::AUTHORIZATION]
+            .to_str()?
+            .starts_with("AWS4-HMAC-SHA256")
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body)?,
+        json!({"taskType": "TEXT_IMAGE", "textToImageParams": {"text": "a kite"}, "imageGenerationConfig": {"numberOfImages": 1, "width": 1280, "height": 720, "quality": "premium"}})
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)?["data"][0]["b64_json"],
+        "RA=="
+    );
+    let (status, _, text) = post(
+        &gw,
+        "/v1/images/generations",
+        &json!({"model": "sd3", "prompt": "a kite", "size": "1024x1024"}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bedrock.nth(1)?.2)?,
+        json!({"prompt": "a kite", "output_format": "png", "aspect_ratio": "1:1"})
+    );
+
+    // A parameter with no equivalent, and a model that draws nothing, are refused before anything is sent.
+    let before = (
+        google.hits.load(Ordering::SeqCst),
+        bedrock.hits.load(Ordering::SeqCst),
+    );
+    for (body, names) in [
+        (
+            json!({"model": "sd3", "prompt": "a kite", "n": 3}),
+            "one image per request",
+        ),
+        (
+            json!({"model": "nova-canvas", "prompt": "a kite", "style": "vivid"}),
+            "\\\"style\\\"",
+        ),
+        (
+            json!({"model": "imagen-4.0-generate-001", "prompt": "a kite", "response_format": "url"}),
+            "response_format",
+        ),
+        (
+            json!({"model": "nova-pro", "prompt": "a kite"}),
+            "not an image model",
+        ),
+    ] {
+        let (status, _, text) = post(&gw, "/v1/images/generations", &body).await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+        assert!(text.contains(names), "{text}");
+    }
+    assert_eq!(
+        before,
+        (
+            google.hits.load(Ordering::SeqCst),
+            bedrock.hits.load(Ordering::SeqCst)
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn bedrock_reranks_with_its_rerank_models() -> TestResult {
+    let bedrock = mock(vec![Reply::Json(
+        json!({"results": [{"index": 1, "relevance_score": 0.92}, {"index": 0, "relevance_score": 0.11}]}),
+    )])
+    .await?;
+    let gw = gateway(
+        "bedrock-rerank",
+        vec![converse(
+            bedrock.url(""),
+            &[
+                ("rerank", "cohere.rerank-v3-5:0"),
+                ("amazon-rerank", "amazon.rerank-v1:0"),
+            ],
+        )],
+        everyone(),
+    )?;
+    let ask = json!({"model": "rerank", "query": "capital of France", "documents": ["Berlin", "Paris"], "top_n": 2});
+    let (status, headers, text) = post(&gw, "/v1/rerank", &ask).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, sent, body) = bedrock.first()?;
+    assert_eq!(target, "/model/cohere.rerank-v3-5%3A0/invoke");
+    assert!(
+        sent[header::AUTHORIZATION]
+            .to_str()?
+            .starts_with("AWS4-HMAC-SHA256")
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body)?,
+        json!({"query": "capital of France", "documents": ["Berlin", "Paris"], "top_n": 2, "api_version": 2})
+    );
+    let answer: Value = serde_json::from_str(&text)?;
+    assert_eq!(
+        answer["results"][0],
+        json!({"index": 1, "relevance_score": 0.92})
+    );
+    assert_eq!(answer["model"], "rerank");
+    let decision = decision_of(&gw, &headers)?;
+    assert_eq!(
+        (decision["path"].as_str(), decision["provider"].as_str()),
+        (Some("/v1/rerank"), Some("bedrock"))
+    );
+    // Amazon's model takes the same body without Cohere's version; a field with no equivalent is refused.
+    let mut amazon = ask.clone();
+    amazon["model"] = "amazon-rerank".into();
+    let (status, _, text) = post(&gw, "/v1/rerank", &amazon).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert!(
+        serde_json::from_slice::<Value>(&bedrock.nth(1)?.2)?
+            .get("api_version")
+            .is_none()
+    );
+    amazon["rank_fields"] = json!(["title"]);
+    let (status, _, text) = post(&gw, "/v1/rerank", &amazon).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(text.contains("rank_fields"), "{text}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn tokens_are_counted_by_every_provider_that_can_and_estimated_and_labelled_otherwise()
+-> TestResult {
+    let bedrock = mock(vec![Reply::Json(json!({"inputTokens": 17}))]).await?;
+    let anthropic = mock(vec![Reply::Json(json!({"input_tokens": 23}))]).await?;
+    let openai = mock(vec![Reply::Json(
+        json!({"object": "response.input_tokens", "input_tokens": 31}),
+    )])
+    .await?;
+    let groq = mock(vec![Reply::Status(404)]).await?;
+    let mut chat = route("groq", Kind::OpenAi, groq.url("/openai/v1"), &["llama-4"]);
+    chat.accept_messages = true;
+    let mut converse = converse(bedrock.url(""), &[("nova", "amazon.nova-pro-v1:0")]);
+    converse.accept_messages = true;
+    let gw = gateway(
+        "counts-tail",
+        vec![
+            converse,
+            route(
+                "anthropic",
+                Kind::Anthropic,
+                anthropic.url(""),
+                &["claude-sonnet-5-5"],
+            ),
+            route("openai", Kind::OpenAi, openai.url(""), &["gpt-5"]),
+            chat,
+        ],
+        everyone(),
+    )?;
+    let messages = |model: &str| json!({"model": model, "system": "Be brief.", "messages": [{"role": "user", "content": "How tall is the Eiffel Tower?"}]});
+    // Bedrock Converse: Bedrock's CountTokens, with the request as a Converse body.
+    let (status, _, text) = post(&gw, "/v1/messages/count_tokens", &messages("nova")).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)?,
+        json!({"input_tokens": 17})
+    );
+    let (target, _, body) = bedrock.first()?;
+    assert_eq!(target, "/model/amazon.nova-pro-v1%3A0/count-tokens");
+    let body: Value = serde_json::from_slice(&body)?;
+    assert_eq!(
+        body["input"]["converse"]["messages"][0]["content"][0]["text"],
+        "How tall is the Eiffel Tower?"
+    );
+    assert_eq!(body["input"]["converse"]["system"][0]["text"], "Be brief.");
+
+    // A chat provider has no count API: Gantry estimates, says so, and sends the provider nothing.
+    let (status, headers, text) =
+        post(&gw, "/v1/messages/count_tokens", &messages("llama-4")).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    // Every string of the request but its model, 42 characters, four to a token.
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)?,
+        json!({"input_tokens": 11, "estimated": true})
+    );
+    assert_eq!(headers["x-gantry-token-count"], "estimate");
+    assert_eq!(groq.hits.load(Ordering::SeqCst), 0);
+    let decision = decision_of(&gw, &headers)?;
+    assert_eq!(
+        (decision["verdict"].as_str(), decision["provider"].as_str()),
+        (Some("allow"), Some("groq"))
+    );
+
+    // The Responses API's input token count: as sent to OpenAI, as a messages count to Claude, an estimate elsewhere.
+    let responses = |model: &str| json!({"model": model, "instructions": "Be brief.", "input": "How tall is the Eiffel Tower?"});
+    let (status, _, text) = post(&gw, "/v1/responses/input_tokens", &responses("gpt-5")).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)?,
+        json!({"object": "response.input_tokens", "input_tokens": 31})
+    );
+    let (target, _, body) = openai.first()?;
+    assert_eq!(target, "/v1/responses/input_tokens");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body)?["input"],
+        "How tall is the Eiffel Tower?"
+    );
+    let (status, _, text) = post(
+        &gw,
+        "/v1/responses/input_tokens",
+        &responses("claude-sonnet-5-5"),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)?,
+        json!({"object": "response.input_tokens", "input_tokens": 23})
+    );
+    let (target, _, body) = anthropic.first()?;
+    assert_eq!(target, "/v1/messages/count_tokens");
+    let body: Value = serde_json::from_slice(&body)?;
+    assert_eq!(body["system"][0]["text"], "Be brief.");
+    assert!(
+        body.get("max_tokens").is_none() && body.get("stream").is_none(),
+        "{body}"
+    );
+    let (status, headers, text) =
+        post(&gw, "/v1/responses/input_tokens", &responses("llama-4")).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let answer: Value = serde_json::from_str(&text)?;
+    assert_eq!(
+        (answer["object"].as_str(), answer["estimated"].as_bool()),
+        (Some("response.input_tokens"), Some(true))
+    );
+    assert_eq!(headers["x-gantry-token-count"], "estimate");
+    // A provider of kind openai was asked first, and has no such route.
+    assert_eq!(groq.first()?.0, "/openai/v1/responses/input_tokens");
+    // A model the rule does not allow is not counted either.
+    let policy = Policy::new()
+        .with_key(MAYA, "maya.cohen", "payments")
+        .with_rule("some", Who::Any, Models::Only(vec!["nova".into()]));
+    let strict = gateway(
+        "counts-tail-strict",
+        vec![route("openai", Kind::OpenAi, openai.url(""), &["gpt-5"])],
+        policy,
+    )?;
+    let (status, _, text) =
+        post(&strict, "/v1/responses/input_tokens", &responses("gpt-5")).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_azure_sdks_api_key_header_carries_the_gantry_key_and_never_reaches_the_provider()
+-> TestResult {
+    let openai = mock(vec![Reply::Json(
+        json!({"id": "c1", "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}),
+    )])
+    .await?;
+    let gw = gateway(
+        "api-key-header",
+        vec![route("openai", Kind::OpenAi, openai.url(""), &["gpt-5"])],
+        everyone(),
+    )?;
+    let chat = json!({"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]});
+    let with = |headers: &[(&str, &str)]| -> Result<Request<Body>, axum::http::Error> {
+        let mut request =
+            Request::post("/v1/chat/completions").header(header::CONTENT_TYPE, "application/json");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.body(Body::from(chat.to_string()))
+    };
+    let (status, headers, text) = send(&gw, with(&[("api-key", MAYA)])?).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(decision_of(&gw, &headers)?["person"], "maya.cohen");
+    let (_, sent, _) = openai.first()?;
+    assert!(
+        sent.get("api-key").is_none(),
+        "the Gantry key went to the provider"
+    );
+    assert_eq!(sent[header::AUTHORIZATION], "Bearer openai-provider-key");
+    // Two different credentials are refused, as for the other headers; an unknown key is unknown.
+    let (status, _, text) = send(
+        &gw,
+        with(&[("api-key", MAYA), ("x-api-key", "gantry_other")])?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(text.contains("ambiguous_key"), "{text}");
+    let (status, _, text) = send(&gw, with(&[("api-key", "gantry_nobody")])?).await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{text}");
+    assert_eq!(openai.hits.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_document_is_read_by_mistrals_ocr_and_charged_by_the_page() -> TestResult {
+    let mistral = mock(vec![Reply::Json(
+        json!({"pages": [{"index": 0, "markdown": "# Invoice"}, {"index": 1, "markdown": "Total: 12"}], "model": "mistral-ocr-latest", "usage_info": {"pages_processed": 2, "doc_size_bytes": 4096}}),
+    )])
+    .await?;
+    let policy = with_price(
+        "mistral-ocr-latest",
+        gantry_core::usage::Price {
+            per_page: Some(0.001),
+            ..priced(0.0, 0.0, 0)
+        },
+    );
+    let gw = gateway(
+        "ocr",
+        vec![
+            route(
+                "mistral",
+                Kind::OpenAi,
+                mistral.url(""),
+                &["mistral-ocr-latest"],
+            ),
+            route(
+                "anthropic",
+                Kind::Anthropic,
+                mistral.url(""),
+                &["claude-sonnet-5-5"],
+            ),
+        ],
+        policy,
+    )?;
+    let ask = json!({"model": "mistral-ocr-latest", "document": {"type": "document_url", "document_url": "https://example.com/invoice.pdf"}});
+    let (status, headers, text) = post(&gw, "/v1/ocr", &ask).await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let (target, sent, body) = mistral.first()?;
+    assert_eq!(target, "/v1/ocr");
+    assert_eq!(sent[header::AUTHORIZATION], "Bearer mistral-provider-key");
+    assert_eq!(serde_json::from_slice::<Value>(&body)?, ask);
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)?["pages"][1]["markdown"],
+        "Total: 12"
+    );
+    let (decision, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(
+        (decision["path"].as_str(), decision["model"].as_str()),
+        (Some("/v1/ocr"), Some("mistral-ocr-latest"))
+    );
+    assert!(close(cost(&usage), 0.002), "{usage}");
+    // A provider with no OCR API is named, and nothing is sent.
+    let (status, _, text) = post(
+        &gw,
+        "/v1/ocr",
+        &json!({"model": "claude-sonnet-5-5", "document": {}}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(text.contains("wrong_route"), "{text}");
+    assert_eq!(mistral.hits.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_aws_sdk_pointed_at_gantry_reaches_bedrock_with_a_gantry_key() -> TestResult {
+    let bedrock = mock(vec![Reply::Json(converse_answer())]).await?;
+    let policy = Policy::new()
+        .with_key(MAYA, "maya.cohen", "payments")
+        .with_rule("payments", Who::Any, Models::Only(vec!["nova-pro".into()]));
+    let gw = gateway(
+        "bedrock-sdk",
+        vec![converse(
+            bedrock.url(""),
+            &[
+                ("nova-pro", "amazon.nova-pro-v1:0"),
+                ("nova-lite", "amazon.nova-lite-v1:0"),
+            ],
+        )],
+        policy,
+    )?;
+    let native = json!({"messages": [{"role": "user", "content": [{"text": "hi"}]}]});
+    let sdk = |path: &str, headers: &[(&str, &str)]| -> Result<Request<Body>, axum::http::Error> {
+        let mut request = Request::post(path).header(header::CONTENT_TYPE, "application/json");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.body(Body::from(native.to_string()))
+    };
+    // As boto3 sends it: the model ID's colon escaped, the request signed with the caller's AWS credentials (which
+    // Gantry cannot check and takes off), and the Gantry key in x-api-key.
+    let signed = "AWS4-HMAC-SHA256 Credential=AKIACALLER/20261115/us-east-1/bedrock/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc";
+    let (status, headers, text) = send(
+        &gw,
+        sdk(
+            "/model/amazon.nova-pro-v1%3A0/converse",
+            &[
+                ("authorization", signed),
+                ("x-amz-date", "20261115T000000Z"),
+                ("x-amz-security-token", "caller-session"),
+                ("x-api-key", MAYA),
+            ],
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)?["stopReason"],
+        "tool_use"
+    );
+    let (target, sent, body) = bedrock.first()?;
+    assert_eq!(target, "/model/amazon.nova-pro-v1%3A0/converse");
+    // Signed by Gantry with the provider's credentials; nothing of the caller's signature or key went on.
+    assert!(
+        sent[header::AUTHORIZATION]
+            .to_str()?
+            .starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/")
+    );
+    assert!(sent.get("x-api-key").is_none() && sent.get("x-amz-security-token").is_none());
+    assert_eq!(serde_json::from_slice::<Value>(&body)?, native);
+    let (decision, usage) = records_of(&gw, &headers).await?;
+    assert_eq!(
+        (
+            decision["person"].as_str(),
+            decision["model"].as_str(),
+            decision["provider"].as_str()
+        ),
+        (Some("maya.cohen"), Some("nova-pro"), Some("bedrock"))
+    );
+    assert_eq!(tokens(&usage), (Some("reported"), Some(1000), Some(500)));
+
+    // An SDK given the Gantry key as its Bedrock API key sends it as a Bearer token; the policy's own name for the
+    // model works in the path too.
+    let bearer = format!("Bearer {MAYA}");
+    let (status, _, text) = send(
+        &gw,
+        sdk("/model/nova-pro/converse", &[("authorization", &bearer)])?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(bedrock.nth(1)?.0, "/model/amazon.nova-pro-v1%3A0/converse");
+
+    // A model the rule does not allow, and a request with no Gantry key, are refused in the shape the SDK reads,
+    // and nothing is sent.
+    let (status, headers, text) = send(
+        &gw,
+        sdk(
+            "/model/amazon.nova-lite-v1%3A0/converse",
+            &[("authorization", &bearer)],
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    let refusal: Value = serde_json::from_str(&text)?;
+    assert_eq!(headers["x-amzn-errortype"], "AccessDeniedException");
+    assert_eq!(refusal["gantry_code"], "model_not_allowed");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("nova-lite"),
+        "{text}"
+    );
+    let (status, headers, text) = send(
+        &gw,
+        sdk("/model/nova-pro/converse", &[("authorization", signed)])?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{text}");
+    assert_eq!(headers["x-amzn-errortype"], "AccessDeniedException");
+    // Only the runtime's inference routes are served this way: anything else under /model is not a route.
+    let (status, _, _) = send(
+        &gw,
+        sdk("/model/nova-pro/delete", &[("authorization", &bearer)])?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(bedrock.hits.load(Ordering::SeqCst), 2);
     Ok(())
 }

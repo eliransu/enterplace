@@ -141,6 +141,70 @@ one repository. How a release is made: RELEASING.md.
 - Docs: the comparison with Bifrost's published overhead now links its benchmark pages with the date read and no
   longer calls its figures means, which those pages do not say.
 
+### Secret managers: CyberArk Conjur and KMS-wrapped values
+
+- Gantry Enterprise (`secrets`): `conjur://<variable id>` reads CyberArk Conjur, signed in with a host API key or the
+  workload's JWT. `aws-kms://`, `gcp-kms://` and `azure-kv-key://` hold a value encrypted with a cloud key and are
+  decrypted by AWS KMS, Google Cloud KMS or Azure Key Vault's unwrapKey, so `GANTRY_MASTER_KEY` can be kept wrapped.
+  A raw decrypted key is used as hex.
+
+### WebSocket passthrough
+
+- A WebSocket to `/passthrough/<provider>/<path>` reaches a provider's realtime API that Gantry has no route of its
+  own for, on the paths a rule lists under `passthrough:`. Decided at connect, relayed frame for frame with the
+  provider's key, read by the rule's guardrails, ended by a kill switch, and recorded as a `realtime_session` with
+  `api: websocket_passthrough`. Not metered.
+
+### Guardrails: an LLM judge and five more vendors
+
+- New guardrail type `judge`: a model asked through Gantry's own chat completions route whether the conversation
+  breaks a `rubric`, with a Gantry key of its own, so each judge call is governed, recorded and charged to that key's
+  person and team. `FAIL` blocks with the finding `rubric`. Verdicts are reused for `cache_seconds` (300 by
+  default). A judge never runs on requests made with its own key.
+- New guardrail types, each asked in the vendor's own API: `prisma_airs` (Palo Alto Networks Prisma AIRS AI
+  Runtime, with `profile_name`), `enkrypt` (Enkrypt AI), `grayswan` (Gray Swan Cygnal, with `policy_id`),
+  `cisco_ai_defense` (Cisco AI Defense, `region` us, eu or ap) and `mistral_moderation`. Findings are recorded by
+  kind, never content. Prompt Security, Pillar Security, Noma, Qualifire and Zscaler AI Guard are not built in: none
+  publishes its request and answer fields without an account.
+
+### Providers: images, rerank and counts across clouds, OCR, Azure and AWS SDK keys
+
+- `POST /v1/images/generations` reaches Imagen and Gemini image models on the Gemini API and Vertex AI, and Amazon
+  Titan Image Generator, Nova Canvas and Stability AI on Bedrock (`bedrock_converse`), translated both ways. A field
+  with no equivalent is refused by name. Images priced `per_image` are charged for each image returned.
+- `POST /v1/rerank` reaches Cohere Rerank 3.5 and Amazon Rerank on Bedrock.
+- `POST /v1/messages/count_tokens` counts Converse models through Bedrock's CountTokens. For a provider with no count
+  API, Gantry answers with its own estimate, marked `"estimated": true` and `x-gantry-token-count: estimate`.
+- New route `POST /v1/responses/input_tokens`: as sent to OpenAI and Azure, as a messages count elsewhere.
+- New route `POST /v1/ocr` (Mistral's OCR API), priced by the page with the new `per_page` price field.
+- The Gantry key is read from `api-key`, the header Azure OpenAI's SDKs send, with the same ambiguity check.
+- boto3 and the AWS SDKs reach Bedrock through Gantry on `/model/<id>/converse`, `/converse-stream`, `/invoke`,
+  `/invoke-with-response-stream` and `/count-tokens` with a Gantry key (`AWS_BEARER_TOKEN_BEDROCK`, or `x-api-key`
+  beside a SigV4 signature, which is removed). The caller's rule decides the model; refusals come back in the AWS
+  error shape (`x-amzn-errortype`).
+
+### MCP gateway: servers without a restart, more transports, prices, token exchange, sessions
+
+- MCP servers are added, changed and removed without a restart: by a saved policy file, `SIGHUP`, or
+  `PUT`/`DELETE /admin/mcp/<name>` with the policy in the store. A server reached as before keeps the sessions
+  Gantry holds at it. `/mcp` is served whenever Gantry runs with a policy, so the first server can be added the same
+  way. A reload that names an unset variable is rejected and the version in use stays.
+- `transport: sse` reaches servers that speak the older HTTP+SSE transport (MCP 2024-11-05). `transport: stdio`
+  starts a server as a process (`command`, `args`, `env`): only a command listed in `GANTRY_MCP_STDIO_ALLOW` in the
+  gateway's own environment, with an environment emptied of everything but what `env:` names. The policy alone
+  cannot make the gateway run a program.
+- `call_price_usd` and `tool_prices` on a server price its tool calls. A priced call the server answered writes a
+  usage record (`provider: "mcp"`, the tool as its model) and counts against the caller's budgets; with a budget
+  spent, the call is refused with `budget_exceeded` before it reaches the server.
+- `user_auth: token_exchange` trades the token a caller sends in `x-gantry-subject-token` for the server's at the
+  identity provider's token endpoint (RFC 8693); `user_auth: on_behalf_of` sends the on-behalf-of form. Records say
+  `upstream_auth` and hold neither token.
+- `GET /admin/mcp/sessions` and the console's MCP sessions page list the MCP clients connected to a gateway and each
+  person's own account at a server; `DELETE /admin/mcp/sessions/<id>` ends one. New refusal code: `session_revoked`.
+- A rule's `mcp_clients` names the MCP client applications that may connect, by the name a client gives itself, its
+  user agent, or `oauth:<client id>`. New refusal code: `mcp_client_not_allowed`.
+- An MCP server can no longer be named `sessions`.
+
 ### Plugin events: guardrail contract v2
 
 - A new guardrail type, `events`, sends an outside service the whole conversation as typed events: `system_prompt`,

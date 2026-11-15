@@ -86,6 +86,7 @@ Prices are US dollars per million tokens, 0 or more. Prices change without a res
 | `max_output` | integer | from the tables | The most output tokens the model writes in one answer. A budget reserves this many for a request that sets no `max_tokens`. |
 | `max_context` | integer | from the tables | The most tokens of context the model reads in one request. A budget reserves this many input tokens for a Responses request that names stored context. |
 | `per_image` | number | none | US dollars per image, for an image model billed by the image. |
+| `per_page` | number | none | US dollars per page, for an OCR model: charged for each page the answer says it processed (`usage_info.pages_processed`). An OCR request reserves nothing, since the page count is known only from the answer. |
 | `input_audio`, `output_audio`, `cache_read_audio` | number | `input`, `output`, `cache_read` | Per million audio tokens: prompt audio, generated audio, cached prompt audio. A realtime session's usage events split tokens by modality, and each part is charged its own price. Set them for a realtime model: audio usually costs several times text. |
 | `batch_input`, `batch_output`, `batch_cache_read` | number | half the price | Per million tokens for a batch line. With `batch_input` and `batch_output` set, a batch line pays them (and other parts in the same proportion); without them, half the model's price, as OpenAI, Anthropic, Bedrock and Vertex AI bill batches. |
 | `per_second` | number | none | US dollars per second of video, for a video model (Sora, Veo). |

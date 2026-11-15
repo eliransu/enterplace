@@ -170,6 +170,10 @@ A `vertex` provider can fall back to a `gemini` or another `vertex` provider. Wi
 
 `POST /v1/messages/count_tokens` (a messages request, as Claude Code counts before it sends) for a Gemini model goes to `<url>/models/<model>:countTokens` with the request's contents and system instruction, and Vertex AI's `totalTokens` comes back as `{"input_tokens": n}`. countTokens takes no tools, so a request with `tools` is refused by name rather than counted short. The `gemini` kind counts the same way.
 
+### Images
+
+`POST /v1/images/generations` for Imagen or a Gemini image model goes to `predict` or `generateContent`, as on the [Gemini API](/providers/gemini/#embeddings-images-and-responses).
+
 ### Veo
 
 `POST /v1/videos` for a Veo model goes to `predictLongRunning`. See [Videos and containers](/providers/videos-and-containers/).
