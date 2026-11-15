@@ -64,8 +64,8 @@ fn key_value(config: &tokio_postgres::Config, port: Option<u16>, database: &str)
     )
 }
 
-/// A provider whose every answer used 3 output tokens. Model `slow` answers after a second, `lag`
-/// after 150 ms.
+/// A provider whose every answer used 3 output tokens. Model `slow` answers after a second, `lazy` after
+/// three, `lag` after 150 ms.
 async fn provider() -> Result<u16, Error> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
@@ -74,6 +74,9 @@ async fn provider() -> Result<u16, Error> {
         post(|body: Bytes| async move {
             if body.windows(6).any(|w| w == b"\"slow\"") {
                 tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            if body.windows(6).any(|w| w == b"\"lazy\"") {
+                tokio::time::sleep(Duration::from_secs(3)).await;
             }
             if body.windows(5).any(|w| w == b"\"lag\"") {
                 tokio::time::sleep(Duration::from_millis(150)).await;
@@ -106,7 +109,7 @@ providers:
     url: http://127.0.0.1:{port}
     allow_private: true
     key_env: MOCK_KEY
-    models: [m, free, slow, lag]
+    models: [m, free, slow, lazy, lag]
   - name: mock2
     kind: openai
     url: http://127.0.0.1:{port}
@@ -140,7 +143,7 @@ aliases:
       - {{ provider: mock, model: free, rpm: 2 }}
   - name: single
     deployments:
-      - {{ provider: mock, model: slow, max_parallel: 1 }}
+      - {{ provider: mock, model: lazy, max_parallel: 1 }}
 prices:
   m: {{ input: 0, output: 1000 }}
 rules:
@@ -818,8 +821,18 @@ async fn with_postgres_down_known_keys_work_and_budgeted_requests_are_refused() 
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    let (status, body) = answer(&a.router, request("GET", "/readyz", ADMIN, "")?).await?;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    // /readyz reads the poll's reachability, which may come back a poll after a lease reconnected.
+    loop {
+        let (status, body) = answer(&a.router, request("GET", "/readyz", ADMIN, "")?).await?;
+        if status == StatusCode::OK {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "never ready again: {body}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     Ok(())
 }
 
@@ -1578,7 +1591,8 @@ async fn a_deployment_s_rpm_and_max_parallel_hold_across_gateways() -> TestResul
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
     assert_eq!(code(&body), "deployment_limit", "{body}");
 
-    // One slow request in flight on a: b's is refused while it runs, and taken once it answered.
+    // One slow request (3 s) in flight on a: b's is refused while it runs, and taken once it answered. b asks
+    // after 1.6 s, past a's flush and b's read of the store (one 500 ms poll each) even on a busy machine.
     let slow = r#"{"model":"single","messages":[]}"#;
     let (first, second) = tokio::join!(
         answer(
@@ -1586,7 +1600,7 @@ async fn a_deployment_s_rpm_and_max_parallel_hold_across_gateways() -> TestResul
             request("POST", "/v1/chat/completions", MAYA, slow)?
         ),
         async {
-            tokio::time::sleep(Duration::from_millis(700)).await;
+            tokio::time::sleep(Duration::from_millis(1600)).await;
             answer(
                 &b.router,
                 request("POST", "/v1/chat/completions", MAYA, slow)?,
@@ -1597,7 +1611,7 @@ async fn a_deployment_s_rpm_and_max_parallel_hold_across_gateways() -> TestResul
     assert_eq!(first?.0, StatusCode::OK);
     let (status, body) = second?;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    tokio::time::sleep(Duration::from_millis(1600)).await;
     send(&b, slow, None).await?;
     Ok(())
 }
