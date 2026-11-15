@@ -19,6 +19,9 @@ Every answer Gantry forwards names where it came from and what it cost, so a cli
 | `x-gantry-deployment` | forwarded answers | `provider/model`, as the attempts record names deployments. |
 | `x-gantry-attempts` | forwarded answers | How many attempts the answer took, retries, key switches and fallbacks included. |
 | `x-gantry-cost-usd` | forwarded answers for a priced model | The cost in US dollars. See below. |
+| `x-gantry-budget-remaining-usd` | answers under a rule with `budget_headers: true` | What the tightest budget the request counts against has left, in US dollars, after this request's own reservation. See [Budget headers](/governance/budgets-and-rate-limits/#budget-headers). |
+| `x-gantry-budget-reset` | the same | When that budget's period ends, such as `2026-12-01 00:00 UTC`. Absent for a sliding window. |
+| `Server-Timing` | forwarded answers | Gantry's own time (`gantry;dur=`), then one entry per stage: `gantry-auth`, `gantry-read`, `gantry-policy`, `gantry-guardrails`, `gantry-cache`, `gantry-audit`, `gantry-connect`, `gantry-first-byte`, in milliseconds. See [Time by stage](/operations/observability/#time-by-stage). |
 
 ## Cost
 

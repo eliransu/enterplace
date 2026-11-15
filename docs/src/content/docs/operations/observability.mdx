@@ -54,6 +54,13 @@ Metrics: http://127.0.0.1:9464/metrics
 | `gantry_budget_limit_usd` | gauge | `scope`, `name`, `per` | A budget of `limits:` in the policy |
 | `gantry_budget_remaining_usd` | gauge | `scope`, `name`, `per` | What that budget has left this period: its limit less what was spent and what requests in flight hold. Counted by the store when the policy has one |
 | `gantry_store_up` | gauge | none | With a store: `1` when it answers, `0` when requests under a budget or rate limit would be refused |
+| `gantry_budget_reserved_usd` | gauge | `scope`, `name`, `per` | What requests in flight hold of that budget now |
+| `gantry_stage_seconds` | histogram | `stage` | Time a request spent in each stage inside Gantry ([below](#time-by-stage)) |
+| `gantry_guardrail_seconds` | histogram | `guardrail` | Time of each guardrail call on a request, by guardrail name: `builtin` for the built-in detectors (they share one scan), `events` for [events plugins](/governance/plugin-events/) |
+| `gantry_unpriced_requests_total` | counter | `model` | Answers from a provider for a model with no price: their spend is counted nowhere. Add the model under `prices:` |
+| `gantry_deployment_rate_headroom_ratio` | gauge | `deployment` | The smallest share left (0 to 1) of the rate limits a deployment's provider named in its last answer's headers, for a minute after that answer |
+| `gantry_mcp_calls_total` | counter | `server`, `outcome` | [MCP gateway](/governance/mcp-gateway/) calls to a tool, prompt or resource: `ok`, `tool_error`, `rpc_error`, a refusal code, or why the server gave no answer |
+| `gantry_requests_by_dimension_total` | counter | `dimension`, `value`, `verdict` | Requests by the `x-gantry-dim-<dimension>` headers you choose ([below](#labels-from-request-headers)). Absent until `GANTRY_METRICS_DIMENSIONS` is set |
 
 | Label | Values |
 |---|---|
@@ -65,9 +72,52 @@ Metrics: http://127.0.0.1:9464/metrics
 | `name` | The entry's name, `org/name` when it is kept to an organization; empty for `global` |
 | `per` | The budget's period, as the policy writes it: `day`, `month`, `6h`, `month@America/New_York` |
 
+### Time by stage
+
+`gantry_stage_seconds` splits a request's time inside Gantry. The same split is on each answer's `Server-Timing` header and on the usage record (`stages_ms`), which the console's [request log](/operations/request-log/) shows in a request's detail.
+
+| `stage` | Covers |
+|---|---|
+| `auth` | Identifying the caller: the key or JWT, kill switches, expiry |
+| `read` | Reading the request body off the socket. A slow client shows here |
+| `policy` | Deciding by the policy: the rule, the model, the route, where it goes |
+| `guardrails` | Transforms, the tool check and every guardrail on the request. `gantry_guardrail_seconds` splits it by guardrail |
+| `cache` | The answer cache lookup, with the rate limits and budget reservations made beside it |
+| `audit` | Waiting for the decision record to be written |
+| `connect` | Getting a connection to the provider that answered: its connect and TLS handshake, near zero for a reused connection |
+| `first_byte` | From sending to the provider that answered to its answer's headers |
+| `stream` | From the answer's headers to its last byte |
+
+```text
+Server-Timing: gantry;dur=0.412, gantry-auth;dur=0.018, gantry-read;dur=0.031, gantry-policy;dur=0.060, gantry-guardrails;dur=0.110, gantry-cache;dur=0.022, gantry-audit;dur=0.150, gantry-connect;dur=0.004, gantry-first-byte;dur=312.500
+```
+
+The header leaves with the answer's head, so it has no `stream`. `gantry;dur=` is Gantry's own time as before. Browser devtools and `curl -i` read the header.
+
+### Labels from request headers
+
+To count requests by a dimension of your own, name it in `GANTRY_METRICS_DIMENSIONS` where `gantry serve` runs, comma-separated, up to 8:
+
+```bash
+GANTRY_METRICS_DIMENSIONS=env,app
+```
+
+A request that carries `x-gantry-dim-env: prod` is then counted in `gantry_requests_by_dimension_total{dimension="env",value="prod",verdict="allow"}`. The headers are Gantry's: they are taken out before the request goes to the provider. A caller chooses the value, so Gantry bounds it: 64 characters of letters, digits, `.`, `-` and `_`, and 100 values a dimension. Any other value, and any value past the hundredth, is counted as `other`.
+
+### Push to a Pushgateway
+
+For a gateway nothing can scrape (behind NAT, a short job), Gantry pushes the same text to a [Prometheus Pushgateway](https://prometheus.io/docs/instrumenting/pushing/):
+
+```bash
+GANTRY_METRICS_PUSH_URL=http://pushgateway:9091/metrics/job/gantry/instance/gw-1
+GANTRY_METRICS_PUSH_SECONDS=15   # the default
+```
+
+The URL is the whole address, job and instance included. Each push is a `PUT`, which replaces the group's metrics. A push that fails is reported on standard error at most once a minute, and the next one is tried on time. `--metrics` is not needed for it.
+
 ### Label cardinality
 
-Every label value comes from the policy (routes, codes, providers, models, teams, deployments, detector kinds), never from what a caller sends, so the number of series is bounded by the policy. Budget gauges are the one family that could grow with people: by default they cover the `global`, `org`, `team` and `model` entries of `limits:`, and leave out entries for `*` (each member counted apart). Choose the scope kinds with `GANTRY_METRICS_BUDGET_SCOPES`, a comma-separated list such as `team,person`, or `none` for no budget gauges.
+Every label value comes from the policy (routes, codes, providers, models, teams, deployments, guardrail names, MCP servers, detector kinds), never from what a caller sends, so the number of series is bounded by the policy. The one exception is `gantry_requests_by_dimension_total`, which is off unless you name its dimensions and caps their values. Budget gauges are the one family that could grow with people: by default they cover the `global`, `org`, `team` and `model` entries of `limits:`, and leave out entries for `*` (each member counted apart). Choose the scope kinds with `GANTRY_METRICS_BUDGET_SCOPES`, a comma-separated list such as `team,person`, or `none` for no budget gauges.
 
 LiteLLM's Prometheus metrics, for orientation: requests (`gantry_requests_total`), tokens (`gantry_tokens_total`), spend (`gantry_spend_usd_total`), total latency (`gantry_request_seconds`), provider latency (`gantry_upstream_seconds`), time to first byte (`gantry_first_byte_seconds`), deployment state and cooldowns (`gantry_deployment_up`, `gantry_deployment_cooldowns_total`), remaining budgets (`gantry_budget_remaining_usd`), cache hits (`gantry_cache_lookups_total`), guardrail findings and errors (`gantry_guardrail_findings_total`). Key switches in a provider's key pool: `gantry_provider_key_switches_total`.
 
@@ -107,7 +157,7 @@ groups:
 
 ## Traces
 
-Gantry exports one OpenTelemetry span per request over OTLP/HTTP with JSON. Set the standard variables where `gantry serve` runs:
+Gantry exports one OpenTelemetry span per request, with a child span for each attempt at a provider and each guardrail call, over OTLP. Set the standard variables where `gantry serve` runs:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318   # spans go to /v1/traces
@@ -115,9 +165,35 @@ OTEL_SERVICE_NAME=gantry                                  # the default
 OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer%20abc     # optional, percent-encoded
 ```
 
-`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` sets the full URL instead. Gantry speaks `http/json` only: a protocol variable set to anything else stops it at startup with a message saying so. Unset, nothing is exported.
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` sets the full URL instead. Unset, nothing is exported.
 
-When a request carries a W3C `traceparent`, its span joins that trace. The provider is sent a `traceparent` naming Gantry's span, so a trace reads caller, Gantry, provider.
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Transport | Endpoint |
+|---|---|---|
+| `http/json` (the default) | OTLP/HTTP, JSON body | `http://otel-collector:4318`, spans go to `/v1/traces` |
+| `http/protobuf` | OTLP/HTTP, protobuf body | The same |
+| `grpc` | OTLP/gRPC over HTTP/2: in the clear for `http://`, TLS for `https://` | `http://otel-collector:4317`, the collector's address alone |
+
+`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` sets it for traces alone. Any other value stops Gantry at startup with a message saying so.
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+```
+
+### Trace context
+
+When a request carries a W3C `traceparent`, its span joins that trace. The provider is sent a `traceparent` naming the span of the attempt that reached it, so a trace reads caller, Gantry, attempt, provider. `GANTRY_TRACE_PROPAGATION` chooses the sides:
+
+| `GANTRY_TRACE_PROPAGATION` | Joins the caller's trace | Sends `traceparent` to the provider |
+|---|---|---|
+| `caller,provider` (the default) | Yes | Yes |
+| `caller` | Yes | No: the provider gets no `traceparent` or `tracestate`, the caller's included |
+| `provider` | No: each request starts a trace | Yes |
+| `none` | No | No |
+
+### Spans
+
+The request's span:
 
 | Span field | Value |
 |---|---|
@@ -127,8 +203,16 @@ When a request carries a W3C `traceparent`, its span joins that trace. The provi
 | `gantry.team`, `gantry.provider`, `gen_ai.request.model` | Who, where and which model |
 | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gantry.charged_usd` | From the usage record |
 | `http.response.status_code`, `gantry.ended` | How the answer ended |
+| `gen_ai.operation.name`, `gen_ai.response.model`, `gen_ai.conversation.id` | The [GenAI conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)' names: the operation (`chat`, `embeddings`, `text_completion`, `generate_content`), the model that answered, and the session when an events guardrail gave one |
 
-The span lasts until the request's usage record, so a stream's span covers the whole stream. A span with no usage record (an upstream error, a route with no usage) ends when its answer was sent, five minutes later. Its status is an error only for a 5xx: a refusal is the policy working.
+Its children:
+
+| Child span | Name | Attributes |
+|---|---|---|
+| One per attempt at a provider, retries and fallbacks included (a client span) | The operation and model, such as `chat gpt-4o` | `gen_ai.operation.name`, `gen_ai.provider.name` (the provider's kind), `gen_ai.request.model`, `server.address`, `http.response.status_code` or `error.type`, `gantry.provider`, `gantry.deployment`, `gantry.attempt`. An attempt that is retried or fallen back from has an error status |
+| One per guardrail call on the request | `guardrail <name>`: `builtin` for the built-in detectors, the guardrail's name for a webhook, `events` for events plugins | `gantry.guardrail` |
+
+The request's span lasts until the request's usage record, so a stream's span covers the whole stream. A span with no usage record (an upstream error, a route with no usage) ends when its answer was sent, five minutes later. Its status is an error only for a 5xx: a refusal is the policy working.
 
 Spans carry what the audit log says and less: no prompt, no answer, no key and no person's name. They are built from the audit records, so traces need the audit log on, as it is under `gantry serve`.
 

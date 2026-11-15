@@ -171,6 +171,7 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `cache` | map | none | `{ ttl_seconds: 1 to 86400, scope: person or team, semantic: { model, threshold } }`. See [Caching](/routing/caching/). |
 | `prompt_cache` | string | `off` | `auto` marks cache breakpoints on Anthropic messages requests. See [Caching](/routing/caching/#prompt-caching). |
 | `buffer_stream` | boolean | `false` | Hold a streamed answer whole so `on: [answer]` guardrails check it first. Needs a guardrail with `on: [answer]`. |
+| `budget_headers` | boolean | `false` | Add `x-gantry-budget-remaining-usd` and `x-gantry-budget-reset` to each answer: what the tightest budget the request counts against has left. See [Budget headers](/governance/budgets-and-rate-limits/#budget-headers). |
 | `check_stream_every` | integer | none | Check a streamed answer every this many characters, sending only what was checked. See [guardrails](/governance/guardrails/#checking-a-stream-as-it-comes-check_stream_every). |
 | `passthrough` | list | `[]` | Native provider paths the rule may reach as sent. See [Passthrough](#passthrough). |
 | `containers` | map | none | `{ sizes: [1g, 4g] }`: the memory sizes of code interpreter containers the rule's callers may create, each of `1g`, `4g`, `16g`, `64g`. Without it none. See [Videos and containers](/providers/videos-and-containers/#containers). |

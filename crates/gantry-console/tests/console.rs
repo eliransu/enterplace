@@ -2411,3 +2411,105 @@ async fn with_per_org_chains_an_org_role_reads_its_own_chain_and_an_admin_switch
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_key_is_rotated_from_its_page_shown_once_and_the_old_one_ends_after_the_grace()
+-> TestResult {
+    let s = setup("rotate")?;
+    let cookie = sign_in(&s.app).await?;
+    let old = sha256_hex(MAYA_KEY.as_bytes());
+    let (status, _, page) = send(
+        &s.app,
+        get(&format!("/console/people/edit?sha256={old}"), &cookie)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        page.contains(r#"action="/console/people/rotate""#) && page.contains(r#"name="grace""#),
+        "the key's page offers the rotation"
+    );
+
+    // A grace that is not a time changes nothing and says how to write one.
+    let (status, _, page) = send(
+        &s.app,
+        post(
+            "/console/people/rotate",
+            &cookie,
+            &format!("sha256={old}&grace=soon"),
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(page.contains("48h"), "{page}");
+    assert!(!std::fs::read_to_string(s.keys())?.contains("replaced_by"));
+
+    let (status, headers, page) = send(
+        &s.app,
+        post(
+            "/console/people/rotate",
+            &cookie,
+            &format!("sha256={old}&grace=48h"),
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(
+        headers
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store")
+    );
+    let at = page
+        .find(r#"id="new-key">"#)
+        .ok_or("the new key is not shown")?
+        + r#"id="new-key">"#.len();
+    let key = &page[at..at + 7 + 64];
+    assert!(key.starts_with("gantry_") && key != MAYA_KEY, "{key}");
+    assert!(
+        page.contains("key_rotated"),
+        "the page says how to find who still uses the old key"
+    );
+    let new = sha256_hex(key.as_bytes());
+    let entries = gantry_core::config::key_entries(&s.keys(), &std::fs::read_to_string(s.keys())?)
+        .map_err(|e| e.join(" "))?;
+    let old_entry = entries
+        .iter()
+        .find(|e| e.sha256 == old)
+        .ok_or("old key gone")?;
+    let new_entry = entries
+        .iter()
+        .find(|e| e.sha256 == new)
+        .ok_or("no new key")?;
+    assert_eq!(old_entry.options.replaced_by.as_deref(), Some(&new[..8]));
+    assert!(
+        old_entry.expires.is_some(),
+        "the old key ends after the grace"
+    );
+    assert_eq!(
+        (new_entry.name.as_str(), new_entry.team.as_str()),
+        ("maya.cohen", "payments")
+    );
+    assert!(!std::fs::read_to_string(s.keys())?.contains(key));
+
+    // Recorded with both hash prefixes and never the key; a second rotation of the old key is refused.
+    s.log.flush();
+    let records = admin_records(&s)?;
+    let rotated = records
+        .iter()
+        .find(|r| r["action"] == "rotate_key" && r["target"]["replaced_by"] == new[..8])
+        .ok_or("the rotation is not recorded")?;
+    assert_eq!(rotated["target"]["sha256_prefix"], old[..8]);
+    assert!(!std::fs::read_to_string(s.audit())?.contains(key));
+    let (status, _, page) = send(
+        &s.app,
+        post(
+            "/console/people/rotate",
+            &cookie,
+            &format!("sha256={old}&grace=1h"),
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(page.contains("already rotated"), "{page}");
+    Ok(())
+}

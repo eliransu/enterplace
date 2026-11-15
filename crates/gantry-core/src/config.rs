@@ -71,6 +71,7 @@ const KNOWN: &[&str] = &[
     "threshold",
     "prompt_cache",
     "buffer_stream",
+    "budget_headers",
     "check_stream_every",
     "file_retention_days",
     "containers",
@@ -1015,6 +1016,8 @@ struct RuleFile {
     prompt_cache: Option<String>,
     #[serde(default)]
     buffer_stream: bool,
+    #[serde(default)]
+    budget_headers: bool,
     #[serde(default)]
     check_stream_every: Option<i64>,
     #[serde(default)]
@@ -3881,6 +3884,7 @@ fn limits(
         )),
     }
     limits.buffer_stream = rule.buffer_stream;
+    limits.budget_headers = rule.budget_headers;
     limits.caller_provider_key = match rule.caller_provider_key.as_deref() {
         None | Some("refused") => CallerKey::Refused,
         Some("allowed") => CallerKey::Allowed,

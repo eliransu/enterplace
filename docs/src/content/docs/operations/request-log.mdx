@@ -39,6 +39,8 @@ Open `/console/requests`. Filter by any of these. Every filter narrows the list,
 
 Each row's **Proof** column recomputes the SHA-256 of its decision record and compares it with the hash the chain holds. It also checks that the record's `prev` is the hash of the record before it. It says `Verified` when both hold, `Changed` when the record no longer hashes to its hash (it was edited after Gantry wrote it), and `Unlinked` when its `prev` does not follow the record before it. For either of the last two, run `gantry audit verify` on the gateway that wrote it. Open a row to see its facts and a link to its record on the Audit log page.
 
+A row's detail has **Time by stage**: where the request's time went inside Gantry, in the order it passed each stage (`auth`, `read`, `policy`, `guardrails`, `cache`, `audit`, `connect`, `first byte`, `stream`), then each guardrail call by name. The numbers are the usage record's `stages_ms` and `guardrail_ms`, in milliseconds. A request with no usage record (a refusal, a provider that never answered) has none. See [Time by stage](/operations/observability/#time-by-stage).
+
 ## Analytics
 
 Open `/console/analytics`. Pick a window (24 hours by the hour, 7 or 30 days by the day) and a dimension to rank by: provider, model, team, person, key, tag or coding agent. Any Requests filter also works here, such as `/console/analytics?team=payments`.

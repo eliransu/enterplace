@@ -2506,3 +2506,119 @@ rules:
     );
     Ok(())
 }
+
+#[test]
+fn usage_prints_tables_or_csv_and_budget_status_says_what_a_key_has_left() -> TestResult {
+    let dir = workdir("usage")?;
+    let policy = path(&dir, "gantry.policy.yaml");
+    let keys = path(&dir, "gantry.keys.yaml");
+    std::fs::write(
+        &policy,
+        format!("{POLICY}limits:\n  - {{ team: payments, budget: {{ usd: 5, per: month }} }}\n"),
+    )?;
+    let new_key = |name: &str, admin: bool| -> Result<String, Box<dyn std::error::Error>> {
+        let mut args = vec![
+            "key", "new", name, "--team", "payments", "--quiet", "--keys", &keys,
+        ];
+        if admin {
+            args.push("--admin");
+        }
+        let out = gantry(&args, &[])?;
+        assert!(out.status.success());
+        Ok(String::from_utf8(out.stdout)?.trim().to_string())
+    };
+    let (admin, maya) = (new_key("ops", true)?, new_key("maya", false)?);
+    let stdout_path = dir.join("stdout.txt");
+    let child = Command::new(env!("CARGO_BIN_EXE_gantry"))
+        .args(["serve", &policy, "--listen", "127.0.0.1:0"])
+        .env("GANTRY_TEST_PROVIDER_KEY", "provider-secret")
+        .stdout(std::fs::File::create(&stdout_path)?)
+        .stderr(std::fs::File::create(dir.join("stderr.txt"))?)
+        .spawn()?;
+    let _server = Running(child);
+    let addr = listening(&stdout_path)?;
+    let url = format!("http://{addr}");
+    let home = path(&dir, "config");
+    let env = [
+        ("XDG_CONFIG_HOME", home.as_str()),
+        ("GANTRY_URL", url.as_str()),
+        ("GANTRY_ADMIN_KEY", admin.as_str()),
+        ("GANTRY_KEY", maya.as_str()),
+    ];
+    // One request by maya: whatever becomes of it, it is a request of team payments for model-a.
+    post(
+        &addr,
+        "/v1/chat/completions",
+        &maya,
+        r#"{"model":"model-a","max_tokens":5,"messages":[]}"#,
+    )?;
+
+    let out = gantry(&["usage", "--since", "1d"], &env)?;
+    let tables = String::from_utf8(out.stdout)?;
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for wanted in [
+        "counted by this gateway",
+        "By team:",
+        "By person:",
+        "By model:",
+        "payments",
+        "maya",
+        "model-a",
+        "spend USD",
+        "total",
+    ] {
+        assert!(tables.contains(wanted), "{wanted} missing from:\n{tables}");
+    }
+    let out = gantry(&["usage", "--group-by", "team", "--csv"], &env)?;
+    let csv = String::from_utf8(out.stdout)?;
+    assert!(out.status.success());
+    let mut lines = csv.lines();
+    assert_eq!(
+        lines.next(),
+        Some(
+            "group_by,value,requests,refused,errors,input_tokens,output_tokens,total_tokens,spend_usd,latency_p50_ms,latency_p95_ms"
+        )
+    );
+    assert!(
+        lines
+            .next()
+            .is_some_and(|l| l.starts_with("team,\"payments\",1,")),
+        "{csv}"
+    );
+    let out = gantry(&["usage", "--since", "soon"], &env)?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("7d, 24h or 30m"));
+    let out = gantry(&["usage", "--group-by", "shoe-size"], &env)?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("Group by day, hour or one of"));
+
+    // The budget of maya's own key, with her key and no admin's.
+    let out = gantry(&["budget", "status"], &env)?;
+    let status = String::from_utf8(out.stdout)?;
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        status.contains("maya (team payments), rule payments-team")
+            && status.contains("left of $5.00 a month")
+            && status.contains("resets"),
+        "{status}"
+    );
+    let out = gantry(&["budget", "status", "--short"], &env)?;
+    let line = String::from_utf8(out.stdout)?;
+    assert!(
+        line.starts_with("$5.00 left (resets ") && line.trim_end().ends_with("00:00 UTC)"),
+        "{line}"
+    );
+    assert_eq!(line.lines().count(), 1, "one line, for a status line");
+    let out = gantry(&["budget", "status"], &env[..2])?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("GANTRY_KEY"));
+    Ok(())
+}

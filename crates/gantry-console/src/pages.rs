@@ -2233,6 +2233,13 @@ pub enum Dialog {
         sha256: String,
         error: String,
     },
+    /// A key was rotated: the new key, shown once, and when the old one stops working.
+    Rotated {
+        name: String,
+        team: String,
+        key: String,
+        until: String,
+    },
 }
 
 impl Dialog {
@@ -2372,6 +2379,28 @@ fn people_dialog(view: &PeopleView<'_>, entries: &[KeyEntry]) -> String {
                 ),
             )
         }
+        Dialog::Rotated {
+            name,
+            team,
+            key,
+            until,
+        } => dialog(
+            "issued-title",
+            "The new key",
+            &format!(
+                "For {}, team {}, with the settings of the key it replaces. It is shown once and is not stored anywhere: copy it now. The old key keeps working until {} (UTC), and every request made with it until then is recorded with key_rotated, so you can find who still uses it.",
+                esc(name),
+                esc(team),
+                esc(until)
+            ),
+            &format!(
+                r#"<span class="g-command g-command--value"><span class="g-command__text t-mono" id="new-key">{}</span><button class="g-btn g-btn--quiet g-btn--sm t-small" type="button" data-copy="new-key">{}Copy</button></span>
+<div class="g-dialog__actions">{}</div>"#,
+                esc(key),
+                icon("copy"),
+                close_link("Done", "", "/console/people")
+            ),
+        ),
         Dialog::Revoke { sha256, error } => {
             let Some(entry) = entries.iter().find(|e| &e.sha256 == sha256) else {
                 return String::new();

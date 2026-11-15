@@ -216,6 +216,8 @@ CREATE TABLE gantry_deployment_load (
     updated timestamptz NOT NULL,
     PRIMARY KEY (deployment, gateway)
 );
+", "
+CREATE TABLE gantry_gateway_health (gateway text PRIMARY KEY, report text NOT NULL, updated timestamptz NOT NULL);
 "];
 
 /// What gateways share for high availability beyond the tables above, in a namespace of its own (`gantry_ha`): each
@@ -374,6 +376,9 @@ struct Inner {
     load_out: Mutex<HashMap<String, DeploymentLoad>>,
     /// Every other gateway's load on each deployment, summed.
     load: RwLock<Arc<HashMap<String, DeploymentLoad>>>,
+    /// This gateway's health report, when it changed since the last write, and every other gateway's.
+    health_out: Mutex<Option<String>>,
+    health: RwLock<Arc<Vec<String>>>,
     polls: std::sync::atomic::AtomicU64,
     /// Budget raises, and the version of them last read.
     raises: RwLock<Arc<Vec<Raise>>>,
@@ -445,6 +450,8 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         latency: RwLock::default(),
         load_out: Mutex::default(),
         load: RwLock::default(),
+        health_out: Mutex::default(),
+        health: RwLock::default(),
         polls: std::sync::atomic::AtomicU64::new(0),
         raises: RwLock::default(),
         raises_seen: Mutex::new(None),
@@ -1257,6 +1264,19 @@ impl Inner {
             );
         }
         write(&self.load, Arc::new(load));
+        // What the other gateways know of each deployment, for the deployment health view.
+        let rows = client
+            .query(
+                "SELECT report FROM gantry_gateway_health WHERE gateway <> $1 AND updated > clock_timestamp() - $2 * interval '1 second' ORDER BY gateway",
+                &[&self.gateway, &LOAD_FOR_SECS],
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+        let reports = rows
+            .iter()
+            .filter_map(|row| row.try_get::<_, String>(0).ok())
+            .collect();
+        write(&self.health, Arc::new(reports));
         Ok(())
     }
 
@@ -1354,7 +1374,31 @@ impl Inner {
             )
             .await;
         }
+        let report = self
+            .health_out
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(report) = report {
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.execute(
+                    "INSERT INTO gantry_gateway_health (gateway, report, updated) VALUES ($1, $2, clock_timestamp()) \
+                     ON CONFLICT (gateway) DO UPDATE SET report = excluded.report, updated = excluded.updated",
+                    &[&self.gateway, &report],
+                ),
+            )
+            .await;
+        }
         if self.polls.fetch_add(1, Ordering::Relaxed) % CLEAN_EVERY == 0 {
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.execute(
+                    "DELETE FROM gantry_gateway_health WHERE updated < clock_timestamp() - $1 * interval '1 second'",
+                    &[&LOAD_FOR_SECS],
+                ),
+            )
+            .await;
             let idle = crate::alias::SESSION_IDLE.as_secs_f64();
             // Sessions that ran out: a console's, and the ones events plugins ended.
             let _ = tokio::time::timeout(
@@ -2887,6 +2931,18 @@ impl Store for PgStore {
 
     fn deployment_load(&self) -> Arc<HashMap<String, DeploymentLoad>> {
         read(&self.inner.load)
+    }
+
+    fn publish_health(&self, report: String) {
+        *self
+            .inner
+            .health_out
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(report);
+    }
+
+    fn health_reports(&self) -> Arc<Vec<String>> {
+        read(&self.inner.health)
     }
 
     fn publish_load(&self, deployment: &str, load: DeploymentLoad) {

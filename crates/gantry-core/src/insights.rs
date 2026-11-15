@@ -138,6 +138,9 @@ pub struct Row {
     pub latency_ms: Option<u64>,
     /// A redacted body was kept for it.
     pub body: bool,
+    /// Where its time went inside Gantry, in milliseconds, in the order it passed them: the stages of its usage
+    /// record's `stages_ms`, then each guardrail call as `guardrail <name>`.
+    pub stages: Vec<(String, f64)>,
 }
 
 /// What became of a request, for filters and charts.
@@ -215,6 +218,23 @@ pub struct Usage {
     pub charged_usd: f64,
     pub latency_ms: Option<u64>,
     pub body: bool,
+    pub stages: Vec<(String, f64)>,
+}
+
+/// A usage record's `stages_ms`, then its `guardrail_ms` as `guardrail <name>`.
+fn stages_of(record: &Value) -> Vec<(String, f64)> {
+    let entries = |field: &str, prefix: &str| -> Vec<(String, f64)> {
+        record
+            .get(field)
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, ms)| Some((format!("{prefix}{name}"), ms.as_f64()?)))
+            .collect()
+    };
+    let mut out = entries("stages_ms", "");
+    out.extend(entries("guardrail_ms", "guardrail "));
+    out
 }
 
 fn text(record: &Value, field: &str) -> String {
@@ -338,6 +358,7 @@ pub fn fact(line: &str, replica: &str, prev: Option<&str>) -> Option<Fact> {
                 .unwrap_or_default(),
             latency_ms: number("latency_ms"),
             body: record.get("body").and_then(Value::as_str) == Some("captured"),
+            stages: stages_of(&record),
         }))),
         Some("upstream_error") => Some(Fact::Failure {
             id,
@@ -370,6 +391,7 @@ impl Usage {
         row.charged_usd = self.charged_usd;
         row.latency_ms = self.latency_ms;
         row.body = self.body;
+        row.stages.clone_from(&self.stages);
     }
 }
 
@@ -911,6 +933,55 @@ pub trait Index: Send + Sync + std::fmt::Debug {
     /// The decision records of every gateway since `since` (RFC 3339), as written, oldest first: the newest `max`
     /// of them when there are more. What a policy dry run replays.
     fn lines(&self, since: &str, max: usize) -> Pending<Vec<String>>;
+    /// What the requests the query matches cost, by day, organization, team, provider and model, summed where the
+    /// rows are kept. What a cost export writes ([`cost_lines`] over the local chain).
+    fn cost_lines(&self, query: &Query) -> Pending<Vec<CostLine>>;
+}
+
+/// One line of a cost export: what one team's requests to one model at one provider cost in one UTC day.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CostLine {
+    /// `2026-11-15`.
+    pub day: String,
+    pub org: String,
+    pub team: String,
+    pub provider: String,
+    pub model: String,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_usd: f64,
+}
+
+/// [`Index::cost_lines`] over rows folded here, from the local chain. A refused request reached no provider and
+/// cost nothing, so it is no line.
+pub fn cost_lines(rows: &[Row]) -> Vec<CostLine> {
+    let mut by: BTreeMap<[String; 5], CostLine> = BTreeMap::new();
+    for row in rows.iter().filter(|r| r.verdict != "refused") {
+        let key = [
+            row.time.get(..10).unwrap_or_default().to_string(),
+            row.label("org").to_string(),
+            row.label("team").to_string(),
+            row.label("provider").to_string(),
+            row.label("model").to_string(),
+        ];
+        let line = by.entry(key.clone()).or_insert_with(|| {
+            let [day, org, team, provider, model] = key;
+            CostLine {
+                day,
+                org,
+                team,
+                provider,
+                model,
+                ..CostLine::default()
+            }
+        });
+        line.requests += 1;
+        line.input_tokens += row.input_tokens.unwrap_or_default();
+        line.output_tokens += row.output_tokens.unwrap_or_default();
+        line.cost_usd += row.cost_usd.unwrap_or_default();
+    }
+    by.into_values().collect()
 }
 
 /// [`Index::spent`] over rows folded here, from the local chain.
@@ -1189,6 +1260,21 @@ mod tests {
             "cost_usd": cost, "charged_usd": cost, "latency_ms": ms, "body": "captured"
         });
         value.as_object().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn a_usage_records_stages_go_on_its_row_in_order() {
+        let lines = [
+            r#"{"id":"S1","time":"2026-11-15T10:00:00.000Z","method":"POST","path":"/v1/chat/completions","verdict":"allow","n":1,"hash":"h1"}"#,
+            r#"{"event":"usage","id":"S1","latency_ms":12,"stages_ms":{"auth":0.02,"policy":0.1,"first_byte":9.5,"stream":2.0},"guardrail_ms":{"lakera":3.25},"n":2,"hash":"h2"}"#,
+        ];
+        let rows = fold(std::io::Cursor::new(lines.join("\n")), "");
+        let names: Vec<&str> = rows[0].stages.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            ["auth", "policy", "first_byte", "stream", "guardrail lakera"]
+        );
+        assert_eq!(rows[0].stages[4].1, 3.25);
     }
 
     #[test]

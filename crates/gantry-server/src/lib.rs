@@ -38,7 +38,9 @@ mod cloud_batch;
 mod cors;
 mod credentials;
 mod events;
+mod focus;
 mod govern;
+mod health;
 pub mod insights;
 mod jwt;
 mod manage;
@@ -49,12 +51,13 @@ mod policy_api;
 mod realtime;
 mod reload;
 mod spend;
+mod stages;
 pub mod store;
 mod teams_api;
 mod traces;
 pub use manage::{AdminApi, AdminCall, AdminRoute};
 pub use mcp::{McpRoute, McpSetup};
-pub use traces::TraceExport;
+pub use traces::{TraceExport, TraceProtocol};
 
 pub use credentials::{MasterKey, credential_problems};
 pub use events::EventsPlugin;
@@ -96,6 +99,8 @@ pub const MAX_BUFFERED_BYTES_PER_CALLER: usize = MAX_BUFFERED_BYTES / 4;
 type Held = Vec<OwnedSemaphorePermit>;
 
 /// The routes this version forwards, and the kind of provider each one reaches.
+/// A caller's own budgets (`me`).
+const ME: &str = "/v1/gantry/me";
 const CHAT: &str = "/v1/chat/completions";
 const MESSAGES: &str = "/v1/messages";
 const COUNT_TOKENS: &str = "/v1/messages/count_tokens";
@@ -1067,8 +1072,16 @@ fn build(
         )),
     };
     let keep = Arc::new(state.clone());
+    if let Some((url, every)) =
+        metrics::push_target(|name| std::env::var(name).ok()).map_err(ConfigError)?
+        && let Ok(runtime) = tokio::runtime::Handle::try_current()
+    {
+        runtime.spawn(metrics::push(Arc::downgrade(&keep), url, every));
+    }
     batch::spawn_poller(Arc::downgrade(&keep));
     spawn_probes(Arc::downgrade(&keep));
+    health::publish(Arc::downgrade(&keep));
+    let health_pages = health::console(keep.clone());
     let metrics = Router::new()
         .route("/metrics", get(metrics::serve))
         .with_state(state.clone());
@@ -1082,7 +1095,8 @@ fn build(
         .route(
             "/api/hello",
             head(|| async { StatusCode::OK }).fallback(handle),
-        );
+        )
+        .route(ME, get(me).fallback(handle));
     // The admin API changes the keys file, so it exists only when Gantry serves from one.
     if reloader.is_some() {
         router = router
@@ -1097,6 +1111,8 @@ fn build(
         .fallback(handle)
         .with_state(state);
     let mut console_extension = config.extension.console;
+    console_extension.nav.extend(health_pages.nav);
+    console_extension.routes = console_extension.routes.merge(health_pages.routes);
     let router = match mcp {
         Some(mcp) => {
             console_extension.nav.extend(mcp.console.nav);
@@ -1756,6 +1772,8 @@ struct Seen<'a> {
     session: Option<String>,
     /// A budget raise asked for with `POST /v1/budget/raises`, for its record.
     budget_raise: Option<serde_json::Value>,
+    /// Where the request's time went so far.
+    stages: stages::Stages,
 }
 
 /// `POST /v1/guardrails/check`: runs the caller's rule's guardrails on text the caller sends, and answers with what
@@ -2041,7 +2059,8 @@ async fn check<'a>(
     // Read before the key's header is removed below: Anthropic's clients send their key in x-api-key.
     let anthropic_client =
         parts.headers.contains_key("x-api-key") || parts.headers.contains_key("anthropic-version");
-    let (person, key_sha256) = identify(
+    let identifying = Instant::now();
+    let identified = identify(
         state,
         policy,
         key,
@@ -2050,7 +2069,9 @@ async fn check<'a>(
         minted,
         seen,
     )
-    .await?;
+    .await;
+    seen.stages.auth = identifying.elapsed();
+    let (person, key_sha256) = identified?;
     // The key must not travel on in any other header either, under whatever name the caller chose for it.
     let (key, mut parts) = (key.to_string(), parts);
     // Taken out at once: nothing after this (guardrail webhooks, traces, the provider) can see it in the headers.
@@ -2185,7 +2206,10 @@ async fn check<'a>(
             ),
         ));
     }
-    let (bytes, permit) = read_body(Some(&person.name), state, &parts.headers, body).await?;
+    let reading = Instant::now();
+    let read = read_body(Some(&person.name), state, &parts.headers, body).await;
+    seen.stages.read = reading.elapsed();
+    let (bytes, permit) = read?;
     let peek = if let Some((_, model, _)) = gemini_native(parts.uri.path()) {
         // The model is in the path. One named in the body as well must be the same, or the policy would check one
         // model while the provider runs another.
@@ -3010,7 +3034,10 @@ async fn passthrough<'a>(
             "Refused: the query carries your Gantry key, which must never reach a provider. Send it in the Authorization header only.",
         ));
     }
-    let (bytes, permit) = read_body(Some(&person.name), state, &parts.headers, body).await?;
+    let reading = Instant::now();
+    let read = read_body(Some(&person.name), state, &parts.headers, body).await;
+    seen.stages.read = reading.elapsed();
+    let (bytes, permit) = read?;
     // Bedrock and Vertex AI name the model in the path (/model/<id>/..., .../models/<model>:<method>): it is decided on
     // by the name the policy knows it by.
     let in_path = version.providers.get(index).and_then(|p| {
@@ -4058,9 +4085,16 @@ pub(crate) async fn handle(State(state): State<AppState>, mut request: Request) 
             request.uri().path(),
             request.headers().get(&TRACEPARENT),
         );
-        // The provider sees Gantry's span as the parent of its own.
-        if let Some(ours) = ours {
-            request.headers_mut().insert(TRACEPARENT, ours);
+        // The provider sees Gantry's span as the parent of its own (the attempt's span replaces it when one is
+        // sent). With propagation to the provider off it gets none, the caller's included.
+        match ours.filter(|_| tracer.to_provider()) {
+            Some(ours) => {
+                request.headers_mut().insert(TRACEPARENT, ours);
+            }
+            None => {
+                request.headers_mut().remove(TRACEPARENT);
+                request.headers_mut().remove("tracestate");
+            }
         }
     }
     let anthropic = matches!(request.uri().path(), MESSAGES | COUNT_TOKENS);
@@ -4245,14 +4279,33 @@ async fn decide(
         .map(str::to_owned);
     // What the caller says of its session, turn and application, read before Gantry's own headers are taken out.
     let markers = events::markers(request.headers());
+    // The dimension headers the operator counts (GANTRY_METRICS_DIMENSIONS), kept before the request moves on.
+    let mut dimensions = HeaderMap::new();
+    for name in metrics::dimensions() {
+        let name = format!("x-gantry-dim-{name}");
+        if let (Some(value), Ok(name)) = (
+            request.headers().get(&name).cloned(),
+            HeaderName::try_from(name),
+        ) {
+            dimensions.insert(name, value);
+        }
+    }
     let mut seen = Seen::default();
+    let checking = Instant::now();
     let mut outcome = check(
         state, version, policy, request, &mut seen, &minted, client_ip,
     )
     .await;
+    seen.stages.policy = checking
+        .elapsed()
+        .saturating_sub(seen.stages.auth + seen.stages.read);
+    let guarding = Instant::now();
     // Gantry's own: a provider has no use for them.
     if let Ok(Next::Forward(parts, _, _)) = &mut outcome {
         for name in gantry_core::events::Markers::OWN {
+            parts.headers.remove(name);
+        }
+        for name in dimensions.keys() {
             parts.headers.remove(name);
         }
     }
@@ -4401,7 +4454,10 @@ async fn decide(
     }
     outcome = match outcome {
         Ok(Next::Forward(parts, bytes, held)) if on_request && !not_text => {
-            let (checked, entries) = guarded(state, guards, &seen, decision, parts, bytes).await;
+            let mut calls = Vec::new();
+            let (checked, entries) =
+                guarded(state, guards, &seen, decision, parts, bytes, &mut calls).await;
+            seen.stages.calls.append(&mut calls);
             if let (true, Some(rule)) = (observe, seen.rule) {
                 let blocked = would_block(rule, &entries);
                 seen.would_refuse.extend(blocked);
@@ -4450,6 +4506,7 @@ async fn decide(
                     .iter()
                     .any(|prefix| path.starts_with(prefix)),
         };
+        let (called, at) = (Instant::now(), traces::now_ns());
         plugins = events::request(
             state,
             events::guards_for(state, guards),
@@ -4459,6 +4516,16 @@ async fn decide(
             bytes,
         )
         .await;
+        // ponytail: every events plugin of the rule as one call; time each apart if one of several is the slow one.
+        seen.stages.calls.push(("events".into(), called.elapsed()));
+        if let Some(tracer) = &state.tracer {
+            tracer.child(
+                decision,
+                "guardrail events",
+                at,
+                &[("gantry.guardrail", "events")],
+            );
+        }
         if observe {
             let blocked = would_block(rule, &plugins.audit);
             seen.would_refuse.extend(blocked);
@@ -4480,6 +4547,8 @@ async fn decide(
             .get_or_insert_with(Vec::new)
             .append(&mut plugins.audit);
     }
+    seen.stages.guardrails = guarding.elapsed();
+    let limiting = Instant::now();
     // Limits come after the guardrails: the cache key and the budget's estimate are of the body that is sent, masked
     // if a guardrail masked it, and a request a guardrail blocks is never served from the cache or counted.
     outcome = match outcome {
@@ -4507,6 +4576,7 @@ async fn decide(
         }
         other => other,
     };
+    seen.stages.cache = limiting.elapsed();
     if guard_check.is_some() {
         let findings =
             serde_json::to_value(found.as_deref().unwrap_or_default()).unwrap_or_default();
@@ -4614,6 +4684,7 @@ async fn decide(
         provider_name,
     );
     state.metrics.inspected(&[], seen.cache);
+    state.metrics.dimensioned(&dimensions, outcome.is_err());
     if let Some(audit) = &state.audit {
         let entry = Entry {
             id: decision,
@@ -4742,10 +4813,13 @@ async fn decide(
             record.insert("deployment".into(), deployment.as_str().into());
         }
         let (tell, written) = tokio::sync::oneshot::channel();
+        let writing = Instant::now();
         audit.log.append_record_then(&record, move |result| {
             let _ = tell.send(result);
         });
-        if !matches!(written.await, Ok(Ok(()))) {
+        let written = written.await;
+        seen.stages.audit = writing.elapsed();
+        if !matches!(written, Ok(Ok(()))) {
             eprintln!(
                 "gantry: the audit log could not be written, so decision {decision} was refused"
             );
@@ -4762,6 +4836,13 @@ async fn decide(
     }
     if let (Some(admitted), Ok(Next::Answer(response))) = (seen.hit.take(), &outcome) {
         (*admitted).settle(response.status(), spend::Ended::Complete, None, true, None);
+    }
+    // A forwarded request takes its stages on to the provider; one answered or refused here is counted now.
+    match &mut outcome {
+        Ok(Next::Forward(parts, _, _)) => {
+            parts.extensions.insert(std::mem::take(&mut seen.stages));
+        }
+        _ => state.metrics.stages(&seen.stages),
     }
     outcome
 }
@@ -4846,16 +4927,26 @@ async fn limit(
             threshold: semantic.threshold,
         });
     }
-    match spend::admit(&state.spend, state.audit.as_ref().map(|a| &a.log), ask).await? {
+    let admitted = spend::admit(&state.spend, state.audit.as_ref().map(|a| &a.log), ask).await?;
+    // Read after the request's own reservation was made, so what is left already leaves room for it.
+    let left = if rule.limits.budget_headers {
+        BudgetLeft::of(state, &applied).await
+    } else {
+        None
+    };
+    match admitted {
         spend::Admit::Hit(response, admitted, found) => {
             seen.cache = Some("hit");
             seen.hit = Some(admitted);
             seen.found = Some(found);
             // The cache holds the provider's own format, so a translated request gets its hit translated too.
             let plan = parts.extensions.get::<Plan>();
-            Ok(Some(
-                for_caller(provider.kind, &provider.name, plan, decision, response).await?,
-            ))
+            let mut response =
+                for_caller(provider.kind, &provider.name, plan, decision, response).await?;
+            if let Some(left) = left {
+                left.write(response.headers_mut());
+            }
+            Ok(Some(response))
         }
         spend::Admit::Go(meter, cache, would_refuse) => {
             seen.cache = cache;
@@ -4863,8 +4954,170 @@ async fn limit(
                 observed(seen, refusal, by);
             }
             parts.extensions.insert(meter);
+            if let Some(left) = left {
+                parts.extensions.insert(left);
+            }
             Ok(None)
         }
+    }
+}
+
+/// What the tightest budget a request counts against has left, for the `x-gantry-budget-*` headers of a rule with
+/// `budget_headers: true`.
+#[derive(Clone, Debug)]
+struct BudgetLeft {
+    usd: f64,
+    /// When that budget's period ends, as refusals write it (`2026-12-01 00:00 UTC`). None for a sliding window,
+    /// which has no end.
+    reset: Option<String>,
+}
+
+impl BudgetLeft {
+    /// The budget with the least left of those `applied` names, a shadowed one aside: it refuses nothing.
+    async fn of(state: &AppState, applied: &[gantry_core::policy::Applied]) -> Option<Self> {
+        let mut least: Option<Self> = None;
+        for budget in budgets_now(state, applied).await {
+            if budget.shadow {
+                continue;
+            }
+            if least.as_ref().is_none_or(|l| budget.remaining < l.usd) {
+                least = Some(Self {
+                    usd: budget.remaining,
+                    reset: budget.resets.clone(),
+                });
+            }
+        }
+        least
+    }
+
+    fn write(&self, headers: &mut HeaderMap) {
+        let text = format!("{:.6}", self.usd.max(0.0));
+        let text = text.trim_end_matches('0').trim_end_matches('.');
+        if let Ok(value) = HeaderValue::from_str(text) {
+            headers.insert(
+                HeaderName::from_static("x-gantry-budget-remaining-usd"),
+                value,
+            );
+        }
+        if let Some(value) = self
+            .reset
+            .as_deref()
+            .and_then(|r| HeaderValue::from_str(r).ok())
+        {
+            headers.insert(HeaderName::from_static("x-gantry-budget-reset"), value);
+        }
+    }
+}
+
+/// One budget a caller counts against, with what it has spent and holds now.
+struct BudgetNow {
+    of: &'static str,
+    whose: String,
+    usd: f64,
+    per: String,
+    spent: f64,
+    reserved: f64,
+    remaining: f64,
+    resets: Option<String>,
+    shadow: bool,
+}
+
+/// Each budget among `applied`, read now from the counters every gateway on the store shares.
+async fn budgets_now(state: &AppState, applied: &[gantry_core::policy::Applied]) -> Vec<BudgetNow> {
+    let now = gantry_core::audit::timestamp();
+    let mut out = Vec::new();
+    for a in applied {
+        let gantry_core::policy::Limit::Budget(budget) = a.limit else {
+            continue;
+        };
+        let (spent, reserved) = state
+            .spend
+            .spent_now(&a.scope, budget.per)
+            .await
+            .unwrap_or_default();
+        out.push(BudgetNow {
+            of: a.of,
+            whose: a.whose.clone(),
+            usd: budget.usd,
+            per: budget.per.word(),
+            spent,
+            reserved,
+            remaining: budget.usd - spent - reserved,
+            resets: (!budget.per.sliding).then(|| budget.per.resets(&budget.per.label(&now))),
+            shadow: a.shadow.is_some(),
+        });
+    }
+    out
+}
+
+/// `GET /v1/gantry/me`: who the caller's key is and what each budget it counts against has left, for a status line
+/// or `gantry budget status`. Any key may ask about itself and only itself. `?model=` adds the budgets of that
+/// model. It reaches no provider, costs nothing and writes no audit record: a status line asks every few seconds.
+async fn me(State(state): State<AppState>, request: Request) -> Response {
+    let decision = id::decision_id();
+    let version = state.version();
+    // The request's body is never read: only its head is kept across the waits below.
+    let (parts, _) = request.into_parts();
+    let outcome = async {
+        let Some(policy) = &version.policy else {
+            return Err(unknown_route());
+        };
+        let key = caller_key(&parts.headers)?;
+        let client_ip = client_ip(policy, parts.extensions.get::<ClientAddr>(), &parts.headers);
+        let minted = std::sync::OnceLock::new();
+        let mut seen = Seen::default();
+        let path = parts.uri.path();
+        let (person, _) =
+            identify(&state, policy, key, path, client_ip, &minted, &mut seen).await?;
+        let rule = policy.rule_for(person).ok_or_else(|| no_rule(person))?;
+        let model = gantry_console::Form::parse(parts.uri.query().unwrap_or_default())
+            .get("model")
+            .to_string();
+        let applied = policy.applied(
+            person,
+            rule,
+            gantry_core::policy::Context {
+                sent: &model,
+                model: &model,
+                customer: person.customer.as_deref(),
+                tags: &person.tags,
+            },
+        );
+        let budgets = budgets_now(&state, &applied).await;
+        let least = budgets
+            .iter()
+            .filter(|b| !b.shadow)
+            .min_by(|a, b| a.remaining.total_cmp(&b.remaining));
+        let rows: Vec<serde_json::Value> = budgets
+            .iter()
+            .map(|b| {
+                serde_json::json!({
+                    "of": b.of,
+                    "whose": b.whose,
+                    "usd": b.usd,
+                    "per": b.per,
+                    "spent_usd": b.spent,
+                    "reserved_usd": b.reserved,
+                    "remaining_usd": b.remaining.max(0.0),
+                    "resets": b.resets,
+                    "shadow": b.shadow,
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({
+            "name": person.name,
+            "team": person.team,
+            "key": person.key,
+            "rule": rule.name,
+            "remaining_usd": least.map(|b| b.remaining.max(0.0)),
+            "resets": least.and_then(|b| b.resets.clone()),
+            "budgets": rows,
+        }))
+    }
+    .await;
+    match outcome {
+        Ok(body) => admin::json_response(StatusCode::OK, &body),
+        Err(refusal) => refusal.respond(&decision, false),
     }
 }
 
@@ -4958,6 +5211,7 @@ async fn guarded(
     decision: &str,
     mut parts: Parts,
     bytes: Bytes,
+    calls: &mut Vec<(String, Duration)>,
 ) -> (Result<(Parts, Bytes), Refusal>, Vec<guard::AuditEntry>) {
     let unreadable = |why: String| {
         Refusal::new(
@@ -5034,7 +5288,24 @@ async fn guarded(
         original = Some(value);
         serde_json::json!({ "input": texts })
     };
+    // One call, one child span: the built-in detectors together (they share one scan), then each webhook.
+    let mut called = |name: &str, since: Instant, at: u64| {
+        calls.push((name.to_string(), since.elapsed()));
+        if let Some(tracer) = &state.tracer {
+            tracer.child(
+                decision,
+                &format!("guardrail {name}"),
+                at,
+                &[("gantry.guardrail", name)],
+            );
+        }
+    };
+    let (since, at) = (Instant::now(), traces::now_ns());
+    let local = guards.iter().any(|g| g.on.request && g.local());
     let mut verdict = guard::check(value, guards);
+    if local {
+        called("builtin", since, at);
+    }
     let (person, team) = seen
         .person
         .map_or(("", ""), |p| (p.name.as_str(), p.team.as_str()));
@@ -5047,7 +5318,9 @@ async fn guarded(
         }
         let sent =
             guard::WebhookRequest::new(decision, person, team, parts.uri.path(), &verdict.body);
+        let (since, at) = (Instant::now(), traces::now_ns());
         let answer = ask(state, guardrail.action, hook, &sent).await;
+        called(&guardrail.name, since, at);
         if let Some(cause) = verdict.merge_answer(guardrail, &sent, answer) {
             eprintln!("gantry: decision {decision}: {cause}");
         }
@@ -6167,6 +6440,11 @@ async fn send(
     decision: &str,
 ) -> Result<Response, Refusal> {
     let plan = parts.extensions.remove::<Plan>();
+    let mut stages = parts
+        .extensions
+        .remove::<stages::Stages>()
+        .unwrap_or_default();
+    let budget_left = parts.extensions.remove::<BudgetLeft>();
     let answer_check = parts.extensions.remove::<AnswerCheck>();
     let turn = parts.extensions.remove::<events::Carry>();
     let mut creator = parts.extensions.remove::<batch::Creator>();
@@ -6297,6 +6575,7 @@ async fn send(
         bytes: &bytes,
         route: &route,
         plan: plan.as_ref(),
+        decision,
     };
     let mut tried = try_chain
         .run(&chain, &mut attempts, &mut sent, &mut admitted)
@@ -6341,7 +6620,10 @@ async fn send(
         served,
         busy,
         view,
+        connect,
+        first_byte,
     } = tried;
+    (stages.connect, stages.first_byte) = (connect, first_byte);
     // An answer from a provider of the other API is not kept in the cache: a hit is handed back as the first
     // deployment's provider answers.
     if let (Some(admitted), Some(_)) = (admitted.as_mut(), &view) {
@@ -6396,6 +6678,7 @@ async fn send(
             if let Some(creator) = creator.as_mut() {
                 creator.defer(&mut admitted);
             }
+            admitted.staged(stages.clone());
             spend::Metered::wrap(response, admitted)
         }
         None => response,
@@ -6446,9 +6729,13 @@ async fn send(
     state
         .metrics
         .first_byte(&version.providers[served].name, arrived.elapsed());
-    if let Ok(value) =
-        HeaderValue::from_str(&format!("gantry;dur={:.3}", own.as_secs_f64() * 1000.0))
-    {
+    state.metrics.stages(&stages);
+    // The total first, as before, then each stage: any browser's devtools and `curl -i` read them.
+    if let Ok(value) = HeaderValue::from_str(&format!(
+        "gantry;dur={:.3}, {}",
+        own.as_secs_f64() * 1000.0,
+        stages.server_timing()
+    )) {
         // Appended, not inserted: the provider's own timings stay.
         response
             .headers_mut()
@@ -6458,6 +6745,9 @@ async fn send(
         Some(price) => with_cost(response, &price, bytes.len()).await,
         None => response,
     };
+    if let Some(left) = budget_left {
+        left.write(response.headers_mut());
+    }
     if let Some(check) = answer_check {
         response.extensions_mut().insert(check);
     }
@@ -6754,6 +7044,7 @@ struct Tries<'a> {
     bytes: &'a Bytes,
     route: &'a str,
     plan: Option<&'a Plan>,
+    decision: &'a str,
 }
 
 /// The last outcome of a chain, which deployment gave it (provider position and model), for an alias the count
@@ -6764,6 +7055,9 @@ struct Tried {
     served: (usize, String),
     busy: Option<alias::Busy>,
     view: Option<Plan>,
+    /// How long the attempt that gave it took to get a connection, and to the answer's headers.
+    connect: Option<Duration>,
+    first_byte: Option<Duration>,
 }
 
 impl Tries<'_> {
@@ -6834,6 +7128,8 @@ impl Tries<'_> {
                 .unwrap_or_default(),
             busy: None,
             view: None,
+            connect: None,
+            first_byte: None,
         };
         let caller = self
             .plan
@@ -6885,8 +7181,17 @@ impl Tries<'_> {
                             provider.least_used_key,
                         )
                     };
-                    let request =
+                    let mut request =
                         outbound(provider, self.parts, &bytes, &route, plan, &hop.model, key)?;
+                    // The attempt's own span, which the provider's span hangs off.
+                    let tracer = self.state.tracer.as_ref();
+                    let span = tracer.and_then(|t| t.attempt(self.decision));
+                    if let (Some((_, header)), Some(true)) =
+                        (&span, tracer.map(|t| t.to_provider()))
+                    {
+                        request.headers_mut().insert("traceparent", header.clone());
+                    }
+                    let began = traces::now_ns();
                     let started = Instant::now();
                     sent.get_or_insert(started);
                     let tokens = u64::try_from(bytes.len() / 4).unwrap_or(u64::MAX);
@@ -6895,7 +7200,9 @@ impl Tries<'_> {
                     if let Some(admitted) = admitted.as_mut() {
                         admitted.forwarded(true);
                     }
-                    let outcome = attempt_within(self.state, provider, request, &limits).await;
+                    let (outcome, connect) =
+                        attempt_timed(self.state, provider, request, &limits).await;
+                    let first_byte = started.elapsed();
                     // A request that never reached an answer is not charged; an answer is settled when it is passed on.
                     if let Some(admitted) = admitted.as_mut() {
                         admitted.forwarded(outcome.is_ok());
@@ -6915,7 +7222,46 @@ impl Tries<'_> {
                     };
                     self.state
                         .metrics
-                        .attempted(&provider.name, &outcome_word, started.elapsed());
+                        .attempted(&provider.name, &outcome_word, first_byte);
+                    if let (Some(tracer), Some((span, _))) = (tracer, span) {
+                        let path = self.parts.uri.path();
+                        let operation = traces::operation(path);
+                        let mut attributes = serde_json::Map::new();
+                        let mut set = |k: &str, v: serde_json::Value| {
+                            attributes.insert(k.to_string(), v);
+                        };
+                        if let Some(operation) = operation {
+                            set("gen_ai.operation.name", operation.into());
+                        }
+                        set("gen_ai.provider.name", provider.kind.word().into());
+                        set("gen_ai.request.model", hop.model.as_str().into());
+                        set("gantry.provider", provider.name.as_str().into());
+                        set("gantry.deployment", label.as_str().into());
+                        set("gantry.attempt", (attempts.len() + 1).into());
+                        if let Some(host) = provider
+                            .url
+                            .parse::<Uri>()
+                            .ok()
+                            .and_then(|u| u.host().map(str::to_string))
+                        {
+                            set("server.address", host.into());
+                        }
+                        match &outcome {
+                            Ok(response) => {
+                                set(
+                                    "http.response.status_code",
+                                    response.status().as_u16().into(),
+                                );
+                            }
+                            Err(refusal) => set("error.type", refusal.code.into()),
+                        }
+                        // The GenAI conventions name a client span by its operation and model.
+                        let name = match (operation, hop.model.is_empty()) {
+                            (Some(operation), false) => format!("{operation} {}", hop.model),
+                            _ => format!("attempt {who}"),
+                        };
+                        tracer.attempted(self.decision, span, &name, began, attributes, again);
+                    }
                     let key_id = key.and_then(|k| ids.get(k).cloned());
                     attempts.push(Attempt {
                         who: who.clone(),
@@ -6974,6 +7320,8 @@ impl Tries<'_> {
                         served: (hop.provider, hop.model.clone()),
                         busy,
                         view: view.clone(),
+                        connect,
+                        first_byte: Some(first_byte),
                     };
                     if !again {
                         break 'providers;
@@ -7883,11 +8231,25 @@ async fn attempt_within(
     request: axum::http::Request<Body>,
     limits: &Limits,
 ) -> Result<Response, Refusal> {
+    attempt_timed(state, provider, request, limits).await.0
+}
+
+/// [`attempt_within`], with how long the request waited for its connection: a new one's connect and TLS
+/// handshake, near zero for one reused from the pool. `None` when it never got one.
+async fn attempt_timed(
+    state: &AppState,
+    provider: &Upstream,
+    mut request: axum::http::Request<Body>,
+    limits: &Limits,
+) -> (Result<Response, Refusal>, Option<Duration>) {
     let upstream = &provider.url;
+    let started = Instant::now();
+    let captured = hyper_util::client::legacy::connect::capture_connection(&mut request);
     let outcome = match &provider.proxy {
         None => {
             let client = state.client_for(limits.connect);
-            tokio::time::timeout(limits.first_byte, client.request(request)).await
+            let sent = client.request(request);
+            tokio::time::timeout(limits.first_byte, connected(sent, captured, started)).await
         }
         Some(proxy) => {
             let client = state
@@ -7897,10 +8259,12 @@ async fn attempt_within(
                 .entry((limits.connect, proxy.id.clone()))
                 .or_insert_with(|| proxied_with(limits.connect, proxy))
                 .clone();
-            tokio::time::timeout(limits.first_byte, client.request(request)).await
+            let sent = client.request(request);
+            tokio::time::timeout(limits.first_byte, connected(sent, captured, started)).await
         }
     };
-    match outcome {
+    let connect = outcome.as_ref().ok().and_then(|(_, connect)| *connect);
+    let outcome = match outcome.map(|(outcome, _)| outcome) {
         Ok(Ok(response)) => Ok(response.map(Body::new)),
         Ok(Err(err)) => {
             // The detail is for the admin's log. The caller cannot act on it and must not see addresses.
@@ -7928,6 +8292,31 @@ async fn attempt_within(
                     "The provider did not start answering within {wait}. Try again. If it keeps happening, tell your Gantry admin."
                 ),
             ))
+        }
+    };
+    (outcome, connect)
+}
+
+/// Waits for `sent`, noting how long after `started` its connection was ready.
+async fn connected<F: Future>(
+    sent: F,
+    mut captured: hyper_util::client::legacy::connect::CaptureConnection,
+    started: Instant,
+) -> (F::Output, Option<Duration>) {
+    tokio::pin!(sent);
+    let wait = captured.wait_for_connection_metadata();
+    tokio::pin!(wait);
+    let (mut waiting, mut at) = (true, None);
+    loop {
+        tokio::select! {
+            biased;
+            outcome = &mut sent => return (outcome, at),
+            found = &mut wait, if waiting => {
+                waiting = false;
+                if found.is_some() {
+                    at = Some(started.elapsed());
+                }
+            }
         }
     }
 }

@@ -105,6 +105,42 @@ one repository. How a release is made: RELEASING.md.
 - Every request record and usage record carries `session`, with or without an events guardrail, read the same
   way. A request that names its session is placed without a second read of its body.
 
+### Operator visibility
+
+- Time by stage. Each forwarded answer's `Server-Timing` header names Gantry's time in `auth`, `read`, `policy`,
+  `guardrails`, `cache`, `audit`, `connect` and `first-byte` after the total. The usage record carries `stages_ms`
+  (with `stream`) and `guardrail_ms`, and a request's detail in the console's request log shows them. New
+  histograms: `gantry_stage_seconds{stage}` and `gantry_guardrail_seconds{guardrail}`. The request index gains a
+  column for it (`insights` migration 2).
+- More metrics: `gantry_unpriced_requests_total{model}`, `gantry_budget_reserved_usd`,
+  `gantry_deployment_rate_headroom_ratio{deployment}`, `gantry_mcp_calls_total{server,outcome}` and, with
+  `GANTRY_METRICS_DIMENSIONS=env,app`, `gantry_requests_by_dimension_total` from `x-gantry-dim-<name>` request
+  headers (values cleaned and capped at 100 a dimension). `GANTRY_METRICS_PUSH_URL` pushes the metrics to a
+  Prometheus Pushgateway.
+- Traces go out as OTLP `http/json`, `http/protobuf` or `grpc` (`OTEL_EXPORTER_OTLP_PROTOCOL`). A request's span
+  has a child span per attempt at a provider, named by the OpenTelemetry GenAI conventions (`chat gpt-4o`, with
+  `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`), and per guardrail call. The provider's
+  `traceparent` names the attempt's span. `GANTRY_TRACE_PROPAGATION` (`caller`, `provider`, `none`) chooses whether
+  Gantry joins the caller's trace and whether it sends trace context to the provider. A protocol other than the
+  three stops the start; `grpc` no longer does.
+- Deployment health. `GET /admin/deployments` and the console's Deployments page show each alias deployment's state
+  (up, cooling, down), last probe, limits and load, latency p50 and p90, error rate and rate headroom, and each
+  provider's key pool. With a store every gateway publishes its report and reads the others' (`gantry_routing`
+  migration 4), so every replica shows the same.
+- `POST /admin/providers/<name>/test` and a **Test connection** button test a provider with its model list, which
+  bills nothing, and record the outcome as `test_provider`.
+- The console rotates a key from its page, as `gantry key rotate` does: the new key is shown once and the old one
+  ends after the grace.
+- `gantry usage` prints spend, tokens and requests by team, person and model from `GET /admin/usage`, with
+  `--since`, `--group-by` and `--csv`.
+- A caller's own budget: `GET /v1/gantry/me`, `gantry budget status` (`--short` for a status line, with an example
+  script for Claude Code's `statusLine` setting), and, on a rule with `budget_headers: true`,
+  `x-gantry-budget-remaining-usd` and `x-gantry-budget-reset` on each answer.
+- `GET /admin/usage?format=focus` writes usage as a FOCUS 1.2 cost and usage file, one line per day, organization,
+  team, provider and model.
+- Docs: the comparison with Bifrost's published overhead now links its benchmark pages with the date read and no
+  longer calls its figures means, which those pages do not say.
+
 ### Plugin events: guardrail contract v2
 
 - A new guardrail type, `events`, sends an outside service the whole conversation as typed events: `system_prompt`,

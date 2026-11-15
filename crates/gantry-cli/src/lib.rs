@@ -69,6 +69,16 @@ Commands:
         Raise the budgets of a scope at once, as an admin. Every raise and decision is in the audit log.
         The budget commands call a running gateway: --url, GANTRY_URL or the saved login, with the key in
         GANTRY_ADMIN_KEY or the saved login key.
+  usage [--since <7d|24h|2026-11-01>] [--group-by <team|person|model|provider|key|tag|org|customer|day|hour>]
+        [--csv] [--url <gantry url>]
+        Spend, tokens and requests of a running gateway (every gateway on a store), as tables by team, by person
+        and by model, or by the one --group-by names. --since is how far back (30d unless given) or a UTC date.
+        --csv prints one CSV in place of the tables. Goes through the admin API (GET /admin/usage), with a key
+        whose role may see spend.
+  budget status [--model <model>] [--short] [--url <gantry url>]
+        What each budget your own key counts against has left and when it resets (GET /v1/gantry/me), with the
+        key in GANTRY_KEY or the saved login. --model adds the budgets of that model. --short prints one line,
+        for a status line: `$9.50 left (resets 2026-12-01 00:00 UTC)`.
   key prune [--keys <file>]
         Remove the entries whose expiry has passed, such as old `gantry login` keys. Each is removed
         as `DELETE /admin/keys` removes one, safe while Gantry runs; every other line is kept.
@@ -449,6 +459,30 @@ pub async fn run(args: &[String]) -> ExitCode {
             ),
             _ => None,
         },
+        ["usage", rest @ ..] => {
+            let csv = rest.contains(&"--csv");
+            let rest: Vec<&str> = rest.iter().copied().filter(|a| *a != "--csv").collect();
+            match options(&rest, &["--since", "--group-by", "--url"]) {
+                Some((positional, named)) if positional.is_empty() => Some(
+                    usage(&named, csv)
+                        .await
+                        .map_or_else(fail, |()| ExitCode::SUCCESS),
+                ),
+                _ => None,
+            }
+        }
+        ["budget", "status", rest @ ..] => {
+            let short = rest.contains(&"--short");
+            let rest: Vec<&str> = rest.iter().copied().filter(|a| *a != "--short").collect();
+            match options(&rest, &["--model", "--url"]) {
+                Some((positional, named)) if positional.is_empty() => Some(
+                    budget_status(&named, short)
+                        .await
+                        .map_or_else(fail, |()| ExitCode::SUCCESS),
+                ),
+                _ => None,
+            }
+        }
         ["store", "import", rest @ ..] => match options(rest, &["--keys", "--policy"]) {
             Some((positional, named)) if positional.is_empty() && named.contains_key("--keys") => {
                 Some(
@@ -628,6 +662,9 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["explain", ..] => Some(
                 "gantry explain <policy> --key <hash prefix or name> --model <model> [--customer <name>] [--tags <a,b>] [--keys <file>]",
             ),
+            ["budget", "status", ..] => {
+                Some("gantry budget status [--model <model>] [--short] [--url <gantry url>]")
+            }
             ["budget", ..] => Some(
                 "gantry budget raise request --usd <n> --until <date> --reason <text> [--scope team|person|key] | list | approve <id> [--usd <n>] [--until <date>] | reject <id> | add --scope <team:payments> --usd <n> --until <date> --reason <text>, each with [--url <gantry url>]",
             ),
@@ -643,6 +680,9 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["key", "revoke", ..] => {
                 Some("gantry key revoke <hash prefix> [--keys <file>] [--policy <file>]")
             }
+            ["usage", ..] => Some(
+                "gantry usage [--since <7d|24h|2026-11-01>] [--group-by <team|person|model|provider|key|tag|org|customer|day|hour>] [--csv] [--url <gantry url>]",
+            ),
             ["store", ..] => Some("gantry store import --keys <file> [--policy <file>]"),
             ["prices", ..] => Some("gantry prices <model> [--policy <file>]"),
             ["import", ..] => Some(
@@ -2135,6 +2175,239 @@ async fn budget_raise(
         Some(list) if list.is_empty() => println!("No budget raises."),
         Some(list) => list.iter().for_each(line),
         None => line(&answer),
+    }
+    Ok(())
+}
+
+/// `--since` as the `from` of a usage query: a UTC date as given, or now less a span such as `7d`, `24h` or `30m`.
+fn since(text: &str, now: std::time::SystemTime) -> Result<String, String> {
+    let wrong = || {
+        format!(
+            "--since is \"{text}\". Write how far back, such as 7d, 24h or 30m, or a UTC date such as 2026-11-01."
+        )
+    };
+    let date = text.len() == 10
+        && text.bytes().enumerate().all(|(i, b)| match i {
+            4 | 7 => b == b'-',
+            _ => b.is_ascii_digit(),
+        });
+    if date {
+        return Ok(text.to_string());
+    }
+    let (number, unit) = text.split_at(text.len().saturating_sub(1));
+    let n: u64 = number.parse().map_err(|_| wrong())?;
+    let seconds = match unit {
+        "m" => n.saturating_mul(60),
+        "h" => n.saturating_mul(3600),
+        "d" => n.saturating_mul(86_400),
+        _ => return Err(wrong()),
+    };
+    let from = now
+        .checked_sub(std::time::Duration::from_secs(seconds))
+        .ok_or_else(wrong)?;
+    Ok(audit::rfc3339(from))
+}
+
+/// A CSV field, quoted, and kept from reading as a formula in a spreadsheet, as the admin API writes one.
+fn csv_field(text: &str) -> String {
+    let text = if text.starts_with(['=', '+', '-', '@']) {
+        format!("'{text}")
+    } else {
+        text.to_string()
+    };
+    format!("\"{}\"", text.replace('"', "\"\""))
+}
+
+/// The columns of a usage table: the field of the admin API's answer, and its heading.
+const USAGE_COLUMNS: [(&str, &str); 9] = [
+    ("requests", "requests"),
+    ("refused", "refused"),
+    ("errors", "errors"),
+    ("input_tokens", "tokens in"),
+    ("output_tokens", "tokens out"),
+    ("total_tokens", "tokens"),
+    ("spend_usd", "spend USD"),
+    ("latency_p50_ms", "p50 ms"),
+    ("latency_p95_ms", "p95 ms"),
+];
+
+/// One table of a usage answer, columns aligned: the group, then its numbers.
+fn usage_table(group: &str, answer: &serde_json::Value) -> String {
+    let cell = |row: &serde_json::Value, field: &str| match &row[field] {
+        serde_json::Value::Null => "-".to_string(),
+        serde_json::Value::String(text) => text.clone(),
+        value if field == "spend_usd" => format!("{:.4}", value.as_f64().unwrap_or(0.0)),
+        value => value.to_string(),
+    };
+    let mut rows: Vec<Vec<String>> = vec![
+        std::iter::once(group.to_string())
+            .chain(
+                USAGE_COLUMNS
+                    .iter()
+                    .map(|(_, heading)| (*heading).to_string()),
+            )
+            .collect(),
+    ];
+    let line = |name: String, row: &serde_json::Value| -> Vec<String> {
+        std::iter::once(name)
+            .chain(USAGE_COLUMNS.iter().map(|(field, _)| cell(row, field)))
+            .collect()
+    };
+    for row in answer["groups"].as_array().into_iter().flatten() {
+        let name = match row[group].as_str() {
+            Some("") | None => "(none)".to_string(),
+            Some(name) => name.to_string(),
+        };
+        rows.push(line(name, row));
+    }
+    rows.push(line("total".to_string(), &answer["totals"]));
+    let widths: Vec<usize> = (0..rows[0].len())
+        .map(|i| rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0))
+        .collect();
+    let mut out = String::new();
+    for row in &rows {
+        let cells: Vec<String> = row
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| {
+                // The group reads from the left, numbers line up on the right.
+                if i == 0 {
+                    format!("{cell:<width$}", width = widths[i])
+                } else {
+                    format!("{cell:>width$}", width = widths[i])
+                }
+            })
+            .collect();
+        out.push_str(cells.join("  ").trim_end());
+        out.push('\n');
+    }
+    out
+}
+
+/// `gantry usage`: `GET /admin/usage` once per group, as tables or one CSV.
+async fn usage(named: &HashMap<&str, &str>, csv: bool) -> Result<(), String> {
+    let from = since(
+        named.get("--since").copied().unwrap_or("30d"),
+        std::time::SystemTime::now(),
+    )?;
+    let groups: Vec<&str> = match named.get("--group-by") {
+        Some(group) => vec![*group],
+        None => vec!["team", "person", "model"],
+    };
+    let mut answers = Vec::new();
+    for group in &groups {
+        let path = format!("/admin/usage?group_by={group}&from={from}");
+        answers.push(admin_call("GET", &path, named, None).await?);
+    }
+    if csv {
+        let fields: Vec<&str> = USAGE_COLUMNS.iter().map(|(field, _)| *field).collect();
+        println!("group_by,value,{}", fields.join(","));
+        for (group, answer) in groups.iter().zip(&answers) {
+            for row in answer["groups"].as_array().into_iter().flatten() {
+                let cells: Vec<String> = fields
+                    .iter()
+                    .map(|field| match &row[*field] {
+                        serde_json::Value::Null => String::new(),
+                        value => value.to_string(),
+                    })
+                    .collect();
+                println!(
+                    "{group},{},{}",
+                    csv_field(row[*group].as_str().unwrap_or_default()),
+                    cells.join(",")
+                );
+            }
+        }
+        return Ok(());
+    }
+    println!(
+        "Usage since {from} (UTC), counted by {}.",
+        answers
+            .first()
+            .and_then(|a| a["counted_by"].as_str())
+            .unwrap_or("the gateway")
+    );
+    for (group, answer) in groups.iter().zip(&answers) {
+        println!("\nBy {group}:\n{}", usage_table(group, answer).trim_end());
+    }
+    Ok(())
+}
+
+/// Dollars as a status line shows them: cents, or four places under a dollar.
+fn dollars(usd: f64) -> String {
+    if usd >= 1.0 || usd == 0.0 {
+        format!("${usd:.2}")
+    } else {
+        format!("${usd:.4}")
+    }
+}
+
+/// `gantry budget status`: what the caller's own key has left, from `GET /v1/gantry/me`.
+async fn budget_status(named: &HashMap<&str, &str>, short: bool) -> Result<(), String> {
+    let saved = credentials()?.unwrap_or_default();
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let url = named
+        .get("--url")
+        .map(|u| u.to_string())
+        .or_else(|| env("GANTRY_URL"))
+        .or_else(|| saved.get("url").cloned())
+        .ok_or("name the gateway with --url, GANTRY_URL or `gantry login`.")?;
+    let url = gantry_console::cli::gateway(&url)?;
+    let key = env("GANTRY_KEY")
+        .or_else(|| saved.get("key").cloned())
+        .ok_or("put your Gantry key in GANTRY_KEY, or run `gantry login`.")?;
+    let model = named
+        .get("--model")
+        .map(|m| format!("?model={m}"))
+        .unwrap_or_default();
+    let (status, answer) =
+        gantry_console::cli::call("GET", &format!("{url}/v1/gantry/me{model}"), &key, None).await?;
+    if !(200..300).contains(&status) {
+        return Err(answer["error"]["message"]
+            .as_str()
+            .map_or_else(|| format!("Gantry answered HTTP {status}."), str::to_string));
+    }
+    let resets = |value: &serde_json::Value| {
+        value.as_str().map_or_else(
+            || "a sliding window".to_string(),
+            |at| format!("resets {at}"),
+        )
+    };
+    if short {
+        match answer["remaining_usd"].as_f64() {
+            Some(left) => println!("{} left ({})", dollars(left), resets(&answer["resets"])),
+            None => println!("no budget"),
+        }
+        return Ok(());
+    }
+    println!(
+        "{} (team {}), rule {}",
+        answer["name"].as_str().unwrap_or(""),
+        answer["team"].as_str().unwrap_or(""),
+        answer["rule"].as_str().unwrap_or("")
+    );
+    let budgets = answer["budgets"].as_array().cloned().unwrap_or_default();
+    if budgets.is_empty() {
+        println!("No budget applies to this key.");
+        return Ok(());
+    }
+    for b in &budgets {
+        let usd = |field: &str| dollars(b[field].as_f64().unwrap_or(0.0));
+        println!(
+            "  {}: {} left of {} a {}, {} spent, {} held by requests in flight, {}{}",
+            b["whose"].as_str().unwrap_or(""),
+            usd("remaining_usd"),
+            usd("usd"),
+            b["per"].as_str().unwrap_or(""),
+            usd("spent_usd"),
+            usd("reserved_usd"),
+            resets(&b["resets"]),
+            if b["shadow"] == true {
+                " (recorded only, refuses nothing)"
+            } else {
+                ""
+            }
+        );
     }
     Ok(())
 }

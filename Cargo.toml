@@ -47,7 +47,9 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bun
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 # Splitting a WebSocket into its two directions to relay both at once. Already in the build through tokio-tungstenite.
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "webpki-tokio", "tls12"] }
+# `http2`: OTLP/gRPC trace export is HTTP/2 from the first byte (traces.rs). No new crate: h2 is already in the build
+# through axum and hyper-util.
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "ring", "webpki-tokio", "tls12"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

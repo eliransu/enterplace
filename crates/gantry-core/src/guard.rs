@@ -318,7 +318,7 @@ pub struct Guardrail {
 
 impl Guardrail {
     /// Whether it runs inside Gantry, with no call out.
-    fn local(&self) -> bool {
+    pub fn local(&self) -> bool {
         !matches!(
             self.check,
             Check::Webhook(_) | Check::Transform(_) | Check::Events(_)

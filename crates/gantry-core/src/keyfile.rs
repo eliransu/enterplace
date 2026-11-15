@@ -969,6 +969,87 @@ fn existing_names(text: &str) -> impl Iterator<Item = &str> {
         .map(str::trim)
 }
 
+/// How long the old key keeps working after a rotation: `48h`, `30m`, `7d`, `90s` or `0`. At most 90 days.
+pub fn grace(text: &str) -> Result<std::time::Duration, String> {
+    let wrong = || {
+        format!(
+            "grace is \"{text}\". Write how long the old key keeps working, such as 48h, 30m or 7d (at most 90d), or 0 to end it now"
+        )
+    };
+    let text = text.trim();
+    if text == "0" {
+        return Ok(std::time::Duration::ZERO);
+    }
+    let (number, unit) = text.split_at(text.len().saturating_sub(1));
+    let n: u64 = number.parse().map_err(|_| wrong())?;
+    let seconds = match unit {
+        "s" => n,
+        "m" => n.saturating_mul(60),
+        "h" => n.saturating_mul(3600),
+        "d" => n.saturating_mul(86_400),
+        _ => return Err(wrong()),
+    };
+    if seconds > 90 * 86_400 {
+        return Err(wrong());
+    }
+    Ok(std::time::Duration::from_secs(seconds))
+}
+
+/// When a key rotated now stops working, given the grace: the grace's end, or the key's own expiry when that is
+/// earlier. A rotation never lengthens a key's life.
+pub fn rotation_end(old: &crate::config::KeyEntry, wait: std::time::Duration) -> String {
+    let at = crate::audit::rfc3339(std::time::SystemTime::now() + wait);
+    match &old.expires {
+        Some(expires) if crate::policy::expiry_passed(expires, &at) => expires.clone(),
+        _ => format!("{}Z", &at[..19]),
+    }
+}
+
+/// Rotates a key: adds `key` with every setting of `old`, then ends `old` at `until` and marks it replaced.
+/// Returns the first 8 hex characters of the new key's hash. If the old entry cannot be ended, the new key is
+/// taken out again, so nobody holds a key the record does not explain.
+pub fn rotate(
+    keys: &Path,
+    old: &crate::config::KeyEntry,
+    key: &str,
+    until: &str,
+) -> Result<String, String> {
+    let attributes = Attributes {
+        admin: old.admin,
+        expires: old.expires.clone(),
+        budget: old.budget,
+        models: old.models.clone(),
+        tpm: old.tpm,
+        org: old.org.clone(),
+        customer: old.customer.clone(),
+        tags: old.tags.clone(),
+        parallel: old.parallel,
+        role: old.role.clone(),
+        options: crate::policy::KeyOptions {
+            replaced_by: None,
+            ..old.options.clone()
+        },
+    };
+    let prefix = crate::id::sha256_hex(key.as_bytes())[..8].to_string();
+    add_with(&old.name, &old.team, key, &attributes, keys)?;
+    let ended = update(keys, &old.sha256, &|entry| {
+        entry.expires = Some(until.to_string());
+        entry.options.replaced_by = Some(prefix.clone());
+    });
+    match ended {
+        Ok(Some(_)) => Ok(prefix),
+        other => {
+            let _ = revoke(keys, &crate::id::sha256_hex(key.as_bytes()));
+            Err(match other {
+                Err(err) => err,
+                _ => {
+                    "the old key was removed by someone else meanwhile. No new key was made.".into()
+                }
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

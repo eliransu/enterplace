@@ -747,6 +747,9 @@ pub struct Limits {
     pub prompt_cache: bool,
     /// Hold a streamed answer whole so the answer guardrails check it before the caller sees any of it.
     pub buffer_stream: bool,
+    /// Tell the caller what its tightest budget has left, in `x-gantry-budget-remaining-usd` and
+    /// `x-gantry-budget-reset` on each answer.
+    pub budget_headers: bool,
     /// Check a streamed answer every this many characters, letting through only what was checked.
     pub check_stream_every: Option<u32>,
     /// Whether a caller may send their own provider key in `x-gantry-provider-key`.

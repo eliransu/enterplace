@@ -573,6 +573,20 @@ impl Pool {
         out
     }
 
+    /// The share of its rate limits each deployment's provider said was left, while that is still believed.
+    pub(crate) fn headrooms(&self) -> Vec<(String, f64)> {
+        let now = Instant::now();
+        let mut out: Vec<_> = locked(&self.deployments)
+            .iter()
+            .filter_map(|(name, d)| {
+                let (left, at) = d.headroom?;
+                (now.duration_since(at) < HEADROOM_FOR).then(|| (name.clone(), left))
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     /// A deployment answered: its circuit closes and its backoff starts over.
     pub(crate) fn answered(&self, deployment: &str) {
         if let Some(state) = locked(&self.deployments).get_mut(deployment) {
@@ -679,6 +693,67 @@ impl Pool {
             keys.get(&format!("{provider}/{other}"))
                 .is_none_or(|k| k.out_until.is_none_or(|until| until <= now))
         })
+    }
+
+    /// What this gateway knows of each deployment and pool key now, as the JSON `health.rs` merges across gateways:
+    /// `deployments` by label and `keys` by `provider/fingerprint`.
+    pub(crate) fn report(&self) -> serde_json::Value {
+        use serde_json::json;
+        let now = Instant::now();
+        let minute = minute_now();
+        let left = |until: Option<Instant>| {
+            until
+                .and_then(|t| t.checked_duration_since(now))
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        };
+        let probes = locked(&self.probes);
+        let mut deployments = serde_json::Map::new();
+        for (name, d) in locked(&self.deployments).iter() {
+            let (requests, tokens) = if d.minute.0 == minute {
+                (d.minute.1, d.minute.2)
+            } else {
+                (0, 0)
+            };
+            deployments.insert(
+                name.clone(),
+                json!({
+                    "cooling_ms": left(d.cool_until),
+                    "cooldowns": d.cooldowns,
+                    "errors": d.errors,
+                    "latency": d.latency,
+                    "in_flight": d.busy.load(Ordering::Relaxed),
+                    "requests": requests,
+                    "tokens": tokens,
+                    "headroom": d.headroom.filter(|(_, at)| now.duration_since(*at) < HEADROOM_FOR).map(|(left, _)| left),
+                }),
+            );
+        }
+        for (name, probe) in probes.iter() {
+            // A probe another gateway holds the lease of, or one not answered yet, says nothing here.
+            if probe.outcome == "sent" || probe.outcome == "probed by another gateway" {
+                continue;
+            }
+            if let Some(entry) = deployments
+                .entry(name.clone())
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+            {
+                entry.insert(
+                    "probe".into(),
+                    json!({ "up": probe.up, "outcome": probe.outcome, "time": probe.time }),
+                );
+            }
+        }
+        let keys: serde_json::Map<String, serde_json::Value> = locked(&self.keys)
+            .iter()
+            .map(|(name, k)| {
+                (
+                    name.clone(),
+                    json!({ "resting_ms": left(k.out_until), "uses": k.uses }),
+                )
+            })
+            .collect();
+        json!({ "deployments": deployments, "keys": keys })
     }
 
     /// The store deployments' state is shared through, when there is one.

@@ -212,6 +212,41 @@ Both answer with the rules passed over and why, the rule that decides (with the 
 
 The admin API adds what each budget has spent and holds now, and when it starts again; it needs the `see_spend` [permission](/governance/policy/#console-roles). A refusal by any limit names the same `applied` object in its decision record.
 
+## Budget headers
+
+A developer sees what is left without asking an admin, two ways.
+
+`budget_headers: true` on a rule adds two headers to each answer under it:
+
+```yaml
+rules:
+  - name: payments
+    principals: { team: payments }
+    models: [gpt-4o-mini]
+    budget: { usd: 500, per: month }
+    budget_headers: true
+```
+
+```text
+x-gantry-budget-remaining-usd: 412.37
+x-gantry-budget-reset: 2026-12-01 00:00 UTC
+```
+
+The figure is the budget with the least left of every budget the request counts against (its rule's, its key's, and each `limits:` entry that applies), after this request's own reservation: its limit less what was spent and what requests in flight hold. A budget in its shadow period refuses nothing and is left out. A sliding window has no reset, so that header is absent. With a store each budget is one read of it, which is why the headers are a choice.
+
+`GET /v1/gantry/me` answers any key about itself: its name, team, rule, and every budget it counts against with what was spent, what is held, what is left and when it resets. `?model=<model>` adds the budgets of that model. It reaches no provider, costs nothing and writes no audit record.
+
+```bash
+curl http://127.0.0.1:8080/v1/gantry/me -H "Authorization: Bearer $GANTRY_KEY"
+```
+
+```json title="200"
+{"name":"maya.cohen","team":"payments","key":"1a2b3c4d","rule":"payments","remaining_usd":412.37,"resets":"2026-12-01 00:00 UTC",
+ "budgets":[{"of":"rule","whose":"team \"payments\"","usd":500,"per":"month","spent_usd":86.2,"reserved_usd":1.43,"remaining_usd":412.37,"resets":"2026-12-01 00:00 UTC","shadow":false}]}
+```
+
+`gantry budget status` prints the same, and `--short` prints one line for a status line. See [the CLI](/reference/cli/#budget-status) and the [Claude Code status line](/integrations/claude-code/#budget-in-the-status-line).
+
 ## How a budget is counted
 ## How a budget is counted
 
