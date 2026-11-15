@@ -47,11 +47,14 @@ Run these at the repository root, on `main`, with nothing uncommitted.
 
 | Workflow | Result |
 |---|---|
-| `.github/workflows/release.yml` | Checks the tag against Cargo.toml and the dated CHANGELOG section. Builds the linux amd64 and arm64 tarballs twice from scratch and fails unless both builds are the same bytes. Runs the rollback check (the previous tag's binary reads this one's data) and the mixed-version check (the previous tag and this one serve from one Postgres at once, `scripts/mixed_version_check.py`). Packages the Helm chart, pushes it to `oci://ghcr.io/eliransu/charts` and signs it with cosign, keyless. Writes `SHA256SUMS` and SLSA provenance and signs both with `RELEASE_SIGNING_KEY`'s SSH key, verified against `release/allowed_signers`. Adds the tarballs, checksums, provenance and signatures to the GitHub Release `vX.Y.Z`, creating it with the CHANGELOG section as its notes if image.yml has not yet. |
+| `.github/workflows/release.yml` | Checks the tag against Cargo.toml and the dated CHANGELOG section. Builds the linux amd64 and arm64 tarballs twice from scratch and fails unless both builds are the same bytes, and the macOS arm64 and amd64 tarballs once each on macOS runners (no byte-for-byte check on macOS). Every tarball holds the one enterprise binary, the open source edition without a key. Runs the rollback check (the previous tag's binary reads this one's data) and the mixed-version check (the previous tag and this one serve from one Postgres at once, `scripts/mixed_version_check.py`). Packages the Helm chart, pushes it to `oci://ghcr.io/eliransu/charts` and signs it with cosign, keyless. Writes `SHA256SUMS` and SLSA provenance and signs both with `RELEASE_SIGNING_KEY`'s SSH key, verified against `release/allowed_signers`. Adds the tarballs, checksums, provenance and signatures to the GitHub Release `vX.Y.Z`, creating it with the CHANGELOG section as its notes if image.yml has not yet. Renders the Homebrew formula (`packaging/homebrew/render.sh`) and pushes it to `eliransu/homebrew-tap` as `Formula/gantry.rb` with the `HOMEBREW_TAP_TOKEN` secret, or skips that with a notice when the secret is unset. |
 | `.github/workflows/image.yml` | Checks the version against the tag. Builds the image for amd64 and arm64, pushes it to `ghcr.io/eliransu/gantry` tagged `X.Y.Z` and the commit SHA, scans it (`scripts/scan_image.sh`, fails on high or critical), signs it with cosign keyless and attaches its CycloneDX SBOM and SLSA provenance as signed attestations. Then puts the image and its digest at the top of the GitHub Release `vX.Y.Z` (creating it if release.yml has not yet), with `sbom.cdx.json`. |
 | `.github/workflows/codeql.yml` | Not started by the tag: CodeQL on the Rust code and the workflows on every pull request, push to main and weekly. |
 
-Pushes to main keep publishing `latest` and the commit SHA. Production pins `X.Y.Z` or, better, the digest from the
+Pushes to main keep publishing `latest` and the commit SHA. release.yml also replaces the GitHub pre-release `edge` on
+every push to main of eliransu/gantry: the same four signed tarballs, `SHA256SUMS`, provenance and signatures, built
+from that commit (the release and its tag are deleted and made again). `install.sh` installs the latest stable
+release, or `edge` when there is none (`GANTRY_VERSION=edge` or `vX.Y.Z` to choose). Production pins `X.Y.Z` or, better, the digest from the
 release notes.
 
 To check a user's download: `scripts/release.sh verify`, with the release files in `dist/`. To check the image, its
@@ -60,6 +63,17 @@ SBOM and provenance, and the chart: `scripts/verify_release.sh X.Y.Z` (docs: Ope
 Keyless signing needs nothing set up: the workflows' `id-token: write` permission is the identity. The signatures and
 their certificates (which name this repository, the workflow and the tag) are recorded in Sigstore's public
 transparency log. Code scanning results from CodeQL are on for this public repository at no cost.
+
+## Install script and Homebrew
+
+`install.sh` at the repository root (also served at https://gantry.eliran.me/install.sh) downloads the tarball for the
+machine from the GitHub Release, checks `SHA256SUMS.sig` with `ssh-keygen -Y verify` against the release key it
+embeds (the same key as `release/allowed_signers`: change both together), checks the tarball's SHA256 and installs to
+`~/.local/bin`. `scripts/install_check.sh` tests it against a fake signed release on localhost (ci.yml, ubuntu and
+macOS).
+
+The tap needs, once: the public repository `eliransu/homebrew-tap`, and a fine-grained token with contents write on it
+set as the secret `HOMEBREW_TAP_TOKEN` of eliransu/gantry. Then `brew install eliransu/tap/gantry`.
 
 ## Dry run
 
@@ -71,7 +85,7 @@ gh workflow run image.yml --repo eliransu/gantry --ref <branch>
 ```
 
 release.yml dates the CHANGELOG in its runner only, checks it as a tag would be checked, builds, compares, signs and
-verifies, and its publish job prints the release it would create instead of creating it. image.yml checks the
+verifies, and its publish job prints the release it would create instead of creating it; the homebrew job prints the formula. image.yml checks the
 version, builds both architectures and pushes nothing.
 
 ## Rolling upgrades and migrations
