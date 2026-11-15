@@ -94,6 +94,18 @@ pub(crate) fn routes() -> Router<AppState> {
 enum Api {
     OpenAi,
     Gemini,
+    /// A provider's own WebSocket API on `/passthrough/<provider>/<path>`, on paths a rule lists.
+    Passthrough,
+}
+
+/// A WebSocket to `/passthrough/<provider>/<path>`: a provider's realtime API Gantry has no translation for, relayed
+/// frame for frame on the paths a rule's `passthrough:` lists, decided at connect like the other sessions.
+pub(crate) async fn passthrough(state: AppState, request: axum::extract::Request) -> Response {
+    use axum::extract::FromRequestParts;
+    let addr = request.extensions().get::<crate::ClientAddr>().cloned();
+    let (mut parts, _) = request.into_parts();
+    let ws = WebSocketUpgrade::from_request_parts(&mut parts, &state).await;
+    open(state, addr, parts.headers, parts.uri, ws, Api::Passthrough).await
 }
 
 impl Api {
@@ -101,6 +113,7 @@ impl Api {
         match self {
             Self::OpenAi => OPENAI,
             Self::Gemini => GEMINI,
+            Self::Passthrough => "/passthrough",
         }
     }
 
@@ -108,6 +121,7 @@ impl Api {
         match self {
             Self::OpenAi => "openai_realtime",
             Self::Gemini => "gemini_live",
+            Self::Passthrough => "websocket_passthrough",
         }
     }
 }
@@ -134,6 +148,8 @@ struct Open {
     would_refuse: Vec<Value>,
     /// What the guardrails found in the session's texts, for its record.
     found: Vec<guard::AuditEntry>,
+    /// A passthrough session's path and query at the provider.
+    native: Option<String>,
 }
 
 async fn open(
@@ -159,14 +175,18 @@ async fn open(
     .await;
     let refused = admitted.as_ref().err();
     // OpenAI's session is wholly decided now. Gemini's is recorded once its setup names the model, unless refused here.
-    if api == Api::OpenAi || refused.is_some() {
+    if api != Api::Gemini || refused.is_some() {
         if let Err(refusal) = batch::record_decision(
             &state,
             &version,
             &decision,
             client_ip.map(|ip| ip.to_string()).as_deref(),
             "GET",
-            api.path(),
+            if api == Api::Passthrough {
+                uri.path()
+            } else {
+                api.path()
+            },
             &seen,
             refused,
             batch::user_agent_of(&headers),
@@ -242,6 +262,7 @@ async fn admit<'a>(
     }
     let mut model = None;
     let mut provider = None;
+    let mut native = None;
     let query: Vec<(&str, &str)> = uri
         .query()
         .unwrap_or_default()
@@ -289,6 +310,57 @@ async fn admit<'a>(
             provider = Some(serving(version, Kind::OpenAi, named)?);
             seen.provider = provider;
             model = Some(named.to_string());
+        }
+        Api::Passthrough => {
+            let rest = uri
+                .path()
+                .strip_prefix(crate::PASSTHROUGH)
+                .unwrap_or_default();
+            let (name, path) = rest.split_once('/').unwrap_or((rest, ""));
+            let path = format!("/{path}");
+            let index = version
+                .providers
+                .iter()
+                .position(|p| p.name == name)
+                .ok_or_else(|| {
+                    Refusal::new(
+                        StatusCode::NOT_FOUND,
+                        "unknown_provider",
+                        format!("Refused: no provider is named \"{name}\". Connect to /passthrough/<provider>/<path> with a provider the policy lists."),
+                    )
+                })?;
+            let kind = version.providers[index].kind;
+            if kind.bedrock() || matches!(kind, Kind::Vertex | Kind::VertexAnthropic) {
+                return Err(Refusal::new(
+                    StatusCode::BAD_REQUEST,
+                    "passthrough_not_allowed",
+                    format!(
+                        "Refused: provider \"{name}\" signs each request with cloud credentials, which a WebSocket passthrough does not carry. Use its HTTP passthrough, or a provider with a key."
+                    ),
+                ));
+            }
+            let climbs = path
+                .split('/')
+                .any(|seg| seg == "." || seg == ".." || seg.contains('%'));
+            if climbs || !rule.reaches(name, &path) {
+                return Err(Refusal::new(
+                    StatusCode::FORBIDDEN,
+                    "passthrough_not_allowed",
+                    format!(
+                        "Refused: rule \"{}\" does not list {path} on provider \"{name}\" under passthrough:. Ask a Gantry admin to add it.",
+                        rule.name
+                    ),
+                ));
+            }
+            crate::killed(state, person, &key_sha256, None)?;
+            seen.provider = Some(index);
+            provider = Some(index);
+            // A passthrough names no model the policy knows: the session's record carries its path.
+            model = Some(String::new());
+            native = Some(match uri.query() {
+                Some(q) => format!("{path}?{q}"),
+                None => path,
+            });
         }
         Api::Gemini => {
             if !query.is_empty() {
@@ -354,6 +426,7 @@ async fn admit<'a>(
         budget_shadow,
         would_refuse: seen.would_refuse.clone(),
         found: Vec::new(),
+        native,
     })
 }
 
@@ -437,7 +510,16 @@ async fn session(
         return;
     };
     let provider = &version.providers[index];
-    let upstream = match dial(&state, provider, api, &model, open.beta.as_ref()).await {
+    let upstream = match dial(
+        &state,
+        provider,
+        api,
+        &model,
+        open.beta.as_ref(),
+        open.native.as_deref(),
+    )
+    .await
+    {
         Ok(upstream) => upstream,
         Err(why) => {
             eprintln!(
@@ -530,7 +612,8 @@ async fn session(
                         found.extend(verdict.audit.iter().cloned());
                         if let Some(blocked) = verdict.blocked {
                             let message = format!("guardrail \"{}\" refused this text event, so it was not sent. Remove what it names and send it again.", blocked.guardrail);
-                            if api == Api::Gemini {
+                            // Only OpenAI's protocol has an error event to answer with; any other session ends.
+                            if api != Api::OpenAi {
                                 tell(&mut down_tx, api, &decision, guard::BLOCKED_CODE, &message).await;
                                 break "guardrail";
                             }
@@ -546,7 +629,10 @@ async fn session(
                                     *slot = masked.clone();
                                 }
                             }
-                            text = event.to_string();
+                            text = match event {
+                                Value::String(raw) => raw,
+                                other => other.to_string(),
+                            };
                         }
                     }
                     if up_tx.send(Up::Text(text.into())).await.is_err() {
@@ -652,6 +738,16 @@ async fn session(
 /// The text a realtime event carries for the guardrails: the event, whether it is request side (the caller's words,
 /// or the transcript of them) and the JSON pointers of its texts. `None` for an event with no text they read.
 fn event_texts(api: Api, text: &str, from_caller: bool) -> Option<(Value, bool, Vec<String>)> {
+    if api == Api::Passthrough {
+        // No shape Gantry knows: every string of a JSON frame is text, and a frame that is not JSON is one text.
+        let event = serde_json::from_str::<Value>(text)
+            .ok()
+            .filter(|v| v.is_object() || v.is_array())
+            .unwrap_or_else(|| Value::String(text.to_string()));
+        let mut pointers = Vec::new();
+        strings(&event, String::new(), &mut pointers);
+        return (!pointers.is_empty()).then_some((event, from_caller, pointers));
+    }
     let event: Value = serde_json::from_str(text).ok()?;
     let mut pointers = Vec::new();
     let list = |v: &Value| v.as_array().map_or(0, Vec::len);
@@ -703,6 +799,7 @@ fn event_texts(api: Api, text: &str, from_caller: bool) -> Option<(Value, bool, 
             }
             true
         }
+        (Api::Passthrough, _) => from_caller,
         (Api::Gemini, false) => {
             let content = &event["serverContent"];
             if content["inputTranscription"]["text"].is_string() {
@@ -933,9 +1030,31 @@ async fn gemini_setup(
 }
 
 /// The usage a provider event reports, with the response it belongs to.
+/// The JSON pointer of every string in `value`.
+fn strings(value: &Value, at: String, out: &mut Vec<String>) {
+    match value {
+        Value::String(_) => out.push(at),
+        Value::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                strings(item, format!("{at}/{i}"), out);
+            }
+        }
+        Value::Object(map) => {
+            for (key, item) in map {
+                let key = key.replace('~', "~0").replace('/', "~1");
+                strings(item, format!("{at}/{key}"), out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn usage_of(api: Api, text: &str) -> Option<(Usage, Option<String>)> {
     let count = |v: &Value| v.as_u64().unwrap_or_default();
     match api {
+        // ponytail: a provider's own protocol reports usage in no shape Gantry knows, so a passthrough session is
+        // recorded (who, what path, how long) and not metered. Read a usage event per API when one is asked for.
+        Api::Passthrough => None,
         Api::OpenAi => {
             if !text.contains("response.done") {
                 return None;
@@ -1037,6 +1156,11 @@ async fn end(
     record.insert("key".into(), open.person.key.as_str().into());
     record.insert("model".into(), model.into());
     record.insert("provider".into(), provider.into());
+    // A passthrough's path, never its query, which may carry a credential.
+    if let Some(native) = &open.native {
+        let path = native.split('?').next().unwrap_or_default();
+        record.insert("path".into(), path.into());
+    }
     record.insert("seconds".into(), started.elapsed().as_secs_f64().into());
     record.insert("responses".into(), responses.into());
     record.insert("charged_usd".into(), charged.into());
@@ -1068,8 +1192,10 @@ async fn dial(
     api: Api,
     model: &str,
     beta: Option<&HeaderValue>,
+    native: Option<&str>,
 ) -> Result<Provider, String> {
     let url = match api {
+        Api::Passthrough => gantry_core::config::join(&provider.url, native.unwrap_or("/")),
         Api::OpenAi => gantry_core::config::join(&provider.url, &format!("{OPENAI}?model={model}")),
         // The Live API lives at the host's root, whatever version path the provider's URL carries for REST.
         Api::Gemini => {

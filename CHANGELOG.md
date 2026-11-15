@@ -7,6 +7,13 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### WebSocket passthrough
+
+- A WebSocket to `/passthrough/<provider>/<path>` reaches a provider's realtime API that Gantry has no route of its
+  own for, on the paths a rule lists under `passthrough:`. Decided at connect, relayed frame for frame with the
+  provider's key, read by the rule's guardrails, ended by a kill switch, and recorded as a `realtime_session` with
+  `api: websocket_passthrough`. Not metered.
+
 ### Guardrails: an LLM judge and five more vendors
 
 - New guardrail type `judge`: a model asked through Gantry's own chat completions route whether the conversation

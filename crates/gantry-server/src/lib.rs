@@ -119,7 +119,7 @@ const INPUT_TOKENS: &str = "/v1/responses/input_tokens";
 /// OpenAI's legacy text completions: forwarded as sent, priced from its usage.
 const COMPLETIONS: &str = "/v1/completions";
 /// `/passthrough/<provider>/<native path>`: a provider's own API, reached as sent on the paths a rule names.
-const PASSTHROUGH: &str = "/passthrough/";
+pub(crate) const PASSTHROUGH: &str = "/passthrough/";
 /// `/bedrock/<native path>` and `/vertex/<native path>`: Amazon Bedrock's and Vertex AI's own APIs, signed with the
 /// provider's cloud credentials (SigV4, Google OAuth) on the way out, on the paths a rule names.
 const BEDROCK_PASSTHROUGH: &str = "/bedrock/";
@@ -4108,6 +4108,15 @@ async fn as_input_tokens(mut response: Response) -> Response {
 
 /// Every request except the health check: gives it a decision ID, checks it, records it, and only then forwards it.
 pub(crate) async fn handle(State(state): State<AppState>, mut request: Request) -> Response {
+    // A WebSocket to a provider's own API: relayed as a session, decided at connect.
+    if request.uri().path().starts_with(PASSTHROUGH)
+        && request
+            .headers()
+            .get(header::UPGRADE)
+            .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"))
+    {
+        return realtime::passthrough(state, request).await;
+    }
     let arrived = Instant::now();
     let decision = id::decision_id();
     const TRACEPARENT: HeaderName = HeaderName::from_static("traceparent");

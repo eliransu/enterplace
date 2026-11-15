@@ -23,6 +23,7 @@ Gantry serves the asynchronous and realtime APIs natively, not as passthrough. E
 | `GET /v1/fine_tuning/jobs`, `GET /v1/fine_tuning/jobs/<id>`, `/events`, `/checkpoints`, `POST .../cancel`, `/pause`, `/resume` | openai | Yours only |
 | `GET /v1/realtime?model=<model>` (WebSocket) | openai | Decided at connect, relayed, metered per response |
 | `GET /ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent` (WebSocket) | gemini | Decided on the `setup` message, relayed, metered per turn |
+| `GET /passthrough/<provider>/<path>` (WebSocket) | any kind with a key | On paths the rule lists under `passthrough:`: decided at connect, relayed, guarded, recorded, not metered. See [Passthrough](/governance/policy/#passthrough) |
 | `POST /v1/completions` | openai | Legacy text completions: decided, guarded on `prompt` and `suffix`, charged from `usage` |
 
 A list or events read takes `after`, `limit`, `order`, `purpose`, `before_id`, `after_id` and `metadata` in its query, with plain values. Anything else is refused with `bad_query`.
