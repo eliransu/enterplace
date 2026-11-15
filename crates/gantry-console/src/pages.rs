@@ -1963,12 +1963,7 @@ pub fn audit(view: &AuditView<'_>) -> String {
     };
     let records = fold_answers(records);
     if records.is_empty() {
-        let none = empty(
-            &motif(&["", "", "", ""], &["empty", "empty"], (2, 1), false, true),
-            "No requests yet",
-            "Point a tool at this gateway and its first request appears here when the page is opened again.",
-            "",
-        );
+        let none = crate::empty_page("Audit log", &crate::base(), true);
         let main = format!("{}\n{none}", head("Audit log", lead, &verify));
         return tool_page("Audit log", view.admin, "/console/audit", query, &main, "");
     }
@@ -2612,12 +2607,16 @@ pub fn people(view: &PeopleView<'_>) -> String {
         ),
     };
     if entries.is_empty() {
-        let none = empty(
-            &motif(&["", "", "", ""], &["empty", "empty"], (2, 1), true, true),
-            "No keys yet",
-            "Every request through Gantry carries a key that names a person or a workload. Issue the first one.",
-            &issue,
-        );
+        let none = if view.read_only {
+            empty(
+                &motif(&["", "", "", ""], &["empty", "empty"], (2, 1), true, true),
+                "No keys yet",
+                "Every request through Gantry carries a key that names a person or a workload. An admin issues them.",
+                "",
+            )
+        } else {
+            crate::empty_page("People and workloads", &crate::base(), true)
+        };
         let main = format!(
             "{}\n{read_only}{none}",
             head(title, &format!("The keys in {keys_name}."), "")
@@ -2760,10 +2759,16 @@ pub fn people(view: &PeopleView<'_>) -> String {
 <div class="g-search">{}<input class="g-input t-body" type="search" name="q" value="{}" aria-label="Search people and workloads" placeholder="Name or team"></div>
 </form>
 
-{table}"#,
+{}{table}"#,
         head(title, &lead, &issue),
         icon("search"),
-        esc(q)
+        esc(q),
+        // Only admin keys so far: the page says what fills it before the list of those keys.
+        if entries.iter().all(|e| e.admin) {
+            crate::empty_page("People and workloads", &crate::base(), !view.read_only)
+        } else {
+            String::new()
+        }
     );
     tool_page(
         title,
@@ -3551,14 +3556,8 @@ pub fn spend(view: &SpendView<'_>) -> String {
     }
 
     if total == 0.0 && stopped == 0 && meters.is_empty() {
-        let none = empty(
-            &motif(&["", "", ""], &["empty", "empty"], (3, 1), false, true),
-            "No spend yet",
-            &format!(
-                "Gantry writes a usage record as each answer ends, with its tokens and its cost. There is none for {name} yet."
-            ),
-            &link("Open the audit log", "", "/console/audit", false),
-        );
+        let none = crate::empty_page("Spend", &crate::base(), true);
+        let _ = name;
         let main = format!("{}\n{none}", head("Spend", lead_none, ""));
         return tool_page("Spend", view.admin, "/console/spend", view.query, &main, "");
     }

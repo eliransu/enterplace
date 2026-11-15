@@ -56,6 +56,11 @@ pub(crate) fn money(usd: f64) -> String {
     )
 }
 
+/// A list on its first page: an empty one there means nothing at all.
+fn offset_zero(form: &Form) -> bool {
+    matches!(form.get("page"), "" | "1")
+}
+
 fn ms(v: Option<u64>) -> String {
     match v {
         None => "-".into(),
@@ -327,7 +332,9 @@ pub(crate) async fn requests_page(
             esc(&open),
         );
     }
-    let list = if shown.is_empty() {
+    let list = if shown.is_empty() && query.pairs().is_empty() && offset_zero(&form) {
+        crate::empty_page("Requests", &crate::base(), admin.may(Permission::IssueKeys))
+    } else if shown.is_empty() {
         empty(
             &motif(&["", "", ""], &["empty"], (3, 1), false, true),
             "No request matches",
@@ -736,6 +743,18 @@ pub(crate) async fn analytics_page(
         }
     };
     let all = summed.totals.clone();
+    if all.requests == 0 && query.pairs().iter().all(|(k, _)| k == "from") {
+        let main = format!(
+            "{}\n{}",
+            head("Analytics", "", ""),
+            crate::empty_page(
+                "Analytics",
+                &crate::base(),
+                admin.may(Permission::IssueKeys)
+            )
+        );
+        return console.page(StatusCode::OK, &admin, "Analytics", &uri, &main);
+    }
     let pct = |s: &Stats, p: f64| ms(s.percentile(p));
     let stats = format!(
         r#"<div class="g-panel g-stats">{}{}{}{}{}{}{}{}</div>"#,

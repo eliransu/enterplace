@@ -2106,7 +2106,16 @@ pub(crate) struct Empty {
 }
 
 /// The empty state of a page: what is missing, the step that fills it, and the docs link.
-pub(crate) fn empty_state(e: &Empty) -> String {
+/// `act` is whether the person may take the action: without it, only the docs link is offered.
+pub(crate) fn empty_state(e: &Empty, act: bool) -> String {
+    let button = if act {
+        format!(
+            r#"<a class="g-btn t-body" href="{}">{}</a>"#,
+            e.action.1, e.action.0
+        )
+    } else {
+        String::new()
+    };
     empty(
         &motif(&["", "", "", ""], &["empty", "empty"], (2, 1), false, true),
         e.title,
@@ -2114,12 +2123,7 @@ pub(crate) fn empty_state(e: &Empty) -> String {
         &format!(
             "{}{}",
             e.extra,
-            acts(&format!(
-                r#"<a class="g-btn t-body" href="{}">{}</a>{}"#,
-                e.action.1,
-                e.action.0,
-                docs("Read the docs page", e.docs)
-            ))
+            acts(&format!("{button}{}", docs("Read the docs page", e.docs)))
         ),
     )
 }
@@ -2226,8 +2230,8 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
 }
 
 /// The empty state of a page, for an extension's own pages (Alerts, Devices, Watch, MCP approvals).
-pub fn empty_page(page: &str, base: &str) -> String {
-    empty_for(page, base).map_or_else(String::new, |e| empty_state(&e))
+pub fn empty_page(page: &str, base: &str, act: bool) -> String {
+    empty_for(page, base).map_or_else(String::new, |e| empty_state(&e, act))
 }
 
 #[cfg(test)]

@@ -644,12 +644,7 @@ async fn teams_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
         link("Issue a key", "", "/console/people?issue=1", false)
     };
     let table = if rows.is_empty() {
-        empty(
-            &motif(&["", ""], &["empty"], (2, 1), true, true),
-            "No teams yet",
-            "A team appears here with its first key.",
-            &actions,
-        )
+        crate::empty_page("Teams", &crate::base(), admin.may(Permission::IssueKeys))
     } else {
         format!(
             r#"<div class="g-panel g-stack"><div class="g-table-wrap"><table class="g-table g-table--stack g-table--prose t-mono-sm">

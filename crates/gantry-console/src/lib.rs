@@ -255,9 +255,29 @@ async fn with_client(
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
     let extra = console.0.extra.clone();
+    let tls: Tls = request
+        .extensions()
+        .get::<axum::http::uri::Scheme>()
+        .cloned()
+        .map(axum::Extension);
+    let base = start::origin(request.headers(), request.uri(), &tls);
     CLIENT
-        .scope(client, html::EXTRA.scope(extra, next.run(request)))
+        .scope(
+            client,
+            BASE.scope(base, html::EXTRA.scope(extra, next.run(request))),
+        )
         .await
+}
+
+tokio::task_local! {
+    /// The gateway's address as the browser reached it, for the lines a page gives to paste.
+    static BASE: String;
+}
+
+/// The gateway's address as the browser of this request reached it.
+pub(crate) fn base() -> String {
+    BASE.try_with(Clone::clone)
+        .unwrap_or_else(|_| "http://127.0.0.1:8080".into())
 }
 
 fn client() -> Option<IpAddr> {
@@ -2786,13 +2806,30 @@ async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Ur
     let config = console.config();
     let text = config::policy_text(&config.policy).map(Some);
     let loaded = config::load(&config.policy, Some(&config.keys));
+    let mut source = edit::policy_source(&console, &admin);
+    // The policy first start writes, one rule that lets everyone in: the page says what to add next.
+    let first = loaded.as_ref().is_ok_and(|l| {
+        let rules = l.policy.rule_list();
+        rules.len() == 1
+            && rules[0].guardrails.is_empty()
+            && rules[0].limits.budgets.is_empty()
+            && l.policy.scope_limits().is_empty()
+            && l.policy_text.contains(r#"models: ["*"]"#)
+    });
+    if first {
+        source.banner.push_str(&empty_page(
+            "Policy",
+            &base(),
+            admin.may(Permission::EditPolicy),
+        ));
+    }
     let body = pages::policy(
         &admin.label(),
         &Form::of(&uri),
         &config.policy,
         &text,
         &loaded,
-        &edit::policy_source(&console, &admin),
+        &source,
     );
     page(StatusCode::OK, body)
 }
