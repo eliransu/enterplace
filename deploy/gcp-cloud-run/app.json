@@ -1,0 +1,41 @@
+{
+  "name": "gantry",
+  "env": {
+    "OPENAI_API_KEY": {
+      "description": "Your OpenAI API key. Fill at least one of the three provider keys.",
+      "required": false
+    },
+    "ANTHROPIC_API_KEY": {
+      "description": "Your Anthropic API key.",
+      "required": false
+    },
+    "GEMINI_API_KEY": {
+      "description": "Your Gemini API key.",
+      "required": false
+    }
+  },
+  "options": {
+    "allow-unauthenticated": true,
+    "port": 8080,
+    "memory": "512Mi",
+    "cpu": "1",
+    "max-instances": 1
+  },
+  "build": {
+    "skip": true
+  },
+  "hooks": {
+    "prebuild": {
+      "commands": [
+        "docker pull ghcr.io/eliransu/gantry:latest",
+        "docker tag ghcr.io/eliransu/gantry:latest $IMAGE_URL",
+        "docker push $IMAGE_URL"
+      ]
+    },
+    "postcreate": {
+      "commands": [
+        "GANTRY_SERVICE=$K_SERVICE GANTRY_IMAGE=$IMAGE_URL bash ./deploy.sh"
+      ]
+    }
+  }
+}

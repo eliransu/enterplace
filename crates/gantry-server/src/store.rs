@@ -352,7 +352,8 @@ fn write<T>(lock: &RwLock<T>, value: T) {
 /// Connects to the database named by the connection string in `env` (as read by the caller), creates or updates
 /// its tables, and reads the keys and kill switches. Fails, naming the fix, if any of that cannot be done.
 pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
-    let (config, tls) = connection(env, url)?;
+    let fallback = std::env::var("PGSSLMODE").ok();
+    let (config, tls) = connection_with(env, url, fallback.as_deref())?;
     if tls.is_none() && !socket(&config) {
         eprintln!(
             "warning: {env} says sslmode=disable, so the connection to the store is not encrypted: key hashes, kill switches and spend cross the network in plain text. Use it only on a network you trust, such as a cluster's own Postgres; remove sslmode=disable to encrypt it."
@@ -461,13 +462,30 @@ fn unreachable(env: &str, err: &tokio_postgres::Error) -> String {
     format!("the store cannot be reached: {text}. Gantry does not start without it. {fix}")
 }
 
+/// `connection_with` and no PGSSLMODE, as the tests call it.
+#[cfg(test)]
+fn connection(env: &str, url: &str) -> Result<(tokio_postgres::Config, Option<Rustls>), String> {
+    connection_with(env, url, None)
+}
+
 /// The connection string, and the TLS it asks for. `sslmode` and `sslrootcert` are read here as libpq reads them
 /// (tokio-postgres knows neither verify mode nor root files): `verify-full`, the default, checks the server's
 /// certificate and name; `verify-ca` its signer only; `require` encrypts without checking, unless `sslrootcert`
 /// is given, which makes it `verify-ca`; `disable` sends plain text. `sslrootcert` names a PEM file whose
 /// certificates are trusted besides the Mozilla roots built in, or, for `verify-ca`, instead of them.
-fn connection(env: &str, url: &str) -> Result<(tokio_postgres::Config, Option<Rustls>), String> {
+/// `fallback` is libpq's PGSSLMODE, the mode when the string names none. A platform that hands over a
+/// connection string it builds (Render's internal one, with a self-signed certificate) cannot add `?sslmode=` to it.
+fn connection_with(
+    env: &str,
+    url: &str,
+    fallback: Option<&str>,
+) -> Result<(tokio_postgres::Config, Option<Rustls>), String> {
     let (rest, mode, rootcert) = split_tls(url.trim());
+    let (mode, said_by) = match (mode, fallback.map(str::trim).filter(|m| !m.is_empty())) {
+        (Some(mode), _) => (Some(mode), env),
+        (None, Some(fallback)) => (Some(fallback.to_string()), "PGSSLMODE"),
+        (None, None) => (None, env),
+    };
     let mut config = rest.parse::<tokio_postgres::Config>().map_err(|err| {
         // The error never repeats the string: it holds a password.
         format!(
@@ -477,7 +495,7 @@ fn connection(env: &str, url: &str) -> Result<(tokio_postgres::Config, Option<Ru
     let mode = mode.as_deref().unwrap_or("verify-full");
     if !matches!(mode, "disable" | "require" | "verify-ca" | "verify-full") {
         return Err(format!(
-            "{env} says sslmode={mode}, which Gantry does not take: it never falls back to plain text unasked. Use verify-full (the default), verify-ca, require or disable."
+            "{said_by} says sslmode={mode}, which Gantry does not take: it never falls back to plain text unasked. Use verify-full (the default), verify-ca, require or disable."
         ));
     }
     // A Unix socket (the Cloud SQL connector's /cloudsql/..., a local server) never leaves the machine, and
@@ -2952,6 +2970,31 @@ mod tests {
         }
         let (config, _) = connection("DATABASE_URL", "postgres://u:p@10.0.0.7/g?sslmode=disable")?;
         assert!(!socket(&config), "a network host is warned about");
+        Ok(())
+    }
+
+    #[test]
+    fn pgsslmode_is_the_mode_when_the_string_names_none() -> Result<(), String> {
+        let (config, tls) =
+            connection_with("DATABASE_URL", "postgres://u:p@10.0.0.7/g", Some("disable"))?;
+        assert!(tls.is_none());
+        assert_eq!(config.get_ssl_mode(), SslMode::Disable);
+        assert!(
+            connection_with("DATABASE_URL", "postgres://u:p@h/g", Some("require"))?
+                .1
+                .is_some()
+        );
+        // The string's own sslmode wins.
+        let (_, tls) = connection_with(
+            "DATABASE_URL",
+            "postgres://u:p@h/g?sslmode=disable",
+            Some("verify-full"),
+        )?;
+        assert!(tls.is_none());
+        let err = connection_with("DATABASE_URL", "postgres://u:p@h/g", Some("prefer"))
+            .err()
+            .unwrap_or_default();
+        assert!(err.contains("PGSSLMODE says sslmode=prefer"), "{err}");
         Ok(())
     }
 

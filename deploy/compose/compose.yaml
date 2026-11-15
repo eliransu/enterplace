@@ -1,0 +1,47 @@
+# Gantry and Postgres on one machine, from the published image, in one command:
+#   mkdir gantry && cd gantry && curl -fsSLO https://raw.githubusercontent.com/eliransu/gantry/main/deploy/compose/compose.yaml && OPENAI_API_KEY=sk-... docker compose up -d
+# The admin key, printed once: docker compose logs gantry | grep GANTRY_KEY
+# The console: http://localhost:8080/console
+# Provider keys are read from the shell or a .env file beside this one (OPENAI_API_KEY, ANTHROPIC_API_KEY,
+# GEMINI_API_KEY). The full guide, with your own policy file: https://gantry-docs.eliran.me/deploy/docker/
+name: gantry
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: gantry
+      # Only Gantry reaches this database: it shares this container's network and publishes no Postgres port.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gantry}
+      POSTGRES_DB: gantry
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "${GANTRY_BIND:-127.0.0.1}:${GANTRY_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "gantry", "-d", "gantry"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  gantry:
+    image: ${GANTRY_IMAGE:-ghcr.io/eliransu/gantry:latest}
+    network_mode: service:postgres
+    environment:
+      DATABASE_URL: postgres://gantry:${POSTGRES_PASSWORD:-gantry}@localhost:5432/gantry?sslmode=disable
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GANTRY_LICENSE: ${GANTRY_LICENSE:-}
+    volumes:
+      # The policy start writes and the hash-chained audit log.
+      - gantry-data:/var/lib/gantry
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  gantry-data:

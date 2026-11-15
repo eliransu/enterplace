@@ -27,6 +27,10 @@ pub const CONTAINER_DIR: &str = "/var/lib/gantry";
 pub const CONTAINER_LISTEN: &str = "0.0.0.0:8080";
 /// A policy mounted here is served as it is, as the image always did.
 const MOUNTED_POLICY: &str = "/etc/gantry/gantry.policy.yaml";
+/// The variable Render, Railway, Fly, App Platform and Heroku set to the Postgres they attach. In a container it
+/// makes the store, so keys and the policy outlive a disk that a redeploy wipes. Only in a container: a shell's
+/// DATABASE_URL may belong to another program.
+const STORE_ENV: &str = "DATABASE_URL";
 
 pub struct Options<'a> {
     pub dir: &'a Path,
@@ -170,7 +174,7 @@ fn choose(
     Ok(chosen)
 }
 
-fn policy(chosen: &[Chosen]) -> String {
+fn policy(chosen: &[Chosen], store: bool) -> String {
     let mut text = String::from(
         "# Written by gantry start. Step 1, See: every key may use every model, and in observe mode\n# nothing is blocked; what a rule would refuse is recorded. Reference: https://gantry-docs.eliran.me/governance/policy/\nversion: 1\nmode: observe\nproviders:\n",
     );
@@ -185,6 +189,12 @@ fn policy(chosen: &[Chosen]) -> String {
     text.push_str(
         "rules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n",
     );
+    if store {
+        // The policy lives in the store too, so the console edits it and a wiped disk does not undo the edits.
+        text.push_str(&format!(
+            "store: {{ postgres_url_env: {STORE_ENV}, policy_from: store }}\n"
+        ));
+    }
     text
 }
 
@@ -236,6 +246,7 @@ pub async fn run(options: &Options<'_>) -> Result<(), String> {
     let dir = std::fs::canonicalize(options.dir).unwrap_or_else(|_| options.dir.to_path_buf());
     let policy_path = dir.join("gantry.policy.yaml");
     let keys_path = dir.join("gantry.keys.yaml");
+    let store = options.container && env(STORE_ENV).is_some_and(|v| !v.trim().is_empty());
     if policy_path.exists() && !options.force {
         return Err(format!(
             "{} exists, and gantry start does not write over a policy. Run gantry serve {} to use it, or gantry start --force to replace it.",
@@ -243,8 +254,29 @@ pub async fn run(options: &Options<'_>) -> Result<(), String> {
             policy_path.display()
         ));
     }
-    std::fs::write(&policy_path, policy(&chosen))
+    std::fs::write(&policy_path, policy(&chosen, store))
         .map_err(|e| format!("could not write {}: {e}. Check that the folder is writable, or give another with --dir.", policy_path.display()))?;
+    // Held until serve replaces this process: while it is open, the key below goes to the store, not the file.
+    let opened = if store {
+        gantry_server::open_store(&policy_path, &keys_path, &env)?
+    } else {
+        None
+    };
+    if let Some(opened) = &opened {
+        let admins = gantry_core::config::key_entries(&keys_path, &opened.keys_text())
+            .map(|entries| entries.iter().any(|e| e.admin))
+            .unwrap_or(false);
+        if admins {
+            println!(
+                "The store named by {STORE_ENV} already holds an admin key, printed at the first start. Lost it? From any machine that reaches the database, with {STORE_ENV} set: gantry key new <name> --team admin --admin --policy {}",
+                policy_path.display()
+            );
+            if !options.serve {
+                return Ok(());
+            }
+            return serve(&chosen, &policy_path, options.listen, &env);
+        }
+    }
     let admin = keyfile::Attributes {
         admin: true,
         ..Default::default()
@@ -265,7 +297,18 @@ pub async fn run(options: &Options<'_>) -> Result<(), String> {
     );
     print!(
         "{}",
-        report(&chosen, &policy_path, &keys_path, &issued, &url, &tools)
+        report(
+            &chosen,
+            &policy_path,
+            &if opened.is_some() {
+                format!("the store named by {STORE_ENV}")
+            } else {
+                keys_path.display().to_string()
+            },
+            &issued,
+            &url,
+            &tools
+        )
     );
     let listen = if options.listen == DEFAULT_LISTEN {
         String::new()
@@ -336,7 +379,7 @@ fn serve(
 fn report(
     chosen: &[Chosen],
     policy: &Path,
-    keys: &Path,
+    keys: &str,
     issued: &keyfile::Issued,
     url: &str,
     tools: &Tools,
@@ -361,7 +404,7 @@ fn report(
     }
     out.push_str(&format!(
         "\nAdmin key, shown once and kept nowhere (only its hash is in {}):\n\n  export GANTRY_KEY={}\n\nThe same key signs in to the console at {url}/console.\n",
-        keys.display(),
+        keys,
         issued.key
     ));
     if issued.rotated {

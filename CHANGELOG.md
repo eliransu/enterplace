@@ -7,6 +7,18 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### One-click deploys
+
+- Deploy Gantry with Postgres in a few clicks or one command: a Render blueprint (`render.yaml`), a Railway template
+  (`deploy/railway/`), Fly.io (`deploy/fly/fly.toml`), DigitalOcean App Platform (`.do/`), Cloud Run with Cloud SQL
+  (`deploy/gcp-cloud-run/`), AWS ECS on Fargate with RDS (`deploy/aws-cloudformation/`), Azure Container Apps with
+  PostgreSQL flexible server (`deploy/azure-arm/`) and Docker Compose (`deploy/compose/compose.yaml`). Guide:
+  `/deploy/one-click/`.
+- `gantry start --container` with `DATABASE_URL` set writes `store: { postgres_url_env: DATABASE_URL,
+  policy_from: store }` and keeps the admin key in that store, made only when the store holds no admin key, so a
+  redeploy on a fresh disk keeps keys and the policy and prints no second key.
+- The store reads libpq's `PGSSLMODE` when the connection string names no `sslmode`.
+
 ### Plugin events: guardrail contract v2
 
 - A new guardrail type, `events`, sends an outside service the whole conversation as typed events: `system_prompt`,
