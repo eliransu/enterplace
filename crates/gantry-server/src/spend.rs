@@ -1329,6 +1329,9 @@ fn output_tokens(hints: &Hints, price: Option<&Price>, route: &str) -> Option<u6
         "/v1/audio",
         "/v1/moderations",
         "/v1/rerank",
+        // ponytail: how many pages a document holds is known only from the answer, so OCR reserves nothing and is
+        // charged per page afterwards; one request can pass a budget by its own cost.
+        "/v1/ocr",
     ]
     .iter()
     .any(|r| route.starts_with(r))
@@ -2497,6 +2500,18 @@ impl Admitted {
                 let answer: Value = serde_json::from_slice(body).ok()?;
                 Some(each * answer["data"].as_array()?.len() as f64)
             });
+        // An OCR model priced by the page is charged for each page the answer says it read.
+        let pages = self
+            .price
+            .as_ref()
+            .and_then(|p| p.per_page)
+            .filter(|_| self.route.starts_with("/v1/ocr") && status.is_success())
+            .zip(answer.as_ref())
+            .and_then(|(each, (_, body))| {
+                let answer: Value = serde_json::from_slice(body).ok()?;
+                Some(each * answer["usage_info"]["pages_processed"].as_u64()? as f64)
+            });
+        let images = images.or(pages);
         let cost = if hit {
             Some(0.0)
         } else if images.is_some() {

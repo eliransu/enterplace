@@ -112,6 +112,10 @@ const TRANSCRIPTIONS: &str = "/v1/audio/transcriptions";
 const SPEECH: &str = "/v1/audio/speech";
 const MODERATIONS: &str = "/v1/moderations";
 const RERANK: &str = "/v1/rerank";
+/// Mistral's OCR API: a document in, its pages as text out. Served by providers of kind openai that have it.
+const OCR: &str = "/v1/ocr";
+/// OpenAI's count of a Responses request's input tokens.
+const INPUT_TOKENS: &str = "/v1/responses/input_tokens";
 /// OpenAI's legacy text completions: forwarded as sent, priced from its usage.
 const COMPLETIONS: &str = "/v1/completions";
 /// `/passthrough/<provider>/<native path>`: a provider's own API, reached as sent on the paths a rule names.
@@ -127,6 +131,94 @@ fn is_passthrough(path: &str) -> bool {
     [PASSTHROUGH, BEDROCK_PASSTHROUGH, VERTEX_PASSTHROUGH]
         .iter()
         .any(|prefix| path.starts_with(prefix))
+        || bedrock_sdk(path)
+}
+
+/// The Bedrock runtime's own inference routes, as the AWS SDKs call them: `/model/<id>/converse`,
+/// `/converse-stream`, `/invoke`, `/invoke-with-response-stream` and `/count-tokens`. An SDK pointed at Gantry
+/// (`AWS_ENDPOINT_URL_BEDROCK_RUNTIME`) reaches the Bedrock provider through them, as sent and signed by Gantry,
+/// for any model the caller's rule allows.
+fn bedrock_sdk(path: &str) -> bool {
+    path.strip_prefix("/model/")
+        .and_then(|rest| rest.rsplit_once('/'))
+        .is_some_and(|(id, action)| {
+            !id.is_empty()
+                && !id.contains('/')
+                && matches!(
+                    action,
+                    "converse"
+                        | "converse-stream"
+                        | "invoke"
+                        | "invoke-with-response-stream"
+                        | "count-tokens"
+                )
+        })
+}
+
+/// On the Bedrock SDK's routes the caller's AWS signature means nothing to Gantry, which has no AWS secret of the
+/// caller's to check it with and signs the request to Bedrock itself. It is taken off, and the Gantry key is read
+/// from `x-api-key` (or `api-key`). An SDK given the Gantry key as its Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`)
+/// sends it as a Bearer token, which is read as on any route. The model ID's colon, which the SDKs escape, is
+/// written back.
+fn bedrock_key(parts: &mut Parts) -> Result<(), Refusal> {
+    if !bedrock_sdk(parts.uri.path()) {
+        return Ok(());
+    }
+    let signed = parts
+        .headers
+        .get(header::AUTHORIZATION)
+        .is_some_and(|v| v.as_bytes().starts_with(b"AWS4-"));
+    if signed {
+        for name in [
+            "authorization",
+            "x-amz-date",
+            "x-amz-security-token",
+            "x-amz-content-sha256",
+        ] {
+            parts.headers.remove(name);
+        }
+    }
+    if parts.uri.path().contains("%3A") || parts.uri.path().contains("%3a") {
+        let path = parts.uri.path().replace("%3A", ":").replace("%3a", ":");
+        let rebuilt = match parts.uri.query() {
+            Some(query) => format!("{path}?{query}"),
+            None => path,
+        };
+        parts.uri = rebuilt.parse().map_err(|_| unknown_route())?;
+    }
+    Ok(())
+}
+
+/// A refusal of Gantry's on a Bedrock SDK route, in the shape the AWS SDKs read: `message`, and the exception's
+/// name in `x-amzn-errortype`. Bedrock's own errors are in that shape already and pass as they are.
+async fn as_aws_error(mut response: Response) -> Response {
+    let status = response.status();
+    let Ok(body) = whole(std::mem::take(response.body_mut())).await else {
+        return response;
+    };
+    let sent: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let Some(message) = sent["error"]["message"].as_str() else {
+        return json_body(response, body.to_vec());
+    };
+    let kind = match status.as_u16() {
+        400 => "ValidationException",
+        401 | 403 => "AccessDeniedException",
+        404 => "ResourceNotFoundException",
+        429 => "ThrottlingException",
+        503 => "ServiceUnavailableException",
+        _ => "InternalServerException",
+    };
+    let answer = serde_json::json!({
+        "message": message,
+        "__type": kind,
+        "gantry_code": sent["error"]["code"],
+        "decision": sent["error"]["decision"],
+    });
+    let mut response = json_body(response, answer.to_string().into_bytes());
+    response
+        .headers_mut()
+        .insert("x-amzn-errortype", HeaderValue::from_static(kind));
+    response
 }
 
 /// Google's own Gemini API, as Gemini CLI and Google's SDKs send it: `/v1beta/models/<model>:<method>` (or `/v1/`),
@@ -179,6 +271,8 @@ fn openai_only(path: &str) -> bool {
             | MODERATIONS
             | RERANK
             | COMPLETIONS
+            | OCR
+            | INPUT_TOKENS
     )
 }
 
@@ -1070,6 +1164,8 @@ fn build(
         .route("/metrics", get(metrics::serve))
         .with_state(state.clone());
     let mut router = Router::new()
+        // Named, so the routes over stored responses (/v1/responses/<id>) do not take it for a response's id.
+        .route(INPUT_TOKENS, any(handle))
         // Every other method on these two paths goes to `handle`, which refuses it with a decision and a record,
         // as it does any other request it does not serve.
         .route("/healthz", get(healthz).fallback(handle))
@@ -1498,6 +1594,14 @@ fn caller_key(headers: &HeaderMap) -> Result<&str, Refusal> {
         None => None,
     };
     let api_key = one(HeaderName::from_static("x-api-key"))?.map(str::trim);
+    // Azure OpenAI's SDKs send the key in `api-key`. Read as x-api-key is, and never beside a different one.
+    let api_key = match (
+        api_key,
+        one(HeaderName::from_static("api-key"))?.map(str::trim),
+    ) {
+        (Some(a), Some(b)) if a != b => return Err(ambiguous()),
+        (a, b) => a.or(b),
+    };
     match (bearer, api_key) {
         (Some(a), Some(b)) if a.is_empty() != b.is_empty() => Err(Refusal::new(
             StatusCode::BAD_REQUEST,
@@ -1981,6 +2085,7 @@ async fn check<'a>(
 ) -> Result<Next, Refusal> {
     let (mut parts, body) = request.into_parts();
     gemini_key(&mut parts)?;
+    bedrock_key(&mut parts)?;
     let key = caller_key(&parts.headers)?;
     let provider_key = caller_provider_key(&parts.headers)?;
     seen.credential = Some(key.to_string());
@@ -2093,7 +2198,33 @@ async fn check<'a>(
             ),
         ));
     }
-    let (bytes, permit) = read_body(Some(&person.name), state, &parts.headers, body).await?;
+    let (mut bytes, permit) = read_body(Some(&person.name), state, &parts.headers, body).await?;
+    let mut route = route;
+    // OpenAI's count of a Responses request's input tokens goes as sent to a provider that has that API. For any
+    // other it is the same request as a messages count, which every provider is counted or estimated through.
+    if parts.uri.path() == INPUT_TOKENS {
+        let named = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|b| b["model"].as_str().map(str::to_string))
+            .unwrap_or_default();
+        let kind = find_provider(version, &named).map(|(i, _)| version.providers[i].kind);
+        if !matches!(kind, None | Some(Kind::OpenAi | Kind::Azure)) {
+            let (messages, _) = to_messages(&to_chat_from_responses(&bytes)?)?;
+            let mut messages = json_of(&messages, "a Responses request")?;
+            if let Some(fields) = messages.as_object_mut() {
+                // What a count takes of a messages request.
+                fields.retain(|key, _| {
+                    matches!(
+                        key.as_str(),
+                        "model" | "messages" | "system" | "tools" | "tool_choice" | "thinking"
+                    )
+                });
+            }
+            bytes = Bytes::from(messages.to_string());
+            parts.uri = Uri::from_static(COUNT_TOKENS);
+            route = Kind::Anthropic;
+        }
+    }
     let peek = if let Some((_, model, _)) = gemini_native(parts.uri.path()) {
         // The model is in the path. One named in the body as well must be the same, or the policy would check one
         // model while the provider runs another.
@@ -2735,13 +2866,24 @@ async fn passthrough<'a>(
     seen: &mut Seen<'a>,
 ) -> Result<Next, Refusal> {
     let path = parts.uri.path().to_string();
+    // The Bedrock SDK's own routes: the model in the path decides, as on a model route, and no `passthrough:` entry
+    // is needed for them.
+    let sdk = bedrock_sdk(&path);
+    let sdk_model = path
+        .strip_prefix("/model/")
+        .and_then(|rest| rest.rsplit_once('/'))
+        .map(|(id, _)| id.to_string())
+        .filter(|_| sdk);
     let (name, native) = match path.strip_prefix(PASSTHROUGH) {
         Some(rest) => match rest.split_once('/') {
             Some((name, path)) => (name.to_string(), format!("/{path}")),
             None => (rest.to_string(), "/".to_string()),
         },
         None => {
-            let (cloud, rest, of) = match path.strip_prefix(BEDROCK_PASSTHROUGH) {
+            let (cloud, rest, of) = match path
+                .strip_prefix(BEDROCK_PASSTHROUGH)
+                .or_else(|| sdk.then(|| path.trim_start_matches('/')))
+            {
                 Some(rest) => ("Amazon Bedrock", rest, Kind::bedrock as fn(Kind) -> bool),
                 None => (
                     "Vertex AI",
@@ -2757,6 +2899,12 @@ async fn passthrough<'a>(
                 .providers
                 .iter()
                 .filter(|p| of(p.kind) && named.is_none_or(|n| n == p.name))
+                // An SDK names no provider: the one that serves the model takes it.
+                .filter(|p| {
+                    sdk_model.as_ref().is_none_or(|id| {
+                        p.models.contains(id) || p.upstream_models.values().any(|u| u == id)
+                    })
+                })
                 .collect();
             let name = match all.as_slice() {
                 [one] => one.name.clone(),
@@ -2820,7 +2968,15 @@ async fn passthrough<'a>(
     let climbs = native
         .split('/')
         .any(|seg| seg == "." || seg == ".." || seg.contains('%'));
-    if climbs || !rule.reaches(&name, &native) {
+    // The caller may name the model as the policy does: it is sent to Bedrock under its model ID.
+    let native = match (&sdk_model, version.providers.get(index)) {
+        (Some(id), Some(provider)) => match provider.upstream_models.get(id) {
+            Some(upstream) => native.replacen(id.as_str(), upstream, 1),
+            None => native,
+        },
+        _ => native,
+    };
+    if climbs || (!sdk && !rule.reaches(&name, &native)) {
         let refusal = Refusal::new(
             StatusCode::FORBIDDEN,
             "passthrough_not_allowed",
@@ -3380,6 +3536,43 @@ fn native_body(
             }
             (out, false)
         }
+        (COUNT_TOKENS, Kind::BedrockConverse) => {
+            // Bedrock's CountTokens takes a Converse request's messages, system and tools.
+            let chat: serde_json::Value = serde_json::from_slice(&to_chat_request(bytes)?)
+                .map_err(|_| untranslatable("the request could not be read as chat"))?;
+            let (converse, _) = gantry_core::converse::openai_to_converse_request(&chat, id)
+                .map_err(untranslatable)?;
+            let mut input = serde_json::json!({"messages": converse["messages"]});
+            for field in ["system", "toolConfig"] {
+                if !converse[field].is_null() {
+                    input[field] = converse[field].clone();
+                }
+            }
+            (serde_json::json!({"input": {"converse": input}}), false)
+        }
+        (IMAGES, Kind::Gemini | Kind::Vertex) => (
+            gantry_core::media::image_request(
+                gantry_core::media::ImageTarget::google(id),
+                &request,
+            )
+            .map_err(untranslatable)?,
+            false,
+        ),
+        (IMAGES, Kind::BedrockConverse) => {
+            let target = gantry_core::media::ImageTarget::bedrock(id).ok_or_else(|| {
+                untranslatable(format!(
+                    "Bedrock model ID \"{id}\" is not an image model Gantry translates to."
+                ))
+            })?;
+            (
+                gantry_core::media::image_request(target, &request).map_err(untranslatable)?,
+                false,
+            )
+        }
+        (RERANK, Kind::BedrockConverse) => (
+            gantry_core::media::bedrock_rerank_request(id, &request).map_err(untranslatable)?,
+            false,
+        ),
         (CHAT, Kind::Gemini | Kind::Vertex) => {
             gemini::openai_to_gemini_request(&request).map_err(untranslatable)?
         }
@@ -3546,10 +3739,9 @@ fn fits(provider: &Upstream, path: &str, model: &str) -> Result<Shape, Refusal> 
     match path {
         COUNT_TOKENS => match kind {
             Kind::Anthropic | Kind::Bedrock | Kind::VertexAnthropic => Ok(Shape::Sent),
-            Kind::Gemini | Kind::Vertex => Ok(Shape::Native),
-            _ if provider.accept_messages => wrong(format!(
-                "which takes messages requests translated to chat completions, and Gantry does not count tokens for it. Send the request to {MESSAGES} without counting first."
-            )),
+            Kind::Gemini | Kind::Vertex | Kind::BedrockConverse => Ok(Shape::Native),
+            // No count API to ask: Gantry answers itself with an estimate, and says it is one (`token_estimate`).
+            _ if provider.accept_messages => Ok(Shape::Sent),
             _ => wrong(format!(
                 "which speaks the chat completions API. Send this request to {CHAT} instead of {path}."
             )),
@@ -3597,13 +3789,33 @@ fn fits(provider: &Upstream, path: &str, model: &str) -> Result<Shape, Refusal> 
         },
         RERANK => match kind {
             Kind::OpenAi | Kind::Cohere => Ok(Shape::Sent),
-            Kind::Vertex => Ok(Shape::Native),
+            Kind::Vertex | Kind::BedrockConverse => Ok(Shape::Native),
             _ => wrong(format!(
-                "which has no rerank API Gantry reaches. Use a model on an openai, cohere or vertex provider for {path}."
+                "which has no rerank API Gantry reaches. Use a model on an openai, cohere, vertex or bedrock_converse provider for {path}."
             )),
         },
+        IMAGES => match kind {
+            Kind::OpenAi | Kind::Azure => Ok(Shape::Sent),
+            Kind::Gemini | Kind::Vertex => Ok(Shape::Native),
+            Kind::BedrockConverse => {
+                let id = provider
+                    .upstream_models
+                    .get(model)
+                    .map_or(model, String::as_str);
+                match gantry_core::media::ImageTarget::bedrock(id) {
+                    Some(_) => Ok(Shape::Native),
+                    None => wrong(format!(
+                        "and its Bedrock model ID \"{id}\" is not an image model Gantry translates to (Amazon Titan Image Generator, Amazon Nova Canvas, Stability AI). Use one of those for {path}."
+                    )),
+                }
+            }
+            _ => wrong(format!(
+                "which has no image generation API Gantry reaches. Use a model on an openai, azure, gemini, vertex or bedrock_converse provider for {path}."
+            )),
+        },
+        INPUT_TOKENS if kind == Kind::Azure => Ok(Shape::Sent),
         _ if openai_only(path) && kind == Kind::OpenAi => Ok(Shape::Sent),
-        IMAGES | TRANSCRIPTIONS | SPEECH | COMPLETIONS if kind == Kind::Azure => Ok(Shape::Sent),
+        TRANSCRIPTIONS | SPEECH | COMPLETIONS if kind == Kind::Azure => Ok(Shape::Sent),
         _ => wrong(format!(
             "and Gantry forwards {path} to providers of kind openai only. Use a model on a provider of kind openai, or send this request to the route that provider speaks ({}).",
             if kind.api() == Kind::Anthropic {
@@ -3879,6 +4091,21 @@ fn check_query(uri: &Uri) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// A messages count (`{"input_tokens": n}`) as OpenAI's answer to `/v1/responses/input_tokens`. OpenAI's own
+/// answer, which names its object, is passed on as it is.
+async fn as_input_tokens(mut response: Response) -> Response {
+    let Ok(body) = whole(std::mem::take(response.body_mut())).await else {
+        return response;
+    };
+    let mut answer: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    if answer.get("object").is_none()
+        && let Some(fields) = answer.as_object_mut()
+    {
+        fields.insert("object".into(), "response.input_tokens".into());
+    }
+    json_body(response, answer.to_string().into_bytes())
+}
+
 /// Every request except the health check: gives it a decision ID, checks it, records it, and only then forwards it.
 pub(crate) async fn handle(State(state): State<AppState>, mut request: Request) -> Response {
     let arrived = Instant::now();
@@ -3897,6 +4124,8 @@ pub(crate) async fn handle(State(state): State<AppState>, mut request: Request) 
         }
     }
     let anthropic = matches!(request.uri().path(), MESSAGES | COUNT_TOKENS);
+    let input_tokens = request.uri().path() == INPUT_TOKENS;
+    let aws_sdk = bedrock_sdk(request.uri().path());
     let gemini = gemini_path(request.uri().path());
     let respond = |refusal: Refusal| {
         if gemini {
@@ -3931,6 +4160,12 @@ pub(crate) async fn handle(State(state): State<AppState>, mut request: Request) 
         }
         Err(refusal) => respond(refusal),
     };
+    if aws_sdk && !response.status().is_success() {
+        response = as_aws_error(response).await;
+    }
+    if input_tokens && response.status().is_success() {
+        response = as_input_tokens(response).await;
+    }
     let creator = response.extensions_mut().remove::<batch::Creator>();
     if let Some(check) = response.extensions_mut().remove::<AnswerCheck>() {
         response = match answer_guarded(&state, check, &decision, response).await {
@@ -4571,7 +4806,7 @@ async fn limit(
         headers: &parts.headers,
         route: parts.uri.path_and_query().map_or("/", |pq| pq.as_str()),
         body: bytes,
-        free: parts.uri.path() == COUNT_TOKENS
+        free: matches!(parts.uri.path(), COUNT_TOKENS | INPUT_TOKENS)
             || gemini_native(parts.uri.path()).is_some_and(|(_, _, m)| m == "countTokens"),
         caller_paid: plan
             .and_then(|p| p.caller_key.as_ref())
@@ -6632,8 +6867,14 @@ impl Tries<'_> {
                             provider.least_used_key,
                         )
                     };
-                    let request =
-                        outbound(provider, self.parts, &bytes, &route, plan, &hop.model, key)?;
+                    // A count for a provider with no count API is Gantry's own estimate: nothing is sent.
+                    let estimate = token_estimate(provider, &route, &bytes);
+                    let request = match estimate {
+                        Some(_) => None,
+                        None => Some(outbound(
+                            provider, self.parts, &bytes, &route, plan, &hop.model, key,
+                        )?),
+                    };
                     let started = Instant::now();
                     sent.get_or_insert(started);
                     let tokens = u64::try_from(bytes.len() / 4).unwrap_or(u64::MAX);
@@ -6642,7 +6883,29 @@ impl Tries<'_> {
                     if let Some(admitted) = admitted.as_mut() {
                         admitted.forwarded(true);
                     }
-                    let outcome = attempt_within(self.state, provider, request, &limits).await;
+                    let outcome = match (estimate, request) {
+                        (Some(estimate), _) => Ok(estimate),
+                        (None, Some(request)) => {
+                            match attempt_within(self.state, provider, request, &limits).await {
+                                // A provider of kind openai that is not OpenAI has no such route: estimated instead.
+                                Ok(response)
+                                    if route.split('?').next() == Some(INPUT_TOKENS)
+                                        && matches!(
+                                            response.status(),
+                                            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+                                        ) =>
+                                {
+                                    Ok(estimated(&bytes))
+                                }
+                                other => other,
+                            }
+                        }
+                        (None, None) => Err(Refusal::new(
+                            StatusCode::BAD_GATEWAY,
+                            "upstream_failed",
+                            "Gantry built no request for this provider. Tell your Gantry admin.",
+                        )),
+                    };
                     // A request that never reached an answer is not charged; an answer is settled when it is passed on.
                     if let Some(admitted) = admitted.as_mut() {
                         admitted.forwarded(outcome.is_ok());
@@ -6845,6 +7108,60 @@ impl http_body::Body for Holding {
     }
 }
 
+/// The header that says a token count is Gantry's estimate and not the provider's count.
+const TOKEN_COUNT: &str = "x-gantry-token-count";
+
+/// Whether a provider has an API that counts a messages request's tokens.
+fn counts_tokens(kind: Kind) -> bool {
+    matches!(
+        kind,
+        Kind::Anthropic
+            | Kind::Bedrock
+            | Kind::VertexAnthropic
+            | Kind::Gemini
+            | Kind::Vertex
+            | Kind::BedrockConverse
+    )
+}
+
+/// The answer to a token count for a model whose provider has no count API: an estimate from the request's text,
+/// four characters to a token, marked as one in the body (`"estimated": true`) and in `x-gantry-token-count`.
+// ponytail: four characters a token is the usual rule of thumb for English and off for code and other scripts; a
+// real tokenizer per model family is the upgrade when a caller budgets by this number.
+fn token_estimate(provider: &Upstream, route: &str, bytes: &[u8]) -> Option<Response> {
+    if route.split('?').next() != Some(COUNT_TOKENS) || counts_tokens(provider.kind) {
+        return None;
+    }
+    Some(estimated(bytes))
+}
+
+/// An estimate of the tokens in a request's text, as the answer to a count.
+fn estimated(bytes: &[u8]) -> Response {
+    fn chars(value: &serde_json::Value) -> usize {
+        match value {
+            serde_json::Value::String(text) => text.chars().count(),
+            serde_json::Value::Array(items) => items.iter().map(chars).sum(),
+            serde_json::Value::Object(map) => map
+                .iter()
+                .filter(|(key, _)| key.as_str() != "model")
+                .map(|(_, v)| chars(v))
+                .sum(),
+            _ => 0,
+        }
+    }
+    let body: serde_json::Value = serde_json::from_slice(bytes).unwrap_or_default();
+    let tokens = chars(&body).div_ceil(4);
+    let mut response = (
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::json!({"input_tokens": tokens, "estimated": true}).to_string(),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(TOKEN_COUNT, HeaderValue::from_static("estimate"));
+    response
+}
+
 /// The request for one attempt at one provider: its URL, its body in the form the provider takes, and its key.
 /// `model` is the model it is sent to there: the caller's, or an alias's deployment.
 fn outbound(
@@ -6893,7 +7210,7 @@ fn outbound(
     let mut headers = parts.headers.clone();
     let passthrough = plan.is_some_and(|p| p.passthrough.is_some());
     // What the request asks of the provider, whatever path its own API gives that.
-    let op = [EMBEDDINGS, RERANK, COUNT_TOKENS, RESPONSES]
+    let op = [EMBEDDINGS, RERANK, COUNT_TOKENS, RESPONSES, IMAGES]
         .into_iter()
         .find(|r| route.split('?').next() == Some(*r))
         .unwrap_or(CHAT);
@@ -7036,6 +7353,13 @@ fn outbound(
                     alias::with_model(Some("application/json"), bytes, deployment),
                 ),
                 (_, EMBEDDINGS) => (on_deployment("embeddings"), bytes.clone()),
+                (INPUT_TOKENS, _) => (
+                    format!(
+                        "{}/openai/responses/input_tokens?api-version={version}",
+                        provider.url
+                    ),
+                    alias::with_model(Some("application/json"), bytes, deployment),
+                ),
                 (IMAGES, _) => (on_deployment("images/generations"), bytes.clone()),
                 (TRANSCRIPTIONS, _) => (on_deployment("audio/transcriptions"), bytes.clone()),
                 (SPEECH, _) => (on_deployment("audio/speech"), bytes.clone()),
@@ -7061,6 +7385,12 @@ fn outbound(
                     format!("{base}/models/{}:batchEmbedContents", encoded(model))
                 }
                 (EMBEDDINGS, _) => format!("{base}/models/{}:predict", encoded(model)),
+                (IMAGES, _)
+                    if gantry_core::media::ImageTarget::google(model)
+                        == gantry_core::media::ImageTarget::Imagen =>
+                {
+                    format!("{base}/models/{}:predict", encoded(model))
+                }
                 (RERANK, _) => {
                     let project = vertex_project(&provider.url).unwrap_or_default();
                     // The Ranking API is Discovery Engine's, at its own host; a private or test URL keeps its host.
@@ -7125,7 +7455,8 @@ fn outbound(
         Kind::BedrockConverse => {
             let (body, stream) = native_body(provider, model, bytes, op)?;
             let action = match (op, stream) {
-                (EMBEDDINGS, _) => "invoke",
+                (EMBEDDINGS | IMAGES | RERANK, _) => "invoke",
+                (COUNT_TOKENS, _) => "count-tokens",
                 (_, true) => "converse-stream",
                 _ => "converse",
             };
@@ -7901,7 +8232,40 @@ async fn native(
             let answer: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
             serde_json::json!({"input_tokens": answer["totalTokens"]})
         }
-        (COUNT_TOKENS, Kind::Bedrock, _) => {
+        (IMAGES, Kind::Gemini | Kind::Vertex | Kind::BedrockConverse, _) => {
+            use gantry_core::media::ImageTarget;
+            let id = provider
+                .upstream_models
+                .get(model)
+                .map_or(model, String::as_str);
+            let target = match provider.kind {
+                Kind::BedrockConverse => ImageTarget::bedrock(id),
+                _ => Some(ImageTarget::google(id)),
+            };
+            let body = whole(std::mem::take(response.body_mut())).await?;
+            let answer = serde_json::from_slice(&body).unwrap_or_default();
+            let created = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            target
+                .ok_or_else(|| "its model is not an image model".to_string())
+                .and_then(|target| gantry_core::media::image_answer(target, &answer, created))
+                .map_err(|err| {
+                    Refusal::new(
+                        StatusCode::BAD_GATEWAY,
+                        "untranslatable",
+                        format!("The provider's image answer could not be translated: {err}"),
+                    )
+                })?
+        }
+        (RERANK, Kind::BedrockConverse, _) => {
+            let body = whole(std::mem::take(response.body_mut())).await?;
+            gantry_core::media::rerank_answer(
+                model,
+                &serde_json::from_slice(&body).unwrap_or_default(),
+            )
+        }
+        (COUNT_TOKENS, Kind::Bedrock | Kind::BedrockConverse, _) => {
             let body = whole(std::mem::take(response.body_mut())).await?;
             let answer: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
             serde_json::json!({"input_tokens": answer["inputTokens"]})

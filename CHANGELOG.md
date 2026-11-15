@@ -7,6 +7,22 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Providers: images, rerank and counts across clouds, OCR, Azure and AWS SDK keys
+
+- `POST /v1/images/generations` reaches Imagen and Gemini image models on the Gemini API and Vertex AI, and Amazon
+  Titan Image Generator, Nova Canvas and Stability AI on Bedrock (`bedrock_converse`), translated both ways. A field
+  with no equivalent is refused by name. Images priced `per_image` are charged for each image returned.
+- `POST /v1/rerank` reaches Cohere Rerank 3.5 and Amazon Rerank on Bedrock.
+- `POST /v1/messages/count_tokens` counts Converse models through Bedrock's CountTokens. For a provider with no count
+  API, Gantry answers with its own estimate, marked `"estimated": true` and `x-gantry-token-count: estimate`.
+- New route `POST /v1/responses/input_tokens`: as sent to OpenAI and Azure, as a messages count elsewhere.
+- New route `POST /v1/ocr` (Mistral's OCR API), priced by the page with the new `per_page` price field.
+- The Gantry key is read from `api-key`, the header Azure OpenAI's SDKs send, with the same ambiguity check.
+- boto3 and the AWS SDKs reach Bedrock through Gantry on `/model/<id>/converse`, `/converse-stream`, `/invoke`,
+  `/invoke-with-response-stream` and `/count-tokens` with a Gantry key (`AWS_BEARER_TOKEN_BEDROCK`, or `x-api-key`
+  beside a SigV4 signature, which is removed). The caller's rule decides the model; refusals come back in the AWS
+  error shape (`x-amzn-errortype`).
+
 ### MCP gateway: servers without a restart, more transports, prices, token exchange, sessions
 
 - MCP servers are added, changed and removed without a restart: by a saved policy file, `SIGHUP`, or

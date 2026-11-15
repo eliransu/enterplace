@@ -22,7 +22,10 @@ Gantry serves the OpenAI and Anthropic routes your clients already call, plus a 
 | `POST` | `/v1/audio/transcriptions` | yes | yes | OpenAI transcription, `multipart/form-data` |
 | `POST` | `/v1/audio/speech` | yes | yes | OpenAI text to speech |
 | `POST` | `/v1/moderations` | yes | yes | OpenAI moderations |
-| `POST` | `/v1/rerank` | yes | yes | Rerank, forwarded as sent |
+| `POST` | `/v1/rerank` | yes | yes | Rerank in Cohere's shape: forwarded as sent, or translated for Vertex AI and Bedrock |
+| `POST` | `/v1/ocr` | yes | yes | Mistral's OCR API: a document in, its pages as markdown out, priced per page |
+| `POST` | `/v1/responses/input_tokens` | yes | yes | OpenAI's count of a Responses request's input tokens |
+| `POST` | `/model/<id>/converse`, `/converse-stream`, `/invoke`, `/invoke-with-response-stream`, `/count-tokens` | yes | yes | The Bedrock runtime's own routes, for the AWS SDKs. See [Bedrock SDK](/providers/bedrock/#the-aws-sdks) |
 | `POST` | `/v1/messages` | yes | yes | Anthropic messages (Claude Code) |
 | `POST` | `/v1/messages/count_tokens` | yes | yes | Anthropic token counting |
 | `GET` | `/v1/models` | yes | yes | The models the caller's rule allows |
@@ -45,8 +48,11 @@ A request goes to the one provider that lists its model, and only if that provid
 |---|---|
 | `/v1/chat/completions` | `openai`, `azure`, `gemini` and `vertex` (the last two translated to Google's API). Also `anthropic`, `bedrock` and `vertex_anthropic` with `accept_chat: true`, translated |
 | `/v1/messages` | `anthropic`, `bedrock`, `vertex_anthropic`. Also `openai`, `azure`, `gemini` and `vertex` with `accept_messages: true`, translated |
-| `/v1/messages/count_tokens` | `anthropic` only |
-| `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/images/edits`, `/v1/images/variations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/rerank` | `openai` only |
+| `/v1/messages/count_tokens` | `anthropic`, `bedrock`, `vertex_anthropic`, counted by the provider; `gemini`, `vertex` and `bedrock_converse`, by the provider's count API; any other provider with `accept_messages: true`, estimated by Gantry (`"estimated": true` and `x-gantry-token-count: estimate`) |
+| `/v1/responses/input_tokens` | `openai` and `azure` as sent (estimated when the server has no such route); every other kind as a messages count |
+| `/v1/images/generations` | `openai`, `azure`; `gemini` and `vertex` (Imagen and Gemini image models), `bedrock_converse` (Titan Image Generator, Nova Canvas, Stability AI), translated |
+| `/v1/rerank` | `openai`, `cohere`; `vertex` and `bedrock_converse`, translated |
+| `/v1/responses`, `/v1/embeddings`, `/v1/images/edits`, `/v1/images/variations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/moderations`, `/v1/ocr` | `openai` only |
 
 A model on a provider that does not serve the route is refused with `wrong_route`, and the message names the route to use. An alias tries only the deployments whose provider serves the route. See [Providers](/providers/overview/).
 

@@ -100,6 +100,7 @@ const KNOWN: &[&str] = &[
     "storage_url",
     "per_second",
     "per_call",
+    "per_page",
     "above_prompt_tokens",
     "price",
     "console",

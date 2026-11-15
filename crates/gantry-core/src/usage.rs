@@ -457,6 +457,9 @@ pub struct Price {
     /// US dollars per object created, for what is billed per use rather than by the token.
     #[serde(default)]
     pub per_call: Option<f64>,
+    /// US dollars per page read, for an OCR model: each page the answer says it processed is charged this.
+    #[serde(default)]
+    pub per_page: Option<f64>,
     /// Where the price came from, written in each usage record. Never read from a file: a price in one is the policy's.
     #[serde(skip)]
     pub source: PriceSource,
@@ -519,6 +522,7 @@ impl Price {
             batch_cache_read: None,
             per_second: None,
             per_call: None,
+            per_page: None,
             source: PriceSource::Builtin,
         }
     }
@@ -595,6 +599,7 @@ impl Price {
             self.batch_cache_read,
             self.per_second,
             self.per_call,
+            self.per_page,
         ];
         if all.into_iter().flatten().any(|p| !p.is_finite() || p < 0.0) {
             return Err(format!(
@@ -804,6 +809,7 @@ fn litellm_row(line: &'static str) -> Option<(&'static str, Price)> {
             batch_cache_read: None,
             per_second: None,
             per_call: None,
+            per_page: None,
             source: PriceSource::Litellm,
         })
     };

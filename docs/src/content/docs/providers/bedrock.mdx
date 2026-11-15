@@ -199,6 +199,22 @@ POST https://bedrock-runtime.us-east-1.amazonaws.com/model/meta.llama3-1-70b-ins
 - Cohere takes a list; `input_type` (default `search_document`) and `dimensions` (as `output_dimension`) are carried over.
 - Tokens are Titan's `inputTextTokenCount`, or Bedrock's `X-Amzn-Bedrock-Input-Token-Count` header for Cohere.
 
+### Images
+
+`POST /v1/images/generations` for an Amazon Titan Image Generator, Amazon Nova Canvas or Stability AI model goes to InvokeModel with the body that model takes, and comes back as OpenAI's `data` list of `b64_json` images:
+
+- Titan and Nova Canvas: a `TEXT_IMAGE` task; `n` is `numberOfImages`, `size` is `width` and `height`, `quality: hd` is `premium`.
+- Stability AI (Stable Image, SD3): one image per request; `size` becomes the nearest `aspect_ratio` the model takes. SDXL 1.0 takes its own older body.
+- `response_format: url`, `style` and any field with no equivalent are refused by name, before anything is sent. Each image is charged the model's `per_image` price.
+
+### Rerank
+
+`POST /v1/rerank` (Cohere's shape) for `cohere.rerank-v3-5:0` or `amazon.rerank-v1:0` goes to InvokeModel and comes back as `{"results": [{"index": ..., "relevance_score": ...}]}`. Cohere's model gets `api_version: 2`; `rank_fields` and other fields Bedrock does not take are refused by name.
+
+### Token counts
+
+`POST /v1/messages/count_tokens` for a Converse model goes to Bedrock's CountTokens with the request as a Converse body (`input.converse`), and `inputTokens` comes back as `{"input_tokens": n}`.
+
 ### Prices
 
 A model named for callers (`llama-3.1-70b`) is priced as the Bedrock model ID it is called by when the policy sets no price for it, and an inference profile (`us.meta...`) as its model: the LiteLLM price table holds Bedrock's IDs. Set `prices:` in the policy for a model the table lacks.
@@ -206,6 +222,17 @@ A model named for callers (`llama-3.1-70b`) is priced as the Bedrock model ID it
 ## Passthrough
 
 `/bedrock/<path>` reaches Bedrock's own API, signed with the provider's AWS credentials, on paths a rule lists under `passthrough:` for the provider, for example `/bedrock/model/amazon.nova-pro-v1:0/converse` or Bedrock batch inference. The model ID in a `/model/<id>/...` path is decided by the rule under the name the policy knows it by, and the call is recorded and metered like any other. With several Bedrock providers, name one in `x-gantry-provider`. A streamed answer (`invoke-with-response-stream`, `converse-stream`) is passed on as Bedrock's event stream, unchanged, and charged the usage its events report: the Anthropic `message_start` and `message_delta` counts inside InvokeModel's `chunk` events, or ConverseStream's `metadata` event. See [Passthrough](/governance/policy/#passthrough).
+
+## The AWS SDKs
+
+boto3 and the other AWS SDKs reach Gantry on the Bedrock runtime's own routes: `/model/<id>/converse`, `/converse-stream`, `/invoke`, `/invoke-with-response-stream` and `/count-tokens`. Point the SDK at Gantry and give it the Gantry key as its Bedrock API key:
+
+```bash
+export AWS_ENDPOINT_URL_BEDROCK_RUNTIME=http://127.0.0.1:8080
+export AWS_BEARER_TOKEN_BEDROCK=gantry_...
+```
+
+The SDK sends the key as a Bearer token. An SDK that signs with AWS credentials can send the Gantry key in `x-api-key` instead; its signature is removed, since Gantry cannot check it, and Gantry signs the request to Bedrock with the provider's own credentials. The model in the path is the Bedrock model ID or the name the policy gives it, decided by the caller's rule as on any model route, and no `passthrough:` entry is needed. The body and answer pass as Bedrock's own, streams included, metered like passthrough. A refusal comes back in the shape the SDKs read: `message`, the exception's name in `x-amzn-errortype` (`AccessDeniedException`, `ValidationException`, `ThrottlingException`), and Gantry's code in `gantry_code`.
 
 ## Errors from gantry check
 

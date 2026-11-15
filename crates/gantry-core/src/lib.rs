@@ -20,6 +20,7 @@ pub mod keyfile;
 pub mod kill;
 pub mod litellm;
 pub mod mcp;
+pub mod media;
 pub mod metrics;
 pub mod policy;
 pub mod replicate;
