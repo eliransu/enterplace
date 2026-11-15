@@ -55,7 +55,8 @@ run() {
   dir=$work/bin-$case_name
   # A home of its own, so the PATH line goes to a startup file of the test's, never this machine's.
   mkdir -p "$work/home-$case_name"
-  if env HOME="$work/home-$case_name" SHELL=/bin/zsh "$@" GANTRY_REPO_URL="http://127.0.0.1:$port/$repo" GANTRY_INSTALL_DIR="$dir" \
+  # XDG_CONFIG_HOME and ZDOTDIR (set on CI runners) would point the startup file outside it.
+  if env -u XDG_CONFIG_HOME -u ZDOTDIR HOME="$work/home-$case_name" SHELL=/bin/zsh "$@" GANTRY_REPO_URL="http://127.0.0.1:$port/$repo" GANTRY_INSTALL_DIR="$dir" \
     GANTRY_ALLOWED_SIGNERS="$work/allowed_signers" "${INSTALL_SH:-sh}" "$root/install.sh" > "$work/$case_name.log" 2>&1; then
     if [ "$expect" != fail ] && "$dir/gantry" version | grep -q "gantry $expect " && grep -q 'Next: .*gantry start' "$work/$case_name.log"; then
       echo "ok   $case_name"; return
