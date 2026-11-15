@@ -3,7 +3,8 @@ name: release
 # On a v* tag the signed files go to a GitHub Release of this repository, with the CHANGELOG section as its
 # notes, and the Homebrew formula goes to the tap eliransu/homebrew-tap. Every push to main of eliransu/gantry replaces
 # the rolling pre-release `edge` with that commit's signed files (install.sh falls back to it before the first stable
-# release). Run by hand (gh workflow run release.yml --ref <branch>) it is a dry run: every step but the publishing.
+# release). Run by hand on main of eliransu/gantry it publishes edge too; on any other branch it is a dry run: every
+# step but the publishing.
 # The binaries: linux amd64 and arm64 (static musl, built twice and compared byte for byte) and macOS arm64 and amd64
 # (built once on their own runners: not checked for reproducibility).
 # How to release: RELEASING.md. image.yml adds the image digest to the same release.
@@ -205,8 +206,9 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           ls -l dist
-          # A push to main: the rolling pre-release edge, deleted and made again on this commit with its files.
-          if [ "${{ github.event_name }}" = push ] && [ "${{ github.ref_type }}" = branch ]; then
+          # main of eliransu/gantry, pushed or run by hand (push triggers do not fire there yet): the rolling
+          # pre-release edge, deleted and made again on this commit with its files.
+          if [ "${{ github.ref }}" = refs/heads/main ] && [ "$REPO" = eliransu/gantry ]; then
             gh release delete edge --repo "$REPO" --cleanup-tag --yes 2> /dev/null || true
             gh release create edge dist/* --repo "$REPO" --target "$GITHUB_SHA" --prerelease --latest=false \
               --title "Gantry edge (main ${GITHUB_SHA::12})" \

@@ -77,7 +77,8 @@ set as the secret `HOMEBREW_TAP_TOKEN` of eliransu/gantry. Then `brew install el
 
 ## Dry run
 
-Both workflows run without a tag, publishing nothing:
+Both workflows run without a tag, publishing nothing (release.yml run by hand on `main` of eliransu/gantry publishes
+the rolling `edge` pre-release, as a push to main does; use another branch for a dry run):
 
 ```bash
 gh workflow run release.yml --repo eliransu/gantry --ref <branch>
