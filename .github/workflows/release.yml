@@ -1,20 +1,32 @@
 name: release
 # Package 7.2: a release is built twice and must be the same bytes, rolls back onto its own data, and is signed.
 # On a v* tag the signed files go to a GitHub Release of this repository, with the CHANGELOG section as its
-# notes. Run by hand (gh workflow run release.yml --ref <branch>) it is a dry run: every step but the GitHub Release.
+# notes, and the Homebrew formula goes to the tap eliransu/homebrew-tap. Every push to main of eliransu/gantry replaces
+# the rolling pre-release `edge` with that commit's signed files (install.sh falls back to it before the first stable
+# release). Run by hand (gh workflow run release.yml --ref <branch>) it is a dry run: every step but the publishing.
+# The binaries: linux amd64 and arm64 (static musl, built twice and compared byte for byte) and macOS arm64 and amd64
+# (built once on their own runners: not checked for reproducibility).
 # How to release: RELEASING.md. image.yml adds the image digest to the same release.
 # The Helm chart goes to ghcr.io/<owner>/charts/gantry as an OCI artifact, signed with cosign keyless (this workflow's
 # GitHub OIDC identity). scripts/verify_release.sh checks it beside the image.
 on:
   push:
     tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
+
+# One edge publish at a time; a newer push to main supersedes an older one still running. Tags never cancel.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 permissions:
   contents: read
 
 jobs:
   version:
+    # Pushes to main publish edge on the public repository only; elsewhere they start nothing.
+    if: github.event_name != 'push' || github.ref_type == 'tag' || github.repository == 'eliransu/gantry'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,16 +58,33 @@ jobs:
     strategy:
       matrix:
         include:
-          - platform: amd64
+          - platform: linux-amd64
             runner: ubuntu-latest
-          - platform: arm64
+          - platform: linux-arm64
             runner: ubuntu-24.04-arm
+          - platform: darwin-arm64
+            runner: macos-latest
+          - platform: darwin-amd64
+            runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - if: runner.os == 'Linux'
+        uses: docker/setup-buildx-action@v3
       # Two builds from scratch on this platform, compared byte for byte.
-      - run: PLATFORMS=${{ matrix.platform }} scripts/release.sh reproduce
+      - if: runner.os == 'Linux'
+        run: PLATFORMS=${PLATFORM#linux-} scripts/release.sh reproduce
+        env:
+          PLATFORM: ${{ matrix.platform }}
+      # One native build: the same enterprise binary (the open source edition without a key), for macOS 11 and later.
+      # Paths are remapped as in the Dockerfile; the byte-for-byte check is linux only.
+      - if: runner.os == 'macOS'
+        run: |
+          export RUSTFLAGS="--remap-path-prefix=$PWD=. --remap-path-prefix=$HOME/.cargo=cargo"
+          scripts/release.sh tarball
+          tar -tzf dist/gantry-*.tar.gz
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.platform }}
@@ -173,8 +202,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
           ls -l dist
+          # A push to main: the rolling pre-release edge, deleted and made again on this commit with its files.
+          if [ "${{ github.event_name }}" = push ] && [ "${{ github.ref_type }}" = branch ]; then
+            gh release delete edge --repo "$REPO" --cleanup-tag --yes 2> /dev/null || true
+            gh release create edge dist/* --repo "$REPO" --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Gantry edge (main ${GITHUB_SHA::12})" \
+              --notes "Rolling pre-release, rebuilt on every push to main: commit $GITHUB_SHA. Not a stable release; pin a vX.Y.Z tag in production. Install: GANTRY_VERSION=edge, see install.sh."
+            exit 0
+          fi
           if [ "${{ github.ref_type }}" != tag ]; then
             echo "dry run: would create release $TAG of ${{ github.repository }} with the files above and these notes:"
             cat release-notes.md
@@ -187,3 +225,41 @@ jobs:
             gh release create "$TAG" dist/* --repo "${{ github.repository }}" --verify-tag \
               --title "Gantry ${TAG#v}" --notes-file release-notes.md
           fi
+
+  # The Homebrew formula of a stable release, rendered from packaging/homebrew/gantry.rb with this release's URLs and
+  # hashes and pushed to the tap eliransu/homebrew-tap. A dry run renders and prints it. Edge has no formula.
+  homebrew:
+    needs: publish
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-release
+          path: dist
+      - name: Render and push the formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then tag=${{ github.ref_name }}; else tag=v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1); fi
+          packaging/homebrew/render.sh dist "$tag" > gantry.rb
+          cat gantry.rb
+          if [ "${{ github.ref_type }}" != tag ]; then
+            echo "dry run: would push Formula/gantry.rb to eliransu/homebrew-tap"
+            exit 0
+          fi
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set, so the formula was not pushed. Create the public repo eliransu/homebrew-tap, then: gh secret set HOMEBREW_TAP_TOKEN --repo eliransu/gantry (a fine-grained token with contents write on the tap)."
+            exit 0
+          fi
+          git clone -q "https://x-access-token:$HOMEBREW_TAP_TOKEN@github.com/eliransu/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp gantry.rb tap/Formula/gantry.rb
+          cd tap
+          git add Formula/gantry.rb
+          if git diff --cached --quiet; then echo "the tap already has this formula"; exit 0; fi
+          git -c user.name="gantry release" -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+            commit -qm "gantry ${tag#v}"
+          git push -q origin HEAD
+          echo "pushed Formula/gantry.rb for ${tag#v}: brew install eliransu/tap/gantry"

@@ -13,6 +13,21 @@ One binary, `gantry`, runs the gateway and every command around it. Every argume
 gantry help
 ```
 
+## Install
+
+```bash
+curl -fsSL https://gantry.eliran.me/install.sh | sh
+```
+
+| Variable | Default | Effect |
+|---|---|---|
+| `GANTRY_VERSION` | the latest stable release, else `edge` | `edge` (built from the latest commit on main) or a tag such as `v0.1.0` |
+| `GANTRY_INSTALL_DIR` | `~/.local/bin` | Where `gantry` goes. A folder you cannot write, such as `/usr/local/bin`, is written with sudo |
+
+The script supports macOS and Linux on x86_64 and arm64. It verifies `SHA256SUMS.sig` with `ssh-keygen` against the release key (the same key as `release/allowed_signers` in the repository), then the tarball's SHA256, and refuses a download that fails either check. Without OpenSSH 8.1 or later it warns and relies on the SHA256 over HTTPS. It prints how to add the folder to `PATH` when it is not there.
+
+Homebrew, stable releases only: `brew install eliransu/tap/gantry`. The tarballs, `SHA256SUMS` and signatures are on each GitHub Release for a manual download (check them with `scripts/release.sh verify`). The binary is the one Gantry build: without a license key it is the open source edition. The container image is `ghcr.io/eliransu/gantry`, and `cargo install --path crates/gantry-cli` builds the open source binary from source.
+
 ## Conventions
 
 | Item | Behavior |

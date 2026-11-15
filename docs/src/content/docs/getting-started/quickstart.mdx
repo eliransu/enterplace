@@ -1,15 +1,27 @@
 ---
 title: Quickstart
-description: Start Gantry with one docker command, send a governed request and verify the audit log in about two minutes.
+description: Start Gantry with one command (the CLI install script or Docker), send a governed request and verify the audit log in about two minutes.
 sidebar:
   order: 1
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-One command starts Gantry with a provider key: every request gets an identity, a policy decision and a hash-chained audit record. You need Docker and a key for one provider (OpenAI in this guide). To run it in your cloud with Postgres instead, use a [one-click deploy](/deploy/one-click/): a few clicks on Render, Railway, Fly.io, DigitalOcean, Cloud Run, AWS or Azure.
+One command starts Gantry with a provider key: every request gets an identity, a policy decision and a hash-chained audit record. You need a key for one provider (OpenAI in this guide), and either a Mac or Linux machine or Docker. To run it in your cloud with Postgres instead, use a [one-click deploy](/deploy/one-click/): a few clicks on Render, Railway, Fly.io, DigitalOcean, Cloud Run, AWS or Azure.
 
-## Run the image
+## Install the CLI
+
+```bash
+curl -fsSL https://gantry.eliran.me/install.sh | sh
+export OPENAI_API_KEY=sk-...
+gantry start
+```
+
+Or with Homebrew: `brew install eliransu/tap/gantry`, then `gantry start`.
+
+The script picks the binary for your machine (macOS or Linux, x86_64 or arm64) from the latest GitHub Release, checks its release signature and SHA256, and installs it to `~/.local/bin`. `GANTRY_VERSION=edge` installs the build of the latest commit on main, `GANTRY_VERSION=v0.1.0` a given release, and `GANTRY_INSTALL_DIR=/usr/local/bin` another folder (with sudo when needed). `gantry start` writes an observe-mode policy and an admin key in the current folder, prints the settings for your coding tools and serves on `http://localhost:8080`. The rest of this guide uses the container; with the CLI, run the `docker exec gantry /gantry ...` commands as `gantry ...` in the same folder.
+
+## Or run the image
 
 ```bash
 docker run --name gantry -p 8080:8080 -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY=sk-... ghcr.io/eliransu/gantry

@@ -136,6 +136,20 @@ jobs:
           name: gantry-enterprise-windows-x86_64
           path: target/release/gantry-enterprise.exe
 
+  # install.sh (curl ... | sh) against a fake signed release on localhost, under sh and dash, and shellcheck clean.
+  install-script:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: runner.os == 'Linux'
+        run: shellcheck -s sh install.sh scripts/install_check.sh
+      - run: scripts/install_check.sh
+      - if: runner.os == 'Linux'
+        run: INSTALL_SH=dash scripts/install_check.sh
+
   supply-chain:
     runs-on: ubuntu-latest
     steps:
