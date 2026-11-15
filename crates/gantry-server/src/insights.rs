@@ -28,7 +28,8 @@ use crate::{credentials::MasterKey, store::PgStore};
 pub const NAMESPACE: &str = "insights";
 
 /// Never edit an entry that has shipped: add one.
-pub const MIGRATIONS: &[&str] = &["
+pub const MIGRATIONS: &[&str] = &[
+    "
 CREATE TABLE gantry_requests (
     id text PRIMARY KEY,
     time timestamptz NOT NULL,
@@ -65,7 +66,11 @@ CREATE TABLE gantry_bodies (
     sealed bytea NOT NULL
 );
 CREATE INDEX gantry_bodies_expires ON gantry_bodies (expires);
-"];
+",
+    "
+ALTER TABLE gantry_requests ADD COLUMN stages text;
+",
+];
 
 /// Most records copied in one pass.
 const BATCH: usize = 5000;
@@ -244,7 +249,7 @@ fn int(v: Option<u64>) -> Option<i64> {
     v.and_then(|v| i64::try_from(v).ok())
 }
 
-const COLUMNS: &str = "id, to_char(time AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'), replica, n, hash, linked, line, path, labels::text, verdict, code, rule, findings, status, input_tokens, output_tokens, cost_usd, charged_usd, latency_ms, body";
+const COLUMNS: &str = "id, to_char(time AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'), replica, n, hash, linked, line, path, labels::text, verdict, code, rule, findings, status, input_tokens, output_tokens, cost_usd, charged_usd, latency_ms, body, coalesce(stages, '[]')";
 
 fn row_of(r: &tokio_postgres::Row) -> Result<Row, String> {
     let get = |i: usize| r.try_get::<_, String>(i).map_err(db);
@@ -273,6 +278,7 @@ fn row_of(r: &tokio_postgres::Row) -> Result<Row, String> {
         charged_usd: r.try_get(17).map_err(db)?,
         latency_ms: unsigned(r.try_get(18).map_err(db)?),
         body: r.try_get(19).map_err(db)?,
+        stages: serde_json::from_str(&get(20)?).unwrap_or_default(),
     })
 }
 
@@ -487,8 +493,9 @@ impl PgIndex {
                     }
                     tx.execute(
                         "UPDATE gantry_requests SET labels = labels || CAST($2 AS text)::jsonb, status = $3, input_tokens = $4, output_tokens = $5, \
-                         cost_usd = $6, charged_usd = $7, latency_ms = $8, body = $9 WHERE id = $1",
-                        &[&usage.id, &serde_json::Value::Object(moved).to_string(), &usage.status.map(i32::from), &int(usage.input_tokens), &int(usage.output_tokens), &usage.cost_usd, &usage.charged_usd, &int(usage.latency_ms), &usage.body],
+                         cost_usd = $6, charged_usd = $7, latency_ms = $8, body = $9, stages = $10 WHERE id = $1",
+                        &[&usage.id, &serde_json::Value::Object(moved).to_string(), &usage.status.map(i32::from), &int(usage.input_tokens), &int(usage.output_tokens), &usage.cost_usd, &usage.charged_usd, &int(usage.latency_ms), &usage.body,
+                          &serde_json::to_string(&usage.stages).unwrap_or_else(|_| "[]".into())],
                     )
                     .await
                     .map_err(db)?;

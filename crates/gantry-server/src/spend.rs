@@ -1416,6 +1416,8 @@ pub(crate) struct Admitted {
     deferred: Option<tokio::sync::oneshot::Sender<Deferred>>,
     /// Told the tokens the answer used (input and output, when the provider said), for the deployment's `tpm`.
     on_tokens: Option<Box<dyn FnOnce(Option<u64>) + Send + Sync>>,
+    /// Where the request's time went up to its answer's headers, and when they came: the rest is the stream.
+    stages: Option<(crate::stages::Stages, Instant)>,
 }
 
 /// What a background response leaves to be settled when it ends: the reservations it holds (as a batch keeps them),
@@ -1588,6 +1590,7 @@ pub(crate) async fn admit(
         stream_copy: None,
         deferred: None,
         on_tokens: None,
+        stages: None,
     };
     // The caller pays their provider: unless the rule says otherwise, budgets (what the organization pays) do not
     // reserve or count it. Rate and token limits still hold.
@@ -2334,6 +2337,11 @@ impl Admitted {
     }
 
     /// Marks whether the provider holds the request now, so a caller who leaves before the answer is charged.
+    /// The stages measured before the answer's body, for the usage record. The stream is timed from now.
+    pub(crate) fn staged(&mut self, stages: crate::stages::Stages) {
+        self.stages = Some((stages, Instant::now()));
+    }
+
     pub(crate) fn forwarded(&mut self, yes: bool) {
         self.forwarded = yes;
     }
@@ -2662,6 +2670,15 @@ impl Admitted {
                 None => commit(),
             }
         }
+        let staged = self.stages.take().map(|(stages, since)| {
+            let stream = since.elapsed();
+            self.spend.metrics.stage("stream", stream);
+            (stages, stream)
+        });
+        // A request that reached a provider with no price for its model: its spend is not counted anywhere.
+        if self.price.is_none() && !hit && !left {
+            self.spend.metrics.unpriced(&self.model);
+        }
         self.audit.as_ref()?;
         let mut record = Map::new();
         record.insert("event".into(), "usage".into());
@@ -2764,6 +2781,9 @@ impl Admitted {
                 .unwrap_or(u64::MAX)
                 .into(),
         );
+        if let Some((stages, stream)) = staged {
+            stages.record(stream, &mut record);
+        }
         if captured {
             // The chain says a body was kept, and the console offers it only then.
             record.insert("body".into(), "captured".into());

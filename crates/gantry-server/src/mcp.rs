@@ -1618,6 +1618,9 @@ async fn record(
         ..Entry::default()
     };
     let mut record = gantry_core::audit::record(&entry);
+    if let (Some(refusal), Some(_)) = (refusal, &asked.item) {
+        count(mcp, asked, refusal.code);
+    }
     let item = asked.item.as_ref().map(|(_, v)| v.clone());
     for (field, value) in [
         ("mcp_method", &asked.method),
@@ -1677,9 +1680,28 @@ async fn event(mcp: &Mcp, name: &str, fields: Value) {
     }
 }
 
+/// Counts a call to a tool, prompt or resource for `/metrics`, by server and outcome. A server the policy does not
+/// name is counted as `unknown`, so a caller cannot add label values.
+fn count(mcp: &Mcp, asked: &Asked, outcome: &str) {
+    let server = asked
+        .server
+        .as_deref()
+        .filter(|name| mcp.servers.iter().any(|s| s.name == *name))
+        .unwrap_or("unknown");
+    mcp.app.metrics.mcp_called(server, outcome);
+}
+
 /// How a forwarded call ended, after its decision record. The tool has run by now, so a failure to write this is
 /// reported and the answer still goes back.
 async fn record_outcome(mcp: &Mcp, decision: &str, asked: &Asked, outcome: Map<String, Value>) {
+    count(
+        mcp,
+        asked,
+        outcome
+            .get("outcome")
+            .and_then(Value::as_str)
+            .unwrap_or("ok"),
+    );
     let mut record = Map::new();
     record.insert("event".into(), "mcp_result".into());
     record.insert("id".into(), decision.into());

@@ -98,8 +98,8 @@ async fn a_requests_span_reaches_the_collector_inside_the_callers_trace() -> Tes
         policy: Some(loaded.policy),
         traces: Some(TraceExport {
             endpoint: format!("http://{collector}/v1/traces"),
-            headers: vec![],
             service: "gantry-test".into(),
+            ..TraceExport::default()
         }),
         ..Config::default()
     })?;
@@ -122,22 +122,32 @@ async fn a_requests_span_reaches_the_collector_inside_the_callers_trace() -> Tes
         .to_string();
     response.into_body().collect().await?;
 
-    // Export runs once a second.
-    let mut span = None;
+    // Export runs once a second, and an attempt's span may leave a batch before its request's.
+    let mut spans = Vec::new();
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let all = exported.lock().map_err(|_| "poisoned")?.clone();
-        if let Some(body) = all.first() {
-            span = Some(body.clone());
+        spans = all
+            .iter()
+            .flat_map(|body| {
+                body["resourceSpans"][0]["scopeSpans"][0]["spans"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+        if spans.len() >= 2 {
+            assert_eq!(
+                all[0]["resourceSpans"][0]["resource"]["attributes"][0]["value"]["stringValue"],
+                "gantry-test"
+            );
             break;
         }
     }
-    let body = span.ok_or("no span reached the collector")?;
-    assert_eq!(
-        body["resourceSpans"][0]["resource"]["attributes"][0]["value"]["stringValue"],
-        "gantry-test"
-    );
-    let s = &body["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
+    let s = spans
+        .iter()
+        .find(|s| s["name"] == "POST /v1/chat/completions")
+        .ok_or("the request's span never reached the collector")?;
     assert_eq!(
         s["traceId"], "4bf92f3577b34da6a3ce929d0e0e4736",
         "the span joins the caller's trace"
@@ -149,20 +159,193 @@ async fn a_requests_span_reaches_the_collector_inside_the_callers_trace() -> Tes
         "the span names the decision, to find its audit record"
     );
     assert!(text.contains("gen_ai.usage.output_tokens"), "{text}");
+    assert!(text.contains("gen_ai.operation.name"), "{text}");
     assert!(
         !text.contains("maya@example.com"),
         "no person's name in a trace"
     );
+    // The attempt at the provider is a child span named by the GenAI conventions, and the provider's parent.
+    let attempt = spans
+        .iter()
+        .find(|s| s["name"] == "chat model-a")
+        .ok_or("no span for the attempt at the provider")?;
+    assert_eq!(attempt["parentSpanId"], s["spanId"]);
+    assert_eq!(attempt["traceId"], s["traceId"]);
+    assert_eq!(attempt["kind"], 3, "a client span");
+    let text = attempt.to_string();
+    for wanted in [
+        "gen_ai.provider.name",
+        "gen_ai.request.model",
+        "server.address",
+        "http.response.status_code",
+    ] {
+        assert!(text.contains(wanted), "{wanted} missing from {text}");
+    }
 
     let sent = upstream_saw.lock().map_err(|_| "poisoned")?.clone();
     let expected = format!(
         "00-4bf92f3577b34da6a3ce929d0e0e4736-{}-01",
-        s["spanId"].as_str().ok_or("no span id")?
+        attempt["spanId"].as_str().ok_or("no span id")?
     );
     assert_eq!(
         sent,
         vec![expected],
-        "the provider's parent is Gantry's span"
+        "the provider's parent is the attempt's span"
+    );
+    Ok(())
+}
+
+/// A gateway on `dir` whose provider is `provider`, exporting as `export` says.
+fn gateway(
+    dir: &std::path::Path,
+    provider: SocketAddr,
+    export: TraceExport,
+) -> Result<Router, Box<dyn std::error::Error>> {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(
+        dir.join("gantry.policy.yaml"),
+        format!(
+            "version: 1\nproviders:\n  - name: mock\n    kind: openai\n    url: http://{provider}\n    allow_private: true\n    key_env: UNUSED\n    models: [model-a]\nrules:\n  - name: everyone\n    principals: {{ any: true }}\n    models: [model-a]\n"
+        ),
+    )?;
+    std::fs::write(
+        dir.join("gantry.keys.yaml"),
+        format!(
+            "keys:\n  - name: maya@example.com\n    team: payments\n    sha256: {}\n",
+            sha256_hex(KEY.as_bytes())
+        ),
+    )?;
+    let loaded = gantry_core::config::load(&dir.join("gantry.policy.yaml"), None)
+        .map_err(|e| e.join("\n"))?;
+    Ok(gantry_server::app(Config {
+        upstream: Some(loaded.providers[0].url.clone()),
+        provider_key: Some(Secret::new("provider-secret")),
+        audit: Some(Audit {
+            log: Arc::new(AuditLog::open(&dir.join("gantry-audit.jsonl"))?),
+            provider: "mock".into(),
+            policy_sha256: loaded.policy_sha256.clone(),
+            keys_sha256: loaded.keys_sha256.clone(),
+        }),
+        policy: Some(loaded.policy),
+        traces: Some(export),
+        ..Config::default()
+    })?)
+}
+
+#[tokio::test]
+async fn spans_reach_a_grpc_collector_and_propagation_can_be_turned_off() -> TestResult {
+    let upstream_saw = Arc::new(Mutex::new(Vec::<String>::new()));
+    let saw = upstream_saw.clone();
+    let provider = listen(Router::new().route(
+        "/v1/chat/completions",
+        post(move |request: Request<Body>| {
+            if let Ok(mut all) = saw.lock() {
+                all.push(format!(
+                    "{:?} {:?}",
+                    request.headers().get("traceparent"),
+                    request.headers().get("tracestate")
+                ));
+            }
+            async {
+                (
+                    [(header::CONTENT_TYPE, "application/json")],
+                    r#"{"id":"x","object":"chat.completion","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+                )
+            }
+        }),
+    ))
+    .await?;
+    // An OTLP/gRPC collector: HTTP/2 without TLS, one length-prefixed protobuf message a call, grpc-status 0.
+    let exported = Arc::new(Mutex::new(Vec::<(String, String, Vec<u8>)>::new()));
+    let keep = exported.clone();
+    let collector = listen(Router::new().route(
+        "/opentelemetry.proto.collector.trace.v1.TraceService/Export",
+        post(move |request: Request<Body>| {
+            let keep = keep.clone();
+            async move {
+                let version = format!("{:?}", request.version());
+                let kind = request
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                let body = request
+                    .into_body()
+                    .collect()
+                    .await
+                    .map(|b| b.to_bytes().to_vec())
+                    .unwrap_or_default();
+                if let Ok(mut all) = keep.lock() {
+                    all.push((version, kind, body));
+                }
+                (
+                    [
+                        (header::CONTENT_TYPE, "application/grpc"),
+                        (header::HeaderName::from_static("grpc-status"), "0"),
+                    ],
+                    // An empty ExportTraceServiceResponse, framed.
+                    vec![0u8, 0, 0, 0, 0],
+                )
+            }
+        }),
+    ))
+    .await?;
+    let dir = std::env::temp_dir().join(format!("gantry-traces-grpc-{}", std::process::id()));
+    let export = TraceExport::from_env(|name| match name {
+        "OTEL_EXPORTER_OTLP_ENDPOINT" => Some(format!("http://{collector}")),
+        "OTEL_EXPORTER_OTLP_PROTOCOL" => Some("grpc".into()),
+        "GANTRY_TRACE_PROPAGATION" => Some("none".into()),
+        _ => None,
+    })?
+    .ok_or("no export")?;
+    let app = gateway(&dir, provider, export)?;
+    let response = app
+        .oneshot(
+            Request::post("/v1/chat/completions")
+                .header(header::AUTHORIZATION, format!("Bearer {KEY}"))
+                .header("traceparent", CALLER)
+                .header("tracestate", "vendor=1")
+                .body(Body::from(r#"{"model":"model-a","messages":[]}"#))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    response.into_body().collect().await?;
+    let mut all = Vec::new();
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        all = exported.lock().map_err(|_| "poisoned")?.clone();
+        let bytes: Vec<u8> = all.iter().flat_map(|(_, _, b)| b.clone()).collect();
+        if bytes
+            .windows(b"POST /v1/chat/completions".len())
+            .any(|w| w == b"POST /v1/chat/completions")
+        {
+            break;
+        }
+    }
+    let (version, kind, first) = all.first().ok_or("nothing reached the gRPC collector")?;
+    assert_eq!(version, "HTTP/2.0");
+    assert_eq!(kind, "application/grpc");
+    // The frame: not compressed, then the message's length.
+    assert_eq!(first[0], 0);
+    let length = u32::from_be_bytes([first[1], first[2], first[3], first[4]]) as usize;
+    assert_eq!(length, first.len() - 5);
+    // The message opens with resource_spans (field 1, length-delimited).
+    assert_eq!(first[5], 0x0a);
+    let bytes: Vec<u8> = all.iter().flat_map(|(_, _, b)| b.clone()).collect();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"POST /v1/chat/completions"), "the request's span");
+    assert!(has(b"chat model-a"), "the attempt's span");
+    assert!(has(b"gen_ai.request.model"));
+    assert!(
+        !has(&[0x4b, 0xf9, 0x2f, 0x35, 0x77, 0xb3, 0x4d, 0xa6]),
+        "with propagation off the span does not join the caller's trace"
+    );
+    assert_eq!(
+        upstream_saw.lock().map_err(|_| "poisoned")?.clone(),
+        vec!["None None".to_string()],
+        "with propagation off the provider gets no trace context, the caller's included"
     );
     Ok(())
 }

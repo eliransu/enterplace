@@ -573,6 +573,20 @@ impl Pool {
         out
     }
 
+    /// The share of its rate limits each deployment's provider said was left, while that is still believed.
+    pub(crate) fn headrooms(&self) -> Vec<(String, f64)> {
+        let now = Instant::now();
+        let mut out: Vec<_> = locked(&self.deployments)
+            .iter()
+            .filter_map(|(name, d)| {
+                let (left, at) = d.headroom?;
+                (now.duration_since(at) < HEADROOM_FOR).then(|| (name.clone(), left))
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     /// A deployment answered: its circuit closes and its backoff starts over.
     pub(crate) fn answered(&self, deployment: &str) {
         if let Some(state) = locked(&self.deployments).get_mut(deployment) {

@@ -3155,8 +3155,16 @@ async fn check_lines(
                 .body(())
                 .map_err(|_| masked_unwritable())?
                 .into_parts();
-            let (result, entries) =
-                crate::guarded(state, &guards, seen, decision, parts, bytes.clone()).await;
+            let (result, entries) = crate::guarded(
+                state,
+                &guards,
+                seen,
+                decision,
+                parts,
+                bytes.clone(),
+                &mut Vec::new(),
+            )
+            .await;
             if observe {
                 checked
                     .would_refuse
@@ -3987,8 +3995,16 @@ async fn guard_text(
         .body(())
         .map_err(|_| masked_unwritable())?
         .into_parts();
-    let (result, entries) =
-        crate::guarded(state, &guards, seen, decision, parts, body.clone()).await;
+    let (result, entries) = crate::guarded(
+        state,
+        &guards,
+        seen,
+        decision,
+        parts,
+        body.clone(),
+        &mut Vec::new(),
+    )
+    .await;
     if policy.mode() == gantry_core::policy::Mode::Observe {
         seen.would_refuse.extend(crate::would_block(rule, &entries));
     }

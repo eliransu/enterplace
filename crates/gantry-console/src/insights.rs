@@ -450,6 +450,17 @@ fn row_sheet(row: &Row, close: &str) -> String {
         ("Cost, USD", row.cost_usd.map_or("-".into(), money)),
         ("Charged, USD", money(row.charged_usd)),
         ("Latency", ms(row.latency_ms)),
+    ]);
+    if !row.stages.is_empty() {
+        // Where the time went inside Gantry, in the order the request passed each stage.
+        let stages: Vec<String> = row
+            .stages
+            .iter()
+            .map(|(name, took)| format!("{} {took:.2} ms", name.replace('_', " ")))
+            .collect();
+        pairs.push(("Time by stage", esc(&stages.join(", "))));
+    }
+    pairs.extend([
         (
             "Chain",
             esc(&format!(

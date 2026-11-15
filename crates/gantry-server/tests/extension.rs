@@ -182,7 +182,7 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
             ("gantry_events".to_string(), 1),
             ("gantry_policy".to_string(), 1),
             ("gantry_routing".to_string(), 3),
-            ("insights".to_string(), 1),
+            ("insights".to_string(), 2),
             ("mcp".to_string(), 1),
         ]
     );
