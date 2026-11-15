@@ -2346,11 +2346,10 @@ mod tests {
         );
         let tools: Vec<&str> = actions.iter().filter_map(|a| a["tool"].as_str()).collect();
         assert_eq!(tools, ["claude-desktop", "claude-code", "vscode", "zed"]);
+        // As paths, so Windows' separators compare equal.
         assert_eq!(
-            actions[0]["backup"],
-            h.join(".config/Claude/claude_desktop_config.json.gantry-backup")
-                .display()
-                .to_string()
+            actions[0]["backup"].as_str().map(PathBuf::from),
+            Some(h.join(".config/Claude/claude_desktop_config.json.gantry-backup"))
         );
         assert_eq!(
             read(&h.join(".config/Claude/claude_desktop_config.json.gantry-backup")),

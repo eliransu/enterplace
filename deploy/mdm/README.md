@@ -1,18 +1,22 @@
 # MDM packaging for the Gantry device agent (plan 6.4, levels 1 and 2)
 
 On macOS the agent (`gantry device`) runs as a root LaunchDaemon; Linux and Windows are below. Every 5 minutes it reads the device profile from your
-Gantry gateway (license feature `devices`) and, for the person signed in at the screen, points Claude Code (managed
-settings in `/Library/Application Support/ClaudeCode/managed-settings.json`), Codex (`~/.codex/config.toml`) and the
-shell (`~/.config/gantry/env`) at the gateway. It puts them back if someone changes them, and reports every coding tool
-it finds (Claude Code, Codex, Cursor, GitHub Copilot, Zed, JetBrains AI, Qwen Code, Gemini CLI, Kilo Code, Roo Code,
-Claude Desktop) with whether it goes through Gantry or calls a provider directly. Owners read it on the console's
-Devices page. Docs: https://gantry-docs.eliran.me/operations/devices/
+Gantry gateway (license feature `devices`) and, for the person signed in at the screen, points the tools the profile
+names at the gateway: Claude Code (managed settings in `/Library/Application Support/ClaudeCode/managed-settings.json`),
+Codex (`~/.codex/config.toml`), OpenCode, Kilo CLI, Continue, Zed, Gemini CLI, Qwen Code and Aider, each through the
+file it documents, and the shell (`~/.config/gantry/env`). It puts them back if someone changes them, takes MCP servers
+an admin blocked out of the tools' MCP files (keeping each file as it was beside it, `<name>.gantry-backup`), and
+reports every coding tool, MCP server and AI app it finds. Owners read it on the console's Devices page. Docs:
+https://gantry-docs.eliran.me/operations/devices/ and, for Intune, Jamf, Kandji and Linux step by step,
+https://gantry-docs.eliran.me/operations/device-deployment/
 
 | File | What it is |
 |---|---|
 | `me.gantry.device.plist` | The LaunchDaemon. `CONTROL_PLANE_URL` (your gateway's address) is filled in by `build-pkg.sh`. |
 | `build-pkg.sh` | Builds a signed-ready `.pkg` with `pkgbuild`: binary in `/usr/local/bin`, daemon loaded on install. |
 | `gantry-device-token.mobileconfig` | Delivers the enrolment token as a managed preference (`me.gantry.device`, key `EnrolmentToken`). |
+| `gantry-device.service`, `install-linux.sh` | The systemd unit, and the script that installs the binary, the token and the unit on Linux. |
+| `windows/install.ps1` | The Windows installer: binary, token file and the scheduled task at sign-in. Deployed by Intune as a Win32 app. |
 | `level3-block-providers.mobileconfig.template` | **UNTESTED** sketch for level 3. Do not deploy before the device spike (plan 0.5) passes. |
 
 ## Steps
@@ -74,28 +78,54 @@ Claude Code's own telemetry instead. Docs: https://gantry-docs.eliran.me/integra
 
 ## Linux
 
-`gantry-device.service` runs the agent as root under systemd. Replace `CONTROL_PLANE_URL`, put the token in
-`/etc/gantry/device-token` (mode 0600), and `systemctl enable --now gantry-device`. As root it finds the signed-in
-person with `who` and works in `/home/<user>`; Claude Code's managed settings go to
-`/etc/claude-code/managed-settings.json`. Run as a user (a user unit, or by hand) it writes that user's own
-`~/.claude/settings.json`. Cursor and VS Code count as installed when `cursor` or `code` is on `PATH`.
+```sh
+sudo GANTRY_DEVICE_TOKEN=gantry_dev_... deploy/mdm/install-linux.sh https://gantry.example.com ./gantry
+sudo deploy/mdm/install-linux.sh --uninstall
+```
+
+The script installs the binary in `/usr/local/bin/gantry`, the token in `/etc/gantry/device-token` (mode 0600) and
+`gantry-device.service` with the control plane URL filled in, then enables and starts it. Its log is
+`journalctl -u gantry-device`. As root the agent finds the signed-in person with `who` and works in `/home/<user>`;
+Claude Code's managed settings go to `/etc/claude-code/managed-settings.json`. Run as a user (a user unit, or by hand)
+it writes that user's own `~/.claude/settings.json`. Cursor and VS Code count as installed when `cursor` or `code` is
+on `PATH`.
 
 ## Windows
 
-The agent runs as the signed-in user, from a scheduled task at logon, so it writes `%USERPROFILE%\.claude\settings.json`,
-`%USERPROFILE%\.codex\config.toml` and `%USERPROFILE%\.config\gantry\env`. The token is read from
-`C:\ProgramData\Gantry\device-token`, which Intune or Group Policy can deliver. Create the task with:
+The agent runs as the signed-in person, from a scheduled task at sign-in, so it writes that person's own files
+(`%USERPROFILE%\.claude\settings.json`, `%USERPROFILE%\.codex\config.toml`, `%APPDATA%\Zed\settings.json` and so
+on). `windows/install.ps1`, run as administrator or as SYSTEM, copies `gantry.exe` to `C:\Program Files\Gantry`,
+writes the token to `C:\ProgramData\Gantry\device-token` and registers the task `Gantry device agent`:
 
 ```bat
-schtasks /Create /TN "Gantry device agent" /SC ONLOGON /RL LIMITED ^
-  /TR "\"C:\Program Files\Gantry\gantry.exe\" device --control-plane https://gantry-control.example.com"
+powershell.exe -ExecutionPolicy Bypass -File install.ps1 -ControlPlane https://gantry.example.com -Token gantry_dev_...
+powershell.exe -ExecutionPolicy Bypass -File install.ps1 -Uninstall
 ```
 
-Cursor and VS Code count as installed when `%LOCALAPPDATA%\Programs\cursor` or `%LOCALAPPDATA%\Programs\Microsoft VS Code`
-exists. The shell env file is not read by Windows shells: set `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` with your
-device management tool there. Not run on a Windows machine yet: the paths follow each tool's documentation.
+With Intune: wrap the folder holding `gantry.exe` and `install.ps1` with `IntuneWinAppUtil.exe -c <folder> -s install.ps1 -o out`,
+add it as a Windows app (Win32) with the two commands above as install and uninstall commands, install behavior
+System, and the detection rule "file `C:\Program Files\Gantry\gantry.exe` exists". Leave `-Token` out when a platform
+script delivers the token file first. The script is not signed: sign it with your own certificate if your execution
+policy asks for it. An MSI was left out on purpose: the install is one file and one task, which a script Intune already
+deploys does without a WiX toolchain.
 
-## MCP inventory
+Build the binary on Windows (`cargo build --release -p gantry-enterprise`, `--target aarch64-pc-windows-msvc` for
+arm64), or take the `gantry-enterprise-windows-x86_64` artifact of the `device-agent` CI job on `main`.
+
+Cursor and VS Code count as installed when `%LOCALAPPDATA%\Programs\cursor` or `%LOCALAPPDATA%\Programs\Microsoft VS Code`
+exists; a command line tool installed with npm is found by its `.cmd` on `PATH`. The shell env file is not read by
+Windows shells: set `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` with your device management tool there. Built and
+unit-tested in CI on Windows, not run on a Windows fleet yet: the paths follow each tool's documentation.
+
+## Jamf and Kandji
+
+Both take the three macOS pieces above as they are. Jamf Pro: upload the `.mobileconfig` under Configuration Profiles,
+the token script under Settings, Scripts and the signed package under Settings, Packages, then one Policy that runs the
+script and installs the package, scoped like the profile. Kandji: a Custom Profile for the `.mobileconfig`, a Custom
+App (install type Package) for the package with the token script as its preinstall script, both assigned to one
+Blueprint.
+
+## MCP inventory and enforcement
 
 Every report also lists the MCP servers configured in each tool, with `tool`, `file`, `server`, `transport` (`http` or
 `stdio`), `target` (the URL without its query or login, or the command's file name) and `via_gantry` (whether the URL is
@@ -112,9 +142,21 @@ the gateway's `/mcp` or a bundle under it). Arguments, environment variables and
 VS Code's and Zed's files may hold comments and trailing commas; they are read as such. Project files (`.mcp.json`,
 `.cursor/mcp.json`, `.vscode/mcp.json`) are not read: the agent does not walk the disk for repositories.
 
+The same files are where the agent enforces an admin's decisions: a blocked server is taken out, and with the
+profile's "Approved MCP servers through Gantry" an approved HTTP server is pointed at `<gateway>/mcp`. The file as it
+was is kept beside it as `<name>.gantry-backup`. `managed-mcp.json` is never edited: it is yours to deliver.
+
+## Apps
+
+A profile lists denied and allowed apps. The agent reports which of the coding tools and of ChatGPT, Windsurf, Ollama,
+LM Studio and Perplexity are installed (by their installer's documented location) or running (by process name, from
+`ps` or `tasklist`), each as `allowed`, `denied` or `unlisted`. It stops no process and removes nothing: remove or
+block a denied app with your device management tool.
+
 ## States
 
 Each tool is reported as `not_installed`, `installed` (found, no endpoint readable), `gantry` (pointed at the gateway)
-or `direct` (pointed at a provider, or holding a provider key or login). Claude Code and Codex are configured by the
-agent; the others are only inspected. Blocking direct provider traffic (level 3) needs the device spike, plan item 0.5,
-on a real Mac with admin rights.
+or `direct` (pointed at a provider, or holding a provider key or login). The agent configures Claude Code, Codex,
+OpenCode, Kilo CLI, Continue, Zed, Gemini CLI, Qwen Code and Aider; Cursor, Cline, Roo Code, JetBrains AI, GitHub
+Copilot and Claude Desktop keep their endpoint where no documented file sets it, stay `installed`, and the report says
+why. Blocking direct provider traffic (level 3) needs the device spike, plan item 0.5, on a real Mac with admin rights.

@@ -7,6 +7,26 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Device agent: more tools, MCP enforcement, app lists, Windows and Linux installers (Enterprise)
+
+- The device agent (`gantry device`) now points nine tools at the gateway, each through the file the tool documents:
+  OpenCode, Kilo CLI, Continue, Zed, Gemini CLI, Qwen Code and Aider beside Claude Code and Codex, with drift
+  detection and repair for each and a backup (`<name>.gantry-backup`) of every file it changes. It also finds
+  OpenCode, Continue, Cline and Aider. Cursor, Cline, Roo Code, JetBrains AI, GitHub Copilot and Claude Desktop keep
+  their endpoint where no documented file sets it: they stay `installed`, and the report, `devices.json` and the
+  Devices page say why. A device with no saved profile still manages Claude Code and Codex only.
+- MCP decisions are enforced: a blocked server is taken out of Claude Desktop's, Claude Code's, Cursor's, VS Code's
+  and Zed's MCP file, the file as it was is kept beside it, and the Devices page lists each change under **MCP
+  enforcement**. A profile can send approved HTTP servers through Gantry's MCP gateway.
+- A device profile lists allowed and denied AI apps. The agent reports which are installed or running (detection
+  only, nothing is stopped), and the Devices page tags each denied app on its person's row.
+- `gantry audit coverage --devices` and the Devices page show, per person, the tools set to go through Gantry, the
+  tools going direct, the denied apps and the blocked MCP servers still configured.
+- Packaging: `deploy/mdm/windows/install.ps1` (binary, token, scheduled task at sign-in; deployed by Intune as a Win32
+  app), `deploy/mdm/install-linux.sh` (binary, token, systemd unit), and a deployment guide for Intune, Jamf, Kandji
+  and Linux. A `device-agent` CI job runs the agent's tests on Linux and Windows and checks the Windows arm64 target.
+- Store migration `enterprise.devices` 5.
+
 ### Plugin events: guardrail contract v2
 
 - A new guardrail type, `events`, sends an outside service the whole conversation as typed events: `system_prompt`,
