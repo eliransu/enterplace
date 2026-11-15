@@ -508,7 +508,7 @@ async fn a_role_sees_only_the_actions_it_may_take() -> TestResult {
     .await?;
     request(&s, "01START0000000000000000000", "noa.bar", "platform")?;
     let viewer = sign_in(&s.app, VIEWER_KEY).await?;
-    let (_, _, page) = send(&s.app, get("/console/start", &viewer)?).await?;
+    send(&s.app, get("/console/start", &viewer)?).await?;
     let (_, _, page) = send(&s.app, get("/console/start?pay=api", &viewer)?).await?;
     assert!(page.contains("Make a key for the first person"), "{page}");
     assert!(
@@ -895,11 +895,18 @@ async fn every_agent_prompt_links_a_docs_page_that_exists() -> TestResult {
     let docs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/src/content/docs");
     let mut prompts = 0;
     for track in ["coding", "coding&pay=api", "apps", "mcp", "limit", "watch"] {
-        let (_, _, page) = send(&s.app, get(&format!("/console/start?track={track}"), &cookie)?).await?;
+        let (_, _, page) = send(
+            &s.app,
+            get(&format!("/console/start?track={track}"), &cookie)?,
+        )
+        .await?;
         for part in page.split(r#"<pre id="agent-step-"#).skip(1) {
             let prompt = part.split("</pre>").next().unwrap_or_default();
             prompts += 1;
-            assert!(prompt.contains(BASE), "{track}: the gateway's address: {prompt}");
+            assert!(
+                prompt.contains(BASE),
+                "{track}: the gateway's address: {prompt}"
+            );
             let link = prompt
                 .split("https://gantry-docs.eliran.me/")
                 .nth(1)

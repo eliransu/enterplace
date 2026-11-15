@@ -5,6 +5,13 @@
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const root = document.documentElement;
 
+  // A button that copies the text of the element its data-copy names: the prompt that has a coding agent set Gantry up.
+  $$('button[data-copy]').forEach((b) => b.addEventListener('click', () => {
+    const source = document.getElementById(b.dataset.copy);
+    if (!source || !navigator.clipboard) return;
+    navigator.clipboard.writeText(source.textContent).then(() => { b.textContent = 'Copied: paste it into your agent'; });
+  }));
+
   // Header: border once scrolled, dropdowns, the phone sheet.
   const hdr = $('#hdr');
   const onScroll = () => hdr.classList.toggle('scrolled', scrollY > 8);

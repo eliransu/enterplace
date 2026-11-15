@@ -106,7 +106,7 @@ The Gantry [device agent](/operations/devices/) sets the same two keys in each p
 
 ### Start with no identity
 
-With `identity: optional`, a request without `x-gantry-user` is recorded as the person `unknown` (team `unknown`), told apart by Claude Code's session ID. A company can point Claude Code at Gantry first and hand out person tokens later. With `identity: required` (the default) such a request is refused with `person_needed`. A kill switch on the person `unknown` stops every unnamed request.
+With `identity: optional`, a request without `x-gantry-user` is recorded as the person `unknown` (team `unknown`), told apart by Claude Code's session ID. A company can point Claude Code at Gantry first and hand out person tokens later. With `identity: required` (the default) such a request is refused with `person_needed` (403). A kill switch on the person `unknown` stops every unnamed request.
 
 ### What Claude Code sends
 
@@ -121,10 +121,10 @@ A login is never swapped for a key of Gantry's, and a Gantry key never goes to a
 | Request | Answer |
 |---|---|
 | A login for a model only a keyed provider serves | 403 `login_not_accepted` |
-| A Gantry key (or `ANTHROPIC_API_KEY`) for a model only a passthrough provider serves | 401 `login_needed` |
+| A Gantry key (or `ANTHROPIC_API_KEY`) for a model only a passthrough provider serves | 403 `login_needed` |
 | A person token as the only credential | 403 `person_token_only` |
 | A login and a different Gantry key at once | 400 `ambiguous_key` |
-| No `x-gantry-user` on a provider with `identity: required` | 401 `person_needed` |
+| No `x-gantry-user` on a provider with `identity: required` | 403 `person_needed` |
 
 When a passthrough provider and a keyed provider list the same model, a request with a login goes to the passthrough one and a request with a Gantry key to the keyed one.
 

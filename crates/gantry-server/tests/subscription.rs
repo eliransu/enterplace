@@ -452,7 +452,7 @@ async fn a_login_and_a_key_never_stand_in_for_each_other() -> TestResult {
         messages(&claude_code(None), "claude-sonnet-4-5", "hello", false)?,
     )
     .await?;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(code(&body), "person_needed", "{body}");
 
     // A person token is not a key.
@@ -498,7 +498,11 @@ async fn a_login_and_a_key_never_stand_in_for_each_other() -> TestResult {
         )?,
     )
     .await?;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "never a 401 on a login: {body}"
+    );
     assert_eq!(code(&body), "unknown_key", "{body}");
     assert_eq!(calls(), 0, "nothing reached the provider");
     Ok(())

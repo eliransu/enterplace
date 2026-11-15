@@ -2308,7 +2308,7 @@ fn subscription_login(
             }
             let Some((name, value)) = login(headers)? else {
                 return Err(Refusal::new(
-                    StatusCode::UNAUTHORIZED,
+                    StatusCode::FORBIDDEN,
                     "no_login",
                     "Refused: this request names its person in x-gantry-user and carries no Claude login to send on. Sign in to Claude Code with your Claude subscription (run claude, then /login), and keep ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset.",
                 ));
@@ -2323,7 +2323,7 @@ fn subscription_login(
                 }
                 (false, true) => {
                     return Err(Refusal::new(
-                        StatusCode::UNAUTHORIZED,
+                        StatusCode::FORBIDDEN,
                         "no_login",
                         "Refused: the login this request carries is empty. Sign in to Claude Code with your Claude subscription (run claude, then /login).",
                     ));
@@ -2350,7 +2350,7 @@ fn subscription_login(
             {
                 // Not a credential of Gantry's, so it is the caller's own login, and no provider takes one unnamed.
                 return Err(Refusal::new(
-                    StatusCode::UNAUTHORIZED,
+                    StatusCode::FORBIDDEN,
                     "person_needed",
                     "Refused: this request carries a login that is not a Gantry key and does not name its person. With a Claude subscription, set ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <your person token>\" (from the console, Start here, Coding agents, or gantry login). Otherwise send your Gantry key.",
                 ));
@@ -2402,7 +2402,7 @@ fn unknown_person(headers: &HeaderMap, login: &Login) -> Principal {
 fn login_fits(provider: &Upstream, login: Option<&Login>, model: &str) -> Result<(), Refusal> {
     match (provider.passthrough, login) {
         (true, None) => Err(Refusal::new(
-            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
             "login_needed",
             format!(
                 "Refused: model \"{model}\" is served by provider \"{}\", which sends each caller's own Claude login and holds no key of Gantry's, and this request carries only a Gantry key. In Claude Code, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN, keep your normal Claude login, and send your person token with ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <token>\".",
@@ -2419,7 +2419,7 @@ fn login_fits(provider: &Upstream, login: Option<&Login>, model: &str) -> Result
         )),
         (true, Some(login)) if !login.identified && !provider.identity_optional => {
             Err(Refusal::new(
-                StatusCode::UNAUTHORIZED,
+                StatusCode::FORBIDDEN,
                 "person_needed",
                 format!(
                     "Refused: provider \"{}\" needs each request to name its person, and this one carries no x-gantry-user. Set ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <your person token>\" (from the console, Start here, Coding agents, or gantry login).",
@@ -2484,7 +2484,13 @@ async fn check<'a>(
     )
     .await;
     seen.stages.auth = identifying.elapsed();
-    let (person, key_sha256) = identified?;
+    // Claude Code reads a 401 as its own Claude login having expired: a person token it does not know is a 403.
+    let (person, key_sha256) = identified.map_err(|mut refusal| {
+        if login.is_some() && refusal.status == StatusCode::UNAUTHORIZED {
+            refusal.status = StatusCode::FORBIDDEN;
+        }
+        refusal
+    })?;
     if login.is_none() && key.starts_with(id::PERSON_PREFIX) {
         return Err(Refusal::new(
             StatusCode::FORBIDDEN,

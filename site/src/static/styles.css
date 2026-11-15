@@ -550,3 +550,8 @@ p code, li code, dd code, td code { background: var(--surface); border-radius: 6
   html { scroll-behavior: auto; }
 }
 @media print { .hdr, .ftr, .cta, .rail { display: none; } }
+
+/* Set up with your agent: the prompt the hero's button copies, readable before it is pasted. */
+.agent-setup { margin-top: 14px; max-width: 760px; }
+.agent-setup summary { cursor: pointer; }
+.agent-setup pre { margin-top: 10px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -7,6 +7,40 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Claude Code on Claude subscriptions, with no API key
+
+- Provider `auth: passthrough` (kind `anthropic`): each caller's own login, such as the OAuth token Claude Code sends
+  from a Claude Pro, Max, Team or Enterprise login, goes to the provider unchanged with `anthropic-beta` and the rest of
+  Claude Code's headers. The provider holds no key. The login is taken off the request before any check and is never
+  stored, logged, recorded, hashed into a record, cached, or sent to a guardrail webhook, plugin or trace. A login never
+  reaches a keyed provider (`login_not_accepted`) and a Gantry key never reaches a passthrough one (`login_needed`),
+  fallbacks included. A passthrough and a keyed provider may list the same model: the request's credential picks.
+- Person tokens: `gantry_u_...`, free, sent in `x-gantry-user` through Claude Code's `ANTHROPIC_CUSTOM_HEADERS`. They
+  name the person and team for rules, records, guardrails, kill switches and limits, and reach no model on their own
+  (`person_token_only`). Made by `gantry key new --identity-only`, the console's Start here, or any Gantry key of the
+  person (`gantry login`, whose env file now sets `ANTHROPIC_CUSTOM_HEADERS` and unsets `ANTHROPIC_API_KEY` on a gateway
+  with passthrough). The device agent writes the header into each person's Claude Code settings from their login.
+- `identity: optional` records a passthrough request without `x-gantry-user` as the person `unknown` (team `unknown`),
+  told apart by Claude Code's session ID; a kill switch can stop `unknown`. `identity: required` (the default) refuses it
+  with `person_needed`. Subscription refusals are 403, never 401, which Claude Code reads as an expired login.
+- Subscription traffic is recorded with tokens and an API-equivalent cost estimate (`"cost_basis":
+  "api_equivalent_estimate"`, `"auth": "passthrough"`), shown as `~$x (est.)` in the console. Dollar budgets do not
+  count it unless the rule sets `budget_basis: api_equivalent`.
+- `tpd`: tokens per calendar day (UTC), in a rule's `rate:` or a `limits:` entry, per person, team or any scope.
+- `gantry start` writes the `claude-subscriptions` passthrough provider (`models: ["claude-*"]`, `identity: optional`),
+  so Claude Code on a subscription works with no key at all. `GANTRY_ANTHROPIC_BASE_URL` points it elsewhere.
+- Start here: Coding agents asks "How does your team pay for Claude Code?", Claude subscriptions first. Its steps: turn
+  on subscriptions (one click), point Claude Code at Gantry (a person token, the two shell lines or managed settings for
+  MDM), which turns done when that person's first subscription request arrives, a second person, and `gantry login`.
+  Anthropic API keys keep the earlier steps.
+- Every Start here step has **Copy for your agent**: a prompt for Claude Code, Codex or Cursor with the goal, the exact
+  values, the commands, how to verify, and the docs page as Markdown. Admin keys never go into a prompt.
+- Docs: every page is also served as Markdown (`<page>.md` and `<page>/index.md`), with `/llms.txt` and
+  `/llms-full.txt`, and each page has Copy page, Open in Claude and Open in ChatGPT under its title. New page
+  Governance, Subscriptions; Claude Code, Claude Team and the quickstart lead with subscriptions.
+- Website: the home page's **Set up with your agent** copies a prompt that installs Gantry, runs `gantry start` and
+  points Claude Code at it on the person's own subscription, with the docs as Markdown.
+
 ### First run in under two minutes, no provider key needed
 
 - `gantry start` needs no provider key. It writes an observe-mode policy with the demo model (`preset: demo`, model

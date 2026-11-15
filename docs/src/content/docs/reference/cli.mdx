@@ -149,7 +149,7 @@ Exit `0` when valid, `1` with every problem otherwise. Warnings that do not fail
 Makes a key for a person or a workload. The key is printed once, with the lines that point Claude Code and the OpenAI SDKs at Gantry. Only its SHA-256 is saved.
 
 ```text
-gantry key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>/<day|month>]
+gantry key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<day|month>]
   [--models <a,b>] [--tpm <n>] [--url <gateway url>] [--quiet] [--keys <file>]
 ```
 
@@ -158,6 +158,7 @@ gantry key new <name> --team <team> [--admin] [--expires <date>] [--budget <usd>
 | `<name>` | required | The person or workload. Letters, digits, dots, dashes, underscores and `@`, at most 100 characters |
 | `--team <team>` | required | The team, same characters |
 | `--admin` | off | The key may sign in to the console and call the admin API. The first admin starts here |
+| `--identity-only` | off | Make a person token (`gantry_u_...`) in place of a key: it names the person for [Claude subscription passthrough](/governance/subscriptions/) in `x-gantry-user` and reaches no model on its own. Prints the two Claude Code lines. Takes no `--admin`, `--budget`, `--models` or `--tpm` |
 | `--expires <date>` | none | Refused from that UTC day on (`2026-12-31`) or that time (`2026-12-31T18:00:00Z`), with `key_expired` |
 | `--budget <usd>/<period>` | none | What this key alone may spend, on top of its rule's budget: `20/month` or `5/day`. Refused with `key_budget_exceeded` |
 | `--models <a,b>` | none | Narrows the rule's models for this key, comma separated |

@@ -102,8 +102,32 @@ gantry</a>
     <p class="lead">Gantry is a self-hosted AI gateway. Coding tools, agents, apps and MCP clients call models through it, and each request gets a person's name, a budget, guardrails and a line in an audit log you can verify.</p>
     <div class="actions">
       <a class="btn btn-main" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Start in two minutes</a>
+      <button class="btn btn-line" type="button" data-copy="agent-setup">Set up with your agent</button>
       <a class="btn btn-line" href="#use-cases">Find your use case</a>
     </div>
+    <details class="agent-setup">
+      <summary class="muted">The button copies a prompt for Claude Code, Codex or Cursor: it installs Gantry, runs <code>gantry start</code> and routes Claude Code through it on your own Claude subscription. Show the prompt</summary>
+<pre id="agent-setup">Set up Gantry, the self-hosted AI gateway, on this machine, and route my Claude Code through it while I keep my own Claude subscription login (no API key).
+
+1. Install it: curl -fsSL https://gantry.eliran.me/install.sh | sh
+   Then open a new shell, or run the PATH line it prints.
+2. Make a folder for it (~/gantry) and run "gantry start --no-open" there in the background.
+   It serves http://127.0.0.1:8080 and already has the claude-subscriptions provider, which passes my Claude login on unchanged.
+   It prints a dashboard sign-in link and an admin key once: show me the link, and never put the admin key in chat, files or commits.
+3. In that folder, make a person token for me (ask me for my name and team):
+   gantry key new &lt;name&gt; --team &lt;team&gt; --identity-only --url http://127.0.0.1:8080
+4. Add these two lines to my shell profile, with the token it printed:
+   export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+   export ANTHROPIC_CUSTOM_HEADERS="x-gantry-user: &lt;token&gt;"
+   ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN must stay unset, so Claude Code keeps using my subscription.
+5. Verify: in a new shell run: claude -p "say hello". It answers, and the request shows at http://127.0.0.1:8080/console/requests once I open the sign-in link.
+
+Docs as Markdown, read them for anything not covered here:
+https://gantry-docs.eliran.me/getting-started/quickstart.md
+https://gantry-docs.eliran.me/integrations/claude-code.md
+https://gantry-docs.eliran.me/governance/subscriptions.md
+Every page: https://gantry-docs.eliran.me/llms.txt</pre>
+    </details>
     <p class="muted"><code>curl -fsSL https://gantry.eliran.me/install.sh | sh</code>, then <code>gantry start</code>: your browser opens on the dashboard. One binary or Docker image, Postgres optional for teams. Open source core under Apache 2.0.</p>
   </div>
 
