@@ -43,7 +43,6 @@ It runs `cargo fmt`, `cargo clippy -D warnings` and every test. Tests that need 
 - **New dependencies need a reason.** Say in one line in the PR why the standard library or an existing dependency
   does not cover it. `cargo deny check` must pass.
 - **Comments explain why, not what.**
-- **No em or en dashes** in code, comments, docs or commit messages. Use a hyphen, a comma or a colon.
 - **Console UI** uses only components from the Gantry design system. For a new screen, open an issue first so the
   design can be agreed.
 - **Clean room.** Do not copy source code from other gateways (LiteLLM, Bifrost and others). Provider API docs and
