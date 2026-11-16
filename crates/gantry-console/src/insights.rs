@@ -101,9 +101,10 @@ fn with(query: &Query, name: &str, value: &str) -> Vec<(String, String)> {
 
 fn outcome_tag(row: &Row) -> String {
     match row.outcome() {
-        Outcome::Allowed => tag("allow", "Allow", ""),
-        Outcome::Refused if row.code == "guardrail_blocked" => tag("block", "Block", &row.code),
-        Outcome::Refused => tag("refused", "Refused", &row.code),
+        // The same words as the Audit log: "Allowed", "Refused: unknown key".
+        Outcome::Allowed => tag("allow", "Allowed", ""),
+        Outcome::Refused if row.code == "guardrail_blocked" => tag("block", "Blocked", ""),
+        Outcome::Refused => tag("refused", "Refused:", &crate::pages::code_words(&row.code)),
         Outcome::Error => tag(
             "warn",
             "Error",

@@ -26,6 +26,14 @@ one repository. How a release is made: RELEASING.md.
   prove says so.
 - Audit log: a kill switch reads "Traffic stopped for ... since ... by ...: reason" with a Restore traffic button,
   recorded as `clear_kill` like `gantry unkill`. Verify chain sits under the records.
+- The rest of the console review: verdicts in words everywhere ("Allowed", "Refused: unknown key", "Admin: signed
+  in"); the time opens a record and IDs show only in its sheet; Requests shows Person, Team, Model and a date range
+  with labels and folds the other filters; a request's sheet is a title in words and six facts, with Details and
+  Proof folded; Analytics draws one chart with a metric switch and four breakdown tabs; Spend at $0 is one empty
+  state; People has Restore traffic on a stopped person and Revoke moved to the key's page; key forms use one
+  date picker and one hint; the sign-in page says admin-only once and confirms a sign-out; Models and Policy in file
+  mode offer nothing that edits; the sidebar stays in place on scroll; scrollbars follow the theme; table text is
+  13px; tab rows wrap on phones; placeholders read "e.g. ...".
 - Empty pages say one line and offer one button. An empty Requests page tells Claude desktop app users that its Code
   tab ignores the base URL.
 

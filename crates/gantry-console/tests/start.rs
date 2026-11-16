@@ -219,7 +219,7 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
             "coding",
             &[
                 "How does your team pay for Claude Code?",
-                "Claude subscriptions (Pro, Max, Team, Enterprise)",
+                "Claude subscription",
                 "Anthropic API keys",
                 "Turn on Claude subscriptions",
                 "Point Claude Code at Gantry",

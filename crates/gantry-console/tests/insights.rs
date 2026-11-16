@@ -218,6 +218,11 @@ async fn the_request_log_filters_and_proves_each_row() -> TestResult {
     }
     // No Proof column saying Verified on every row: a row that does not prove says so in its outcome.
     assert!(!page.contains("<th>Proof</th>") && page.contains(r#"href="/console/requests""#));
+    // Outcomes read as the Audit log reads them.
+    assert!(
+        page.contains(">Allowed<") && !page.contains(">Allow<"),
+        "{page}"
+    );
     assert!(
         page.contains("<th class=\"g-table__num\">Tokens</th>"),
         "{page}"

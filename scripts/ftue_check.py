@@ -296,7 +296,7 @@ def main():
             click(chrome, "button[data-start-button]")
             chrome.wait("document.querySelector('#step-1[data-state=done]')", "Claude subscriptions on after gantry start")
             text = chrome.js("document.body.innerText")
-            check("Claude subscriptions (Pro, Max, Team, Enterprise)" in text and "ANTHROPIC_API_KEY=" not in text,
+            check("Claude subscription" in text and "ANTHROPIC_API_KEY=" not in text,
                   "subscriptions are the default and no API key is asked for")
             chrome.js("document.getElementById('token-name-sarah.miller').value = 'sarah.miller'; document.getElementById('token-team-sarah.miller').value = 'platform'")
             click(chrome, "form[action='/console/start/key'] button[type=submit]")

@@ -2559,7 +2559,7 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
         // Coding agents first asks how the team pays: Claude subscriptions route with no API key at all.
         let body = if track == Track::Coding {
             let items: String = [
-                ("subscriptions", "Claude subscriptions (Pro, Max, Team, Enterprise)"),
+                ("subscriptions", "Claude subscription"),
                 ("api", "Anthropic API keys"),
             ]
             .iter()

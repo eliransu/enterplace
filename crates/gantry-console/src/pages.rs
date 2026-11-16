@@ -679,7 +679,7 @@ fn action_word(action: &str) -> (&str, &str) {
 }
 
 /// A refusal code in words, as a tag says it: "unknown key", not `unknown_key`.
-fn code_words(code: &str) -> String {
+pub(crate) fn code_words(code: &str) -> String {
     match code {
         "killed" => "kill switch".into(),
         other => other.replace('_', " "),
