@@ -43,10 +43,26 @@ function record(env, ctx, row) {
     row.country || '', row.status || 0).run().catch(() => {}));
 }
 
+// The PostHog project (US cloud). The key is public by design: it can only send events, not read them.
+const POSTHOG_KEY = 'phc_qZHhywTyXPLH8LuvmxoyUBcqMCwyGYegKAWuEjXKcW7P';
+
 // Every click on a link or button, named by its data-track attribute, else its label; copies; and track(name, detail)
-// for custom events from any script. Capture runs before a button relabels itself (Copied).
+// for custom events from any script. Capture runs before a button relabels itself (Copied). Each event goes to D1
+// (through /_e) and to PostHog, which also records page views, page leaves and autocaptured clicks. PostHog keeps its
+// id in memory only: no cookie, no local storage, so no consent banner; a visitor is new on every page load.
 const TRACKER = `(() => {
-  const send = (e, d) => { try { navigator.sendBeacon('/_e', JSON.stringify({ e: String(e), d: String(d || ''), p: location.pathname })); } catch (err) { /* not counted */ } };
+  const waiting = [];
+  const ph = (e, d) => { if (window.posthog && window.posthog.__loaded) window.posthog.capture(e, d ? { detail: d } : {}); else waiting.push([e, d]); };
+  const s = document.createElement('script');
+  s.src = 'https://us-assets.i.posthog.com/static/array.js';
+  s.async = true;
+  s.onload = () => {
+    if (!window.posthog || !window.posthog.init) return;
+    window.posthog.init('${POSTHOG_KEY}', { api_host: 'https://us.i.posthog.com', defaults: '2025-05-24', persistence: 'memory', person_profiles: 'identified_only' });
+    waiting.splice(0).forEach(([e, d]) => window.posthog.capture(e, d ? { detail: d } : {}));
+  };
+  document.head.appendChild(s);
+  const send = (e, d) => { ph(String(e), d ? String(d) : ''); try { navigator.sendBeacon('/_e', JSON.stringify({ e: String(e), d: String(d || ''), p: location.pathname })); } catch (err) { /* not counted */ } };
   const words = (t) => (t || '').trim().replace(/\\s+/g, ' ').slice(0, 60);
   window.track = send;
   document.addEventListener('click', (ev) => {
