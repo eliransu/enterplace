@@ -7,6 +7,11 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### License
+
+- The open source part is now under the MIT License, as LiteLLM's is. The root `LICENSE` says at the top that
+  `enterprise/` is under `enterprise/LICENSE` and everything else is MIT. The enterprise license itself is unchanged.
+
 ### Codex on a ChatGPT subscription
 
 - `auth: passthrough` is allowed on a provider of kind `openai` (url `https://chatgpt.com/backend-api/codex`), so Codex

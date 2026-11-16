@@ -11,7 +11,7 @@ The open source gateway needs no license. The `gantry` binary in the image `ghcr
 
 Gantry is one repository with two licenses, the way LiteLLM is:
 
-- Everything outside `enterprise/` (the gateway, the console, the command line, the deploy files and the docs) is under the Apache License 2.0. You can build it with `cargo install --path crates/gantry-cli` and run it without a key.
+- Everything outside `enterprise/` (the gateway, the console, the command line, the deploy files and the docs) is under the MIT License, and the root `LICENSE` file says so at the top, as LiteLLM's does. You can build it with `cargo install --path crates/gantry-cli` and run it without a key.
 - `enterprise/` holds the enterprise features under the Gantry Commercial License (`enterprise/LICENSE`). Its source is there to read and audit. Running it in production needs a valid Gantry license key, and it may not be redistributed or changed to get around the license check.
 
 The open source crates never import `enterprise/`. The enterprise crate plugs into them through their extension hooks.

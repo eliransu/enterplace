@@ -1,6 +1,6 @@
 # Conventions for agents working in this repository
 
-This is Gantry, an AI gateway: the open source crates (Apache 2.0) and, in `enterprise/`, the commercial features under their own license. The full plan is kept outside this repository.
+This is Gantry, an AI gateway: the open source crates (MIT) and, in `enterprise/`, the commercial features under their own license. The full plan is kept outside this repository.
 
 ## Rules
 
@@ -9,7 +9,7 @@ This is Gantry, an AI gateway: the open source crates (Apache 2.0) and, in `ente
 3. Clean room: do not read or copy source code from Bifrost or LiteLLM. Use provider API documentation and the public documentation of those projects only. The LiteLLM price map is the one exception (MIT data, attributed).
 4. No new dependency without a one-line justification in the pull request. Standard library first. `cargo deny check` must pass.
 5. Never weaken a fail-closed test, a policy test or the bench gate to make a package pass. Stop and report instead.
-6. License checks live only inside `enterprise/`. Nothing outside `enterprise/` imports it: `gantry-core`, `gantry-server`, `gantry-console` and `gantry-cli` build and test alone (`cargo test -p gantry-core`) and hold no license code. Enterprise features plug in through the extension hooks the open crates define (`enterprise/docs/porting.md`). `enterprise/` is under its own commercial license (`enterprise/LICENSE`); everything else is Apache 2.0. Never move enterprise code out of `enterprise/`.
+6. License checks live only inside `enterprise/`. Nothing outside `enterprise/` imports it: `gantry-core`, `gantry-server`, `gantry-console` and `gantry-cli` build and test alone (`cargo test -p gantry-core`) and hold no license code. Enterprise features plug in through the extension hooks the open crates define (`enterprise/docs/porting.md`). `enterprise/` is under its own commercial license (`enterprise/LICENSE`); everything else is MIT. Never move enterprise code out of `enterprise/`.
 7. Unknown provider parameters pass through or return a 400. They are never dropped or rewritten silently.
 8. Error messages name the cause and the fix.
 9. Product work packages (marked P in the plan) go in `enterprise/`.

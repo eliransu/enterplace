@@ -6,7 +6,7 @@ members = ["crates/gantry-core", "crates/gantry-server", "crates/gantry-cli", "c
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-license = "Apache-2.0"
+license = "MIT"
 
 [workspace.dependencies]
 gantry-core = { path = "crates/gantry-core", version = "0.1.0" }

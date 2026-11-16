@@ -12,7 +12,7 @@
 Every model request gets an identity, a policy decision and a tamper-evident audit record before it reaches a provider.
 
 [![CI](https://github.com/eliransu/gantry/actions/workflows/ci.yml/badge.svg)](https://github.com/eliransu/gantry/actions/workflows/ci.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-gantry--docs.enterplace.dev-e3ff45.svg)](https://gantry-docs.enterplace.dev/)
 
 [Documentation](https://gantry-docs.enterplace.dev/) · [Quickstart](https://gantry-docs.enterplace.dev/getting-started/quickstart/) · [Claude Code](https://gantry-docs.enterplace.dev/integrations/claude-code/) · [Policy reference](https://gantry-docs.enterplace.dev/governance/policy/)
@@ -30,7 +30,7 @@ Gantry sits between your people, agents and workloads and the model providers th
 
 A request that cannot be recorded is refused. Gantry is one binary (or one container image): policy, keys and audit log are plain files, and Postgres is optional, for teams that share keys and budgets across gateways.
 
-Everything outside `enterprise/` is Apache 2.0. The enterprise features in `enterprise/` are under a commercial license and need a license key; see [License](#license).
+Everything outside `enterprise/` is MIT. The enterprise features in `enterprise/` are under a commercial license and need a license key; see [License](#license).
 
 ## Quickstart
 
@@ -129,11 +129,11 @@ Runs the same checks as CI: format, clippy with warnings as errors, every test, 
 
 Gantry is one repository with two licenses, as LiteLLM is:
 
-- Everything outside `enterprise/` is under the [Apache License 2.0](LICENSE).
+- Everything outside `enterprise/` is under the [MIT License](LICENSE).
 - `enterprise/` is under the [Gantry Commercial License](enterprise/LICENSE): the source is there to read, and
   running it in production needs a valid Gantry license key.
 
-The [NOTICE](NOTICE) file at the root states the same split, as LiteLLM's root license does.
+The root [LICENSE](LICENSE) states the split at the top, as LiteLLM's does.
 
 The open source crates build, test and run without `enterprise/` and never import it. The `gantry` binary in the
 image is the enterprise build: with no license key it is the open source gateway, and a key unlocks the enterprise

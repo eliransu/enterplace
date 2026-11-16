@@ -6,7 +6,7 @@
 # kind a careful reader would report in it, once per value. An empty expect is a hard negative.
 # Every value is synthetic or a published example value: AWS's documented example key, card networks' test
 # numbers, RFC 2606 mail domains, fictional phone ranges, random numbers with valid or broken checksums.
-# No real secret and no real person's data. License: Apache-2.0, as the rest of the repository.
+# No real secret and no real person's data. License: MIT, as the rest of the repository.
 # Measured by crates/gantry-core/tests/detector_corpus.rs; published in docs/src/content/docs/governance/guardrails.mdx.
 {"id": 1, "target": "private_key", "text": "-----BEGIN RSA PRIVATE KEY-----\nwcqUb6iqmgYgoNdM/bM3Hg+YQKrvjT9YIYOg41T7mKJdauuqj8VsBXOEA1PlluF3\nircaw0rA+NgNaBYTVgNn1DuqSFfAjPBq0uRjYEcIiALU/MDxYgO8qumiM2Sove5/\nh+vktGx0p3tQdlnblKMzDAqWHwON+n/sX0KizIvanirZgdZQBUwgSGqZ0Rza3cQg\n-----END RSA PRIVATE KEY-----", "expect": ["private_key"]}
 {"id": 2, "target": "private_key", "text": "Here's the deploy key, please add it to the runner:\n-----BEGIN EC PRIVATE KEY-----\nRxAnjcyT/SuqTdkP4PsmDoLF2sxV/MENKvPO03qY7lDeckbTeeZMUKDRUCz/aalS\n7NsZR6r5JdlW6KdQVSJ51SQFjWG5V9aDjtDuCWlu2iKcd8INJCZ1sHBFKmYSqbvS\nzaKutrQEem99HsyMmh6ymePgMha1jgas0WWAafZwQYgZQu3g9P0RPDUT7zeP1XJv\nqcghH19zZn3IRGBCWfQirNQ1mxrts6mG4gKlFz4FWPDBhpcPye8Pi8XjFPbvYiEx\n-----END EC PRIVATE KEY-----", "expect": ["private_key"]}
