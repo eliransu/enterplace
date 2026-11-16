@@ -1,6 +1,6 @@
 ---
 title: Codex
-description: Send Codex CLI's Responses API requests through Gantry with a model provider of its own and a Gantry key.
+description: Send Codex CLI's Responses API requests through Gantry with a Gantry key, or with each developer's own ChatGPT login.
 sidebar:
   order: 2
 ---
@@ -63,6 +63,51 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
 </Steps>
 
 For a model Codex has no built-in description of, it prints `warning: Model metadata for "<model>" not found. Defaulting to fallback metadata` and carries on. The warning is Codex's own.
+
+## ChatGPT subscription
+
+Developers signed in to Codex with ChatGPT (Plus, Pro, Business, Enterprise or Edu) keep that login. Gantry sends each person's own ChatGPT login on to ChatGPT unchanged and holds no OpenAI key. Rules, guardrails, kill switches and limits apply as for any request; cost is an API-equivalent estimate. See [Subscriptions](/governance/subscriptions/).
+
+<Steps>
+
+1. **Add a passthrough provider for ChatGPT logins.**
+
+    ```yaml title="gantry.policy.yaml"
+    version: 1
+    providers:
+      - name: chatgpt-subscriptions
+        kind: openai
+        url: https://chatgpt.com/backend-api/codex
+        auth: passthrough
+        models: ["gpt-*"]
+    rules:
+      - name: everyone
+        principals: { any: true }
+        models: ["*"]
+        rate: { tpd: 5000000, rpd: 2000 }
+    ```
+
+    `gpt-*` covers the models Codex picks for ChatGPT logins. `identity: optional` records a request with no person token as `unknown`, by Codex's session.
+
+2. **Point Codex at Gantry with your ChatGPT login.** In `~/.codex/config.toml`:
+
+    ```toml title="~/.codex/config.toml"
+    model_provider = "gantry"
+
+    [model_providers.gantry]
+    name = "Gantry"
+    base_url = "https://gantry.example.com/v1"
+    wire_api = "responses"
+    requires_openai_auth = true             # send the ChatGPT login, not an API key
+    http_headers = { "x-gantry-user" = "gantry_u_..." }
+    stream_max_retries = 0
+    ```
+
+    `requires_openai_auth = true` makes Codex send its own ChatGPT login (`Authorization` and `chatgpt-account-id`) to this provider. The person token in `http_headers` comes from the console (Start here, Coding agents), `gantry key new --identity-only`, or `gantry login`. Leave `env_key` out.
+
+3. **Sign in with ChatGPT and run Codex.** `codex login` (choose ChatGPT) if you are not signed in, then `codex`.
+
+</Steps>
 
 ## Retries
 
