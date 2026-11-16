@@ -134,9 +134,10 @@ impl Track {
         self == Track::Watch
     }
 
-    /// Connect a model and Send your first request come first on every track.
+    /// Connect a model and Send your first request come first on every track but Watch, which has no model to connect.
     fn steps(self) -> usize {
         match self {
+            Track::Watch => 4,
             // Claude subscriptions, the default way to pay: no model to connect and no first request with a key.
             Track::Coding => 4,
             Track::Limit => 6,
@@ -968,6 +969,10 @@ fn steps(c: &Ctx<'_>) -> Vec<Step> {
         return subscriptions(c, f);
     }
     let mut list = first_steps(c, f);
+    // Watch routes nothing, so there is no model to connect.
+    if c.track == Track::Watch {
+        list = list.into_iter().skip(1).collect();
+    }
     list.extend(match c.track {
         Track::Coding => coding(c, f),
         Track::Apps => apps(c, f),
@@ -1064,7 +1069,8 @@ fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let connected: Vec<String> = f.connected.iter().map(|(n, _)| mono(n)).collect();
     let s1 = Step::new(
         "Connect a model",
-        !f.connected.is_empty() || f.demo,
+        // A request that arrived proves a model answered it, so this never reads Now above a done first request.
+        !f.connected.is_empty() || f.demo || !f.tries.is_empty(),
         format!(
             r#"<p class="t-body">Paste a key from OpenAI, Anthropic or Gemini, and Gantry sends your requests to that provider. Or try the free demo model: Gantry answers it with a sample text, so your first request lands in seconds.</p>{error}{connect_form}{}"#,
             acts(demo_form)
@@ -2007,7 +2013,7 @@ fn watch(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         base,
         "Make a watch token",
         &[],
-        &[format!("Open {base}/console/start?track=watch#step-2 and make the token there: it is shown once, inside the settings block.")],
+        &[format!("Open {base}/console/start?track=watch#step-3 and make the token there: it is shown once, inside the settings block.")],
         "The settings block shows the token.",
         "/integrations/claude-team/",
     ));
@@ -2082,12 +2088,9 @@ fn pick_form(selected: Option<Track>, may: bool) -> String {
 }
 
 /// Checklist: one row per step, its marker carrying the state.
-fn checklist(steps: &[Step], states: &[&str], only_open: bool) -> String {
+fn checklist(steps: &[Step], states: &[&str]) -> String {
     let mut out = String::from(r#"<ol class="g-check">"#);
     for (i, (s, state)) in steps.iter().zip(states).enumerate() {
-        if only_open && *state == "done" {
-            continue;
-        }
         let mark = match *state {
             "done" => r#"<svg class="g-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>"#.to_string(),
             "listening" => r#"<span class="g-check__pulse"></span>"#.into(),
@@ -2632,12 +2635,12 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
         };
         let body = if traffic {
             format!(
-                r#"{}<div class="g-stack"><h2 class="t-sm">Next step</h2>{}</div>"#,
+                r#"{}<div class="g-stack"><h2 class="t-sm">Your steps</h2>{}</div>"#,
                 first_data(f),
-                checklist(&list, &st, true)
+                checklist(&list, &st)
             )
         } else {
-            checklist(&list, &st, false)
+            checklist(&list, &st)
         };
         // Coding agents first asks how the team pays: Claude subscriptions route with no API key at all.
         let body = if track == Track::Coding {
@@ -3564,5 +3567,85 @@ mod tests {
         ];
         assert_eq!(states(&list), ["done", "done", "now"]);
         assert!(complete(&list));
+    }
+
+    fn list_for(track: Track, pay_api: bool, f: &Facts) -> Vec<Step> {
+        let admin = Admin::of_role("noa.bar", "platform", false, crate::Via::Key);
+        let ctx = Ctx {
+            f,
+            admin: &admin,
+            track,
+            tool: String::new(),
+            made: None,
+            watch_token: None,
+            error: String::new(),
+            policy: String::new(),
+            pay_api,
+            setup: String::new(),
+        };
+        steps(&ctx)
+    }
+
+    /// A demo request arrived: no provider connected, and the demo model was never chosen on the page.
+    fn demo_request_arrived() -> Facts {
+        let row = Row {
+            verdict: "allow".into(),
+            ..Row::default()
+        };
+        Facts {
+            tries: vec![row.clone()],
+            requests: vec![row],
+            ..Facts::default()
+        }
+    }
+
+    #[test]
+    fn connect_a_model_is_done_once_a_demo_request_has_arrived() {
+        // Found on a keyless start: "Connect a model" showed as Now above "Send your first request: Done".
+        let f = demo_request_arrived();
+        for track in [Track::Coding, Track::Apps, Track::Mcp, Track::Limit] {
+            let list = list_for(track, true, &f);
+            let st = states(&list);
+            assert_eq!(list[0].title, "Connect a model", "{track:?}");
+            assert_eq!(st[0], "done", "{track:?}: {st:?}");
+            assert_eq!(list[1].title, "Send your first request", "{track:?}");
+            assert_eq!(st[1], "done", "{track:?}: {st:?}");
+        }
+        // Before any request, with nothing connected, it is still the current step.
+        let list = list_for(Track::Apps, true, &Facts::default());
+        assert_eq!(states(&list)[0], "now");
+    }
+
+    #[test]
+    fn the_watch_track_has_no_connect_a_model_step() {
+        // That track routes nothing, so a model to connect has no meaning there.
+        for f in [Facts::default(), demo_request_arrived()] {
+            let list = list_for(Track::Watch, false, &f);
+            assert!(
+                list.iter().all(|s| s.title != "Connect a model"),
+                "{:?}",
+                list.iter().map(|s| &s.title).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn every_track_lists_all_the_steps_it_counts() {
+        let f = demo_request_arrived();
+        for (track, pay_api) in [
+            (Track::Coding, false),
+            (Track::Apps, false),
+            (Track::Mcp, false),
+            (Track::Limit, false),
+            (Track::Watch, false),
+        ] {
+            assert_eq!(
+                list_for(track, pay_api, &f).len(),
+                track.steps(),
+                "{track:?}"
+            );
+        }
+        // Coding agents with Anthropic API keys has the two first steps and the four of its own.
+        assert_eq!(list_for(Track::Coding, true, &f).len(), 6);
     }
 }
