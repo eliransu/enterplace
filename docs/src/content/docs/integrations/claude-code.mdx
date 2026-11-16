@@ -11,13 +11,21 @@ Most teams pay for Claude Code with Claude subscriptions (Pro, Max, Team or Ente
 
 ## The shortest path
 
-On a Claude subscription, with a new install, it is one line and no key:
+On a Claude subscription, with a new install, start Gantry and add one setting to Claude Code, with no key:
 
 ```bash
-gantry start                                      # once, on the machine that runs Gantry
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8080   # in the shell that runs Claude Code
-claude
+gantry start    # once, on the machine that runs Gantry
 ```
+
+```json title="~/.claude/settings.json"
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080"
+  }
+}
+```
+
+Then run `claude`. If you prefer a shell, `export ANTHROPIC_BASE_URL=http://127.0.0.1:8080` in the shell that runs Claude Code does the same.
 
 Claude Code keeps your Claude login. Leave `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset. Send a prompt, and **Requests** in the console shows it, with the person `unknown` until you add a person token ([step 2 below](#claude-subscriptions)). No Gantry yet? See the [Quickstart](/getting-started/quickstart/).
 
@@ -32,7 +40,7 @@ Three ways to bring Claude Code under Gantry, in order of preference:
 | Rules, guardrails, kill switches | Yes | No | Yes |
 | Limits | Tokens and requests per person, team and day | No | Dollars, tokens and requests |
 | Cost shown | API-equivalent estimate | Claude Code's estimate | What was billed |
-| Setup per developer | Two environment variables | Managed settings | Two environment variables and a key |
+| Setup per developer | Two `env` settings | Managed settings | Two `env` settings and a key |
 
 ## Claude subscriptions
 
@@ -71,7 +79,7 @@ Three ways to bring Claude Code under Gantry, in order of preference:
     gantry login https://gantry.example.com
     ```
 
-    On a gateway with subscription passthrough, the file it writes (`~/.config/gantry/env`) sets the two lines below with the person's own key, and unsets `ANTHROPIC_API_KEY`. See [Single sign-on](/governance/single-sign-on/).
+    It writes `ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS` (with the person's own key) into the `env` block of `~/.claude/settings.json` and keeps every other key in that file, so step 3 is already done. A settings file that is not valid JSON is left as it is, with an error. It also writes `~/.config/gantry/env` for the OpenAI SDKs and Codex, which is the shell fallback for Claude Code. See [Single sign-on](/governance/single-sign-on/).
 
     </TabItem>
     <TabItem label="Issued by an admin">
@@ -80,12 +88,25 @@ Three ways to bring Claude Code under Gantry, in order of preference:
     gantry key new maya.cohen --team payments --identity-only --url https://gantry.example.com
     ```
 
-    Prints a `gantry_u_...` token once, with the two lines below.
+    Prints a `gantry_u_...` token once, with the settings below.
 
     </TabItem>
     </Tabs>
 
 3. **Point Claude Code at Gantry, and keep your normal Claude login.**
+
+    Add the `env` block to `~/.claude/settings.json` (keep the file's other keys). `gantry login` does this for you.
+
+    ```json title="~/.claude/settings.json"
+    {
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://gantry.example.com",
+        "ANTHROPIC_CUSTOM_HEADERS": "x-gantry-user: gantry_u_..."
+      }
+    }
+    ```
+
+    Fallback: if you cannot edit that file, export the same two variables in the shell that runs Claude Code.
 
     ```bash
     export ANTHROPIC_BASE_URL=https://gantry.example.com
@@ -177,6 +198,19 @@ When Claude Code runs on API keys, Gantry holds the provider key and each develo
 2. **Get a Gantry key**: **People and workloads**, **Issue a key** in the console (or **Start here**, **Coding agents**, **Anthropic API keys**), `gantry login` on a gateway without subscription passthrough, or `gantry key new maya.cohen --team payments --url https://gantry.example.com`. See [Keys and identity](/governance/keys/).
 
 3. **Point Claude Code at Gantry.**
+
+    ```json title="~/.claude/settings.json"
+    {
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080",
+        "ANTHROPIC_API_KEY": "gantry_...",
+        "ANTHROPIC_MODEL": "claude-sonnet-5-5",
+        "ANTHROPIC_SMALL_FAST_MODEL": "claude-haiku-5-5"
+      }
+    }
+    ```
+
+    Fallback, in the shell that runs Claude Code:
 
     ```bash
     export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
