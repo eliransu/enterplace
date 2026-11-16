@@ -3,7 +3,10 @@
   // The website: public/ is built from src/ by build.py and served at gantry.enterplace.dev.
   "name": "gantry-site",
   "compatibility_date": "2026-11-01",
-  "assets": { "directory": "./public", "not_found_handling": "404-page" },
+  "main": "./worker.js",
+  // Page views, agent fetches, installs and clicks: site/worker.js writes them, scripts/web_stats.sh reads them.
+  "d1_databases": [{ "binding": "WEB", "database_name": "gantry-web", "database_id": "a149c188-5bcf-4184-86b2-203b52bcd183" }],
+  "assets": { "directory": "./public", "not_found_handling": "404-page", "binding": "ASSETS", "run_worker_first": true },
   // The old hostname keeps serving: install commands people saved and the docs links inside binaries
   // already installed name it.
   "routes": [
