@@ -488,7 +488,7 @@ async fn page(
         providers.push_str(&html::row(&html::esc(name), &meta, &end, true));
     }
     let lead = format!(
-        "Each deployment of an alias: whether it takes requests, its last probe, its limits and load, latency and error rate, as {} sees them. Below, each provider with its key pool; a connection test asks for its model list, which bills nothing, and is recorded in the audit log.",
+        "Providers and their health, as {} sees them.",
         if view["counted_by"] == "store" {
             format!(
                 "every gateway on the store ({} now)",

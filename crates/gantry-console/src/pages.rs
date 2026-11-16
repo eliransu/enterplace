@@ -305,6 +305,8 @@ pub struct AuditView<'a> {
     pub read_only: bool,
     /// The kill switches on now, or why they cannot be read.
     pub kills: &'a Result<Vec<Kill>, String>,
+    /// The reader may turn a switch off here (`Permission::Kill`).
+    pub may_restore: bool,
 }
 
 /// What a record sheet reads besides its own record.
@@ -341,7 +343,7 @@ fn words_whole(text: &str) -> String {
 
 /// The banner over the audit log while a kill switch is on: one block per switch, as the KillSwitch design reads,
 /// with what it stops, why, since when and by whom, and the command that turns it off.
-fn kills_banner(kills: &Result<Vec<Kill>, String>) -> String {
+fn kills_banner(kills: &Result<Vec<Kill>, String>, may_restore: bool) -> String {
     match kills {
         Err(err) => alert(&format!(
             "Every request is refused: the kill switch list cannot be read. {}",
@@ -349,21 +351,30 @@ fn kills_banner(kills: &Result<Vec<Kill>, String>) -> String {
         )),
         Ok(kills) if kills.is_empty() => String::new(),
         Ok(kills) => {
-            let blocks: String = kills
+            // One line per switch, and the button that turns it off. Without the right to, the command an admin runs.
+            let lines: String = kills
                 .iter()
                 .map(|k| {
+                    let off = if may_restore {
+                        format!(
+                            r#"<form method="post" action="/console/kills/restore"><input type="hidden" name="scope" value="{}"><input type="hidden" name="value" value="{}"><button class="g-btn g-btn--sm t-small" type="submit">Restore traffic</button></form>"#,
+                            esc(&k.scope),
+                            esc(&k.value)
+                        )
+                    } else {
+                        format!(r#"<span class="t-mono-sm">{}</span>"#, words_whole(&unkill_command(k)))
+                    };
                     format!(
-                        r#"<div class="g-stack" style="gap: var(--space-1)"><span class="t-mono">{}</span><span class="t-body">{}</span><span class="t-small g-muted">Traffic is stopped since {} UTC by {}. <span class="t-mono">{}</span> turns it off.</span></div>"#,
+                        r#"<div style="display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; justify-content: space-between"><span class="t-body">Traffic stopped for <span class="t-mono">{}</span> since {} by {}: {}</span>{off}</div>"#,
                         esc(&k.label()),
-                        esc(&k.reason),
                         esc(&time_list(&k.at)),
                         esc(&k.by),
-                        words_whole(&unkill_command(k))
+                        esc(&k.reason)
                     )
                 })
                 .collect();
             format!(
-                r#"<div class="g-banner" role="alert" style="border-color: var(--flame)"><div class="g-stack" style="gap: var(--space-4)">{blocks}</div></div>
+                r#"<div class="g-banner" role="alert" style="border-color: var(--flame)"><div class="g-stack" style="gap: var(--space-3); width: 100%">{lines}</div></div>
 "#
             )
         }
@@ -1876,8 +1887,9 @@ pub fn audit(view: &AuditView<'_>) -> String {
             link(&esc(label), if *shown { "" } else { "quiet" }, href, true)
         })
         .collect();
+    // Verify sits with the chain's line under the records: it checks the data, it is not the page's main action.
     let verify = format!(
-        r#"{switch}<form method="post" action="/console/audit/verify{}">{}</form>"#,
+        r#"<form method="post" action="/console/audit/verify{}">{}</form>"#,
         if view.chain.is_empty() {
             String::new()
         } else {
@@ -1886,7 +1898,7 @@ pub fn audit(view: &AuditView<'_>) -> String {
         button("Verify chain now", "quiet", "submit", "")
     );
     let lead = if view.chain.is_empty() {
-        "Every decision Gantry made and every change to who may do what, newest first.".to_string()
+        "Every decision and admin change, in one chain.".to_string()
     } else {
         format!(
             "Every decision and change of organization {}, newest first, from its own chain.",
@@ -2020,9 +2032,9 @@ pub fn audit(view: &AuditView<'_>) -> String {
         today_where(&|r| s(r, "verdict") == "refused" && s(r, "code") != "guardrail_blocked");
     let stats = format!(
         r#"<div class="g-panel g-stats"{}>
-<div class="g-stat"><p class="g-stat__figure t-numeral">{}</p><p class="g-stat__label t-body">requests checked today</p></div>
-<div class="g-stat"><p class="g-stat__figure t-numeral">{}</p><p class="g-stat__label t-body">refused today, by policy</p></div>
-<div class="g-stat"><p class="g-stat__figure t-numeral">{}</p><p class="g-stat__label t-body">blocked by a guardrail today</p></div>
+<div class="g-stat"><p class="g-stat__figure t-lg">{}</p><p class="g-stat__label t-small">requests checked today</p></div>
+<div class="g-stat"><p class="g-stat__figure t-lg">{}</p><p class="g-stat__label t-small">refused today, by policy</p></div>
+<div class="g-stat"><p class="g-stat__figure t-lg">{}</p><p class="g-stat__label t-small">blocked by a guardrail today</p></div>
 </div>"#,
         if broken.is_some() {
             r#" style="display: none""#
@@ -2133,20 +2145,10 @@ pub fn audit(view: &AuditView<'_>) -> String {
                 |r| record_sheet(r, &ctx, &close),
             )
     };
-    // Observe mode forwards what the policy would refuse: whoever reads the log must know nothing was stopped.
-    let observing = view
-        .loaded
-        .is_some_and(|l| l.policy.mode() == gantry_core::policy::Mode::Observe);
-    let observe = if observing {
-        r#"<div class="g-banner" role="status"><span class="t-body">Observe mode: nothing is blocked. What the policy would refuse is let through and marked would_refuse. Kill switches, unknown keys and unknown models are still refused.</span></div>
-"#
-    } else {
-        ""
-    };
-    let banner = kills_banner(view.kills) + observe + &banner;
+    let banner = kills_banner(view.kills, view.may_restore) + &banner;
     let main = format!(
-        "{banner}{}\n{}{chain}\n\n{stats}\n\n{toolbar}\n\n{list}",
-        head("Audit log", lead, &verify),
+        "{banner}{}\n{}\n\n{stats}\n\n{toolbar}\n\n{list}\n<div class=\"g-stack\" style=\"gap: var(--space-2)\">{chain}{verify}</div>",
+        head("Audit log", lead, &switch),
         // Sign-ins and setup only, no request yet: the page says what fills it above those records.
         if records.iter().all(|r| r.get("event").is_some()) {
             crate::empty_page("Audit log", &crate::base(), true)
@@ -2571,7 +2573,11 @@ pub fn people(view: &PeopleView<'_>) -> String {
     } else {
         String::new()
     };
-    let keys_name = esc(&view.keys_path.display().to_string());
+    // The file's name, not its whole path: a long path wrapped over three lines and ran off a phone's screen.
+    let keys_name = esc(&view.keys_path.file_name().map_or_else(
+        || view.keys_path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    ));
     let entries = match &view.keys {
         Ok(Some(text)) => match gantry_core::config::key_entries(view.keys_path, text) {
             Ok(entries) => entries,
@@ -2689,7 +2695,7 @@ pub fn people(view: &PeopleView<'_>) -> String {
     names.sort_unstable();
     names.dedup();
     let lead = format!(
-        "{} for {} in {}. A key is shown once, when it is issued: Gantry keeps only its hash, in {keys_name}.",
+        "{} for {} in {}. A key is shown once: Gantry keeps only its hash.",
         gantry_core::count(entries.len(), "key"),
         if names.len() == 1 {
             "1 person or workload".to_string()
@@ -2964,7 +2970,7 @@ fn credential_dialog(view: &CredentialsView<'_>) -> String {
 pub fn credentials(view: &CredentialsView<'_>) -> String {
     let title = "Provider credentials";
     let here = "/console/credentials";
-    let lead = "The keys Gantry sends to providers, kept sealed in the store. A provider in the policy names one with credential:.";
+    let lead = "Provider keys, stored encrypted. Never shown after saving.";
     let picture = motif(&["", "flame"], &["empty"], (2, 1), true, true);
     let list = match &view.credentials {
         None => {
@@ -3409,7 +3415,7 @@ pub fn spend(view: &SpendView<'_>) -> String {
     let days = days_in(year, month);
     let name = MONTHS[month as usize - 1];
     let next = format!("1 {}", MONTHS[month as usize % 12]);
-    let lead_none = "What each team spends on each model, from the usage record Gantry writes as each answer ends.";
+    let lead_none = "What each team spends, by model.";
     let text = match view.log {
         Ok(text) => text.as_deref().unwrap_or(""),
         Err(err) => {

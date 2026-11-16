@@ -122,8 +122,28 @@ pub fn head(title: &str, lead: &str, actions: &str) -> String {
         format!("\n<div class=\"g-head__actions\">{actions}</div>")
     };
     format!(
-        "<header class=\"g-head\">\n<h1 class=\"g-head__title t-lg\">{title}</h1>\n<p class=\"g-head__lead t-lead\">{lead}</p>{actions}\n</header>"
+        "<header class=\"g-head\">\n<h1 class=\"g-head__title t-md\">{title}</h1>\n<p class=\"g-head__lead t-small g-muted\">{lead}</p>{actions}\n</header>"
     )
+}
+
+/// Links between pages that share one nav item, such as the MCP pages: (href, label), the current one marked.
+pub fn page_tabs(pages: &[(&str, &str)], current: &str) -> String {
+    let tabs: String = pages
+        .iter()
+        .map(|(href, label)| {
+            let here = if *label == current {
+                r#" aria-pressed="true""#
+            } else {
+                ""
+            };
+            format!(
+                r#"<a class="g-tab t-small" href="{}"{here}>{}</a>"#,
+                esc(href),
+                esc(label)
+            )
+        })
+        .collect();
+    format!(r#"<nav class="g-tabs" aria-label="Pages">{tabs}</nav>"#)
 }
 
 /// Label and value pairs for one record. Values are markup: the caller escapes text, so a value can hold a tag.
@@ -299,40 +319,103 @@ pub(crate) struct Extra {
 
 tokio::task_local! {
     pub(crate) static EXTRA: std::sync::Arc<Extra>;
+    /// The policy in force is in observe mode: every page says so in one line.
+    pub(crate) static OBSERVE: bool;
 }
 
-const NAV: [(&str, &str); 10] = [
-    ("/console/start", "Start here"),
-    ("/console/audit", "Audit log"),
-    ("/console/policy", "Policy"),
-    ("/console/models", "Models"),
-    ("/console/people", "People and workloads"),
-    ("/console/teams", "Teams"),
-    ("/console/credentials", "Provider credentials"),
-    ("/console/spend", "Spend"),
-    ("/console/requests", "Requests"),
-    ("/console/analytics", "Analytics"),
+/// One line at the top of every page in observe mode, so nobody reads a page as if rules were stopping requests.
+fn observe_line() -> &'static str {
+    if OBSERVE.try_with(|o| *o).unwrap_or(false) {
+        r#"<p class="t-small g-muted" style="margin: 0">Observe mode: rules only record. <a href="/console/start?track=limit">Turn on enforcement</a></p>
+"#
+    } else {
+        ""
+    }
+}
+
+/// The nav: Start here, then the pages by what they are for. Each item is (href, label shown, the labels of the
+/// pages it stands for); a page is marked by the label it passes as `current`. Teams lives under People, and the
+/// pages a binary adds (MCP, deployments, enterprise) go under Tools.
+/// A nav item: its href, the label shown, and the labels of the pages it stands for.
+type Item = (&'static str, &'static str, &'static [&'static str]);
+
+const GROUPS: [(&str, &[Item]); 3] = [
+    ("", &[("/console/start", "Start here", &["Start here"])]),
+    (
+        "Activity",
+        &[
+            ("/console/requests", "Requests", &["Requests"]),
+            ("/console/audit", "Audit log", &["Audit log"]),
+            ("/console/analytics", "Analytics", &["Analytics"]),
+            ("/console/spend", "Spend", &["Spend"]),
+        ],
+    ),
+    (
+        "Access",
+        &[
+            (
+                "/console/people",
+                "People",
+                &["People and workloads", "Teams"],
+            ),
+            ("/console/policy", "Policy", &["Policy"]),
+            ("/console/models", "Models", &["Models"]),
+            (
+                "/console/credentials",
+                "Providers",
+                &["Provider credentials"],
+            ),
+        ],
+    ),
 ];
 
+/// The pages a binary adds, folded the same way: the three MCP pages are one item, linking to the first of them
+/// the binary added (the first is the key here, not a link).
+const FOLDED: [Item; 1] = [(
+    "/console/mcp/tools",
+    "MCP servers",
+    &["MCP tools", "MCP approvals", "MCP sessions"],
+)];
+
 fn nav_links(current: &str, class: &str, extra: &str) -> String {
-    let added = EXTRA
-        .try_with(|e| e.nav.clone())
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(href, label)| (esc(&href), esc(&label)));
-    NAV.iter()
-        .map(|(href, label)| ((*href).to_string(), (*label).to_string()))
-        .chain(added)
-        .map(|(href, label)| {
-            let here = if label == current {
-                r#" aria-current="page""#
-            } else {
-                ""
-            };
-            format!(r#"<a class="{class} t-body" href="{href}"{here}{extra}>{label}</a>"#)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let link = |href: &str, label: &str, marks: bool| {
+        let here = if marks { r#" aria-current="page""# } else { "" };
+        format!(
+            r#"<a class="{class} t-body" href="{}"{here}{extra}>{}</a>"#,
+            esc(href),
+            esc(label)
+        )
+    };
+    let group = |name: &str| format!(r#"<span class="g-nav__group t-tag g-caps">{name}</span>"#);
+    let mut out = Vec::new();
+    for (name, items) in GROUPS {
+        if !name.is_empty() {
+            out.push(group(name));
+        }
+        for (href, label, pages) in items {
+            out.push(link(href, label, pages.contains(&current)));
+        }
+    }
+    let added = EXTRA.try_with(|e| e.nav.clone()).unwrap_or_default();
+    if !added.is_empty() {
+        out.push(group("Tools"));
+    }
+    let mut folded_shown = Vec::new();
+    for (href, label) in &added {
+        match FOLDED
+            .iter()
+            .find(|(_, _, pages)| pages.contains(&label.as_str()))
+        {
+            Some((key, shown, pages)) => {
+                if !folded_shown.contains(key) {
+                    folded_shown.push(*key);
+                    out.push(link(href, shown, pages.contains(&current)));
+                }
+            }
+            None => out.push(link(href, label, label == current)),
+        }
+    }
+    out.join("\n")
 }
 
 /// `admin` is "name, role": the name on one line and the role under it, so a long email never splits the role.
@@ -390,13 +473,14 @@ pub fn shell(
 <a class="g-nav__menu g-btn g-btn--quiet g-btn--sm t-small" href="{here}?menu=1">{}Menu</a>
 </nav>
 <main class="g-shell__main" id="main" tabindex="-1">
-{main}
+{observe}{main}
 </main>
 {overlay}{sheet}
 </div>"##,
         nav_links(current, "g-nav__item", ""),
         signed_in(admin),
-        icon("menu")
+        icon("menu"),
+        observe = observe_line(),
     )
 }
 
@@ -456,6 +540,30 @@ pub fn field(f: &Field<'_>) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_nav_is_grouped_and_a_page_folded_into_another_marks_it() {
+        let nav = super::nav_links("Teams", "g-nav__item", "");
+        // Three groups, in this order, with Start here above them.
+        let at = |s: &str| nav.find(s).unwrap_or(usize::MAX);
+        assert!(
+            at(">Start here<") < at(">Activity<") && at(">Activity<") < at(">Access<"),
+            "{nav}"
+        );
+        assert!(
+            at(">Requests<") < at(">Audit log<") && at(">Audit log<") < at(">Access<"),
+            "{nav}"
+        );
+        // Teams has no item of its own: People is marked while it is open.
+        assert!(
+            nav.contains(r#"href="/console/people" aria-current="page">People<"#),
+            "{nav}"
+        );
+        assert!(
+            !nav.contains(">Teams<") && nav.contains(">Providers<"),
+            "{nav}"
+        );
+    }
+
     #[test]
     fn the_menu_link_of_a_nested_page_stays_in_the_console() {
         let page = super::shell("/console/start", "admin, admin", "/start", "", "", false);

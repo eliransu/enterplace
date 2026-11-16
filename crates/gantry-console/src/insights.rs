@@ -76,14 +76,6 @@ pub(crate) async fn rows(console: &Console, query: &Query) -> Result<Vec<Row>, S
         .map_err(|err| format!("the request log stopped before it finished: {err}."))?
 }
 
-fn source(console: &Console) -> &'static str {
-    if insights::attached(&console.config().audit).index.is_some() {
-        "every gateway on the store"
-    } else {
-        "this gateway's audit log"
-    }
-}
-
 fn href(base: &str, pairs: &[(String, String)]) -> String {
     let query: Vec<String> = pairs
         .iter()
@@ -302,18 +294,27 @@ pub(crate) async fn requests_page(
         };
         let _ = writeln!(
             body,
-            r#"<tr><td>{}<span class="g-table__sub">{}</span></td><td>{}<span class="g-table__sub">{}</span></td><td>{}</td><td class="g-table__wide">{}<span class="g-table__sub">{}</span></td><td class="g-table__num">{}</td><td class="g-table__num">{}</td><td class="g-table__wide">{}<span class="g-table__sub"><a href="{}">Open</a></span></td></tr>"#,
-            esc(&time_list(&row.time)),
+            r#"<tr><td><a href="{}" aria-label="Open request {}">{}</a></td><td>{}<span class="g-table__sub">{}</span></td><td>{}{}</td><td class="g-table__wide">{}<span class="g-table__sub">{}</span></td><td class="g-table__num">{}</td><td class="g-table__num">{}</td><td class="g-table__num">{}</td></tr>"#,
+            esc(&open),
             esc(&row.id),
+            esc(&time_list(&row.time)),
             cell("person"),
             cell("team"),
             outcome_tag(row),
+            // Proof shows only where it fails: a row that checks out needs no tag saying so.
+            if row.checks_out() && row.linked {
+                String::new()
+            } else {
+                format!(" {}", proof_tag(row))
+            },
             cell("model"),
             cell("provider"),
+            match (row.input_tokens, row.output_tokens) {
+                (None, None) => "-".to_string(),
+                (i, o) => count(i.unwrap_or(0) + o.unwrap_or(0)),
+            },
             cost_text(row),
             ms(row.latency_ms),
-            proof_tag(row),
-            esc(&open),
         );
     }
     let list = if shown.is_empty() && query.pairs().is_empty() && offset_zero(&form) {
@@ -338,7 +339,7 @@ pub(crate) async fn requests_page(
             esc(EST_TIP)
         );
         format!(
-            "<div class=\"g-table-wrap\"><table class=\"g-table g-table--stack t-mono-sm\">\n<thead class=\"t-tag\"><tr><th>Time (UTC) and decision</th><th>Person and team</th><th>Outcome</th><th>Model and provider</th>{est_head}<th class=\"g-table__num\">Latency</th><th>Proof</th></tr></thead>\n<tbody>\n{body}</tbody>\n</table></div>\n{}",
+            "<div class=\"g-table-wrap\"><table class=\"g-table g-table--stack t-mono-sm\">\n<thead class=\"t-tag\"><tr><th>Time (UTC)</th><th>Person</th><th>Outcome</th><th>Model</th><th class=\"g-table__num\">Tokens</th>{est_head}<th class=\"g-table__num\">Latency</th></tr></thead>\n<tbody>\n{body}</tbody>\n</table></div>\n{}",
             pager(
                 &format!("Page {page_no}, {} requests", shown.len()),
                 (
@@ -377,11 +378,8 @@ pub(crate) async fn requests_page(
         "{}\n<div class=\"g-panel g-stack\">\n{toolbar}\n{filter_form}\n{list}\n</div>",
         head(
             "Requests",
-            &format!(
-                "Every request's decision, usage and latency, from {}, newest first. Each row's proof recomputes its decision record's hash. Prompt and answer text are never here.",
-                source(&console)
-            ),
-            &link("Analytics", "quiet", "/console/analytics", false)
+            "Every request, newest first. New ones appear as they arrive.",
+            ""
         )
     );
     page(
@@ -690,7 +688,7 @@ fn chart(label: &str, points: &[(String, f64)], show: impl Fn(f64) -> String) ->
 
 fn stat(figure: &str, label: &str) -> String {
     format!(
-        r#"<div class="g-stat"><p class="g-stat__figure t-numeral">{figure}</p><p class="g-stat__label t-body">{label}</p></div>"#
+        r#"<div class="g-stat"><p class="g-stat__figure t-lg">{figure}</p><p class="g-stat__label t-small">{label}</p></div>"#
     )
 }
 
@@ -758,19 +756,12 @@ pub(crate) async fn analytics_page(
         return console.page(StatusCode::OK, &admin, "Analytics", &uri, &main);
     }
     let pct = |s: &Stats, p: f64| ms(s.percentile(p));
+    // Three figures, as the design system's Stat allows: tokens, errors and latency are in the charts and the table.
     let stats = format!(
-        r#"<div class="g-panel g-stats">{}{}{}{}{}{}{}{}</div>"#,
+        r#"<div class="g-panel g-stats">{}{}{}</div>"#,
         stat(&count(all.requests), "requests"),
-        stat(&count(all.refused), "refused"),
-        stat(&count(all.errors), "errors"),
-        stat(
-            &count(all.input_tokens + all.output_tokens),
-            "tokens in and out"
-        ),
         stat(&money(all.cost_usd), "cost"),
-        stat(&pct(&all, 50.0), "latency p50"),
-        stat(&pct(&all, 95.0), "latency p95"),
-        stat(&pct(&all, 99.0), "latency p99"),
+        stat(&count(all.refused), "refused"),
     );
     // Every hour or day of the window, empty ones too, so the bars keep time.
     let had: std::collections::BTreeMap<String, Stats> = summed.series.into_iter().collect();
@@ -906,15 +897,7 @@ pub(crate) async fn analytics_page(
     };
     let main = format!(
         "{}\n<div class=\"g-tabs\" role=\"group\" aria-label=\"Window\">{windows}</div>\n{stats}\n<div class=\"g-split\">{panels}</div>\n{ranking}\n{forecasts}",
-        head(
-            "Analytics",
-            &format!(
-                "Requests, tokens, cost, latency, refusals and errors over {}, from {}.{filtered}",
-                window.3,
-                source(&console)
-            ),
-            &link("Requests", "quiet", "/console/requests", false)
-        )
+        head("Analytics", &format!("Over {}.{filtered}", window.3), "")
     );
     console.page(StatusCode::OK, &admin, "Analytics", &uri, &main)
 }

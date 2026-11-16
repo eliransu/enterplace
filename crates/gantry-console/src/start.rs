@@ -678,8 +678,6 @@ pub(crate) struct Step {
     /// Gantry watches the request log for it, so it listens while it is the current step.
     listens: bool,
     now: String,
-    when: String,
-    then: String,
     listen: String,
     done_text: String,
     open: Option<(&'static str, &'static str)>,
@@ -721,15 +719,13 @@ pub(crate) fn md(path: &str) -> String {
 }
 
 impl Step {
-    fn new(title: &str, done: bool, now: String, when: &str, then: &str) -> Step {
+    fn new(title: &str, done: bool, now: String) -> Step {
         Step {
             title: title.into(),
             optional: false,
             done,
             listens: false,
             now,
-            when: when.into(),
-            then: then.into(),
             listen: String::new(),
             done_text: String::new(),
             open: None,
@@ -1073,9 +1069,7 @@ fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             r#"<p class="t-body">Paste a key from OpenAI, Anthropic or Gemini, and Gantry sends your requests to that provider. Or try the free demo model: Gantry answers it with a sample text, so your first request lands in seconds.</p>{error}{connect_form}{}"#,
             acts(demo_form)
         ),
-        "A provider is connected, or you chose the demo model.",
-        "The next step's request goes to that model.",
-    )
+)
     .finished(if connected.is_empty() {
         r#"Using the demo model: answers are sample text, free. Connect a provider any time in <a class="g-link" href="/console/credentials">Provider credentials</a>, or on this step after <a class="g-link" href="/console/start?pick=1">changing what to start with</a>."#.to_string()
     } else {
@@ -1113,11 +1107,9 @@ fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
                 &first_lines(&f.base, key, &model, lang)
             ),
         ),
-        "The first request arrives, answered or refused.",
-        "Requests shows it with the person, the model, tokens and cost.",
-    )
+)
     .listening(
-        "Listening for the first request. This step turns done by itself.".into(),
+        "Waiting for the first request.".into(),
         ("Open Requests", "/console/requests"),
     )
     .finished(first.map_or_else(String::new, |r| {
@@ -1196,9 +1188,7 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             r#"<p class="t-body">Each person gets their own key, so every request carries a name and a team.</p>{}"#,
             c.key_form("Name", ("sarah.miller", "platform"), false)
         ),
-        "A key other than an admin key exists.",
-        "People and workloads lists the person.",
-    )
+)
     .finished(made_text(c, first));
     let s2 = Step::new(
         "Point Claude Code at Gantry and send one prompt",
@@ -1217,11 +1207,9 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             ),
             acts(&docs("Read the Claude Code guide", "/integrations/claude-code/"))
         ),
-        &format!("The first request from {who} arrives."),
-        "Requests shows each prompt with its model and cost. Analytics ranks them by tool and model.",
-    )
+)
     .listening(
-        format!("Listening for the first request from {}. This step turns done by itself.", esc(&who)),
+        format!("Waiting for the first request from {}.", esc(&who)),
         ("Open Requests", "/console/requests"),
     )
     .finished(c.requests_done());
@@ -1232,9 +1220,7 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             r#"<p class="t-body">Make a key for one more developer and send them the same lines through your secret manager. With two people, Analytics can compare them.</p>{}"#,
             c.key_form("Name", ("mike.johnson", "payments"), false)
         ),
-        "A second person sends a request.",
-        "Analytics ranks by person and team. Spend splits by person.",
-    )
+)
     .finished(format!(
         "{} sent a first request.",
         mono(second.as_deref().unwrap_or("A second person"))
@@ -1248,9 +1234,7 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             command("cmd-login", &format!("gantry login {}", f.base)),
             acts(&docs("Read Single sign-on", "/governance/single-sign-on/"))
         ),
-        "Someone makes their own key through single sign-on.",
-        "People and workloads lists each key under its owner's email.",
-    )
+)
     .finished("Someone made their own key through single sign-on.".into());
     s4.optional = true;
     let base = f.base.as_str();
@@ -1430,9 +1414,7 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             acts(&turn_on),
             acts(&docs("Read Subscriptions", "/governance/subscriptions/"))
         ),
-        "The policy has a provider with auth: passthrough.",
-        "Claude Code requests on Claude subscriptions go through Gantry.",
-    )
+)
     .finished(format!(
         "On: provider {} sends each person's own Claude login. Gantry holds no Anthropic key for it.",
         mono(gantry_core::catalog::SUBSCRIPTION_PROVIDER)
@@ -1454,18 +1436,28 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     // A token made on this page, whole. Else a placeholder naming whose token goes there, but only where a name is
     // needed or people already hold tokens: a first run shows one line.
     let made = c.made.filter(|m| !m.start).map(|m| m.key.clone());
+    let mdm = c.setup == "mdm";
+    // Managed settings are a rollout, one token per person: they keep the header line, with the place to put it.
     let token = made
         .clone()
-        .or_else(|| (!f.unnamed_ok || first.is_some()).then(|| person_token(c, first)));
-    let mdm = c.setup == "mdm";
+        .or_else(|| (!f.unnamed_ok || mdm).then(|| person_token(c, first)));
     let seen = f.subscribed();
     let first_seen = seen.last();
+    // The person token is optional: without it requests show as unknown. Open once a token was asked for.
+    let name_on_requests = format!(
+        r#"<details class="g-stack" style="gap: var(--space-3)"{}><summary class="t-small g-link">Add your name to the requests</summary><p class="t-small g-check__muted">Until then they show as the person unknown. The token is free and reaches no model.</p>{}</details>"#,
+        if c.error.is_empty() && made.is_none() {
+            ""
+        } else {
+            " open"
+        },
+        token_form(c, ("sarah.miller", "platform"))
+    );
     let s2 = Step::new(
         "Point Claude Code at Gantry",
         !seen.is_empty(),
         format!(
-            r#"<p class="t-body">Paste this where Claude Code runs. Keep your normal Claude login: there is no API key. A free person token puts a name on the requests.</p>{}{}<p class="t-small g-check__muted">{}</p>{}"#,
-            token_form(c, ("sarah.miller", "platform")),
+            r#"<p class="t-body">Paste this where Claude Code runs. Your Claude login stays as it is.</p>{}<p class="t-small g-check__muted">{}</p>{}"#,
             block(
                 "lines-subscription",
                 &tabs_by("setup", "How to set it", 2, &[("shell", "Shell"), ("mdm", "Managed settings (MDM)")], if mdm { "mdm" } else { "shell" }),
@@ -1475,15 +1467,13 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             if mdm {
                 format!("One file per machine, one token per person: {}.", esc(MANAGED_SETTINGS))
             } else {
-                "Leave ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset, or Claude Code stops using your subscription.".to_string()
+                "Leave ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset.".to_string()
             },
-            acts(&docs("Read the Claude Code guide", "/integrations/claude-code/"))
+            name_on_requests
         ),
-        &format!("The first request from {who} on a Claude subscription arrives."),
-        "Requests shows each prompt with the person, model, tokens and cost (est. for a subscription).",
-    )
+)
     .listening(
-        format!("Listening for the first request from {}. This step turns done by itself.", esc(&who)),
+        format!("Waiting for the first request from {}.", esc(&who)),
         ("Open Requests", "/console/requests"),
     )
     .finished(first_seen.map_or_else(String::new, |r| {
@@ -1506,9 +1496,7 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             r#"<p class="t-body">Make a person token for one more developer and send them the same lines. With two people, Analytics can compare them.</p>{}"#,
             token_form(c, ("mike.johnson", "payments"))
         ),
-        "A second person sends a request on their Claude subscription.",
-        "Analytics ranks by person and team.",
-    )
+)
     .finished(format!(
         "{} sent a first request.",
         mono(second.as_deref().unwrap_or("A second person"))
@@ -1533,9 +1521,7 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             command("cmd-login", &format!("gantry login {base}")),
             acts(&docs("Read Single sign-on", "/governance/single-sign-on/"))
         ),
-        "Someone gets their own token through single sign-on.",
-        "People and workloads lists each person under their company email.",
-    )
+)
     .finished("Someone got their own token through single sign-on.".into())
     .agent(prompt(
         base,
@@ -1574,9 +1560,7 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             r#"<p class="t-body">A workload key names the app, not a person. Give it the team that owns it.</p>{}"#,
             c.key_form("Workload", ("support-bot", "support"), true)
         ),
-        "The key exists.",
-        "People and workloads lists the app as a workload.",
-    )
+)
     .finished(made_text(c, app));
     let s2 = Step::new(
         "Change the base URL and send one request",
@@ -1590,11 +1574,9 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             ),
             acts(&docs("Read Connect a project", "/integrations/connect-a-project/"))
         ),
-        &format!("The first request from {name} arrives."),
-        "Requests shows each call with its model, tokens and cost.",
-    )
+)
     .listening(
-        format!("Listening for the first request from {}. This step turns done by itself.", esc(&name)),
+        format!("Waiting for the first request from {}.", esc(&name)),
         ("Open Requests", "/console/requests"),
     )
     .finished(first.map_or_else(String::new, |r| {
@@ -1618,9 +1600,7 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             c.lines("lines-budget-team", &format!("budget-team:{team}"), "Add to a policy draft"),
             acts(&docs("Read Budgets and rate limits", "/governance/budgets-and-rate-limits/"))
         ),
-        &format!("The policy has a budget for {team}."),
-        &format!("Spend shows {team} against $200, with the day it runs out at today's pace."),
-    )
+)
     .finished(format!("The policy has a budget for {}.", mono(&team)));
     let base = f.base.as_str();
     let budget = change(&format!("budget-team:{team}"))
@@ -1677,9 +1657,7 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             c.lines("lines-mcp", "mcp-server", "Add to a policy draft"),
             acts(&docs("Read MCP gateway", "/governance/mcp-gateway/"))
         ),
-        "The policy lists an MCP server.",
-        "The MCP pages list the server and the tools it offers.",
-    )
+)
     .finished(format!(
         "{} in the policy.",
         f.mcp_servers.iter().map(|s| mono(s)).collect::<Vec<_>>().join(", ")
@@ -1699,11 +1677,9 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             ),
             acts(&glink("No key yet? Make one", "/console/start?track=coding&amp;pay=api#step-3", true))
         ),
-        &format!("The first tool call arrives at {}/mcp.", f.base),
-        "The audit log shows each tool call with the person, the tool and the decision.",
-    )
+)
     .listening(
-        "Listening for the first tool call. This step turns done by itself.".into(),
+        "Waiting for the first tool call.".into(),
         ("Open the Audit log", "/console/audit"),
     )
     .finished(call.map_or_else(String::new, |r| {
@@ -1727,9 +1703,7 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             c.lines("lines-approve", "approve", "Add to a policy draft"),
             acts(&docs("Read Tool permissions", "/governance/mcp-gateway/"))
         ),
-        "The first call waits for approval and is answered.",
-        "MCP approvals shows the waiting call with Approve and Deny.",
-    )
+)
     .finished("A call waited for approval and was answered.".into());
     let base = f.base.as_str();
     let plain = |name: &str| {
@@ -1792,9 +1766,7 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             r#"<p class="t-body">A budget counts requests that pass through Gantry, so traffic comes first. Start with one key.</p>{}"#,
             c.key_form("Name", ("sarah.miller", "platform"), false)
         ),
-        "A key other than an admin key exists.",
-        "People and workloads lists the person.",
-    )
+)
     .finished(made_text(c, first));
     let s2 = Step::new(
         "Send requests through Gantry",
@@ -1807,11 +1779,9 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
                 &coding_lines(c, first, tool)
             )
         ),
-        "The first request arrives.",
-        "Spend counts from the first request.",
-    )
+)
     .listening(
-        "Listening for the first request. This step turns done by itself.".into(),
+        "Waiting for the first request.".into(),
         ("Open Spend", "/console/spend"),
     )
     .finished(f.requests.last().map_or_else(String::new, |r| {
@@ -1830,9 +1800,7 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             c.lines("lines-budget-all", "budget-all", "Add to a policy draft"),
             acts(&docs("Read Budgets and rate limits", "/governance/budgets-and-rate-limits/"))
         ),
-        "A budget is in the policy.",
-        "Spend shows each team against its budget. Analytics forecasts the day it runs out.",
-    )
+)
     .finished("A budget is in the policy.".into());
     let s4 = Step::new(
         "Enforce the budget",
@@ -1842,9 +1810,7 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             c.lines("lines-enforce", "enforce", "Turn off observe mode"),
             acts(&docs("Read Step 3: Limit", "/start/step-3-limit/"))
         ),
-        "Observe mode is off.",
-        "Refused requests show on the Audit log with the code and the date the budget starts again.",
-    )
+)
     .finished("Observe mode is off: budgets refuse.".into());
     let base = f.base.as_str();
     let plain = |name: &str| {
@@ -1916,9 +1882,7 @@ fn watch(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             ),
             acts(&docs("Read the license setup", "/deploy/overview/"))
         ),
-        "The license includes watch and the store answers.",
-        "Watch appears in the nav.",
-    )
+)
     .finished("The license includes watch, and the store answers.".into());
     let token = c.watch_token.unwrap_or("gantry_watch_...");
     let may = f.watch_on && !c.admin.read_only;
@@ -1952,9 +1916,7 @@ fn watch(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         format!(
             r#"<p class="t-body">The token goes into Claude Code's managed settings. People are counted under the team you name.</p>{form}"#
         ),
-        "A watch token exists.",
-        "The settings block shows here, ready to paste.",
-    )
+)
     .finished(if c.watch_token.is_some() {
         "Token made. It is shown once, inside the settings block below: copy it now.".into()
     } else {
@@ -1983,11 +1945,9 @@ fn watch(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             ),
             acts(&docs("Read Claude Team and Enterprise", "/integrations/claude-team/"))
         ),
-        "Claude Code telemetry arrives.",
-        "Watch lists each person by their Claude email, with sessions, tokens and cost (est.).",
-    )
+)
     .listening(
-        "Listening for Claude Code telemetry. People appear within a few minutes of their next session.".into(),
+        "Waiting for Claude Code telemetry. People appear within minutes of their next session.".into(),
         ("Open Watch", "/console/watch"),
     )
     .finished(seen.map_or_else(String::new, |r| {
@@ -2097,14 +2057,9 @@ fn checklist(steps: &[Step], states: &[&str]) -> String {
         let word = match *state {
             "done" => "Done",
             "now" => "Now",
-            "listening" => "Listening",
+            "listening" => "Waiting",
             _ => "Not yet",
         };
-        let terms = format!(
-            r#"<dl class="g-check__terms t-small"><div><dt>Turns done when</dt><dd>{}</dd></div><div><dt>Then you see</dt><dd>{}</dd></div></dl>"#,
-            esc(&s.when),
-            esc(&s.then)
-        );
         let agent = if s.agent.is_empty() {
             String::new()
         } else {
@@ -2112,7 +2067,7 @@ fn checklist(steps: &[Step], states: &[&str]) -> String {
                 r#"<pre id="agent-step-{n}" hidden>{}</pre>{}"#,
                 esc(&s.agent),
                 acts(&format!(
-                    r#"<button class="g-btn g-btn--quiet g-btn--sm t-small" type="button" data-copy="agent-step-{}" data-agent-prompt>{}Copy for your agent</button><span class="t-small g-check__muted">Paste it into Claude Code, Codex or Cursor, and it does this step.</span>"#,
+                    r#"<button class="g-btn g-btn--quiet g-btn--sm t-small" type="button" data-copy="agent-step-{}" data-agent-prompt>{}Copy for your agent</button>"#,
                     i + 1,
                     icon("copy")
                 )),
@@ -2120,21 +2075,16 @@ fn checklist(steps: &[Step], states: &[&str]) -> String {
             )
         };
         let body = match *state {
-            "done" => format!(
-                r#"<p class="t-small g-check__muted">{}</p>{}"#,
-                s.done_text,
-                s.open
-                    .map(|(label, href)| acts(&glink(label, href, true)))
-                    .unwrap_or_default()
-            ),
-            "now" => format!("{agent}{}{terms}", s.now),
+            // Done: one line saying what happened. Not yet: the title alone.
+            "done" => format!(r#"<p class="t-small g-check__muted">{}</p>"#, s.done_text),
+            "now" => format!("{}{agent}", s.now),
             "listening" => format!(
-                r#"{agent}{}<p class="g-check__listen t-body" role="status"><span class="g-loading" aria-hidden="true"><i></i><i></i><i></i></span><span>{}</span></p>{}{terms}"#,
+                r#"{}{agent}<p class="g-check__listen t-small" role="status"><span class="g-loading" aria-hidden="true"><i></i><i></i><i></i></span><span>{}</span></p><noscript>{}</noscript>"#,
                 s.now,
                 s.listen,
-                acts(&glink("Check now", "/console/start", true))
+                glink("Check now", "/console/start", true)
             ),
-            _ => format!(r#"<p class="t-small g-check__muted">{}</p>"#, esc(&s.then)),
+            _ => String::new(),
         };
         let current = if matches!(*state, "now" | "listening") {
             r#" aria-current="step""#
@@ -2155,13 +2105,6 @@ fn checklist(steps: &[Step], states: &[&str]) -> String {
         );
     }
     out + "</ol>"
-}
-
-fn observe_banner(f: &Facts) -> String {
-    if !f.observe {
-        return String::new();
-    }
-    r#"<div class="g-banner" role="status"><span class="t-body">Nothing is blocked yet (observe mode). Gantry sends every request and records it; a request a rule would stop is marked <span class="t-mono">would_refuse</span> instead of refused.</span></div>"#.into()
 }
 
 /// The first requests on Start here, with a reading of each part.
@@ -2205,36 +2148,8 @@ fn first_data(f: &Facts) -> String {
             )
         })
         .collect();
-    let points = [
-        (
-            "One row per request",
-            "Each tool sent these through Gantry with a person's key. Nothing else changed for them.",
-        ),
-        (
-            "The model",
-            "A coding tool may use a small model for quick tasks. Each row shows the model that answered and its price.",
-        ),
-        (
-            "Cost",
-            "From the provider's token counts at the model's price per million tokens, as listed on Models.",
-        ),
-        (
-            "Allowed",
-            "Observe mode sends every request from a known key and records what a rule would refuse.",
-        ),
-        (
-            "Also in the Audit log",
-            "Each row is a record chained to the one before it, so a removed record shows.",
-        ),
-    ];
-    let dl: String = points
-        .iter()
-        .map(|(t, d)| {
-            format!(r#"<div><dt class="t-body">{t}</dt><dd class="t-small">{d}</dd></div>"#)
-        })
-        .collect();
     format!(
-        r#"<div class="g-setup__cols"><section class="g-panel g-stack" style="align-content: start"><div class="g-stack" style="gap: var(--space-1)"><h2 class="t-sm">First requests through Gantry</h2><p class="t-small g-muted">Since {since}.</p></div><div class="g-stats">{}{}{}</div><div class="g-table-wrap"><table class="g-table g-table--stack"><thead><tr><th class="t-tag">Time (UTC)</th><th class="t-tag">Person and model</th><th class="t-tag g-table__wide">Tool</th><th class="t-tag g-table__num g-table__wide">Tokens</th><th class="t-tag g-table__num">Cost</th><th class="t-tag g-table__wide">Decision</th></tr></thead><tbody>{body}</tbody></table></div>{}</section><section class="g-stack" style="align-content: start"><h2 class="t-sm">What you are seeing</h2><dl class="g-points">{dl}</dl></section></div>"#,
+        r#"<div><section class="g-panel g-stack" style="align-content: start"><div class="g-stack" style="gap: var(--space-1)"><h2 class="t-sm">First requests through Gantry</h2><p class="t-small g-muted">Since {since}.</p></div><div class="g-stats">{}{}{}</div><div class="g-table-wrap"><table class="g-table g-table--stack"><thead><tr><th class="t-tag">Time (UTC)</th><th class="t-tag">Person and model</th><th class="t-tag g-table__wide">Tool</th><th class="t-tag g-table__num g-table__wide">Tokens</th><th class="t-tag g-table__num">Cost</th><th class="t-tag g-table__wide">Decision</th></tr></thead><tbody>{body}</tbody></table></div>{}</section></div>"#,
         stat(crate::html::thousands(f.requests.len()), "Requests"),
         stat(
             people.to_string(),
@@ -2512,8 +2427,7 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
             return page(StatusCode::OK, welcome(f, may));
         }
         let main = format!(
-            "{}{problem}{}{}",
-            observe_banner(f),
+            "{problem}{}{}",
             head(
                 "Start here",
                 "Pick what to start with. You get a short checklist for it, and each step turns done when the gateway sees it happen.",
@@ -2540,7 +2454,8 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
     let done = st.iter().filter(|s| **s == "done").count();
     let finished = complete(&list);
     let change = if may {
-        r#"<a class="g-btn g-btn--quiet t-body" href="/console/start?pick=1">Change what to start with</a>"#.to_string()
+        r#"<a class="g-link t-small" href="/console/start?pick=1">Change what to start with</a>"#
+            .to_string()
     } else {
         String::new()
     };
@@ -2583,8 +2498,7 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
             f.senders().len()
         );
         format!(
-            "{}{problem}{}{folded}{}{}",
-            observe_banner(f),
+            "{problem}{}{folded}{}{}",
             head(
                 "Start here",
                 &format!(
@@ -2616,11 +2530,7 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
                 list.len()
             )
         } else {
-            format!(
-                "{}: {done} of {} done. Each step turns done when the gateway sees it happen.",
-                track.name(),
-                list.len()
-            )
+            format!("{}: {done} of {} done.", track.name(), list.len())
         };
         let viewing = if viewing_other && v.kept.choice.is_some() {
             format!(
@@ -2677,8 +2587,7 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
             )
         });
         format!(
-            r#"<div class="g-stack" style="gap: var(--space-6)"{poll}>{}{problem}{}{shown_once}{viewing}{body}{banner}{}</div>"#,
-            observe_banner(f),
+            r#"<div class="g-stack" style="gap: var(--space-6)"{poll}>{problem}{}{shown_once}{viewing}{body}{banner}{}</div>"#,
             head("Start here", &lead, &change),
             if finished { others() } else { String::new() }
         )
@@ -3351,24 +3260,25 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
     Some(match page {
         "Requests" => Empty {
             title: "No requests yet",
-            body: format!(
-                "Point one tool at {} with a Gantry key. Each request shows here as one row with its person, model and cost.",
-                esc(base)
-            ),
-            action: key,
+            body: "Point a tool at this gateway. Its first request shows here as it arrives.".into(),
+            action: point,
             docs: "/integrations/coding-tools/",
-            extra: command("empty-copy", &format!("export ANTHROPIC_BASE_URL={base}")),
+            // The Code tab of the Claude desktop app sets ANTHROPIC_BASE_URL itself, so nothing ever arrives from it.
+            extra: format!(
+                r#"{}<p class="t-small g-muted" style="margin: 0">Using the Claude desktop app? Its Code tab ignores your base URL. Run <span class="t-mono-sm">claude</span> in a terminal.</p>"#,
+                command("empty-copy", &format!("export ANTHROPIC_BASE_URL={base}"))
+            ),
         },
         "Analytics" => Empty {
             title: "Nothing to rank yet",
-            body: "Analytics ranks requests by person, team, tool and model. It starts with the first request through Gantry and draws a trend after a day.".into(),
+            body: "Rankings start with the first request through Gantry.".into(),
             action: point,
             docs: "/operations/request-log/",
             extra: String::new(),
         },
         "Spend" => Empty {
             title: "No spend and no budgets yet",
-            body: "Spend counts from the first request through Gantry. Add a budget now and it counts against it from that request. Observe mode records what it would refuse.".into(),
+            body: "Spend counts from the first request. A budget added now counts from then.".into(),
             action: ("Add a budget", "/console/start?track=limit#step-5"),
             docs: "/governance/budgets-and-rate-limits/",
             extra: code(&[
@@ -3378,21 +3288,21 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
         },
         "People and workloads" => Empty {
             title: "Only your admin key so far",
-            body: "Make a key for each person or workload, so every request carries a name and a team. Or connect single sign-on and people make their own.".into(),
+            body: "Make a key for each person or workload, so every request carries a name.".into(),
             action: key,
             docs: "/governance/keys/",
             extra: command("empty-copy", &format!("gantry key new sarah.miller --team platform --url {base}")),
         },
         "Teams" => Empty {
             title: "No teams yet",
-            body: "A team is set when you make a key, such as team payments for mike.johnson. Each team shows here with its people, its rule and its budget.".into(),
+            body: "A team is set when you make a key.".into(),
             action: ("Make a person token with a team", "/console/start?track=coding#step-2"),
             docs: "/governance/teams/",
             extra: String::new(),
         },
         "Policy" => Empty {
             title: "One rule lets everyone in",
-            body: "This is the policy Gantry wrote at first start: every key may use every model, and observe mode blocks nothing. Add a budget or a guardrail when you are ready.".into(),
+            body: "Every key may use every model, and observe mode blocks nothing.".into(),
             action: ("Edit the policy", "/console/start?track=limit#step-5"),
             docs: "/governance/policy/",
             extra: String::new(),
@@ -3422,11 +3332,8 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
             extra: String::new(),
         },
         "MCP approvals" => Empty {
-            title: "No MCP servers behind Gantry",
-            body: format!(
-                "Add a server under mcp: in the policy and point the agent at {}/mcp. A tool call that needs an admin's approval waits here.",
-                esc(base)
-            ),
+            title: "No MCP servers yet",
+            body: "Put an MCP server behind Gantry and choose which tools each team may use.".into(),
             action: ("Add an MCP server", "/console/start?track=mcp#step-3"),
             docs: "/governance/mcp-gateway/",
             extra: String::new(),
@@ -3549,7 +3456,7 @@ mod tests {
         let step = |done, listens, optional| Step {
             optional,
             listens,
-            ..Step::new("t", done, String::new(), "", "")
+            ..Step::new("t", done, String::new())
         };
         let list = [
             step(true, false, false),

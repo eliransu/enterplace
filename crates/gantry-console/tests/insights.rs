@@ -216,7 +216,12 @@ async fn the_request_log_filters_and_proves_each_row() -> TestResult {
     ] {
         assert!(page.contains(id), "{id} is listed");
     }
-    assert!(page.contains(">Verified<") && page.contains(r#"href="/console/requests""#));
+    // No Proof column saying Verified on every row: a row that does not prove says so in its outcome.
+    assert!(!page.contains("<th>Proof</th>") && page.contains(r#"href="/console/requests""#));
+    assert!(
+        page.contains("<th class=\"g-table__num\">Tokens</th>"),
+        "{page}"
+    );
     assert!(
         page.contains("aria-current=\"page\">Requests"),
         "the nav marks the page"
@@ -357,10 +362,9 @@ async fn analytics_show_totals_percentiles_rankings_and_forecasts() -> TestResul
     let cookie = sign_in(&s.app, NOA).await?;
     let (status, _, page) = send(&s.app, get("/console/analytics?by=team", &cookie)?).await?;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        page.contains("latency p95") && page.contains("2,400 ms"),
-        "{page}"
-    );
+    // Three figures at the top; latency is in its chart and the ranking.
+    assert_eq!(page.matches(r#"<div class="g-stat">"#).count(), 3, "{page}");
+    assert!(page.contains("Latency p95"), "{page}");
     assert!(page.contains("$4.01"), "the cost of both answers");
     assert!(page.contains("By team, most costly first"));
     let payments = page.find(">payments<").ok_or("no payments row")?;

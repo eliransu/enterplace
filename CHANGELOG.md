@@ -13,6 +13,22 @@ one repository. How a release is made: RELEASING.md.
   signed in with ChatGPT is governed with no OpenAI key. Codex's `session-id` header tells sessions apart when no
   person is named. The refusals name Codex's fix: `requires_openai_auth = true` and `http_headers` with `x-gantry-user`.
 
+### Console: simpler, from the approved design
+
+- The nav has Start here and three groups (Activity, Access, Tools). Teams opens under People, the three MCP pages
+  are one item with tabs between them, and Provider credentials is called Providers.
+- Page titles and figures are smaller (28px titles, 44px figures, three figures at most), and each page opens with
+  one line instead of a paragraph.
+- Observe mode is one line at the top of every page instead of two different banners on two pages.
+- Start here: the step in front shows what to do and one status line. "Turns done when", "Then you see" and "What
+  you are seeing" are gone, and the person token is an optional "Add your name to the requests".
+- Requests: a Tokens column, the time opens the request, and the Proof column is gone: only a row that does not
+  prove says so.
+- Audit log: a kill switch reads "Traffic stopped for ... since ... by ...: reason" with a Restore traffic button,
+  recorded as `clear_kill` like `gantry unkill`. Verify chain sits under the records.
+- Empty pages say one line and offer one button. An empty Requests page tells Claude desktop app users that its Code
+  tab ignores the base URL.
+
 ### Fixed, found by running Claude Code and Codex through Gantry
 
 - `tpd` on a rule with no other limit was never applied: every request passed. It holds now, for subscription

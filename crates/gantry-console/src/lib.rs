@@ -262,10 +262,20 @@ async fn with_client(
         .cloned()
         .map(axum::Extension);
     let base = start::origin(request.headers(), request.uri(), &tls);
+    // Pages only: the policy is read again for each one, as the role check already does, so a change shows at once.
+    let path = request.uri().path();
+    let observe = request.method() == axum::http::Method::GET
+        && !path.starts_with("/console/assets/")
+        && !path.ends_with(".json")
+        && config::load(&console.config().policy, Some(&console.config().keys))
+            .is_ok_and(|l| l.policy.mode() == gantry_core::policy::Mode::Observe);
     CLIENT
         .scope(
             client,
-            BASE.scope(base, html::EXTRA.scope(extra, next.run(request))),
+            BASE.scope(
+                base,
+                html::EXTRA.scope(extra, html::OBSERVE.scope(observe, next.run(request))),
+            ),
         )
         .await
 }
@@ -570,6 +580,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .merge(start::routes())
         .route("/spend", get(spend_page))
         .route("/live.json", get(live_json))
+        .route("/kills/restore", post(restore_traffic))
         .route("/requests", get(insights::requests_page))
         .route("/requests/body", post(insights::body_view))
         .route("/analytics", get(insights::analytics_page))
@@ -2468,8 +2479,45 @@ async fn audit_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
         verified: console.verified(&chain),
         read_only: admin.read_only,
         kills: &gantry_core::kill::read(&gantry_core::kill::path_beside(&config.keys)),
+        may_restore: admin.may(Permission::Kill),
     });
     page(StatusCode::OK, body)
+}
+
+/// Restore traffic: turns a kill switch off, as `gantry unkill` and `DELETE /admin/kills` do, recorded first.
+async fn restore_traffic(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !same_origin(&headers) {
+        return foreign();
+    }
+    let Some(admin) = console.admin(&headers).await else {
+        return redirect("/console/sign-in");
+    };
+    if !admin.may(Permission::Kill) {
+        read_only(&console, &admin, "clear_kill").await;
+        return redirect("/console/audit");
+    }
+    let form = Form::parse(&body);
+    let (scope, value) = (form.get("scope").to_string(), form.get("value").to_string());
+    let Ok(value) = gantry_core::kill::checked(&scope, &value, "-") else {
+        return redirect("/console/audit");
+    };
+    let act = Act {
+        action: "clear_kill",
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target: json!({ "scope": scope, "value": value }),
+    };
+    if record(&console, &act, None, None).await.is_err() {
+        return redirect("/console/audit");
+    }
+    let switches =
+        gantry_core::kill::Switches::open(gantry_core::kill::path_beside(&console.config().keys));
+    let _ = tokio::task::spawn_blocking(move || switches.clear(&scope, &value)).await;
+    redirect("/console/audit")
 }
 
 async fn verify(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {

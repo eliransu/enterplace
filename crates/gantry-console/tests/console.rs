@@ -733,7 +733,7 @@ async fn sign_in_sign_out_issue_and_revoke_are_each_recorded_with_who_did_them()
     );
     // The three requests of the setup, and none of the admin records.
     assert!(
-        page.contains(r#"<p class="g-stat__figure t-numeral">3</p><p class="g-stat__label t-body">requests checked today"#),
+        page.contains(r#"<p class="g-stat__figure t-lg">3</p><p class="g-stat__label t-small">requests checked today"#),
         "{page}"
     );
     let issue_id = records[2]["id"].as_str().unwrap_or("");
@@ -1726,12 +1726,15 @@ async fn a_kill_switch_shows_a_banner_on_audit_and_in_the_sheet_of_a_request_it_
         ..Entry::default()
     })?;
     let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    // One line per switch, in words, with the button that turns it off.
     assert!(
         page.contains(r#"<div class="g-banner" role="alert""#)
-            && page.contains(r#"<span class="t-mono">person maya.cohen</span>"#)
-            && page.contains("Traffic is stopped since")
+            && page.contains(
+                r#"Traffic stopped for <span class="t-mono">person maya.cohen</span> since "#
+            )
             && page.contains("retrying &lt;the same&gt; ticket")
-            && page.contains(UNKILL_MAYA),
+            && page.contains(r#"action="/console/kills/restore""#)
+            && page.contains("Restore traffic"),
         "{page}"
     );
     let (_, _, sheet) = send(
@@ -1743,7 +1746,29 @@ async fn a_kill_switch_shows_a_banner_on_audit_and_in_the_sheet_of_a_request_it_
         sheet.contains("Kill switch") && sheet.contains("Still on"),
         "{sheet}"
     );
-    kills.clear("person", "maya.cohen")?;
+    // Restore traffic turns the switch off, as gantry unkill does, and the admin record says who did it.
+    let (status, _, _) = send(
+        &s.app,
+        post(
+            "/console/kills/restore",
+            &cookie,
+            "scope=person&value=maya.cohen",
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(
+        gantry_core::kill::read(&gantry_core::kill::path_beside(&s.keys()))?.is_empty(),
+        "the switch is off"
+    );
+    assert!(
+        admin_records(&s)?
+            .iter()
+            .any(|r| r["action"] == "clear_kill"
+                && r["target"]["value"] == "maya.cohen"
+                && r["verdict"] == "allow"),
+        "recorded"
+    );
     let (_, _, sheet) = send(
         &s.app,
         get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAK1", &cookie)?,
@@ -1914,10 +1939,9 @@ async fn a_killed_sheet_tells_the_story_of_the_switch_that_stopped_it_and_whethe
     // m12-5. One block per switch: its scope in mono, its reason, since when and by whom, and the one command.
     assert!(
         list.contains(r#"<span class="t-mono">person maya.cohen</span>"#)
-            && list.contains("Traffic is stopped since ")
-            && list.contains(" UTC by noa.bar.")
-            && list.contains("turns it off")
-            && !list.contains("turns it on again"),
+            && list.contains("Traffic stopped for ")
+            && list.contains(" by noa.bar: ")
+            && list.contains("Restore traffic"),
         "{list}"
     );
     Ok(())
@@ -2192,7 +2216,7 @@ async fn an_answer_guardrail_shows_on_its_request_and_the_price_source_shows() -
         "{list}"
     );
     assert!(
-        list.contains(r#"<p class="g-stat__figure t-numeral">1</p><p class="g-stat__label t-body">blocked by a guardrail today"#),
+        list.contains(r#"<p class="g-stat__figure t-lg">1</p><p class="g-stat__label t-small">blocked by a guardrail today"#),
         "{list}"
     );
     let (_, _, blocked) = send(&s.app, get("/console/audit?verdict=blocked", &cookie)?).await?;
@@ -2311,7 +2335,7 @@ async fn a_custom_role_sees_only_the_pages_it_may_and_an_org_role_only_its_keys(
 }
 
 #[tokio::test]
-async fn the_audit_log_says_when_observe_mode_lets_everything_through() -> TestResult {
+async fn every_page_says_when_observe_mode_lets_everything_through() -> TestResult {
     let s = setup("observe-banner")?;
     let cookie = sign_in(&s.app).await?;
     let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
@@ -2320,9 +2344,21 @@ async fn the_audit_log_says_when_observe_mode_lets_everything_through() -> TestR
         s.dir.join("gantry.policy.yaml"),
         format!("mode: observe\n{POLICY}"),
     )?;
-    let (status, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
-    assert_eq!(status, StatusCode::OK);
-    assert!(page.contains("Observe mode: nothing is blocked."), "{page}");
+    // One short line, the same on every page, once.
+    for path in [
+        "/console/audit",
+        "/console/people",
+        "/console/policy",
+        "/console/start",
+    ] {
+        let (status, _, page) = send(&s.app, get(path, &cookie)?).await?;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(
+            page.matches("Observe mode: rules only record.").count(),
+            1,
+            "{path}: {page}"
+        );
+    }
     Ok(())
 }
 

@@ -22,6 +22,12 @@ use crate::Refusal;
 
 const TOOLS: &str = "MCP tools";
 const APPROVALS: &str = "MCP approvals";
+/// The three MCP pages share one nav item and link each other.
+pub(super) const MCP_PAGES: [(&str, &str); 3] = [
+    ("/console/mcp/tools", TOOLS),
+    ("/console/mcp/approvals", APPROVALS),
+    ("/console/mcp/sessions", super::sessions::SESSIONS),
+];
 
 /// A tool as Gantry compares it: everything a model reads of it, with object keys in one order.
 fn fingerprint(tool: &Value) -> String {
@@ -470,11 +476,15 @@ async fn tools_page(
         rows
     };
     let lead = if said.is_empty() {
-        "Every tool the MCP servers listed, pinned to the description and schema first seen. A change is recorded, and held on a server set to block changes.".to_string()
+        "Each tool your MCP servers offer, and who may use it.".to_string()
     } else {
         html::esc(said)
     };
-    let main = format!("{}{body}", html::head(TOOLS, &lead, ""));
+    let main = format!(
+        "{}{}{body}",
+        html::head(TOOLS, &lead, ""),
+        html::page_tabs(&MCP_PAGES, TOOLS)
+    );
     console.page(StatusCode::OK, &admin, TOOLS, uri, &main)
 }
 
@@ -657,7 +667,7 @@ async fn approvals_page(
         rows
     };
     let lead = if said.is_empty() {
-        "Calls held for an admin. Approve to let one run as asked, or deny it.".to_string()
+        "Tool calls waiting for an admin.".to_string()
     } else {
         html::esc(said)
     };
@@ -666,7 +676,11 @@ async fn approvals_page(
         &admin,
         APPROVALS,
         uri,
-        &format!("{}{body}", html::head(APPROVALS, &lead, "")),
+        &format!(
+            "{}{}{body}",
+            html::head(APPROVALS, &lead, ""),
+            html::page_tabs(&MCP_PAGES, APPROVALS)
+        ),
     );
     response
         .headers_mut()

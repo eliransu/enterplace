@@ -279,8 +279,14 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
                 "{choice}: {part}"
             );
         }
-        for part in ["Turns done when", "Then you see", r#"data-state="now""#] {
-            assert!(page.contains(part), "{choice}: {part}");
+        // The step in front holds what to do and nothing more: no "Turns done when" and "Then you see" blocks.
+        assert!(page.contains(r#"data-state="now""#), "{choice}");
+        for gone in [
+            "Turns done when",
+            "Then you see",
+            "Paste it into Claude Code",
+        ] {
+            assert!(!page.contains(gone), "{choice}: {gone}");
         }
     }
     // A policy kept in the file: the lines come with Copy and the file's path, no draft button.
@@ -359,12 +365,13 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
         "{page}"
     );
     assert!(
-        page.contains("Listening for the first request from sarah.miller"),
+        page.contains("Waiting for the first request from sarah.miller"),
         "{page}"
     );
+    // The page polls; without a script the step's Check now link does the same.
     assert!(
-        page.contains(r#"href="/console/start">Check now"#),
-        "works without the script"
+        page.contains(r#"<noscript><a class="g-link t-small" href="/console/start">Check now"#),
+        "works without the script: {page}"
     );
     let (_, _, later) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
     assert!(
@@ -395,7 +402,6 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
     for part in [
         "Your first requests arrived",
         "First requests through Gantry",
-        "What you are seeing",
         "claude-sonnet-5-5",
         "Your steps",
         "Add a second person",
@@ -437,6 +443,13 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
 async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestResult {
     let s = setup("empty")?;
     let cookie = sign_in(&s.app, ADMIN_KEY).await?;
+    // Requests, empty: the one line to paste, and the one reason a desktop user sees nothing arrive.
+    let (_, _, page) = send(&s.app, get("/console/requests", &cookie)?).await?;
+    assert!(
+        page.contains("Claude desktop app")
+            && page.contains("Run <span class=\"t-mono-sm\">claude</span> in a terminal"),
+        "{page}"
+    );
     let pages = [
         (
             "/console/requests",

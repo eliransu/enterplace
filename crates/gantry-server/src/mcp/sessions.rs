@@ -184,7 +184,7 @@ async fn page(
         rows
     };
     let lead = if said.is_empty() {
-        "The MCP clients connected to this gateway, and each person's own account at a server. End one and its client connects, or its person signs in, again.".to_string()
+        "Connected MCP clients and accounts.".to_string()
     } else {
         html::esc(said)
     };
@@ -193,7 +193,11 @@ async fn page(
         &admin,
         SESSIONS,
         uri,
-        &format!("{}{body}", html::head(SESSIONS, &lead, "")),
+        &format!(
+            "{}{}{body}",
+            html::head(SESSIONS, &lead, ""),
+            html::page_tabs(&super::console::MCP_PAGES, SESSIONS)
+        ),
     )
 }
 

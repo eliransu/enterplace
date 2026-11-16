@@ -216,7 +216,7 @@ fn models_body(console: &Console, admin: &Admin, query: &Form, error: &str) -> S
     let title = "Models";
     let here = "/console/models";
     let c = console.config();
-    let lead = "The models each provider serves, what they cost per million tokens, and the other names callers may send for them.";
+    let lead = "Each model, its provider and its price.";
     let loaded = match config::load(&c.policy, Some(&c.keys)) {
         Ok(loaded) => loaded,
         Err(problems) => {
@@ -551,7 +551,7 @@ async fn teams_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
     let query = Form::of(&uri);
     let title = "Teams";
     let here = "/console/teams";
-    let lead = "Each key names a person or a workload and its team. Admin keys may sign in to this console and use the admin API; members send requests. A binary with a members feature adds its own roles on its pages.";
+    let lead = "Who is in each team.";
     let c = console.config();
     let loaded = match config::load(&c.policy, Some(&c.keys)) {
         Ok(loaded) => loaded,
