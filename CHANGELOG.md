@@ -7,6 +7,12 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Codex on a ChatGPT subscription
+
+- `auth: passthrough` is allowed on a provider of kind `openai` (url `https://chatgpt.com/backend-api/codex`), so Codex
+  signed in with ChatGPT is governed with no OpenAI key. Codex's `session-id` header tells sessions apart when no
+  person is named. The refusals name Codex's fix: `requires_openai_auth = true` and `http_headers` with `x-gantry-user`.
+
 ### Fixed, found by running Claude Code and Codex through Gantry
 
 - `tpd` on a rule with no other limit was never applied: every request passed. It holds now, for subscription

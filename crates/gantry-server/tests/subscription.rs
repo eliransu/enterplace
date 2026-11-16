@@ -612,3 +612,152 @@ async fn tokens_per_day_and_requests_per_day_limit_subscription_traffic() -> Tes
     assert!(body.contains("tokens were used today"), "{body}");
     Ok(())
 }
+
+/// What Codex sends from a ChatGPT login: an OAuth access token (a JWT) and the ChatGPT account. Made up.
+const CHATGPT_LOGIN: &str = "Bearer eyJhbGciOiJSUzI1NiJ9.FAKE-chatgpt-login.c2ln";
+const CHATGPT_ACCOUNT: &str = "6f1c2d3e-0000-4000-8000-acc0unt1d000";
+
+/// ChatGPT's Codex backend (chatgpt.com/backend-api/codex): keeps what it was sent and answers with 8 tokens each way.
+async fn chatgpt() -> Result<(Seen, u16), Error> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
+    let seen: Seen = Arc::default();
+    let app = Router::new()
+        .route(
+            "/backend-api/codex/responses",
+            post(
+                |State(seen): State<Seen>, headers: HeaderMap, body: Bytes| async move {
+                    if let Ok(mut all) = seen.lock() {
+                        all.push((headers, String::from_utf8_lossy(&body).into_owned()));
+                    }
+                    (
+                        [(header::CONTENT_TYPE, "application/json")],
+                        r#"{"id":"resp_1","object":"response","status":"completed","model":"gpt-5-codex","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello there"}]}],"usage":{"input_tokens":8,"output_tokens":8,"total_tokens":16}}"#,
+                    )
+                },
+            ),
+        )
+        .with_state(seen.clone());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    Ok((seen, port))
+}
+
+fn codex_setup(name: &str, port: u16, identity: &str) -> Result<Setup, Error> {
+    let dir = std::env::temp_dir().join(format!("gantry-sub-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let policy = dir.join("gantry.policy.yaml");
+    std::fs::write(
+        &policy,
+        format!(
+            "version: 1
+providers:
+  - name: chatgpt-subscriptions
+    kind: openai
+    url: http://127.0.0.1:{port}/backend-api/codex
+    allow_private: true
+    auth: passthrough
+    identity: {identity}
+    models: [gpt-5-codex]
+prices:
+  gpt-5-codex: {{ input: 1.25, output: 10 }}
+rules:
+  - name: everyone
+    principals: {{ any: true }}
+    models: [\"*\"]
+"
+        ),
+    )?;
+    std::fs::write(
+        dir.join("gantry.keys.yaml"),
+        format!(
+            "keys:\n  - name: maya.cohen\n    team: payments\n    sha256: {}\n    admin: false\n",
+            sha256_hex(MAYA.as_bytes())
+        ),
+    )?;
+    let gw = gantry_server::governed(&policy, None, &|_| None)?;
+    Ok(Setup { gw, dir })
+}
+
+/// What Codex on a ChatGPT login sends to a model provider with `requires_openai_auth = true` (Codex 0.166), with
+/// the person token from the provider's `http_headers`.
+fn codex(person: Option<&str>) -> Result<Request<Body>, Error> {
+    let mut request = Request::post("/v1/responses")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("authorization", CHATGPT_LOGIN)
+        .header("chatgpt-account-id", CHATGPT_ACCOUNT)
+        .header("originator", "codex_cli_rs")
+        .header("session-id", "01a1e44c-codex-session");
+    if let Some(person) = person {
+        request = request.header("x-gantry-user", person);
+    }
+    Ok(request.body(Body::from(
+        json!({"model": "gpt-5-codex", "store": false, "stream": false, "instructions": "be brief", "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}]})
+            .to_string(),
+    ))?)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn codex_on_a_chatgpt_login_reaches_chatgpt_unchanged_and_is_never_recorded() -> TestResult {
+    let (provider_saw, port) = chatgpt().await?;
+    let s = codex_setup("codex", port, "required")?;
+
+    let (status, body) = send(&s.gw, codex(Some(MAYA))?).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (headers, _) = last(&provider_saw)?;
+    let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    assert_eq!(
+        get("authorization"),
+        Some(CHATGPT_LOGIN),
+        "the exact login goes on"
+    );
+    assert_eq!(get("chatgpt-account-id"), Some(CHATGPT_ACCOUNT));
+    assert!(headers.get("x-gantry-user").is_none(), "{headers:?}");
+
+    let records = records(&s.dir, 1).await?;
+    let decision = records
+        .iter()
+        .find(|r| r["auth"] == "passthrough" && r["event"] != "usage")
+        .ok_or("no decision record of the passthrough request")?;
+    assert_eq!(decision["verdict"], "allow", "{decision}");
+    assert_eq!(decision["person"], "maya.cohen", "{decision}");
+    let usage = records
+        .iter()
+        .find(|r| r["event"] == "usage")
+        .ok_or("no usage record")?;
+    assert_eq!(usage["output_tokens"], 8, "{usage}");
+    assert_eq!(usage["cost_basis"], "api_equivalent_estimate", "{usage}");
+    assert!(!everything_written(&s.dir).contains("FAKE-chatgpt-login"));
+
+    // Without a person, `identity: required` refuses it before anything is sent.
+    let before = provider_saw.lock().map_err(|_| "lock")?.len();
+    let (status, body) = send(&s.gw, codex(None)?).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let code = serde_json::from_str::<Value>(&body).unwrap_or_default()["error"]["code"].clone();
+    assert_eq!(code, "person_needed", "OpenAI's error shape: {body}");
+    assert!(body.contains("http_headers"), "names Codex's fix: {body}");
+    assert_eq!(provider_saw.lock().map_err(|_| "lock")?.len(), before);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn codex_without_a_person_is_told_apart_by_its_session() -> TestResult {
+    let (_, port) = chatgpt().await?;
+    let s = codex_setup("codex-unknown", port, "optional")?;
+    let (status, body) = send(&s.gw, codex(None)?).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let records = records(&s.dir, 1).await?;
+    let decision = records
+        .iter()
+        .find(|r| r["auth"] == "passthrough" && r["event"] != "usage")
+        .ok_or("no decision record")?;
+    assert_eq!(decision["person"], "unknown", "{decision}");
+    assert_eq!(
+        decision["key"],
+        json!(&sha256_hex(b"session\n01a1e44c-codex-session")[..8]),
+        "told apart by Codex's session-id: {decision}"
+    );
+    Ok(())
+}
