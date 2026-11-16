@@ -87,7 +87,7 @@ Developers signed in to Codex with ChatGPT (Plus, Pro, Business, Enterprise or E
         rate: { tpd: 5000000, rpd: 2000 }
     ```
 
-    `gpt-*` covers the models Codex picks for ChatGPT logins. `identity: optional` records a request with no person token as `unknown`, by Codex's session.
+    `gpt-*` covers the models Codex picks for ChatGPT logins. A request with no person token is refused (`identity: required`, the default). Add `identity: optional` to the provider to record it as the person `unknown`, told apart by Codex's `session-id`, while tokens are rolled out.
 
 2. **Point Codex at Gantry with your ChatGPT login.** In `~/.codex/config.toml`:
 
@@ -105,7 +105,9 @@ Developers signed in to Codex with ChatGPT (Plus, Pro, Business, Enterprise or E
 
     `requires_openai_auth = true` makes Codex send its own ChatGPT login (`Authorization` and `chatgpt-account-id`) to this provider. The person token in `http_headers` comes from the console (Start here, Coding agents), `gantry key new --identity-only`, or `gantry login`. Leave `env_key` out.
 
-3. **Sign in with ChatGPT and run Codex.** `codex login` (choose ChatGPT) if you are not signed in, then `codex`.
+3. **Sign in with ChatGPT and run Codex.** `codex login` (choose ChatGPT) if you are not signed in, then `codex`. **Requests** in the console shows the person, the model and an API-equivalent cost estimate. The login itself is never written to the audit log.
+
+A request that carries a ChatGPT login is served only by a `passthrough` provider, and a request with a Gantry key only by a keyed one. If Codex is refused with `person_needed` or `login_needed`, the message names the setting to fix.
 
 </Steps>
 
