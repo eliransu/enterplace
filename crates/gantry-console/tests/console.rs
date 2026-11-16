@@ -343,7 +343,7 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
     let (status, headers, _) = send(&s.app, get("/console/sign-out", &cookie)?).await?;
     assert_eq!(
         (status, location(&headers)),
-        (StatusCode::SEE_OTHER, "/console/sign-in")
+        (StatusCode::SEE_OTHER, "/console/sign-in?out=1")
     );
     assert!(
         headers
@@ -386,7 +386,7 @@ async fn the_audit_log_shows_records_newest_first_with_filters_and_a_record_shee
     );
     assert!(first < last, "not newest first");
     assert!(
-        page.contains("model_not_allowed")
+        page.contains("model not allowed")
             && page.contains("key hash deadbeef")
             && page.contains("1 to 4 of 4 decisions")
     );
@@ -727,7 +727,7 @@ async fn sign_in_sign_out_issue_and_revoke_are_each_recorded_with_who_did_them()
     let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
     assert!(
         page.contains(
-            r#"<span class="t-tag">Admin</span><span class="t-mono-sm">issued key</span>"#
+            r#"<span class="t-tag">Admin:</span><span class="t-mono-sm">issued a key</span>"#
         ),
         "{page}"
     );
@@ -1169,12 +1169,12 @@ async fn admin_records_are_tagged_in_words_and_a_refused_one_says_it_was_tried()
     let cookie = sign_in(&s.app).await?;
     let (_, _, list) = send(&s.app, get("/console/audit", &cookie)?).await?;
     assert!(
-        list.contains(r#"<span class="g-tag g-tag--refused"><span class="t-tag">Refused</span><span class="t-mono-sm">sign-in</span>"#)
-            && list.contains(r#"<span class="g-tag"><span class="t-tag">Admin</span><span class="t-mono-sm">sign-in</span>"#)
+        list.contains(r#"<span class="g-tag g-tag--refused"><span class="t-tag">Refused:</span><span class="t-mono-sm">sign-in</span>"#)
+            && list.contains(r#"<span class="g-tag"><span class="t-tag">Admin:</span><span class="t-mono-sm">signed in</span>"#)
             && !list.contains("console_sign_in"),
         "{list}"
     );
-    assert!(list.contains("Time (UTC) and decision"));
+    assert!(list.contains("<th>Time</th>"));
     let refused = admin_records(&s)?
         .first()
         .and_then(|r| r["id"].as_str().map(str::to_string))
@@ -1514,7 +1514,7 @@ async fn people_shows_each_keys_status_its_budget_meter_and_the_fix() -> TestRes
     let (_, _, people) = send(&s.app, get("/console/people", &cookie)?).await?;
     for expected in [
         "<th>Status</th>",
-        "<th>Fix</th>",
+        r#"<th aria-label="Actions"></th>"#,
         r#"<span class="g-tag g-tag--refused t-tag">Expired</span>"#,
         // m12-3: "$0.82 of $1" is not spent; the next request would pass it.
         r#"<span class="g-tag g-tag--refused t-tag">Budget reached</span>"#,
@@ -1651,7 +1651,7 @@ async fn changes_list_in_their_own_table_and_a_repair_is_one_of_them() -> TestRe
     let cookie = sign_in(&s.app).await?;
     let (_, _, list) = send(&s.app, get("/console/audit?verdict=changes", &cookie)?).await?;
     for expected in [
-        "<th>Who</th><th>Change and reason</th><th>Time and record</th>",
+        "<th>Who</th><th>Change and reason</th><th>Time</th>",
         "record=4",
         "of 2 changes",
         "noa.bar signed in to the console",
@@ -2157,7 +2157,7 @@ async fn people_shows_a_stopped_person_and_a_keys_own_models_and_tpm() -> TestRe
     assert!(
         page.contains(r#"g-tag--refused t-tag">Stopped</span>"#)
             && page.contains("retrying a ticket in a loop")
-            && page.contains(UNKILL_MAYA)
+            && page.contains(r#"<input type="hidden" name="value" value="maya.cohen"><button class="g-btn g-btn--sm t-small" type="submit">Restore traffic</button>"#)
             && page.contains("models gpt-4o-mini")
             && page.contains("50,000 tokens a minute")
             && !page.contains("T06:16:26Z"),
@@ -2547,5 +2547,157 @@ async fn a_key_is_rotated_from_its_page_shown_once_and_the_old_one_ends_after_th
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(page.contains("already rotated"), "{page}");
+    Ok(())
+}
+
+/// UX #19, #29, #30: one set of verdict words, the row opens on its time, and refusals are not said to be by policy.
+#[tokio::test]
+async fn audit_rows_say_verdicts_in_words_and_open_on_their_time() -> TestResult {
+    let s = setup("verdict-words")?;
+    killed_record(&s, "01AAAAAAAAAAAAAAAAAAAAAAK1", Some("gpt-4o"))?;
+    kill_record(
+        &s,
+        "01AAAAAAAAAAAAAAAAAAAAAAK2",
+        "set_kill",
+        "person",
+        "maya.cohen",
+        "a loop",
+    )?;
+    let cookie = sign_in(&s.app).await?;
+    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    for words in [
+        r#"<span class="g-tag g-tag--allow t-tag">Allowed</span>"#,
+        r#"<span class="t-tag">Refused:</span><span class="t-mono-sm">unknown key</span>"#,
+        r#"<span class="t-tag">Refused:</span><span class="t-mono-sm">kill switch</span>"#,
+        r#"<span class="t-tag">Admin:</span><span class="t-mono-sm">signed in</span>"#,
+        r#"<span class="t-tag">Admin:</span><span class="t-mono-sm">stopped traffic</span>"#,
+        "refused today</p>",
+        "<th>Time</th>",
+        r#"aria-label="Open decision 01AAAAAAAAAAAAAAAAAAAAAAA3""#,
+    ] {
+        assert!(page.contains(words), "{words}: {page}");
+    }
+    for gone in [
+        "unknown_key",
+        ">Allow<",
+        "by policy",
+        "Time (UTC) and decision",
+        ">01AAAAAAAAAAAAAAAAAAAAAAA3<",
+    ] {
+        assert!(!page.contains(gone), "{gone}: {page}");
+    }
+    let (_, _, sheet) = send(
+        &s.app,
+        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAA1", &cookie)?,
+    )
+    .await?;
+    assert!(
+        sheet.contains(r#"<dd class="t-mono-sm">Allowed</dd>"#)
+            && sheet.contains("01AAAAAAAAAAAAAAAAAAAAAAA1</dd>"),
+        "{sheet}"
+    );
+    Ok(())
+}
+
+/// UX #38, #40: the row offers Edit only, Revoke is on the edit page, one page has no pager, and the key forms match.
+#[tokio::test]
+async fn people_rows_offer_edit_and_the_key_forms_keep_one_hint() -> TestResult {
+    let s = setup("people-actions")?;
+    let cookie = sign_in(&s.app).await?;
+    let (_, _, people) = send(&s.app, get("/console/people", &cookie)?).await?;
+    assert!(
+        people.contains(r#"<th aria-label="Actions"></th>"#)
+            && people.contains(">Edit</a>")
+            && !people.contains("<th>Fix</th>")
+            && !people.contains("Revoke key")
+            && !people.contains("of 2 keys"),
+        "{people}"
+    );
+    let maya = sha256_hex(MAYA_KEY.as_bytes());
+    let (_, _, edit) = send(
+        &s.app,
+        get(&format!("/console/people/edit?sha256={maya}"), &cookie)?,
+    )
+    .await?;
+    assert!(
+        edit.contains(&format!(
+            r#"href="/console/people?revoke={maya}">Revoke key</a>"#
+        )) && edit.contains(r#"id="key-expires" name="expires" value="" type="date""#)
+            && edit.contains(r#"<h2 class="t-md" style="margin: 0">Rotate key</h2>"#)
+            && !edit.contains("Rotate: how long")
+            && edit.matches("g-field__hint").count() == 1,
+        "{edit}"
+    );
+    let (_, _, issue) = send(&s.app, get("/console/people?issue=1", &cookie)?).await?;
+    assert_eq!(issue.matches("g-field__hint").count(), 1, "{issue}");
+    Ok(())
+}
+
+/// UX #35: at no spend the page is one empty state, not an empty chart and people ranked at $0.
+#[tokio::test]
+async fn spend_at_zero_is_one_empty_state() -> TestResult {
+    let s = setup("spend-zero")?;
+    let cookie = sign_in(&s.app).await?;
+    let mut demo = usage_record("maya.cohen", "deadbeef", 0.0);
+    demo.insert("model".into(), "gantry-demo".into());
+    s.log.append_record(&demo)?;
+    let (_, _, spend) = send(&s.app, get("/console/spend", &cookie)?).await?;
+    assert!(
+        spend.contains("No spend yet")
+            && spend.contains("Demo requests are free.")
+            && !spend.contains("Who spent most")
+            && !spend.contains("Stopped before sending"),
+        "{spend}"
+    );
+    Ok(())
+}
+
+/// UX #47: the sign-in page says admin-only once, and signing out says it worked.
+#[tokio::test]
+async fn sign_in_says_admin_only_once_and_sign_out_is_confirmed() -> TestResult {
+    let s = setup("sign-in-once")?;
+    let (_, _, page) = send(&s.app, get("/console/sign-in", "")?).await?;
+    assert!(
+        page.contains("Admin keys only.")
+            && !page.contains("Admins only")
+            && !page.contains("8 hours")
+            && !page.contains("never stored"),
+        "{page}"
+    );
+    let cookie = sign_in(&s.app).await?;
+    let (_, headers, _) = send(&s.app, get("/console/sign-out", &cookie)?).await?;
+    let (_, _, out) = send(&s.app, get(location(&headers), "")?).await?;
+    assert!(out.contains("You signed out."), "{out}");
+    Ok(())
+}
+
+/// UX #25, #26: a policy kept in a file says read only once, with no edit, export or change column to contradict it.
+#[tokio::test]
+async fn a_file_kept_policy_offers_nothing_that_edits_it() -> TestResult {
+    let s = setup("read-only-file")?;
+    std::fs::write(
+        s.dir.join("gantry.policy.yaml"),
+        POLICY.replace(
+            "  - name: payments-team\n    principals: { team: payments }\n    models: [gpt-4o-mini]\n",
+            "",
+        ),
+    )?;
+    let cookie = sign_in(&s.app).await?;
+    let (_, _, models) = send(&s.app, get("/console/models", &cookie)?).await?;
+    assert!(
+        models.contains("Read only: prices come from")
+            && models.contains("How to edit here")
+            && !models.contains("policy_from")
+            && !models.contains("<th>Change</th>")
+            && !models.contains("A form edit"),
+        "{models}"
+    );
+    let (_, _, policy) = send(&s.app, get("/console/policy", &cookie)?).await?;
+    assert!(
+        policy.contains(">Add a budget</a>")
+            && !policy.contains("Edit the policy")
+            && !policy.contains("Export YAML"),
+        "{policy}"
+    );
     Ok(())
 }

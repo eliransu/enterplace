@@ -98,12 +98,15 @@ pub(crate) fn policy_source(console: &Console, admin: &Admin) -> PolicySource {
             false,
         ));
     }
-    actions.push_str(&link(
-        "Export YAML",
-        "quiet",
-        "/console/policy/export",
-        false,
-    ));
+    // Kept in a file, the page already shows the file: exporting it again adds nothing.
+    if live.is_some() {
+        actions.push_str(&link(
+            "Export YAML",
+            "quiet",
+            "/console/policy/export",
+            false,
+        ));
+    }
     let banner = match versions::file_differs(path) {
         Some(v) => format!(
             r#"<div class="g-banner" role="status"><span class="t-body">{} differs from live version {v}, and only its store: section is read: the store decides. Export the live version to update the file, or paste the file in the editor to make it a new version.</span></div>"#,
@@ -243,10 +246,15 @@ fn models_body(console: &Console, admin: &Admin, query: &Form, error: &str) -> S
     } else {
         String::new()
     };
+    // A plain line, not a banner: read only is how a file-kept policy works, nothing went wrong.
     let banner = if live.is_none() {
         format!(
-            r#"<div class="g-banner" role="status"><span class="t-body">{}</span></div>"#,
-            esc(&sentence(&versions::read_only_message(&c.policy)))
+            r#"<p class="t-small g-muted" style="margin: 0">Read only: prices come from <span class="t-mono">{}</span>. <a class="g-link t-small" href="{}/operations/console-editing/">How to edit here</a></p>"#,
+            esc(&c.policy.file_name().map_or_else(
+                || c.policy.display().to_string(),
+                |n| n.to_string_lossy().into_owned()
+            )),
+            crate::start::DOCS
         )
     } else {
         String::new()
@@ -276,19 +284,23 @@ fn models_body(console: &Console, admin: &Admin, query: &Form, error: &str) -> S
                 })
                 .map(|a| a.name.as_str())
                 .collect();
-            let action = if editable {
-                link(
-                    "Price",
-                    "quiet",
-                    &format!("{here}?price={}", enc(model)),
-                    true,
+            // Read only, the column has nothing to offer and is left out.
+            let change = if editable {
+                format!(
+                    r#"<td><span class="g-head__actions">{}</span></td>"#,
+                    link(
+                        "Price",
+                        "quiet",
+                        &format!("{here}?price={}", enc(model)),
+                        true,
+                    )
                 )
             } else {
                 String::new()
             };
             let _ = write!(
                 rows,
-                r#"<tr><td>{}<span class="g-table__sub">{}</span></td><td class="g-table__num">{price}<span class="g-table__sub">{source}</span></td><td class="g-table__wide">{}</td><td><span class="g-head__actions">{action}</span></td></tr>"#,
+                r#"<tr><td>{}<span class="g-table__sub">{}</span></td><td class="g-table__num">{price}<span class="g-table__sub">{source}</span></td><td class="g-table__wide">{}</td>{change}</tr>"#,
                 esc(model),
                 esc(&format!("{} ({})", provider.name, provider.kind.word())),
                 if aliases.is_empty() {
@@ -307,11 +319,19 @@ fn models_body(console: &Console, admin: &Admin, query: &Form, error: &str) -> S
             &add,
         )
     } else {
+        let (change, form_note) = if editable {
+            (
+                "<th>Change</th>",
+                " A form edit saves the policy without its comments: the editor keeps them.",
+            )
+        } else {
+            ("", "")
+        };
         format!(
             r#"<div class="g-panel g-stack"><div class="g-table-wrap"><table class="g-table g-table--stack g-table--prose t-mono-sm">
-<thead class="t-tag"><tr><th>Model</th><th>USD per 1M tokens, in / out</th><th>Aliases</th><th>Change</th></tr></thead>
+<thead class="t-tag"><tr><th>Model</th><th>USD per 1M tokens, in / out</th><th>Aliases</th>{change}</tr></thead>
 <tbody>{rows}</tbody></table></div>
-<p class="t-small g-muted" style="margin: 0">A price set in the policy is used over the built-in one. A form edit saves the policy without its comments: the editor keeps them.</p></div>"#
+<p class="t-small g-muted" style="margin: 0">A price set in the policy is used over the built-in one.{form_note}</p></div>"#
         )
     };
     let overlay = if editable {
@@ -738,14 +758,21 @@ fn key_body(
         )
     };
     let admin_box = typed.map_or(entry.admin, |f| f.get("admin") == "1");
+    let expires = value("expires", entry.expires.clone().unwrap_or_default());
+    // The date picker of the issue form. An expiry with a time (a gantry login key) stays text: a date input
+    // cannot show it and would send it back empty, ending the expiry.
     let fields = field(&Field {
         id: "key-expires",
         name: "expires",
         label: "Expires, optional",
-        value: &value("expires", entry.expires.clone().unwrap_or_default()),
+        value: &expires,
         mono: true,
-        extra: "",
-        hint: "UTC, for example 2026-12-31 or 2026-12-31T18:00:00Z. Empty never expires.",
+        extra: if expires.len() <= 10 {
+            r#" type="date""#
+        } else {
+            ""
+        },
+        hint: "",
         error: "",
     }) + &format!(
         r#"<div class="g-field"><label class="g-field__label t-tag g-caps" for="key-budget">Budget, USD, optional</label><div class="g-toolbar" style="flex-wrap: nowrap"><input class="g-input t-mono" style="flex: 1; min-width: 0" id="key-budget" name="budget" type="number" min="0" step="any" inputmode="decimal" value="{}"><div class="g-select-wrap"><select class="g-input g-select t-body" name="per" aria-label="Budget period"><option value="day"{}>a day</option><option value="month"{}>a month</option>{other}</select>{}</div></div><span class="g-field__hint t-small">Most the key may spend, on top of its rule's budget. Empty for none.</span></div>"#,
@@ -763,7 +790,7 @@ fn key_body(
         ),
         mono: true,
         extra: r#" autocomplete="off" placeholder="gpt-4o-mini, o3""#,
-        hint: "Narrows the rule's models for this key, separated by commas. Empty uses the rule's.",
+        hint: "",
         error: "",
     }) + &field(&Field {
         id: "key-tpm",
@@ -772,7 +799,7 @@ fn key_body(
         value: &value("tpm", entry.tpm.map(|t| t.to_string()).unwrap_or_default()),
         mono: true,
         extra: r#" type="number" min="1" step="1" inputmode="numeric""#,
-        hint: "On top of the rule's limit. Empty for none.",
+        hint: "",
         error: "",
     }) + &format!(
         r#"<label class="g-choice t-body"><input type="checkbox" name="admin" value="1"{}>Admin: may sign in to this console and use the admin API</label>"#,
@@ -793,17 +820,19 @@ fn key_body(
     } else {
         format!(
             r#"<div class="g-panel g-stack" style="max-width: 40rem">
+<h2 class="t-md" style="margin: 0">Rotate key</h2>
+<p class="t-small g-muted" style="margin: 0">Makes a new key with the same settings and shows it once.</p>
 <form class="g-stack" style="gap: var(--space-6)" method="post" action="/console/people/rotate"><input type="hidden" name="sha256" value="{}">{}<div class="g-dialog__actions">{}</div></form>
 </div>"#,
             esc(&entry.sha256),
             field(&Field {
                 id: "key-grace",
                 name: "grace",
-                label: "Rotate: how long the old key keeps working",
+                label: "Old key works for",
                 value: &typed.map_or("24h".to_string(), |f| f.get("grace").to_string()),
                 mono: true,
                 extra: r#" autocomplete="off""#,
-                hint: "Makes a new key with the same settings and shows it once. Write 48h, 30m or 7d (at most 90d), or 0 to end the old key now. Requests made with the old key until then are recorded with key_rotated.",
+                hint: "",
                 error: "",
             }),
             button("Rotate the key", "", "submit", "")
@@ -820,13 +849,25 @@ fn key_body(
         head(
             &format!("Edit the key of {}", esc(&entry.name)),
             "The key itself does not change and is never shown again: only what it may do. Every gateway uses the new fields within 2 seconds.",
-            ""
+            &link(
+                "Revoke key",
+                "quiet",
+                &format!("/console/people?revoke={}", enc(&entry.sha256)),
+                false
+            )
         ),
-        facts(&[
-            ("Name", esc(&entry.name)),
-            ("Team", esc(&entry.team)),
-            ("Key hash", esc(&entry.sha256[..8])),
-        ]),
+        // Laid out as the fields below, label over value, so both start at the same edge.
+        [
+            ("Name", &entry.name),
+            ("Team", &entry.team),
+            ("Key hash", &entry.sha256[..8].to_string()),
+        ]
+        .iter()
+        .map(|(k, v)| format!(
+            r#"<div class="g-field"><span class="g-field__label t-tag g-caps">{k}</span><span class="t-mono" style="padding-left: var(--space-6)">{}</span></div>"#,
+            esc(v)
+        ))
+        .collect::<String>(),
         esc(&entry.sha256),
         link("Cancel", "quiet", "/console/people", false),
         button("Save", "", "submit", "")

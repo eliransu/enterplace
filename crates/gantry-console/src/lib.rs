@@ -1107,9 +1107,12 @@ async fn root(State(console): State<Console>, headers: HeaderMap) -> Response {
     }
 }
 
-async fn sign_in_page(State(console): State<Console>, headers: HeaderMap) -> Response {
+async fn sign_in_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
     if console.admin(&headers).await.is_some() {
         return redirect(HOME);
+    }
+    if Form::of(&uri).get("out") == "1" {
+        return page(StatusCode::OK, pages::signed_out(console.sso_on()));
     }
     page(StatusCode::OK, pages::sign_in("", "", console.sso_on()))
 }
@@ -2311,7 +2314,7 @@ async fn sign_out(State(console): State<Console>, headers: HeaderMap) -> Respons
     if let Some(id) = cookie_value(&headers, COOKIE) {
         console.end_session(&id);
     }
-    let mut response = redirect("/console/sign-in");
+    let mut response = redirect("/console/sign-in?out=1");
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_static(
@@ -2582,6 +2585,7 @@ fn people_body(console: &Console, admin: &Admin, query: &Form, dialog: pages::Di
         // A list that cannot be read shows no one stopped here; the audit log's banner says it cannot be read.
         kills: gantry_core::kill::read(&gantry_core::kill::path_beside(&config.keys))
             .unwrap_or_default(),
+        may_restore: admin.may(Permission::Kill),
     })
 }
 
@@ -3098,10 +3102,11 @@ async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Ur
             && l.policy.scope_limits().is_empty()
             && l.policy_text.contains(r#"models: ["*"]"#)
     });
-    if first {
-        source.banner.push_str(&empty_page(
-            "Policy",
-            &base(),
+    if first && let Some(mut next) = start::empty_for("Policy", &base()) {
+        // The button opens the budget step: it says so, and never reads as an editor on a read-only page.
+        next.action.0 = "Add a budget";
+        source.banner.push_str(&start::empty_state(
+            &next,
             admin.may(Permission::EditPolicy),
         ));
     }
