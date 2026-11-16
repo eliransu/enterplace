@@ -1,5 +1,10 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-dark.svg">
+  <img src=".github/assets/logo-light.svg" alt="Gantry logo" width="104" height="96">
+</picture>
+
 # Gantry
 
 **The open source AI gateway built for governance.**

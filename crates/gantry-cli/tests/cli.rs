@@ -2197,11 +2197,18 @@ limits:
     Ok(())
 }
 
+/// What a cleared environment must keep on Windows: without SYSTEMROOT, Winsock cannot start and the gateway never
+/// listens. Elsewhere it is unset and this adds nothing.
+fn windows_root() -> Option<(&'static str, std::ffi::OsString)> {
+    std::env::var_os("SYSTEMROOT").map(|v| ("SYSTEMROOT", v))
+}
+
 /// `gantry start` with only the variables given: a provider key in the developer's own shell must not leak in.
 fn start(dir: &std::path::Path, extra: &[&str], env: &[(&str, &str)]) -> std::io::Result<Output> {
     let mut command = Command::new(env!("CARGO_BIN_EXE_gantry"));
     command
         .env_clear()
+        .envs(windows_root())
         .args(["start", "--dir", &dir.display().to_string(), "--no-serve"])
         .args(extra);
     for (key, value) in env {
@@ -2419,6 +2426,7 @@ fn start_prints_the_dashboard_link_first_and_it_signs_in_once() -> TestResult {
     let addr = format!("127.0.0.1:{port}");
     let mut child = Command::new(env!("CARGO_BIN_EXE_gantry"))
         .env_clear()
+        .envs(windows_root())
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .args([
             "start",
@@ -2835,6 +2843,7 @@ fn start_on_a_taken_port_writes_nothing_and_stop_stops_the_gateway_of_a_folder()
     drop(held);
     let mut child = Command::new(env!("CARGO_BIN_EXE_gantry"))
         .env_clear()
+        .envs(windows_root())
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .args(["start", "--no-open", "--dir", &dir_s, "--listen", &addr])
         .stdout(std::process::Stdio::piped())
