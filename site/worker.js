@@ -54,11 +54,11 @@ const TRACKER = `(() => {
   const waiting = [];
   const ph = (e, d) => { if (window.posthog && window.posthog.__loaded) window.posthog.capture(e, d ? { detail: d } : {}); else waiting.push([e, d]); };
   const s = document.createElement('script');
-  s.src = 'https://us-assets.i.posthog.com/static/array.js';
+  s.src = '/ingest/static/array.js';
   s.async = true;
   s.onload = () => {
     if (!window.posthog || !window.posthog.init) return;
-    window.posthog.init('${POSTHOG_KEY}', { api_host: 'https://us.i.posthog.com', defaults: '2025-05-24', persistence: 'memory', person_profiles: 'identified_only' });
+    window.posthog.init('${POSTHOG_KEY}', { api_host: '/ingest', ui_host: 'https://us.posthog.com', defaults: '2025-05-24', persistence: 'memory', person_profiles: 'identified_only' });
     waiting.splice(0).forEach(([e, d]) => window.posthog.capture(e, d ? { detail: d } : {}));
   };
   document.head.appendChild(s);
@@ -122,8 +122,19 @@ export default {
       return stats(url, env);
     }
 
+    // PostHog through our own host: blockers drop requests to posthog.com, and most visitors of a developer site run one.
+    if (url.pathname.startsWith('/ingest/')) {
+      const rest = url.pathname.slice('/ingest'.length);
+      const host = rest.startsWith('/static/') || rest.startsWith('/array/') ? 'us-assets.i.posthog.com' : 'us.i.posthog.com';
+      const headers = new Headers(request.headers);
+      headers.delete('cookie');
+      headers.set('x-forwarded-for', request.headers.get('cf-connecting-ip') || '');
+      const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.arrayBuffer();
+      return fetch(`https://${host}${rest}${url.search}`, { method: request.method, headers, body });
+    }
+
     if (url.pathname === '/_t.js') {
-      return new Response(TRACKER, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
+      return new Response(TRACKER, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=300' } });
     }
 
     // Clicks, copies and custom events sent by /_t.js with navigator.sendBeacon.
