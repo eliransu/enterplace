@@ -92,6 +92,10 @@ pub const SAFE_TO_DROP: &[(&str, &str)] = &[
         "Opt-ins to Anthropic API versions and features that a chat provider does not have. A body field that a beta would enable is still refused by name.",
     ),
     (
+        "safeguards (Anthropic request)",
+        "Asks Anthropic's server to run Claude Code's auto mode classifier on tool use. A chat provider has no such classifier, and with no safeguard_results in the answer Claude Code runs its own classifier requests, so the check still happens. Dropping it also keeps the working and home folders it carries away from the provider.",
+    ),
+    (
         "citations (Anthropic answer)",
         "Pointers to the sources of cited text. The text itself still arrives.",
     ),
@@ -681,7 +685,7 @@ pub fn anthropic_to_openai_request(request: &Value) -> Result<Value> {
                 }
             }
             // SAFE_TO_DROP.
-            "cache_control" => {}
+            "cache_control" | "safeguards" => {}
             // Clearing thinking blocks, which the translation drops anyway (SAFE_TO_DROP). Any other edit changes
             // what the model is sent and is refused.
             "context_management" => {
@@ -2223,6 +2227,11 @@ mod tests {
             crate::id::sha256_hex(long.as_bytes())
         );
         assert!(chat.get("context_management").is_none() && chat.get("thinking").is_none());
+        // Claude Code in auto mode asks the server to run its tool use classifier. A chat provider has none, and
+        // the context (working folder, home folder) is not sent to it.
+        claude_code["safeguards"] = json!([{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto", "live_cwd": "/Users/maya/app", "home_dir": "/Users/maya"}}]);
+        let chat = anthropic_to_openai_request(&claude_code)?;
+        assert!(chat.get("safeguards").is_none() && !chat.to_string().contains("/Users/maya"));
         let mut thinking = request;
         thinking["thinking"] = json!({"type": "enabled", "budget_tokens": 2000});
         assert_eq!(

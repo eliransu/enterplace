@@ -905,10 +905,16 @@ fn cost(r: &Row) -> String {
 }
 
 fn coding_lines(c: &Ctx<'_>, owner: Option<&KeyEntry>, tool: &str) -> Vec<String> {
-    let (base, key) = (c.f.base.as_str(), c.key(owner));
+    tool_lines(c.f.base.as_str(), &c.key(owner), &first_model(c.f), tool)
+}
+
+/// The settings of one tool. `model` is one this install serves (`first_model`), so the lines work as copied: a
+/// tool left to its own default asks for a model the policy may not have.
+fn tool_lines(base: &str, key: &str, model: &str, tool: &str) -> Vec<String> {
     match tool {
         "codex" => vec![
             "# ~/.codex/config.toml".into(),
+            format!("model = \"{model}\""),
             "model_provider = \"gantry\"".into(),
             "[model_providers.gantry]".into(),
             "name = \"Gantry\"".into(),
@@ -937,7 +943,9 @@ fn coding_lines(c: &Ctx<'_>, owner: Option<&KeyEntry>, tool: &str) -> Vec<String
             format!("curl {base}/v1/chat/completions \\"),
             format!("  -H \"Authorization: Bearer {key}\" \\"),
             "  -H \"Content-Type: application/json\" \\".into(),
-            "  -d '{\"model\":\"gpt-5-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}'".into(),
+            format!(
+                "  -d '{{\"model\":\"{model}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hello\"}}]}}'"
+            ),
         ],
         "openai" => vec![
             format!("export OPENAI_BASE_URL={base}/v1"),
@@ -3403,6 +3411,32 @@ mod tests {
     use super::*;
 
     const POLICY: &str = "version: 1\nmode: observe\nproviders:\n  - name: openai\n    preset: openai\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n";
+
+    #[test]
+    fn the_lines_for_a_tool_name_a_model_this_install_serves() {
+        // Found with real Codex on a keyless start: left to its default model, its first request was refused.
+        let codex = tool_lines(
+            "http://127.0.0.1:8080",
+            "$GANTRY_KEY",
+            "gantry-demo",
+            "codex",
+        );
+        assert!(
+            codex.contains(&"model = \"gantry-demo\"".to_string()),
+            "{codex:?}"
+        );
+        let curl = tool_lines(
+            "http://127.0.0.1:8080",
+            "$GANTRY_KEY",
+            "gantry-demo",
+            "curl",
+        )
+        .join("\n");
+        assert!(
+            curl.contains("\"model\":\"gantry-demo\"") && !curl.contains("gpt-5-mini"),
+            "{curl}"
+        );
+    }
 
     #[test]
     fn policy_lines_land_where_the_policy_reads_them() {

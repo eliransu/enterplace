@@ -93,7 +93,7 @@ The translation is decided before the record is written, so an untranslatable re
 
 **Refused with `untranslatable`:** thinking of another type, server tools (web search, code execution), `context_management` edits other than clearing thinking, document and other non-text tool result blocks, and any field Gantry does not know.
 
-**Dropped on purpose:** `cache_control`, thinking blocks, `defer_loading` on tools, `context_management` that only clears thinking, and the `anthropic-*` headers.
+**Dropped on purpose:** `cache_control`, thinking blocks, `defer_loading` on tools, `context_management` that only clears thinking, `safeguards` (Claude Code then runs its auto mode classifier itself), and the `anthropic-*` headers.
 
 `POST /v1/messages/count_tokens` for these models is refused with `wrong_route`. It is served for `anthropic`, `bedrock` (Bedrock's CountTokens) and `vertex_anthropic` (Vertex AI's count-tokens endpoint).
 

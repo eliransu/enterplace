@@ -13,6 +13,10 @@ Cursor reaches Gantry through its "Override OpenAI Base URL" setting. Its chat a
 Cursor's own servers build the final prompt and send the request, also when you give it your own key and base URL. Gantry must have a public HTTPS address, and every Gantry key travels through Cursor's servers. A Gantry on `127.0.0.1` or a private network cannot be reached from Cursor. See [Deployment](/operations/deployment/) for TLS.
 </Aside>
 
+<Aside type="tip" title="Before you start">
+You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+</Aside>
+
 ## Setup
 
 <Steps>
@@ -36,10 +40,10 @@ Cursor cannot reach `127.0.0.1`, so a Gantry on your laptop needs a public addre
 
 <Steps>
 
-1. Start Gantry: `gantry serve gantry.policy.yaml --listen 127.0.0.1:8080`.
+1. Start Gantry: `gantry start`. It serves `127.0.0.1:8080`.
 2. In another terminal: `cloudflared tunnel --url http://127.0.0.1:8080`. It prints an address such as `https://words-words-words.trycloudflare.com`.
 3. In Cursor, set **Override OpenAI Base URL** to that address with `/v1`, and the Gantry key as the OpenAI API key.
-4. Send a chat message. Its decision is in `gantry-audit.jsonl`, with `user_agent` naming Cursor.
+4. Send a chat message. **Requests** in the console shows it, and its record in `gantry-audit.jsonl` has a `user_agent` naming Cursor.
 
 </Steps>
 

@@ -7,6 +7,33 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Fixed, found by running Claude Code and Codex through Gantry
+
+- `tpd` on a rule with no other limit was never applied: every request passed. It holds now, for subscription
+  traffic too.
+- The demo model answers Claude Code (`/v1/messages`), as the quickstart says, instead of refusing it with
+  `wrong_route`.
+- The demo model's streamed Responses answer opens its output item and text part before the text, so Codex shows the
+  text instead of logging `OutputTextDelta without active item` and printing nothing.
+- `gantry --help` from the image's binary lists every command, `start` included, and exits 0.
+- The `tpd` refusal and the kill switch refusal no longer say UTC twice.
+- Claude Code in auto mode on a chat provider (`accept_messages`) gets one answer per prompt instead of three
+  `untranslatable` refusals first. Its `safeguards` field is dropped on purpose (`SAFE_TO_DROP`): Claude Code then
+  runs its classifier itself, and the working and home folders the field carries never reach the provider.
+
+### First run, made shorter
+
+- `gantry help` (and `gantry` alone) opens with `gantry start`, the one command a newcomer runs. It was the 23rd of
+  35.
+- `gantry kill`, `gantry unkill` and the other admin commands take the admin key from `GANTRY_KEY` too, the name
+  `gantry start` prints it under. With only `GANTRY_ADMIN_KEY` read, the first `gantry kill` after a first run failed.
+- The console's Codex settings and its curl name a model this install serves (the demo model on a fresh install).
+  Codex left to its default model, and the curl's `gpt-5-mini`, were refused with `unknown_model`.
+- Docs: the quickstart is the first page of the sidebar and shows a first request with its answer; every tool guide
+  says how to get a gateway and a key in one line and that `gantry-demo` works with no provider key; the pages that
+  said Claude Team and Enterprise seats cannot go through a gateway now describe subscription passthrough; guides
+  no longer say the Responses route reaches `openai` providers only or that `/v1/completions` is not served.
+
 ### Claude Code on Claude subscriptions, with no API key
 
 - Provider `auth: passthrough` (kind `anthropic`): each caller's own login, such as the OAuth token Claude Code sends

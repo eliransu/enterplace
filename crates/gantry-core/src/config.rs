@@ -5331,7 +5331,8 @@ fn providers(
                 fallback: entry.fallback.clone(),
                 retries: entry.retries.unwrap_or(0),
                 accept_chat: entry.accept_chat.unwrap_or(false),
-                accept_messages: entry.accept_messages.unwrap_or(false),
+                // The demo answers Claude Code too, so its first request works with no key: translated like any chat provider.
+                accept_messages: entry.accept_messages.unwrap_or(kind == Kind::Demo),
                 timeouts,
                 keys,
                 least_used_key,

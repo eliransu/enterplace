@@ -13,31 +13,35 @@ One record for every request, allowed or refused, kept where a restart cannot lo
 
 ## The one change
 
-Gantry has written an audit record for every request since step 1. Put the file on storage that outlives the container. Mount a volume at `/var/lib/gantry`, move the existing `gantry-audit.jsonl` onto it, add this line to `gantry.policy.yaml`, and restart Gantry once:
+Gantry has written an audit record for every request since step 1. Verify the chain and keep its last hash somewhere the Gantry host cannot write:
 
-```yaml title="gantry.policy.yaml (added)"
-audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+```bash
+gantry audit verify gantry-audit.jsonl
 ```
+
+```text
+gantry-audit.jsonl: 9 records in an unbroken chain from record 1 to record 9.
+5 requests, 1 configuration record, 0 admin records, 3 usage records.
+Last hash: 1ae338b73793e850d4a1a345e1648c1addde566b34dc70b1688fe50a887f7fb1
+```
+
+Copy the `Last hash` line to a ticket or a document. Later, `gantry audit verify <file> --expect-last <hash>` shows that nothing up to that record was changed or removed.
+
+Where the file is depends on how you ran step 1:
+
+| How Gantry runs | The audit log | Kept across restarts |
+|---|---|---|
+| `gantry start` in a folder | `gantry-audit.jsonl` in that folder | Yes, it is a file on your disk |
+| The quickstart's `docker run` | `/var/lib/gantry/gantry-audit.jsonl` on the `gantry-data` volume: `docker exec gantry /gantry audit verify /var/lib/gantry/gantry-audit.jsonl` | Yes, the volume outlives the container |
+| A container with no volume | Inside the container, lost when it is removed | No: mount a volume at `/var/lib/gantry` and set `audit: { path: /var/lib/gantry/gantry-audit.jsonl }` in the policy |
 
 Each record holds who asked, the model, the decision, the rule behind it and the cost. It holds no prompt or answer text.
 
 ## Check it worked
 
-On **Start here** (`/console/start`), the five-step strip marks Prove done once **Verify chain now** on the Audit log passes.
+On **Start here** (`/console/start`), the five-step strip marks Prove done once **Verify chain now** on the Audit log passes. It runs the same check as the command above.
 
-```bash
-gantry audit verify /var/lib/gantry/gantry-audit.jsonl
-```
-
-```text
-/var/lib/gantry/gantry-audit.jsonl: 9 records in an unbroken chain from record 1 to record 9.
-5 requests, 1 configuration record, 0 admin records, 3 usage records.
-Last hash: 1ae338b73793e850d4a1a345e1648c1addde566b34dc70b1688fe50a887f7fb1
-```
-
-Every record carries the hash of the one before it, so a changed, removed or reordered record breaks the chain at that record. The console's **Audit log** page has a **Verify** button that runs the same check.
-
-Copy the `Last hash` line of the output to a place the Gantry host cannot write, such as a ticket. Later, `gantry audit verify <file> --expect-last <hash>` shows that nothing up to that record was changed or removed.
+Every record carries the hash of the one before it, so a changed, removed or reordered record breaks the chain at that record.
 
 What [watch mode](/integrations/claude-team/) sees on Claude Team or Enterprise seats is in the same chain, as `watch` records, and verifies with it.
 

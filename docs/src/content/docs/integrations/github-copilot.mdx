@@ -9,6 +9,10 @@ import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/com
 
 Copilot's bring your own key (BYOK) sends chat and agent requests from the developer's machine straight to the endpoint you configure. Point that endpoint at Gantry with a Gantry key, and each request is identified, decided and recorded. Gantry can be on `127.0.0.1` or a private network: GitHub's servers are not in the path.
 
+<Aside type="tip" title="Before you start">
+You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+</Aside>
+
 ## Setup
 
 <Tabs>
@@ -40,7 +44,7 @@ Copilot's bring your own key (BYOK) sends chat and agent requests from the devel
 ]
 ```
 
-`apiType` picks the route: `chat-completions` (`POST /v1/chat/completions`), `responses` (`POST /v1/responses`, `openai` providers only) or `messages` (`POST /v1/messages`, sent with `x-api-key`). With `url` set, VS Code also lists models from `GET /v1/models`, which returns the models the key may use. `toolCalling: true` is needed for agent mode.
+`apiType` picks the route: `chat-completions` (`POST /v1/chat/completions`), `responses` (`POST /v1/responses`, sent as it is to `openai` and `azure` providers and translated for the rest) or `messages` (`POST /v1/messages`, sent with `x-api-key`). With `url` set, VS Code also lists models from `GET /v1/models`, which returns the models the key may use. `toolCalling: true` is needed for agent mode.
 
 On Copilot Business and Enterprise, an admin must enable the policy **Bring Your Own Language Model Key in VS Code** first.
 

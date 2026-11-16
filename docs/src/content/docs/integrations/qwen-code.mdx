@@ -9,6 +9,10 @@ import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/com
 
 Qwen Code reaches Gantry through its `openai` auth type. Its requests go to `POST /v1/chat/completions` on Gantry, or to `POST /v1/responses` with `wireApi: responses`, identified by a Gantry key.
 
+<Aside type="tip" title="Before you start">
+You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+</Aside>
+
 ## Setup
 
 <Tabs>
@@ -43,7 +47,7 @@ With `OPENAI_API_KEY` set, Qwen Code picks its OpenAI-compatible auth from the e
 }
 ```
 
-`envKey` names the variable that holds the Gantry key, never the key itself. `baseUrl` is the `/v1` root: Qwen Code adds the request path. `wireApi: responses` uses `POST /v1/responses`, which reaches `openai` providers only.
+`envKey` names the variable that holds the Gantry key, never the key itself. `baseUrl` is the `/v1` root: Qwen Code adds the request path. `wireApi: responses` uses `POST /v1/responses`, which reaches every provider: sent as it is to `openai` and `azure`, translated for the rest.
 
 </TabItem>
 </Tabs>

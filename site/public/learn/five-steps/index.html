@@ -100,6 +100,8 @@ gantry</a>
   <nav class="crumbs" aria-label="Breadcrumb"><a href="/learn/">Learn</a><span>The five steps</span></nav>
   <h1>Five steps, one change at a time.</h1>
   <p class="lead">Each step is one change on top of the last, and each works without the next. Stay on a step for a day or a quarter. Nothing is blocked in the first two.</p>
+  <figure class="code cmd"><pre>curl -fsSL https://gantry.eliran.me/install.sh | sh
+gantry start</pre></figure>
 </section>
 
 <nav class="rail" aria-label="The five steps">
@@ -117,15 +119,14 @@ gantry</a>
   <div class="step-body">
     <div class="stack">
       <div><h3>What you get</h3><p>A list of the AI tools and models in use and what each one costs, from the first day. Nothing is blocked.</p></div>
-      <div><h3>The one change</h3><p>On the machine that will run Gantry, run gantry start. It writes a policy in observe mode with one rule that allows everyone and opens the dashboard, which takes a provider key and shows the settings for each coding tool. Then give the first people one key and have them point their tool at the gateway.</p></div>
-      <div><h3>Check it worked</h3><p>Open the console and sign in with the admin key. The banner says <strong>Observe mode: nothing is blocked</strong>. The Analytics page ranks requests, tokens and cost by coding agent, model or key.</p></div>
+      <div><h3>The one change</h3><p>On the machine that will run Gantry, run gantry start. No provider key is needed: it writes a policy in observe mode with one rule that allows everyone, a free demo model and Claude subscription passthrough, and opens the dashboard. Its Start here checklist sends a first request and shows the settings for each coding tool. Then have the first people point their tool at the gateway.</p></div>
+      <div><h3>Check it worked</h3><p>gantry start opens the console through a one-time sign-in link. The banner says <strong>Observe mode: nothing is blocked</strong>. The Analytics page ranks requests, tokens and cost by coding agent, model or key.</p></div>
       <div><h3>Who does it</h3><p>A platform engineer. For everyone else it is one settings change in each tool.</p></div>
       <a class="more" href="https://gantry-docs.eliran.me/start/step-1-see/">Step 1 in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
     </div>
     <div class="stack">
-      <figure class="code"><figcaption>Start Gantry</figcaption><pre>export OPENAI_API_KEY=sk-...
-export ANTHROPIC_API_KEY=sk-ant-...
+      <figure class="code"><figcaption>Start Gantry</figcaption><pre>curl -fsSL https://gantry.eliran.me/install.sh | sh
 gantry start
 
 <span class="c"># a key for the first people to try it</span>
@@ -133,14 +134,15 @@ gantry key new pilot --team pilot</pre></figure>
       <figure class="code"><figcaption>gantry.policy.yaml, as gantry start writes it</figcaption><pre>version: 1
 mode: observe
 providers:
-  - name: openai
-    preset: openai
-    key_env: OPENAI_PROVIDER_KEY
-    models: [gpt-5, gpt-5-mini, gpt-5-codex, gpt-4o-mini]
-  - name: anthropic
-    preset: anthropic
-    key_env: ANTHROPIC_PROVIDER_KEY
-    models: [claude-sonnet-5-5, claude-haiku-5-5]
+  - name: demo
+    preset: demo
+    models: [gantry-demo]
+  - name: claude-subscriptions
+    kind: anthropic
+    auth: passthrough
+    identity: optional
+    models: ["claude-*"]
+    url: https://api.anthropic.com
 rules:
   - name: everyone
     principals: { any: true }

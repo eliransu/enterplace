@@ -1834,6 +1834,7 @@ impl Policy {
             && l.rph.is_none()
             && l.rpd.is_none()
             && l.tpm.is_none()
+            && l.tpd.is_none()
             && l.parallel.is_none()
             && who.budget.is_none()
             && who.tpm.is_none()
@@ -2663,6 +2664,36 @@ mod tests {
             l.iter()
                 .any(|x| x["scope"] == "person:acme/maya" && x["usd"] == 30.0)
         }));
+    }
+
+    // Found by a real Claude Code session: `rate: { tpd: 2000 }` alone on a rule let every request through, because
+    // the no-limits fast path did not look at tpd.
+    #[test]
+    fn a_rule_whose_only_limit_is_tokens_per_day_applies_it() {
+        let policy = Policy::new()
+            .with_key("k", "maya", "payments")
+            .with_rule("everyone", Who::Any, Models::Any)
+            .with_rule_change(|r| r.limits.tpd = Some(2000));
+        let Some(who) = policy.identify("k") else {
+            panic!("the key is in the policy");
+        };
+        let Some(rule) = policy.rule_for(who) else {
+            panic!("the rule names the key");
+        };
+        let applied = policy.applied(
+            who,
+            rule,
+            Context {
+                sent: "claude-haiku-4-5",
+                model: "claude-haiku-4-5",
+                customer: None,
+                tags: &[],
+            },
+        );
+        assert!(
+            applied.iter().any(|a| a.limit == Limit::Tpd(2000)),
+            "{applied:?}"
+        );
     }
 
     #[test]

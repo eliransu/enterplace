@@ -351,6 +351,12 @@ async fn main() -> ExitCode {
         Some(command) if !matches!(command, "serve" | "help" | "--help" | "-h") => {
             return gantry_cli::run(&args).await;
         }
+        // Asked for help: every command, the open source ones first (start is the first one a person runs).
+        Some("help" | "--help" | "-h") => {
+            let enterprise = USAGE.strip_prefix("usage:\n").unwrap_or(USAGE);
+            println!("{}\nEnterprise commands:\n{enterprise}", gantry_cli::USAGE);
+            return ExitCode::SUCCESS;
+        }
         _ => Err(USAGE.to_owned()),
     };
     match result {

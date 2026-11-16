@@ -9,6 +9,10 @@ import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/com
 
 Zed takes extra providers under `language_models` in its `settings.json`. Add Gantry as one, and the Zed Agent, the inline assistant, commit messages and thread summaries send through it.
 
+<Aside type="tip" title="Before you start">
+You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+</Aside>
+
 ## Setup
 
 <Tabs>
@@ -62,7 +66,7 @@ Enter the Gantry key in the Agent panel's settings (**Add Provider** under LLM P
 
 ## What Gantry does not see
 
-- Edit predictions. They have their own provider under `edit_predictions`, Zed's hosted Zeta model by default. The `open_ai_compatible_api` option there needs `POST /v1/completions`, which Gantry does not serve.
+- Edit predictions. They have their own provider under `edit_predictions`, Zed's hosted Zeta model by default. The `open_ai_compatible_api` option there uses `POST /v1/completions`, which Gantry serves for models on an `openai` provider. This setup is untried.
 - External agents and terminal threads, which use their own configuration. Point those agents at Gantry in their own settings, for example [Claude Code](/integrations/claude-code/).
 - Zed's hosted models and Copilot in Zed.
 

@@ -31,7 +31,7 @@ Observe mode is still on, so a request over the budget is forwarded and recorded
 - **Analytics** (`/console/analytics`): the budget forecasts say whether each budget lasts the month at the current pace, or the date it runs out.
 
 <Aside type="note">
-Budgets count requests that go through Gantry. Usage on Claude Team or Enterprise seats seen through [watch mode](/integrations/claude-team/) is never refused and counts against no budget: this step needs API traffic through Gantry. An [alert](/operations/alerting/) on watched spend still works.
+Claude Code on Claude subscriptions goes through Gantry too. A subscription is paid by the seat, so limit it in tokens and requests (`tpd`, `rpd`), or in dollars at the estimate: see [Subscriptions](/governance/subscriptions/#limit-tokens-and-requests). Usage seen only through [watch mode](/integrations/claude-team/) is never refused and counts against no budget; an [alert](/operations/alerting/) on watched spend still works.
 </Aside>
 
 ## Enforce it
@@ -40,9 +40,11 @@ When the amounts look right, delete the `mode: observe` line from the policy. Fr
 
 ## The stop button
 
-A kill switch needs no policy change and works in observe mode too. Set `GANTRY_URL` and `GANTRY_ADMIN_KEY`, then:
+A kill switch needs no policy change and works in observe mode too. It needs the gateway's address and an admin key, the one `gantry start` printed:
 
 ```bash
+export GANTRY_URL=http://127.0.0.1:8080
+export GANTRY_KEY=gantry_...   # the admin key; GANTRY_ADMIN_KEY works too
 gantry kill --team support --reason "agent retrying one ticket in a loop"
 gantry unkill --team support
 ```

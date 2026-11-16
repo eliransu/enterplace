@@ -9,11 +9,15 @@ import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components'
 
 Codex CLI talks to OpenAI's Responses API (`POST /v1/responses`). Give it a model provider that points at Gantry and a Gantry key, and each of its requests is identified, decided, checked by the rule's guardrails and recorded before it is forwarded.
 
+<Aside type="tip" title="Before you start">
+You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+</Aside>
+
 ## Setup
 
 <Steps>
 
-1. **Serve Codex's models from an `openai` provider.** The Responses route reaches only providers of `kind: openai`: OpenAI itself, or a vendor that serves the Responses API. A Codex request for a model on any other kind is refused with `wrong_route`.
+1. **Serve the model Codex asks for.** Codex speaks the Responses API. Gantry sends it as it is to `openai` and `azure` providers and [translates it](/routing/translation/#responses-to-chat-codex-on-any-provider) for every other kind, so any model the policy serves works, the free `gantry-demo` included. This example uses OpenAI's own models.
 
     ```yaml title="gantry.policy.yaml"
     version: 1
@@ -77,7 +81,7 @@ With `stream_max_retries = 0`, a stream cut by the network is not resumed, and t
 - A budget reserves the most a request could cost before it is sent, from `max_output_tokens` or the model's `max_output` price.
 - Codex sends `store: false` and the whole conversation in `input` on every turn, with no `previous_response_id`, `conversation` or `prompt`. Its requests work under a budget, and each reservation counts the whole history, so a long session reserves more per request.
 - A client that does send `previous_response_id`, `conversation` or `prompt` is refused under a budget with `stored_context`, unless the model's price sets `max_context`. The provider would add stored context the reservation never saw.
-- Other Responses routes (`GET /v1/responses/{id}`, `DELETE`, cancel) are refused with `unknown_route`. Codex does not need them.
+- The other Responses routes (`GET /v1/responses/{id}`, `DELETE`, cancel) are served too, for the person who created the response. Codex does not need them.
 
 ## Refusals
 

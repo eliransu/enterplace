@@ -68,12 +68,22 @@ fn the_enterprise_commands_keep_precedence() -> TestResult {
     let out = run(&["license", "show"])?;
     assert!(out.status.success(), "{out:?}");
     // `serve` with no policy is the enterprise usage, never the open source server started without a license check.
-    for args in [&["serve"][..], &[], &["help"]] {
+    for args in [&["serve"][..], &[]] {
         let out = run(args)?;
         assert_eq!(out.status.code(), Some(2), "{args:?}");
         assert!(
             String::from_utf8(out.stderr)?.contains("gantry node --control-plane"),
             "{args:?}"
+        );
+    }
+    // Asked for, help is no error and lists every command: start first among them, then the enterprise ones.
+    for args in [&["help"][..], &["--help"]] {
+        let out = run(args)?;
+        assert!(out.status.success(), "{args:?}");
+        let help = String::from_utf8(out.stdout)?;
+        assert!(
+            help.contains("  start [") && help.contains("gantry node --control-plane"),
+            "{args:?}: {help}"
         );
     }
     Ok(())

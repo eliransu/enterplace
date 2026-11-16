@@ -15,10 +15,27 @@ use gantry_core::{
     usage::PriceSource,
 };
 
-const USAGE: &str = "\
+pub const USAGE: &str = "\
 Usage: gantry <command>
 
+New here? Run `gantry start`: it needs no provider key and opens the dashboard, which walks you to a first request.
+
 Commands:
+  start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--no-open] [--force] [--no-serve] [--container]
+        Step 1 in one command, no provider key needed. Writes gantry.policy.yaml in observe mode (nothing is
+        blocked) with the free demo model and every provider whose key is in the environment (OPENAI_API_KEY,
+        ANTHROPIC_API_KEY, GEMINI_API_KEY or the *_PROVIDER_KEY forms), an admin key (printed once, its hash in
+        gantry.keys.yaml) and gantry-master.key (0600), which seals the provider keys pasted in the dashboard.
+        Then runs the gateway on --listen (default 127.0.0.1:8080) and prints the dashboard link, which signs in
+        once from this machine within 10 minutes; on a terminal with a display it opens it unless --no-open.
+        Run again in the same folder, it serves the policy it wrote (a new link, no new admin key) unless
+        --force. --dir names the folder (default the current one); --providers openai,anthropic picks among the
+        keys found; GANTRY_OPENAI_BASE_URL (and the same for ANTHROPIC, GEMINI) points a provider at a proxy.
+        --no-serve stops before running the gateway. --container is the image's default command: it serves
+        /etc/gantry/gantry.policy.yaml when one is mounted, else the policy an earlier start wrote in --dir
+        (default /var/lib/gantry), and only with neither writes one as above, on 0.0.0.0:8080 and opening no
+        browser. With DATABASE_URL set it writes a policy kept in that Postgres (store: with policy_from: store)
+        and puts the admin key there, made only when the store holds none.
   check <policy> [--keys <file>]
         Check a policy file and its keys file. Prints every problem with its file and line.
   explain <policy> --key <hash prefix or name> --model <model> [--customer <name>] [--tags <a,b>] [--keys <file>]
@@ -104,21 +121,6 @@ Commands:
         the catalog (default openai, see `gantry providers`) and the models it serves (--models; openai defaults
         to gpt-4o-mini): everyone may use them. Then set
         the provider key it names and run `gantry serve`, which prints a one-time link to make the first admin.
-  start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--no-open] [--force] [--no-serve] [--container]
-        Step 1 in one command, no provider key needed. Writes gantry.policy.yaml in observe mode (nothing is
-        blocked) with the free demo model and every provider whose key is in the environment (OPENAI_API_KEY,
-        ANTHROPIC_API_KEY, GEMINI_API_KEY or the *_PROVIDER_KEY forms), an admin key (printed once, its hash in
-        gantry.keys.yaml) and gantry-master.key (0600), which seals the provider keys pasted in the dashboard.
-        Then runs the gateway on --listen (default 127.0.0.1:8080) and prints the dashboard link, which signs in
-        once from this machine within 10 minutes; on a terminal with a display it opens it unless --no-open.
-        Run again in the same folder, it serves the policy it wrote (a new link, no new admin key) unless
-        --force. --dir names the folder (default the current one); --providers openai,anthropic picks among the
-        keys found; GANTRY_OPENAI_BASE_URL (and the same for ANTHROPIC, GEMINI) points a provider at a proxy.
-        --no-serve stops before running the gateway. --container is the image's default command: it serves
-        /etc/gantry/gantry.policy.yaml when one is mounted, else the policy an earlier start wrote in --dir
-        (default /var/lib/gantry), and only with neither writes one as above, on 0.0.0.0:8080 and opening no
-        browser. With DATABASE_URL set it writes a policy kept in that Postgres (store: with policy_from: store)
-        and puts the admin key there, made only when the store holds none.
   providers [--markdown]
         List the provider catalog: id, name, kind and URL. A policy provider may say `preset: <id>` in place
         of its url and kind. --markdown prints the reference page of the docs.
@@ -2149,9 +2151,13 @@ fn admin_target(named: &HashMap<&str, &str>) -> Result<(String, String), String>
         .or_else(|| saved.get("url").cloned())
         .ok_or("name the gateway with --url, GANTRY_URL or `gantry login`.")?;
     let url = gantry_console::cli::gateway(&url)?;
+    // GANTRY_KEY too: it is the name `gantry start` prints the admin key under.
     let key = env("GANTRY_ADMIN_KEY")
+        .or_else(|| env("GANTRY_KEY"))
         .or_else(|| saved.get("key").cloned())
-        .ok_or("put an admin key in GANTRY_ADMIN_KEY.")?;
+        .ok_or(
+            "put an admin key in GANTRY_ADMIN_KEY (or GANTRY_KEY, as `gantry start` prints it).",
+        )?;
     Ok((url, key))
 }
 
@@ -2642,9 +2648,13 @@ async fn switch(
         .or_else(|| saved.get("url").cloned())
         .ok_or("name the gateway with --url, GANTRY_URL or `gantry login`.")?;
     let url = gantry_console::cli::gateway(&url)?;
+    // GANTRY_KEY too: it is the name `gantry start` prints the admin key under.
     let key = env("GANTRY_ADMIN_KEY")
+        .or_else(|| env("GANTRY_KEY"))
         .or_else(|| saved.get("key").cloned())
-        .ok_or("put an admin key in GANTRY_ADMIN_KEY.")?;
+        .ok_or(
+            "put an admin key in GANTRY_ADMIN_KEY (or GANTRY_KEY, as `gantry start` prints it).",
+        )?;
     let mut body = serde_json::json!({ "scope": scope, "value": value });
     if on {
         body["reason"] = reason.into();

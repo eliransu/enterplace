@@ -2,12 +2,16 @@
 title: Docker Compose
 description: Run Gantry Enterprise and Postgres on one machine from one Compose file, make a governed call, verify the audit log, then harden the VM.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 One Compose file runs the gateway and Postgres 16 on one machine, each with a named volume: `gantry-data` for the audit log and `postgres-data` for the database. It fits a trial on a laptop and a team on one VM. You need Docker and the two files on this page. Nothing is cloned or built.
+
+<Aside type="tip" title="Only trying it?">
+The [one-command Compose](/deploy/one-click/#docker-compose) runs the same gateway and Postgres with a policy written for you, the free demo model and no license or provider key. This guide is for your own policy file.
+</Aside>
 
 ## Prerequisites
 
@@ -146,7 +150,7 @@ One Compose file runs the gateway and Postgres 16 on one machine, each with a na
    ```text
    License lic_8f2 for Acme: scim, siem, 50 seats, until 2027-11-13.
    warning: DATABASE_URL says sslmode=disable, so the connection to the store is not encrypted: ...
-   gantry enterprise 0.0.1 listening on http://0.0.0.0:8080
+   gantry enterprise 0.1.0 listening on http://0.0.0.0:8080
    First run: no admin key yet. Open http://127.0.0.1:8080/console/setup/efe8afe6... to make the first one. The link works once.
    Audit log: /var/lib/gantry/gantry-audit.jsonl is new. The chain starts at record 1.
    1 rule, 0 keys, 1 provider: openai (openai) at https://api.openai.com/v1.
@@ -208,7 +212,7 @@ To change the policy without a restart, keep it in a file: save the YAML as `gan
 
 ## Try it without a provider key
 
-A stand-in for OpenAI answers every chat call with `pong`, so the steps above work before you have a provider key. Save this beside `docker-compose.yml`; Compose reads it on every command.
+The [one-command Compose](/deploy/one-click/#docker-compose) needs no provider key at all: it serves the free demo model. To try this guide's own policy without one, a stand-in for OpenAI answers every chat call with `pong`, so the steps above work before you have a provider key. Save this beside `docker-compose.yml`; Compose reads it on every command.
 
 ```yaml title="docker-compose.override.yml"
 # A stand-in for OpenAI, for a trial: delete this file to use OpenAI.

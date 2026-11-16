@@ -27,7 +27,7 @@ Your people already use AI tools. Gantry sits between those tools and the model 
 
 | Step | What you do | What you get |
 |---|---|---|
-| [1. See](/start/step-1-see/) | Run Gantry and point your tools at it | Which tools and models are in use and what they cost |
+| [1. See](/start/step-1-see/) | Run `gantry start` and point your tools at it | Which tools and models are in use and what they cost |
 | [2. Know](/start/step-2-know/) | Give each person their own key | A name and a team on every request |
 | [3. Limit](/start/step-3-limit/) | Set a budget per team | A cap on spend, and a stop button |
 | [4. Protect](/start/step-4-protect/) | Add a check for secrets, on trial first | Keys and passwords stay out of prompts |
@@ -64,10 +64,10 @@ It ships as one binary, or one container image. Policy, keys and the audit log a
 		One hash-chained record per request, written before forwarding. Refusals are recorded too. `gantry audit verify` proves nothing was changed or reordered.
 	</Card>
 	<Card title="Budgets and rate limits" icon="seti:pipeline">
-		Dollar budgets per team, person or key, reserved at admission so they cannot be overrun. Requests and tokens per minute, with `Retry-After`.
+		Dollar budgets per organization, team, person, key, end customer, tag or model, reserved at admission so they cannot be overrun. Requests and tokens per minute, hour and day, with `Retry-After`.
 	</Card>
 	<Card title="Guardrails" icon="warning">
-		Built-in secret and personal data detectors, seven guardrail vendors, and your own services by webhook. Block, mask or record, on requests and answers.
+		Built-in secret and personal data detectors, thirteen guardrail vendors, and your own services by webhook. Block, mask or record, on requests and answers.
 	</Card>
 	<Card title="Kill switches" icon="error">
 		Stop a person, a team, a key or a model at once with `gantry kill`. The person stopped sees who set it and why.
@@ -78,13 +78,13 @@ It ships as one binary, or one container image. Policy, keys and the audit log a
 
 <CardGrid>
 	<Card title="Every major provider" icon="puzzle">
-		OpenAI, Anthropic, Azure OpenAI, Claude on Amazon Bedrock and Vertex AI, Gemini, and any OpenAI-compatible server: Groq, Mistral, Together, Fireworks, DeepSeek, OpenRouter, Ollama, vLLM, LM Studio.
+		Over 120 provider presets: OpenAI, Anthropic, Azure OpenAI, Amazon Bedrock (every model family), Vertex AI, Gemini, Cohere, IBM watsonx.ai, SageMaker, Replicate, and any OpenAI-compatible server: Groq, Mistral, Together, Fireworks, DeepSeek, OpenRouter, Ollama, vLLM, LM Studio.
 	</Card>
 	<Card title="Retries, fallbacks and aliases" icon="random">
-		Retries and a fallback per provider. Model aliases spread one name over several deployments with weights, cooldown and named fallbacks.
+		Retries and a fallback per provider. Model aliases spread one name over several deployments by round robin, least busy, lowest latency, lowest cost or adaptive, with cooldown and named fallbacks.
 	</Card>
 	<Card title="Cross-API translation" icon="translate">
-		Opt in to send chat completions to Claude, or Claude Code's messages requests to GPT, Gemini or a local model.
+		Codex's Responses requests reach any provider. Opt in to send chat completions to Claude, or Claude Code's messages requests to GPT, Gemini or a local model.
 	</Card>
 	<Card title="Cost on every answer" icon="seti:db">
 		Tokens and cost recorded for each answer, with prices built in for most models. `gantry prices <model>` shows the price and its source.

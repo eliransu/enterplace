@@ -145,10 +145,10 @@ The database password is a random value made at deploy and kept only inside `DAT
 One machine with Docker, one command:
 
 ```bash
-mkdir gantry && cd gantry && curl -fsSLO https://raw.githubusercontent.com/eliransu/gantry/main/deploy/compose/compose.yaml && OPENAI_API_KEY=sk-... docker compose up -d
+mkdir gantry && cd gantry && curl -fsSLO https://raw.githubusercontent.com/eliransu/gantry/main/deploy/compose/compose.yaml && docker compose up -d
 docker compose logs gantry | grep GANTRY_KEY
 ```
 
-[`compose.yaml`](https://github.com/eliransu/gantry/blob/main/deploy/compose/compose.yaml) runs Postgres 16 and Gantry with a volume each, so here the audit log survives restarts too. Gantry shares Postgres's network, so the database has no port of its own and the connection is plain. The gateway listens on `127.0.0.1:8080`; the console is at `http://127.0.0.1:8080/console`. Put provider keys in a `.env` file beside it to keep them out of your shell history. The [Docker Compose guide](/deploy/docker/) goes further, with your own policy file.
+[`compose.yaml`](https://github.com/eliransu/gantry/blob/main/deploy/compose/compose.yaml) runs Postgres 16 and Gantry with a volume each, so here the audit log survives restarts too. Gantry shares Postgres's network, so the database has no port of its own and the connection is plain. The gateway listens on `127.0.0.1:8080`; the console is at `http://127.0.0.1:8080/console`. No provider key is needed to start: the free demo model answers, and a key pasted in the console is sealed. A key in the environment is picked up too (`OPENAI_API_KEY=sk-... docker compose up -d`); put it in a `.env` file beside `compose.yaml` to keep it out of your shell history. The [Docker Compose guide](/deploy/docker/) goes further, with your own policy file.
 
 **Cost:** your machine.

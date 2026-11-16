@@ -15,15 +15,16 @@ A list of the AI tools and models in use and what each one costs, per key, from 
 
 <Steps>
 
-1. On the machine that will run Gantry, start it (no provider key needed):
+1. On the machine that will run Gantry, install it and start it (no provider key needed):
 
     ```bash
+    curl -fsSL https://gantry.eliran.me/install.sh | sh
     gantry start
     ```
 
     It writes `gantry.policy.yaml` in observe mode with one rule that allows everyone, makes an admin key, starts the gateway, and opens the dashboard with a link that signs you in once. In the dashboard, **Connect a model** takes a provider key (kept sealed) or the free demo model, and **Send your first request** shows the first request arrive. Provider keys already in the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) are picked up.
 
-2. Give the people who try it first one key: `gantry key new pilot --team pilot` prints it once, with the lines their tool reads. The [coding tool guides](/integrations/coding-tools/) cover Claude Code, Codex, Cursor and the rest.
+2. Point the first tools at it. In the dashboard, **Start here** makes a key and shows the exact lines for each tool; the [coding tool guides](/integrations/coding-tools/) cover Claude Code, Codex, Cursor and the rest. Claude Code on a Claude subscription needs one line and no key: `export ANTHROPIC_BASE_URL=http://127.0.0.1:8080`.
 
 </Steps>
 
@@ -37,7 +38,7 @@ The dashboard link `gantry start` printed opens the console (or sign in at `http
 - **Requests** (`/console/requests`): one row per request, with its model and cost. Filter by coding agent to see one tool.
 
 <Aside type="note">
-Developers on Claude Team or Enterprise seats cannot send their requests through a gateway. With Gantry Enterprise, [watch mode](/integrations/claude-team/) receives Claude Code's own telemetry instead: `gantry watch setup` prints the settings, and their requests appear on the same pages with **Source** `watch`.
+Claude Code on Claude Pro, Max, Team or Enterprise seats goes through Gantry on its own login, with no API key: `gantry start` already wrote the `claude-subscriptions` provider for it. See [Claude Code](/integrations/claude-code/#claude-subscriptions). Where nothing may be routed, Gantry Enterprise's [watch mode](/integrations/claude-team/) receives Claude Code's own telemetry instead, and those requests appear on the same pages with **Source** `watch`.
 </Aside>
 
 ## When you're ready
@@ -68,6 +69,14 @@ providers:
     preset: anthropic
     key_env: ANTHROPIC_PROVIDER_KEY
     models: [claude-sonnet-5-5, claude-haiku-5-5]
+  # Claude Code on your developers' own Claude subscriptions (Pro, Max, Team, Enterprise): each request carries
+  # the person's own Claude login, sent on unchanged and never kept. Gantry holds no Anthropic key for it.
+  - name: claude-subscriptions
+    kind: anthropic
+    auth: passthrough
+    identity: optional
+    models: ["claude-*"]
+    url: https://api.anthropic.com
 rules:
   - name: everyone
     principals: { any: true }

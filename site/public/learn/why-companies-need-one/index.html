@@ -144,14 +144,14 @@ gantry</a>
     </table>
 
     <h2 id="start">What starting takes</h2>
-    <p>Less than most people expect. The first step is one container, the provider keys you already have, and a settings change in each tool so it points at the gateway. In Gantry that first step runs in observe mode: every request from a key you issued is forwarded, and nothing your people do today is blocked.</p>
+    <p>Less than most people expect. The first step is one command, with no provider key needed to start, and a settings change in each tool so it points at the gateway. In Gantry that first step runs in observe mode: every request from a key you issued is forwarded, and nothing your people do today is blocked.</p>
     <p>You decide when to go further. Each step is one change on top of the last, and each one works without the next. Your provider accounts and contracts stay as they are, and people keep the tools they chose.</p>
 
     <h2 id="limits">What a gateway does not do</h2>
     <ul class="ticks out">
       <li>It sees the requests that are sent through it. A tool that still calls a provider directly stays invisible until you point it at the gateway.</li>
       <li>A check for secrets finds an API key in a prompt. It does not know that a paragraph is your unreleased roadmap unless you give it a pattern or a word list.</li>
-      <li>Some subscriptions cannot be routed. Developers on Claude Team or Enterprise seats, for example, cannot send requests through a gateway. Gantry has a watch setup for them that shows usage and does not block.</li>
+      <li>Subscription seats are billed by their vendor. Claude Code on Claude Pro, Max, Team or Enterprise seats goes through Gantry on its own login, so rules, guardrails and token limits apply, and the dollar figures are estimates.</li>
       <li>Gantry's audit log holds who asked, which model, the decision and the cost. It holds no prompt or answer text, so it will not tell you what was said.</li>
     </ul>
     <p>Next: <a href="/learn/five-steps/">the five steps</a>, or the <a href="/learn/rollout-plan/">rollout plan</a> if you need one page to forward.</p>

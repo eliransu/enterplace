@@ -3366,7 +3366,7 @@ fn killed(
             StatusCode::FORBIDDEN,
             "killed",
             format!(
-                "Refused: a kill switch stops traffic for {}: \"{}\" (set by {} at {} UTC). It stays stopped until an admin runs gantry unkill. Ask {}.",
+                "Refused: a kill switch stops traffic for {}: \"{}\" (set by {} at {}). It stays stopped until an admin runs gantry unkill. Ask {}.",
                 kill.label(),
                 kill.reason,
                 kill.by,

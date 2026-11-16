@@ -49,7 +49,17 @@ fn an_unknown_argument_is_an_error_not_ignored() -> TestResult {
     // UX11 n12: no command at all is an error too.
     let out = gantry(&[], &[])?;
     assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8(out.stderr)?.contains("Usage: gantry <command>"));
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(stderr.contains("Usage: gantry <command>"));
+    // A newcomer who types `gantry` alone sees the one command to run first, before the other thirty.
+    let (start, check) = (
+        stderr.find("\n  start [").ok_or("start")?,
+        stderr.find("\n  check <policy>").ok_or("check")?,
+    );
+    assert!(
+        start < check && stderr.contains("New here? Run `gantry start`"),
+        "{stderr}"
+    );
     for args in [
         &["serve", "--port", "1"][..],
         &["serve", "--unchecked", "extra"],
@@ -1565,6 +1575,12 @@ fn kill_stops_a_person_with_the_reason_unkill_restores_and_logout_revokes_the_sa
             && refused.contains("set by ops"),
         "{refused}"
     );
+    // `gantry start` prints the admin key as `export GANTRY_KEY=...`: the admin commands take it from there too.
+    let env = [
+        ("XDG_CONFIG_HOME", home.as_str()),
+        ("GANTRY_URL", url.as_str()),
+        ("GANTRY_KEY", admin.as_str()),
+    ];
     let out = gantry(&["unkill", "--person", "maya"], &env)?;
     assert!(
         out.status.success(),
@@ -2468,8 +2484,44 @@ fn start_prints_the_dashboard_link_first_and_it_signs_in_once() -> TestResult {
         ),
     )
     .unwrap_or_default();
+    let post = |path: &str, body: &str| {
+        http(
+            &addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {key}\r\nanthropic-version: 2023-06-01\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+        .unwrap_or_default()
+    };
+    // Claude Code with a Gantry key on a new install: the demo answers messages too.
+    let claude = post(
+        "/v1/messages",
+        r#"{"model":"gantry-demo","max_tokens":50,"messages":[{"role":"user","content":"hi"}]}"#,
+    );
+    // Codex streams the Responses API and drops a text delta that no output item was opened for.
+    let codex = post(
+        "/v1/responses",
+        r#"{"model":"gantry-demo","stream":true,"input":"hi"}"#,
+    );
     let _ = child.kill();
     let _ = child.wait();
+    assert!(claude.starts_with("HTTP/1.1 200"), "{claude}");
+    assert!(claude.contains("Gantry demo model"), "{claude}");
+    let order: Vec<&str> = codex
+        .lines()
+        .filter_map(|l| l.strip_prefix("event: "))
+        .collect();
+    let at = |name: &str| order.iter().position(|e| *e == name);
+    assert!(
+        at("response.output_item.added") < at("response.content_part.added")
+            && at("response.content_part.added").is_some()
+            && at("response.content_part.added") < at("response.output_text.delta")
+            && at("response.output_text.done") > at("response.output_text.delta")
+            && at("response.output_item.done") > at("response.output_text.done")
+            && at("response.completed") > at("response.output_item.done"),
+        "{order:?}"
+    );
     assert_eq!(first, "Gantry is running. Open the dashboard:", "{head:?}");
     assert!(link.starts_with("/console/sign-in/"), "{head:?}");
     assert!(signed.starts_with("HTTP/1.1 303"), "{signed}");

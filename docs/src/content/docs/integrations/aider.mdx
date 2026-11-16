@@ -9,6 +9,10 @@ import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 Aider reaches an OpenAI-compatible server through two environment variables. Point them at Gantry and its requests go to `POST /v1/chat/completions`.
 
+<Aside type="tip" title="Before you start">
+You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+</Aside>
+
 ## Setup
 
 ```bash

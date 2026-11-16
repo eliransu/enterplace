@@ -92,7 +92,7 @@ A switch on a model stops the whole alias, not only that deployment. An alias's 
 A stopped request is refused with `killed` (403), in the error shape their client understands:
 
 ```text
-Refused: a kill switch stops traffic for person maya.cohen@example.com: "retrying the same ticket in a loop" (set by noa.bar at 2026-11-13T09:12:44.120Z UTC). It stays stopped until an admin runs gantry unkill. Ask noa.bar.
+Refused: a kill switch stops traffic for person maya.cohen@example.com: "retrying the same ticket in a loop" (set by noa.bar at 2026-11-13T09:12:44.120Z). It stays stopped until an admin runs gantry unkill. Ask noa.bar.
 ```
 
 While a switch is on, the console's Audit log shows a banner, and the record of each request it stopped names it.

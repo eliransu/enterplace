@@ -38,6 +38,17 @@ gantry start
 
 **3. Your browser opens:** pick what you want to start with and follow the steps. The first step connects a model (paste a provider key) or tries the free demo model; the second sends your first request, and you see it arrive.
 
+Or send the first request from the terminal, with the `export GANTRY_KEY=...` line that `gantry start` printed:
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer $GANTRY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gantry-demo","messages":[{"role":"user","content":"hello"}]}'
+```
+
+The answer starts with `Hello from the Gantry demo model.`, and the request is in the dashboard under **Requests**. Next, [connect Claude Code](/integrations/claude-code/) or [another tool](/integrations/coding-tools/).
+
 Everything below is detail.
 
 ## What gantry start does
@@ -112,14 +123,14 @@ See [Audit log](/governance/audit-log/).
 
 ## With Postgres: Docker Compose
 
-For a team, keys, kill switches, budgets and credentials live in Postgres, so they are shared and survive the container. The [Docker Compose](/deploy/docker/) guide holds the two files: `docker-compose.yml` (the gateway and Postgres 16) and `.env`. Save both in an empty folder, fill in `.env`, then:
+For a team, keys, kill switches, budgets and credentials live in Postgres, so they are shared and survive the container. One command runs Gantry and Postgres 16 on one machine, with no provider key and no file to write:
 
 ```bash
-docker compose up -d
-docker compose logs gantry | grep 'First run'
+mkdir gantry && cd gantry && curl -fsSLO https://raw.githubusercontent.com/eliransu/gantry/main/deploy/compose/compose.yaml && docker compose up -d
+docker compose logs gantry | grep GANTRY_KEY
 ```
 
-The second line prints a one-time link that makes the first admin key in the console. To run it in your cloud instead, use a [one-click deploy](/deploy/one-click/).
+The second line prints the admin key, once. The console is at `http://127.0.0.1:8080/console`, with the same **Start here** checklist and the free demo model. To write your own policy file, follow the [Docker Compose guide](/deploy/docker/); to run it in your cloud, use a [one-click deploy](/deploy/one-click/).
 
 ## From source
 

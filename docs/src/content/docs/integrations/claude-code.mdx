@@ -9,6 +9,20 @@ import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starli
 
 Most teams pay for Claude Code with Claude subscriptions (Pro, Max, Team or Enterprise seats), not with Anthropic API keys. Gantry routes those sessions as they are: Claude Code keeps its own Claude login, Gantry sends that login to Anthropic unchanged, and a free Gantry person token says who sent each request. Nobody creates an API key.
 
+## The shortest path
+
+On a Claude subscription, with a new install, it is one line and no key:
+
+```bash
+gantry start                                      # once, on the machine that runs Gantry
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8080   # in the shell that runs Claude Code
+claude
+```
+
+Claude Code keeps your Claude login. Leave `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset. Send a prompt, and **Requests** in the console shows it, with the person `unknown` until you add a person token ([step 2 below](#claude-subscriptions)). No Gantry yet? See the [Quickstart](/getting-started/quickstart/).
+
+## Three ways
+
 Three ways to bring Claude Code under Gantry, in order of preference:
 
 | | Claude subscriptions through Gantry | Watch mode | Anthropic API keys through Gantry |

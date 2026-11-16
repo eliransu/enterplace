@@ -10,6 +10,8 @@ import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 A provider is a server Gantry forwards to. Each entry under `providers:` names the API it speaks (`kind`), where it is (`url`), the variable that holds its key (`key_env`) and the exact models it serves.
 
+The shortest way to add one needs no YAML: in the console, **Start here** and **Provider credentials** take a provider key, seal it and write the entry. In a policy file, `preset: <id>` stands in for `kind` and `url` for the 120 providers of the [catalog](/reference/providers/): see [Presets](#presets).
+
 ## Example
 
 ```yaml title="gantry.policy.yaml"
@@ -101,11 +103,11 @@ See [Translation](/routing/translation/).
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | required | Letters, digits, `.`, `-`, `_` and `@`, up to 100 characters. Unique. Audit records name the provider by it. |
-| `kind` | string | required | One of the kinds above. |
-| `url` | string | required | The base URL. See [How the URL is built](#how-the-url-is-built). Optional for `bedrock`. |
-| `key_env` | string | required | The name of the environment variable that holds the provider key. Not allowed on `bedrock`. Optional on a local `openai` provider with `allow_private: true`. |
+| `kind` | string | required | One of the kinds above. Not needed with `preset:`. |
+| `url` | string | required | The base URL. See [How the URL is built](#how-the-url-is-built). Not needed with `preset:`. Optional for `bedrock`. |
+| `key_env` | string | required | The name of the environment variable that holds the provider key. Replaced by `key_file`, `credential` or `auth: passthrough`. Not allowed on `bedrock`. Optional on a local `openai` provider with `allow_private: true`. |
 | `key_file` | string | none | Instead of `key_env`: the path of a file that holds the provider key. Not allowed on `bedrock`. See [Provider keys](#provider-keys). |
-| `credential` | string | none | Instead of `key_env` or `key_file`: the name of a provider credential kept in the store, sealed under the master key. Needs `store:`. Not allowed on `bedrock`. See [Provider credentials](/governance/provider-credentials/). |
+| `credential` | string | none | Instead of `key_env` or `key_file`: the name of a provider credential sealed under the master key, kept in the store, or in `gantry-credentials.json` beside the policy when there is none. Not allowed on `bedrock`. See [Provider credentials](/governance/provider-credentials/). |
 | `models` | list | required | The exact model names this provider serves. Not empty, no `"*"`. |
 | `allow_private` | bool | `false` | Lets `url` point at this machine or a private network. |
 | `retries` | integer | `0` | 0 to 5. See [Retries and fallbacks](/routing/retries-and-fallbacks/). |

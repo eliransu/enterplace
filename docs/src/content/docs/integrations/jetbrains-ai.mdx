@@ -9,6 +9,10 @@ import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components'
 
 JetBrains AI Assistant takes a third-party provider of kind OpenAI-compatible. With Gantry there and a Gantry key, chat and the features you assign to Gantry's models send their prompts through Gantry. It needs no JetBrains AI subscription.
 
+<Aside type="tip" title="Before you start">
+You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+</Aside>
+
 ## Setup
 
 <Steps>
@@ -30,7 +34,7 @@ Requests go to `POST /v1/chat/completions`. AI Assistant lists the models from `
 ## What Gantry does not see
 
 - A feature the assigned models do not support. AI Assistant sends its prompt and context to the JetBrains AI service instead.
-- Code completion and next edit suggestions. They use JetBrains' Mellum model unless **AI Completion** is set to an OpenAI-compatible provider with a fill-in-the-middle model, which Gantry does not serve.
+- Code completion and next edit suggestions. They use JetBrains' Mellum model unless **AI Completion** is set to an OpenAI-compatible provider with a fill-in-the-middle model. Gantry serves `POST /v1/completions` for models on an `openai` provider; this setup is untried.
 - Junie, which takes a JetBrains AI subscription or an OpenAI or Anthropic key, and no custom URL.
 - Anything an IDE Services or JetBrains Central admin routes elsewhere.
 

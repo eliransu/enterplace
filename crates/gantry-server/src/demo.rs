@@ -90,10 +90,35 @@ pub(crate) async fn answer(request: axum::http::Request<Body>) -> Response {
         started["status"] = json!("in_progress");
         started["output"] = json!([]);
         started["usage"] = Value::Null;
-        let mut events = vec![(
-            "response.created",
-            json!({ "type": "response.created", "response": started }),
-        )];
+        // Codex drops text deltas for an item no output_item.added opened, so the stream carries the whole sequence.
+        let item = &done["output"][0];
+        let mut opened = item.clone();
+        opened["status"] = json!("in_progress");
+        opened["content"] = json!([]);
+        let part = json!({ "type": "output_text", "text": "", "annotations": [] });
+        let at = json!({ "item_id": "msg_demo", "output_index": 0, "content_index": 0 });
+        let with = |kind: &str, extra: Value| {
+            let mut event = at.clone();
+            event["type"] = json!(kind);
+            if let (Some(event), Some(extra)) = (event.as_object_mut(), extra.as_object()) {
+                event.extend(extra.clone());
+            }
+            event
+        };
+        let mut events = vec![
+            (
+                "response.created",
+                json!({ "type": "response.created", "response": started }),
+            ),
+            (
+                "response.output_item.added",
+                json!({ "type": "response.output_item.added", "output_index": 0, "item": opened }),
+            ),
+            (
+                "response.content_part.added",
+                with("response.content_part.added", json!({ "part": part })),
+            ),
+        ];
         events.extend(words.iter().enumerate().map(|(i, w)| {
             let piece = if i == 0 {
                 (*w).to_string()
@@ -106,6 +131,21 @@ pub(crate) async fn answer(request: axum::http::Request<Body>) -> Response {
                 "output_index": 0, "content_index": 0, "delta": piece }),
             )
         }));
+        events.push((
+            "response.output_text.done",
+            with("response.output_text.done", json!({ "text": TEXT })),
+        ));
+        events.push((
+            "response.content_part.done",
+            with(
+                "response.content_part.done",
+                json!({ "part": item["content"][0] }),
+            ),
+        ));
+        events.push((
+            "response.output_item.done",
+            json!({ "type": "response.output_item.done", "output_index": 0, "item": item }),
+        ));
         events.push((
             "response.completed",
             json!({ "type": "response.completed", "response": done }),

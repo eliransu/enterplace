@@ -9,10 +9,11 @@ description: Gantry is a self-hosted AI gateway. Every call from coding tools, a
     <div class="actions">
       <a class="btn btn-main" href="docs:/getting-started/quickstart/">Start in two minutes</a>
       <button class="btn btn-line" type="button" data-copy="agent-setup">Set up with your agent</button>
-      <a class="btn btn-line" href="#use-cases">Find your use case</a>
     </div>
+    <figure class="code cmd"><pre>curl -fsSL https://gantry.eliran.me/install.sh | sh
+gantry start</pre></figure>
     <details class="agent-setup">
-      <summary class="muted">The button copies a prompt for Claude Code, Codex or Cursor: it installs Gantry, runs <code>gantry start</code> and routes Claude Code through it on your own Claude subscription. Show the prompt</summary>
+      <summary class="muted">Show the agent prompt</summary>
 <pre id="agent-setup">Set up Gantry, the self-hosted AI gateway, on this machine, and route my Claude Code through it while I keep my own Claude subscription login (no API key).
 
 1. Install it: curl -fsSL https://gantry.eliran.me/install.sh | sh
@@ -20,9 +21,9 @@ description: Gantry is a self-hosted AI gateway. Every call from coding tools, a
 2. Make a folder for it (~/gantry) and run "gantry start --no-open" there in the background.
    It serves http://127.0.0.1:8080 and already has the claude-subscriptions provider, which passes my Claude login on unchanged.
    It prints a dashboard sign-in link and an admin key once: show me the link, and never put the admin key in chat, files or commits.
-3. In that folder, make a person token for me (ask me for my name and team):
+3. Optional, so my requests carry my name (without it they are recorded as unknown). In that folder, make a person token for me (ask me for my name and team):
    gantry key new &lt;name&gt; --team &lt;team&gt; --identity-only --url http://127.0.0.1:8080
-4. Add these two lines to my shell profile, with the token it printed:
+4. Add these lines to my shell profile (the second only with a token from step 3):
    export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
    export ANTHROPIC_CUSTOM_HEADERS="x-gantry-user: &lt;token&gt;"
    ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN must stay unset, so Claude Code keeps using my subscription.
@@ -34,12 +35,11 @@ https://gantry-docs.eliran.me/integrations/claude-code.md
 https://gantry-docs.eliran.me/governance/subscriptions.md
 Every page: https://gantry-docs.eliran.me/llms.txt</pre>
     </details>
-    <p class="muted"><code>curl -fsSL https://gantry.eliran.me/install.sh | sh</code>, then <code>gantry start</code>: your browser opens on the dashboard. One binary or Docker image, Postgres optional for teams. Open source core under Apache 2.0.</p>
   </div>
 
 {{gate
 label: Four callers send requests through the Gantry gate. Allowed requests pass to the provider. One request is refused because its team is over budget. Each request writes an audit record.
-foot: Example requests. Each record carries the hash of the one before it.
+foot: Example requests.
 lane: sarah.miller | Claude Code | Anthropic
 lane: svc-invoice-bot | internal app | OpenAI
 lane: emily.davis | Codex | OpenAI
@@ -56,29 +56,45 @@ req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
 </section>
 
 <section class="wrap works" aria-label="Works with">
-  <h2>Coding tools and clients</h2>
-  <ul>
-    <li><span class="logo" style="--m: url(/logos/claude.svg)"></span>Claude Code</li>
-    <li>OpenAI Codex</li>
-    <li><span class="logo" style="--m: url(/logos/githubcopilot.svg)"></span>GitHub Copilot</li>
-    <li><span class="logo" style="--m: url(/logos/cursor.svg)"></span>Cursor</li>
-    <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini CLI</li>
-    <li><span class="logo" style="--m: url(/logos/zedindustries.svg)"></span>Zed</li>
-    <li><span class="logo" style="--m: url(/logos/jetbrains.svg)"></span>JetBrains AI</li>
-    <li><span class="logo" style="--m: url(/logos/modelcontextprotocol.svg)"></span>MCP clients</li>
-  </ul>
-  <h2>Model providers</h2>
-  <ul>
-    <li>OpenAI</li>
-    <li><span class="logo" style="--m: url(/logos/anthropic.svg)"></span>Anthropic</li>
-    <li>Azure OpenAI</li>
-    <li>Amazon Bedrock</li>
-    <li><span class="logo" style="--m: url(/logos/googlecloud.svg)"></span>Vertex AI</li>
-    <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini</li>
-    <li><span class="logo" style="--m: url(/logos/mistralai.svg)"></span>Mistral</li>
-    <li>Ollama and vLLM</li>
-  </ul>
-  <p class="works-note">Named so you can find yours. Each mark belongs to its owner. <a href="/use-cases/coding-agents/#tools">Which tools were run against Gantry, and which were set up from their docs only</a></p>
+  <h2>Works with</h2>
+  <div class="marquee">
+    <ul>
+      <li><span class="logo" style="--m: url(/logos/claude.svg)"></span>Claude Code</li>
+      <li>OpenAI Codex</li>
+      <li><span class="logo" style="--m: url(/logos/githubcopilot.svg)"></span>GitHub Copilot</li>
+      <li><span class="logo" style="--m: url(/logos/cursor.svg)"></span>Cursor</li>
+      <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini CLI</li>
+      <li><span class="logo" style="--m: url(/logos/zedindustries.svg)"></span>Zed</li>
+      <li><span class="logo" style="--m: url(/logos/jetbrains.svg)"></span>JetBrains AI</li>
+      <li><span class="logo" style="--m: url(/logos/modelcontextprotocol.svg)"></span>MCP clients</li>
+      <li>OpenAI</li>
+      <li><span class="logo" style="--m: url(/logos/anthropic.svg)"></span>Anthropic</li>
+      <li>Azure OpenAI</li>
+      <li>Amazon Bedrock</li>
+      <li><span class="logo" style="--m: url(/logos/googlecloud.svg)"></span>Vertex AI</li>
+      <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini</li>
+      <li><span class="logo" style="--m: url(/logos/mistralai.svg)"></span>Mistral</li>
+      <li>Ollama and vLLM</li>
+    </ul>
+    <ul aria-hidden="true">
+      <li><span class="logo" style="--m: url(/logos/claude.svg)"></span>Claude Code</li>
+      <li>OpenAI Codex</li>
+      <li><span class="logo" style="--m: url(/logos/githubcopilot.svg)"></span>GitHub Copilot</li>
+      <li><span class="logo" style="--m: url(/logos/cursor.svg)"></span>Cursor</li>
+      <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini CLI</li>
+      <li><span class="logo" style="--m: url(/logos/zedindustries.svg)"></span>Zed</li>
+      <li><span class="logo" style="--m: url(/logos/jetbrains.svg)"></span>JetBrains AI</li>
+      <li><span class="logo" style="--m: url(/logos/modelcontextprotocol.svg)"></span>MCP clients</li>
+      <li>OpenAI</li>
+      <li><span class="logo" style="--m: url(/logos/anthropic.svg)"></span>Anthropic</li>
+      <li>Azure OpenAI</li>
+      <li>Amazon Bedrock</li>
+      <li><span class="logo" style="--m: url(/logos/googlecloud.svg)"></span>Vertex AI</li>
+      <li><span class="logo" style="--m: url(/logos/googlegemini.svg)"></span>Gemini</li>
+      <li><span class="logo" style="--m: url(/logos/mistralai.svg)"></span>Mistral</li>
+      <li>Ollama and vLLM</li>
+    </ul>
+  </div>
 </section>
 
 <section class="wrap sec" id="use-cases">

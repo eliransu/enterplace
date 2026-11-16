@@ -2315,7 +2315,7 @@ async fn count_day_tokens(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
             format!(
-                "Refused: {} tokens were used today, and {whose} allows {most} per day. The count starts again at {} (UTC). Ask a Gantry admin to raise tpd if this team needs more.",
+                "Refused: {} tokens were used today, and {whose} allows {most} per day. The count starts again at {}. Ask a Gantry admin to raise tpd if this team needs more.",
                 over.spent.round() as u64,
                 resets(&period_of(&now, Period::Day), Period::Day)
             ),

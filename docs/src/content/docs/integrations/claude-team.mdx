@@ -196,7 +196,7 @@ If nothing arrives, run `claude --debug-file /tmp/claude-debug.log` and search t
 
 ## Limits
 
-- No console page yet: read `summary.json`, the Requests and Analytics pages, and coverage.
+- The console's **Watch** page shows the watched people; `summary.json`, the Requests and Analytics pages and coverage hold the rest.
 - No gRPC and no traces: see [the receiver](#the-receiver).
 - Metrics need `session.id` on each point, which Claude Code sends unless `OTEL_METRICS_INCLUDE_SESSION_ID=false`.
 - A token without `org` writes to the install's chain, also with `audit: { per_org: true }`.

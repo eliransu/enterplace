@@ -64,21 +64,21 @@ Full walkthrough: [Quickstart](https://gantry-docs.eliran.me/getting-started/qui
 - **[Keys per person and workload](https://gantry-docs.eliran.me/governance/keys/)**: hashed at rest, with optional expiry, budget, model list and token limit per key.
 - **[Self-service keys through SSO](https://gantry-docs.eliran.me/governance/single-sign-on/)**: `gantry login` issues a developer an expiring key through your identity provider.
 - **[Policy as code](https://gantry-docs.eliran.me/governance/policy/)**: first-match rules by team, person or anyone. `gantry check` rejects unknown fields with file, line and fix. Reloads in 2 seconds without a restart.
-- **[Budgets and rate limits](https://gantry-docs.eliran.me/governance/budgets-and-rate-limits/)**: dollars per team, person or key, reserved at admission. Requests and tokens per minute.
-- **[Guardrails](https://gantry-docs.eliran.me/governance/guardrails/)**: built-in secret and personal data detectors, seven guardrail vendors, and your own services by webhook. Block, mask or record.
+- **[Budgets and rate limits](https://gantry-docs.eliran.me/governance/budgets-and-rate-limits/)**: dollars per organization, team, person, key, end customer, tag or model, reserved at admission. Requests and tokens per minute, hour and day, and requests in flight.
+- **[Guardrails](https://gantry-docs.eliran.me/governance/guardrails/)**: built-in secret and personal data detectors, thirteen guardrail vendors, and your own services by webhook. Block, mask or record.
 - **[Kill switches](https://gantry-docs.eliran.me/governance/kill-switches/)**: stop a person, team, key or model at once.
 - **[Tamper-evident audit log](https://gantry-docs.eliran.me/governance/audit-log/)**: one hash-chained record per request, refusals included, verified with `gantry audit verify`.
 
 ### Routing
 
-- **[Providers](https://gantry-docs.eliran.me/providers/overview/)**: OpenAI, Anthropic, Azure OpenAI, Claude on Amazon Bedrock and Vertex AI, Gemini, and any OpenAI-compatible server (Groq, Mistral, Together, Fireworks, DeepSeek, OpenRouter, Ollama, vLLM, LM Studio).
-- **[Retries and fallbacks](https://gantry-docs.eliran.me/routing/retries-and-fallbacks/)** per provider, and **[model aliases](https://gantry-docs.eliran.me/routing/aliases/)** over several deployments with weights and cooldown.
-- **[Translation](https://gantry-docs.eliran.me/routing/translation/)**: chat completions to Claude, or Claude Code's messages requests to GPT, Gemini or a local model.
-- **[Cost on every answer](https://gantry-docs.eliran.me/routing/pricing/)** with built-in prices for most models, and an exact-match **[cache](https://gantry-docs.eliran.me/routing/caching/)** per rule.
+- **[Providers](https://gantry-docs.eliran.me/providers/overview/)**: over 120 provider presets. OpenAI, Anthropic, Azure OpenAI, Amazon Bedrock (every model family), Vertex AI, Gemini, Cohere, IBM watsonx.ai, SageMaker, Replicate, and any OpenAI-compatible server (Groq, Mistral, Together, Fireworks, DeepSeek, OpenRouter, Ollama, vLLM, LM Studio).
+- **[Retries and fallbacks](https://gantry-docs.eliran.me/routing/retries-and-fallbacks/)** per provider, and **[model aliases](https://gantry-docs.eliran.me/routing/aliases/)** over several deployments: round robin, least busy, lowest latency, lowest cost or adaptive, with cooldown.
+- **[Translation](https://gantry-docs.eliran.me/routing/translation/)**: chat completions to Claude, Claude Code's messages requests to GPT, Gemini or a local model, and Codex's Responses requests to any provider.
+- **[Cost on every answer](https://gantry-docs.eliran.me/routing/pricing/)** with built-in prices for most models, and an exact or semantic **[cache](https://gantry-docs.eliran.me/routing/caching/)** per rule.
 
 ### Operations
 
-- **[Admin console](https://gantry-docs.eliran.me/operations/console/)** at `/console`: audit log, people and keys, policy and spend, with OIDC sign-in and admin and read-only roles.
+- **[Admin console](https://gantry-docs.eliran.me/operations/console/)** at `/console`: a Start here checklist for the first request, requests, analytics, people and keys, policy and spend, with OIDC or SAML sign-in and roles.
 - **[Prometheus metrics](https://gantry-docs.eliran.me/operations/observability/)** and audit log shipping with Vector, Fluent Bit or the OpenTelemetry Collector.
 - **[Container image and Kubernetes](https://gantry-docs.eliran.me/deploy/overview/)**: one non-root image built `FROM scratch` (`ghcr.io/eliransu/gantry`), a Helm chart, Terraform for AWS, Google Cloud and Azure, Docker Compose and Cloudflare.
 - **[HTTPS](https://gantry-docs.eliran.me/operations/deployment/)** with `--tls-cert` and `--tls-key`.
@@ -90,7 +90,7 @@ Full walkthrough: [Quickstart](https://gantry-docs.eliran.me/getting-started/qui
 |---|---|---|
 | Claude Code | `/v1/messages` | [docs](https://gantry-docs.eliran.me/integrations/claude-code/) |
 | Codex CLI | `/v1/responses` | [docs](https://gantry-docs.eliran.me/integrations/codex/) |
-| Cursor, Continue, Cline, Aider, OpenCode | `/v1/chat/completions` | [docs](https://gantry-docs.eliran.me/integrations/cursor/) |
+| Cursor, Continue, Cline, Aider, OpenCode, Gemini CLI, Copilot, Zed and 8 more | `/v1/chat/completions` and others | [docs](https://gantry-docs.eliran.me/integrations/coding-tools/) |
 | OpenAI and Anthropic SDKs | all | [docs](https://gantry-docs.eliran.me/integrations/sdks/) |
 
 ## Repository
@@ -100,7 +100,7 @@ crates/
   gantry-core      policy, routing, guardrails, audit chain, pricing (library, no HTTP)
   gantry-server    the HTTP gateway (library)
   gantry-console   the admin console assets
-  gantry-cli       the gantry binary: serve, check, key, audit, kill, login, import, prices
+  gantry-cli       the gantry binary: start, serve, check, key, audit, kill, usage, budget, login, import, prices
   gantry-bench     overhead benchmark and CI gate
 enterprise/        enterprise features (commercial license, see enterprise/LICENSE)
 deploy/            Helm chart, Terraform (AWS ECS, GCP Cloud Run, Azure Container Apps), Compose, Cloudflare, MDM
@@ -110,7 +110,7 @@ scripts/           CI, release and example checks
 
 ## Status
 
-Gantry is pre-1.0 (0.1.0, see [CHANGELOG.md](CHANGELOG.md)) and runs as a single node. See [Project status](https://gantry-docs.eliran.me/getting-started/status/) for what is built, what is planned and what has been verified against which services.
+Gantry is pre-1.0 (0.1.0, see [CHANGELOG.md](CHANGELOG.md)) and runs as one node on plain files, or as several replicas sharing a Postgres store. See [Project status](https://gantry-docs.eliran.me/getting-started/status/) for what is built, what is planned and what has been verified against which services.
 
 ## Contributing
 

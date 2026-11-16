@@ -20,6 +20,10 @@ cors:
 Without `cors:` (it is off by default) every request fails in the browser before it reaches Gantry. See [Browser pages (CORS)](/governance/access-control/#browser-pages-cors).
 </Aside>
 
+<Aside type="tip" title="Before you start">
+You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+</Aside>
+
 ## Setup
 
 Set these as manifest URL parameters when you generate `manifest.xml`, after a `#` so the key is not sent to Microsoft's servers, then upload the manifest in the Microsoft 365 admin center:

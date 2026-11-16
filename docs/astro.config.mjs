@@ -27,6 +27,11 @@ export default defineConfig({
 				{
 					label: 'Start here',
 					items: [
+						// The install command first: a newcomer runs it, connects a tool, then reads why and how.
+						// The getting-started pages keep their addresses, so no link to them breaks.
+						'getting-started/quickstart',
+						{ label: 'Connect Claude Code', link: '/integrations/claude-code/' },
+						{ label: 'Connect another tool', link: '/integrations/coding-tools/' },
 						'start/why',
 						'start/step-1-see',
 						'start/step-2-know',
@@ -34,8 +39,6 @@ export default defineConfig({
 						'start/step-4-protect',
 						'start/step-5-prove',
 						'start/plan',
-						// These four keep their /getting-started/ addresses, so no link to them breaks.
-						'getting-started/quickstart',
 						'getting-started/how-it-works',
 						'getting-started/status',
 						'getting-started/changelog',

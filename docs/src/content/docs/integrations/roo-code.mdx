@@ -9,6 +9,10 @@ import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/com
 
 Roo Code is configured like [Cline](/integrations/cline/), in its settings panel in VS Code. It reaches Gantry over OpenAI's chat completions API or Anthropic's messages API, with a Gantry key in place of a provider key.
 
+<Aside type="tip" title="Before you start">
+You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+</Aside>
+
 ## Setup
 
 <Tabs>
@@ -44,7 +48,7 @@ Requests go to `POST /v1/messages`, where refusals use Anthropic's error shape.
 ## What Gantry does not see
 
 - Telemetry, sent to PostHog by default with the VS Code machine ID. Turn it off in Roo Code's settings.
-- Codebase indexing. Its embedder is a separate setting with its own provider and key, and the vectors go to the Qdrant instance you choose. To send embeddings through Gantry, set **Embedder Provider** to OpenAI Compatible with Gantry's `/v1` address: Gantry serves `POST /v1/embeddings` to `openai` providers.
+- Codebase indexing. Its embedder is a separate setting with its own provider and key, and the vectors go to the Qdrant instance you choose. To send embeddings through Gantry, set **Embedder Provider** to OpenAI Compatible with Gantry's `/v1` address: Gantry serves `POST /v1/embeddings` for `openai`, `azure`, `gemini`, `vertex`, `cohere`, `watsonx` and `bedrock_converse` providers.
 
 <Aside type="note">
 This follows Roo Code's documentation. Roo Code's repository was archived in May 2026. It was not run through Gantry.
