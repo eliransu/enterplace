@@ -112,6 +112,15 @@ pub(crate) fn alert(text: &str) -> String {
 /// `key_error` belongs to the key field. `notice` is about sign-in as a whole (single sign-on refused, nothing
 /// recorded), so it is a Banner above both ways in and the key field stays at rest.
 pub fn sign_in(key_error: &str, notice: &str, sso: bool) -> String {
+    sign_in_page(key_error, notice, sso, false)
+}
+
+/// The sign-in page just after signing out: it says the sign-out worked.
+pub fn signed_out(sso: bool) -> String {
+    sign_in_page("", "", sso, true)
+}
+
+fn sign_in_page(key_error: &str, notice: &str, sso: bool, out: bool) -> String {
     let key = field(&Field {
         id: "key",
         name: "key",
@@ -119,7 +128,7 @@ pub fn sign_in(key_error: &str, notice: &str, sso: bool) -> String {
         value: "",
         mono: true,
         extra: r#" type="password" autocomplete="off" required aria-required="true" autofocus"#,
-        hint: "Checked against its hash in the keys file and never stored. The session holds a random ID for 8 hours.",
+        hint: "",
         error: key_error,
     });
     let closed = motif(&[""; 12], &["empty"; 6], (4, 2), true, false);
@@ -131,7 +140,12 @@ pub fn sign_in(key_error: &str, notice: &str, sso: bool) -> String {
     let lead = if sso {
         "Sign in with single sign-on, or paste an admin key."
     } else {
-        "Paste your Gantry key. The console is open to the keys that the keys file marks as admin."
+        "Paste your Gantry key."
+    };
+    let toast = if out {
+        r#"<div class="g-toasts"><div class="g-toast" role="status"><span class="g-toast__text t-body">You signed out.</span></div></div>"#
+    } else {
+        ""
     };
     let body = format!(
         r#"<div class="g-shell">
@@ -147,21 +161,20 @@ pub fn sign_in(key_error: &str, notice: &str, sso: bool) -> String {
 {or_key}{key}
 <div class="g-head__actions">{}</div>
 </form>
-<p class="t-small g-muted g-measure" style="margin: 0">To make an admin, run <span class="t-mono">gantry key new &lt;name&gt; --team &lt;team&gt; --admin</span>.</p>
+<p class="t-small g-muted g-measure" style="margin: 0">Admin keys only. To make one: <span class="t-mono">gantry key new &lt;name&gt; --team &lt;team&gt; --admin</span></p>
 {other}
 </div>
 <aside class="g-panel g-stack" style="gap: var(--space-10); padding: var(--space-10); align-content: start">
 {closed}
-<div class="g-stack g-measure"><h2 class="t-md" style="margin: 0">Admins only</h2><p class="t-body g-muted" style="margin: 0">The console shows every decision and can issue and revoke keys. Your key is not kept in the browser: the browser holds a session that ends after 8 hours or when you sign out.</p></div>
 </aside>
 </div>
 </main>
-</div>"#,
+</div>{toast}"#,
         // With single sign-on on, it is the way in the lead names first; the key form follows as the other way.
         button("Sign in", if sso { "quiet" } else { "" }, "submit", ""),
         sso = if sso {
             format!(
-                r#"<div class="g-stack g-measure"><div class="g-head__actions">{}</div><p class="t-small g-muted" style="margin: 0">Through your company's identity provider. Every sign-in is recorded in the audit log.</p></div>
+                r#"<div class="g-stack g-measure"><div class="g-head__actions">{}</div></div>
 "#,
                 link(
                     "Sign in with single sign-on",
@@ -355,15 +368,7 @@ fn kills_banner(kills: &Result<Vec<Kill>, String>, may_restore: bool) -> String 
             let lines: String = kills
                 .iter()
                 .map(|k| {
-                    let off = if may_restore {
-                        format!(
-                            r#"<form method="post" action="/console/kills/restore"><input type="hidden" name="scope" value="{}"><input type="hidden" name="value" value="{}"><button class="g-btn g-btn--sm t-small" type="submit">Restore traffic</button></form>"#,
-                            esc(&k.scope),
-                            esc(&k.value)
-                        )
-                    } else {
-                        format!(r#"<span class="t-mono-sm">{}</span>"#, words_whole(&unkill_command(k)))
-                    };
+                    let off = restore(k, may_restore);
                     format!(
                         r#"<div style="display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; justify-content: space-between"><span class="t-body">Traffic stopped for <span class="t-mono">{}</span> since {} by {}: {}</span>{off}</div>"#,
                         esc(&k.label()),
@@ -378,6 +383,22 @@ fn kills_banner(kills: &Result<Vec<Kill>, String>, may_restore: bool) -> String 
 "#
             )
         }
+    }
+}
+
+/// The button that turns switch `k` off. Without the right to, the command an admin runs.
+fn restore(k: &Kill, may_restore: bool) -> String {
+    if may_restore {
+        format!(
+            r#"<form method="post" action="/console/kills/restore"><input type="hidden" name="scope" value="{}"><input type="hidden" name="value" value="{}"><button class="g-btn g-btn--sm t-small" type="submit">Restore traffic</button></form>"#,
+            esc(&k.scope),
+            esc(&k.value)
+        )
+    } else {
+        format!(
+            r#"<span class="t-mono-sm">{}</span>"#,
+            words_whole(&unkill_command(k))
+        )
     }
 }
 
@@ -639,20 +660,29 @@ impl Filter<'_> {
     }
 }
 
-/// An admin action in words, as the list shows it.
-fn action_word(action: &str) -> &str {
+/// An admin action in words: what was done, and what was tried when it was refused.
+fn action_word(action: &str) -> (&str, &str) {
     match action {
-        "console_sign_in" => "sign-in",
-        "console_sign_out" => "sign-out",
-        "issue_key" => "issued key",
-        "revoke_key" => "revoked key",
-        "list_keys" => "listed keys",
-        "set_kill" => "stopped traffic",
-        "clear_kill" => "restored traffic",
-        "list_kills" => "listed switches",
-        "self_issue_key" => "gantry login key",
-        "revoke_own_key" => "gantry logout",
-        other => other,
+        "console_sign_in" => ("signed in", "sign-in"),
+        "console_sign_out" => ("signed out", "sign-out"),
+        "issue_key" => ("issued a key", "key issue"),
+        "revoke_key" => ("revoked a key", "key revoke"),
+        "list_keys" => ("listed keys", "key list"),
+        "set_kill" => ("stopped traffic", "traffic stop"),
+        "clear_kill" => ("restored traffic", "traffic restore"),
+        "list_kills" => ("listed switches", "switch list"),
+        "start_choice" => ("chose a track", "track choice"),
+        "self_issue_key" => ("gantry login key", "gantry login"),
+        "revoke_own_key" => ("gantry logout", "gantry logout"),
+        other => (other, other),
+    }
+}
+
+/// A refusal code in words, as a tag says it: "unknown key", not `unknown_key`.
+fn code_words(code: &str) -> String {
+    match code {
+        "killed" => "kill switch".into(),
+        other => other.replace('_', " "),
     }
 }
 
@@ -670,11 +700,11 @@ fn badge(action: &str, kind: &str) -> String {
 fn verdict(record: &Value) -> String {
     match s(record, "event") {
         "admin" => {
-            let word = action_word(s(record, "action"));
+            let (done, tried) = action_word(s(record, "action"));
             return if s(record, "verdict") == "allow" {
-                tag("", "Admin", word)
+                tag("", "Admin:", done)
             } else {
-                tag("refused", "Refused", word)
+                tag("refused", "Refused:", tried)
             };
         }
         "config_loaded" => return tag("", "Change", "policy loaded"),
@@ -695,11 +725,11 @@ fn verdict(record: &Value) -> String {
     }
     match (s(record, "verdict"), s(record, "code")) {
         (_, "guardrail_blocked") => badge("block", found(record, "block").unwrap_or("guardrail")),
-        ("refused", code) => tag("refused", "Refused", code),
+        ("refused", code) => tag("refused", "Refused:", &code_words(code)),
         ("allow", _) => match (found(record, "mask"), found(record, "warn")) {
             (Some(kind), _) => badge("mask", kind),
             (None, Some(kind)) => badge("warn", kind),
-            (None, None) => tag("allow", "Allow", ""),
+            (None, None) => tag("allow", "Allowed", ""),
         },
         _ => tag("", "Change", s(record, "event")),
     }
@@ -737,26 +767,34 @@ fn audit_table(rows: &[&Value], selected: &str, filter: &Filter<'_>, page: usize
             ("", key) => format!("key hash {key}"),
             (team, _) => team.to_string(),
         };
-        let (label, text) = if s(record, "id").is_empty() {
-            (format!("Open record {id}"), format!("record {id}"))
-        } else {
-            (format!("Open decision {id}"), id.clone())
-        };
         let _ = writeln!(
             body,
-            r#"<tr{sel}><td>{}<span class="g-table__sub">{}</span></td><td>{}</td><td>{}<span class="g-table__sub"><a href="{}" aria-label="{}">{}</a></span></td><td class="g-table__wide">{}</td></tr>"#,
+            r#"<tr{sel}><td>{}<span class="g-table__sub">{}</span></td><td>{}</td><td>{}</td><td class="g-table__wide">{}</td></tr>"#,
             ident(&who(record)),
             esc(&sub),
             verdict(record),
-            esc(&time_list(s(record, "time"))),
-            filter.href(page, &id),
-            esc(&label),
-            esc(&text),
+            open_link(record, &id, filter, page),
             esc(s(record, "model")),
         );
     }
     format!(
-        "<div class=\"g-table-wrap\"><table class=\"g-table g-table--stack t-mono-sm\" data-rows-open>\n<thead class=\"t-tag\"><tr><th>Person or workload</th><th>Verdict</th><th>Time (UTC) and decision</th><th>Model</th></tr></thead>\n<tbody>\n{body}</tbody>\n</table></div>"
+        "<div class=\"g-table-wrap\"><table class=\"g-table g-table--stack t-mono-sm\" data-rows-open>\n<thead class=\"t-tag\"><tr><th>Person or workload</th><th>Verdict</th><th>Time</th><th>Model</th></tr></thead>\n<tbody>\n{body}</tbody>\n</table></div>"
+    )
+}
+
+/// The row's link to its sheet, on its time: the ID is in the sheet, a 26-character ID is no label for a row.
+fn open_link(record: &Value, id: &str, filter: &Filter<'_>, page: usize) -> String {
+    // An admin action has a decision ID; a change to the files has only its record number.
+    let label = if s(record, "id").is_empty() {
+        format!("Open record {id}")
+    } else {
+        format!("Open decision {id}")
+    };
+    format!(
+        r#"<a href="{}" aria-label="{}">{}</a>"#,
+        filter.href(page, id),
+        esc(&label),
+        esc(&time_list(s(record, "time")))
     )
 }
 
@@ -786,25 +824,16 @@ fn changes_table(
             ""
         };
         let (title, _, _) = story(record, ctx);
-        // An admin action has a decision ID; a change to the files has only its record number.
-        let (label, text) = if s(record, "id").is_empty() {
-            (format!("Open record {id}"), format!("record {id}"))
-        } else {
-            (format!("Open decision {id}"), id.clone())
-        };
         let _ = writeln!(
             body,
-            r#"<tr{sel}><td>{}</td><td><span class="t-body">{title}</span><span class="g-table__sub">{}</span></td><td>{}<span class="g-table__sub"><a href="{}" aria-label="{}">{}</a></span></td></tr>"#,
+            r#"<tr{sel}><td>{}</td><td><span class="t-body">{title}</span><span class="g-table__sub">{}</span></td><td>{}</td></tr>"#,
             ident(&who(record)),
             verdict(record),
-            esc(&time_list(s(record, "time"))),
-            filter.href(page, &id),
-            esc(&label),
-            esc(&text),
+            open_link(record, &id, filter, page),
         );
     }
     format!(
-        "<div class=\"g-table-wrap\"><table class=\"g-table g-table--stack g-table--prose t-mono-sm\" data-rows-open>\n<thead class=\"t-tag\"><tr><th>Who</th><th>Change and reason</th><th>Time and record</th></tr></thead>\n<tbody>\n{body}</tbody>\n</table></div>"
+        "<div class=\"g-table-wrap\"><table class=\"g-table g-table--stack g-table--prose t-mono-sm\" data-rows-open>\n<thead class=\"t-tag\"><tr><th>Who</th><th>Change and reason</th><th>Time</th></tr></thead>\n<tbody>\n{body}</tbody>\n</table></div>"
     )
 }
 
@@ -1696,10 +1725,13 @@ fn record_sheet(record: &Value, ctx: &Context<'_>, close: &str) -> String {
         ),
         (
             "Verdict",
-            match answer_verdict(record) {
-                "block" => both(s(record, "verdict"), "answer withheld, guardrail_blocked"),
-                "mask" => both(s(record, "verdict"), "answer masked"),
-                _ => both(s(record, "verdict"), s(record, "code")),
+            // The words the list's tag uses, not the record's own codes.
+            match (s(record, "verdict"), answer_verdict(record)) {
+                (_, "block") => "Allowed, answer withheld".to_string(),
+                (_, "mask") => "Allowed, answer masked".to_string(),
+                ("allow", _) => "Allowed".to_string(),
+                ("refused", _) => format!("Refused: {}", code_words(s(record, "code"))),
+                (verdict, _) => both(verdict, s(record, "code")),
             },
         ),
         (
@@ -2033,7 +2065,7 @@ pub fn audit(view: &AuditView<'_>) -> String {
     let stats = format!(
         r#"<div class="g-panel g-stats"{}>
 <div class="g-stat"><p class="g-stat__figure t-lg">{}</p><p class="g-stat__label t-small">requests checked today</p></div>
-<div class="g-stat"><p class="g-stat__figure t-lg">{}</p><p class="g-stat__label t-small">refused today, by policy</p></div>
+<div class="g-stat"><p class="g-stat__figure t-lg">{}</p><p class="g-stat__label t-small">refused today</p></div>
 <div class="g-stat"><p class="g-stat__figure t-lg">{}</p><p class="g-stat__label t-small">blocked by a guardrail today</p></div>
 </div>"#,
         if broken.is_some() {
@@ -2232,6 +2264,8 @@ pub struct PeopleView<'a> {
     pub read_only: bool,
     /// The kill switches on now.
     pub kills: Vec<Kill>,
+    /// May turn a kill switch off: a stopped row offers Restore traffic instead of the command.
+    pub may_restore: bool,
 }
 
 fn people_dialog(view: &PeopleView<'_>, entries: &[KeyEntry]) -> String {
@@ -2256,7 +2290,7 @@ fn people_dialog(view: &PeopleView<'_>, entries: &[KeyEntry]) -> String {
                     value: name,
                     mono: true,
                     extra: r#" required aria-required="true" autocomplete="off" autofocus placeholder="maya.cohen""#,
-                    hint: "Every request with the key carries this name in the audit log.",
+                    hint: "",
                     error: if invalid { error } else { "" },
                 }),
                 field(&Field {
@@ -2266,7 +2300,7 @@ fn people_dialog(view: &PeopleView<'_>, entries: &[KeyEntry]) -> String {
                     value: team,
                     mono: true,
                     extra: r#" required aria-required="true" autocomplete="off" placeholder="payments""#,
-                    hint: "Rules in the policy can name the team.",
+                    hint: "",
                     error: "",
                 })
             ) + &field(&Field {
@@ -2276,7 +2310,7 @@ fn people_dialog(view: &PeopleView<'_>, entries: &[KeyEntry]) -> String {
                 value: expires,
                 mono: true,
                 extra: r#" type="date""#,
-                hint: "UTC. Requests with the key are refused from this day on.",
+                hint: "",
                 error: "",
             }) + &format!(
                 r#"<div class="g-field"><label class="g-field__label t-tag g-caps" for="issue-budget">Budget, USD, optional</label><div class="g-toolbar" style="flex-wrap: nowrap"><input class="g-input t-mono" style="flex: 1; min-width: 0" id="issue-budget" name="budget" type="number" min="0" step="any" inputmode="decimal" value="{}" placeholder="20"><div class="g-select-wrap"><select class="g-input g-select t-body" name="per" aria-label="Budget period"><option value="day"{}>a day</option><option value="month"{}>a month</option></select>{}</div></div><span class="g-field__hint t-small">Most the key may spend, on top of its rule's budget.</span></div>"#,
@@ -2417,6 +2451,7 @@ fn key_status(
     soon: &str,
     read_only: bool,
     stopped: Option<&Kill>,
+    may_restore: bool,
 ) -> (String, String) {
     let key = &entry.sha256[..8];
     let expired = Principal {
@@ -2513,10 +2548,7 @@ fn key_status(
         meter.map_or(String::new(), |(html, _)| html)
     );
     let fix = if let Some(k) = stopped {
-        format!(
-            r#"<span class="t-mono-sm">{}</span>"#,
-            words_whole(&unkill_command(k))
-        )
+        restore(k, may_restore)
     } else if expired && !read_only {
         link(
             "Issue a new key",
@@ -2727,7 +2759,16 @@ pub fn people(view: &PeopleView<'_>) -> String {
             let stopped = view.kills.iter().find(|k| {
                 k.scope != "model" && k.stops(&entry.name, &entry.team, &entry.sha256, None)
             });
-            let (status, fix) = key_status(entry, &by_key, &now, &soon, view.read_only, stopped);
+            let (status, fix) = key_status(
+                entry,
+                &by_key,
+                &now,
+                &soon,
+                view.read_only,
+                stopped,
+                view.may_restore,
+            );
+            // Revoke is on the edit page, away from the row: one click on a row never ends a key.
             let revoke = if view.read_only {
                 String::new()
             } else {
@@ -2735,11 +2776,6 @@ pub fn people(view: &PeopleView<'_>) -> String {
                     "Edit",
                     "quiet",
                     &format!("/console/people/edit?sha256={}", enc(&entry.sha256)),
-                    true,
-                ) + &link(
-                    "Revoke key",
-                    "quiet",
-                    &format!("/console/people?revoke={}", enc(&entry.sha256)),
                     true,
                 )
             };
@@ -2764,12 +2800,17 @@ pub fn people(view: &PeopleView<'_>) -> String {
         format!(
             r#"<div class="g-panel g-stack">
 <div class="g-table-wrap"><table class="g-table g-table--stack g-table--prose t-mono-sm">
-<thead class="t-tag"><tr><th>Name</th><th>Status</th><th>Key hash</th><th class="g-table__num">Requests</th><th>Last request</th><th>Fix</th></tr></thead>
+<thead class="t-tag"><tr><th>Name</th><th>Status</th><th>Key hash</th><th class="g-table__num">Requests</th><th>Last request</th><th aria-label="Actions"></th></tr></thead>
 <tbody>{rows}</tbody>
 </table></div>
 {}
 </div>"#,
-            pages_of(shown.len(), page, "keys", href)
+            // One page needs no pager: the lead already counts the keys.
+            if shown.len() > PER_PAGE {
+                pages_of(shown.len(), page, "keys", href)
+            } else {
+                String::new()
+            }
         )
     };
     let main = format!(
@@ -3598,9 +3639,29 @@ pub fn spend(view: &SpendView<'_>) -> String {
         }
     }
 
-    if total == 0.0 && stopped == 0 && meters.is_empty() {
-        let none = crate::empty_page("Spend", &crate::base(), true);
-        let _ = name;
+    if total == 0.0 && meters.is_empty() && view.loaded.is_ok() {
+        // Requests that cost nothing (the demo model) would draw an empty chart and rank people at $0: one line says it.
+        let none = if people.is_empty() && stopped == 0 {
+            crate::empty_page("Spend", &crate::base(), true)
+        } else {
+            empty(
+                &motif(&["", "", ""], &["empty", "empty"], (3, 1), false, true),
+                "No spend yet",
+                if models.is_empty() {
+                    "No request reached a provider yet."
+                } else if models.keys().all(|m| m == gantry_core::usage::DEMO_MODEL) {
+                    "Demo requests are free."
+                } else {
+                    "No request so far had a price."
+                },
+                &link(
+                    "Add a budget",
+                    "",
+                    "/console/start?track=limit#step-5",
+                    false,
+                ),
+            )
+        };
         let main = format!("{}\n{none}", head("Spend", lead_none, ""));
         return tool_page("Spend", view.admin, "/console/spend", view.query, &main, "");
     }
@@ -3777,7 +3838,14 @@ pub fn spend(view: &SpendView<'_>) -> String {
 
     // Who spent most, each with a way to their requests.
     let mut ranked: Vec<_> = people.iter().collect();
-    ranked.sort_by(|a, b| b.1.0.usd.total_cmp(&a.1.0.usd).then(a.0.cmp(b.0)));
+    // By spend, then by requests: until something is spent, the busiest come first.
+    ranked.sort_by(|a, b| {
+        b.1.0
+            .usd
+            .total_cmp(&a.1.0.usd)
+            .then(b.1.0.requests.cmp(&a.1.0.requests))
+            .then(a.0.cmp(b.0))
+    });
     let top_people: String = ranked
         .iter()
         .take(3)

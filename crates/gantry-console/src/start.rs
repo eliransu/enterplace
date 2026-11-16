@@ -1023,6 +1023,25 @@ fn first_lines(base: &str, key: &str, model: &str, lang: &str) -> Vec<String> {
     }
 }
 
+/// The provider, the key and Connect on one row, bottom-aligned; the one hint sits under the whole row.
+fn connect_form(providers: &str) -> String {
+    format!(
+        r#"<form class="g-check__form" method="post" action="/console/start/connect"><div class="g-field"><label class="g-field__label t-tag g-caps" for="connect-provider">Provider</label><div class="g-select-wrap"><select class="g-input g-select t-body" id="connect-provider" name="provider">{providers}</select>{}</div></div>{}<button class="g-btn t-body" type="submit">Connect</button></form><p class="t-small g-check__muted">Stored encrypted.</p>"#,
+        icon("down"),
+        field(&Field {
+            id: "connect-key",
+            name: "key",
+            label: "Provider key",
+            value: "",
+            mono: true,
+            extra: r#" type="password" placeholder="sk-..." required autocomplete="off""#,
+            // The hint goes under the whole row: inside the field it lifts the input above the select.
+            hint: "",
+            error: "",
+        })
+    )
+}
+
 /// Connect a model, then Send your first request: the first data on every track, within a minute.
 fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let may_connect = c.admin.may(Permission::Credentials) && !c.admin.confined();
@@ -1040,20 +1059,7 @@ fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     } else if !f.credentials_on {
         r#"<p class="t-small g-check__muted">Provider keys are kept sealed under a master key, and this gateway has none. Set GANTRY_MASTER_KEY (64 hex characters) or start Gantry with gantry start, which makes one. Meanwhile, try the demo model.</p>"#.to_string()
     } else {
-        format!(
-            r#"<form class="g-check__form" method="post" action="/console/start/connect"><div class="g-field"><label class="g-field__label t-tag g-caps" for="connect-provider">Provider</label><div class="g-select-wrap"><select class="g-input g-select t-body" id="connect-provider" name="provider">{providers}</select>{}</div></div>{}<button class="g-btn t-body" type="submit">Connect</button></form>"#,
-            icon("down"),
-            field(&Field {
-                id: "connect-key",
-                name: "key",
-                label: "Provider key",
-                value: "",
-                mono: true,
-                extra: r#" type="password" placeholder="sk-..." required autocomplete="off""#,
-                hint: "Sealed with this gateway's master key. Only sealed bytes are kept.",
-                error: "",
-            })
-        )
+        connect_form(&providers)
     };
     let demo_form = if may_choose(c.admin) && f.demo_in_policy {
         r#"<form method="post" action="/console/start/demo"><button class="g-btn g-btn--quiet t-body" type="submit">Try without a key</button></form>"#
@@ -3359,6 +3365,18 @@ mod tests {
     use super::*;
 
     const POLICY: &str = "version: 1\nmode: observe\nproviders:\n  - name: openai\n    preset: openai\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n";
+
+    #[test]
+    fn the_connect_row_has_no_hint_inside_it_and_one_line_under_it() {
+        // UX #9: a hint inside the key field lifted the input about 25px above the provider select.
+        let form = connect_form(r#"<option value="openai">OpenAI</option>"#);
+        let (row, after) = form.split_once("</form>").unwrap_or_default();
+        assert!(!row.contains("g-field__hint"), "{row}");
+        assert_eq!(
+            after,
+            r#"<p class="t-small g-check__muted">Stored encrypted.</p>"#
+        );
+    }
 
     #[test]
     fn the_claude_code_prompt_never_hands_an_agent_a_placeholder() {
