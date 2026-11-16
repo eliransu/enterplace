@@ -572,7 +572,7 @@ async fn an_es256_viewer_signs_in_read_only_and_cannot_issue_a_key() -> TestResu
     let (_, _, page) = send(&s.app, "GET", "/console/people", &cookie, "").await?;
     // The name on one line and the role on the next.
     assert!(
-        page.contains(r#"<span class="t-mono-sm g-muted">guest@partner.org</span><span class="t-small g-muted">read only</span>"#),
+        page.contains(r#"<span class="t-mono g-muted">guest@partner.org</span><span class="t-small g-muted">read only</span>"#),
         "{page}"
     );
     // A read-only person never sees an action they cannot take, and is told why.

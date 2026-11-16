@@ -419,12 +419,18 @@ fn nav_links(current: &str, class: &str, extra: &str) -> String {
 }
 
 /// `admin` is "name, role": the name on one line and the role under it, so a long email never splits the role.
+/// The built-in admin is named after its role, and "admin" twice reads as a glitch: the role shows only when it
+/// adds something.
 fn signed_in(admin: &str) -> String {
     let (name, role) = admin.rsplit_once(", ").unwrap_or((admin, ""));
+    let role = if role.is_empty() || role == name {
+        String::new()
+    } else {
+        format!(r#"<span class="t-small g-muted">{}</span>"#, esc(role))
+    };
     format!(
-        r#"<span class="g-live t-small" data-live="checking" data-live-last-request="">Checking requests</span><span class="g-stack" style="gap: 0"><span class="t-mono-sm g-muted">{}</span><span class="t-small g-muted">{}</span></span><a class="t-small" href="/console/sign-out">Sign out</a>"#,
+        r#"<span class="g-live t-small" data-live="checking" data-live-last-request="">Checking requests</span><span class="g-stack" style="gap: 0"><span class="t-mono g-muted">{}</span>{role}</span><a class="t-small" href="/console/sign-out">Sign out</a>"#,
         esc(name),
-        esc(role)
     )
 }
 
@@ -453,7 +459,7 @@ pub fn shell(
 <div class="g-stack" style="gap: var(--space-1)">
 {}
 </div>
-<div class="g-stack" style="gap: var(--space-2)">{}</div>
+<div class="g-toolbar" style="gap: var(--space-2) var(--space-4)">{}</div>
 </nav>
 </div>"#,
             icon("close"),
@@ -528,13 +534,21 @@ pub fn field(f: &Field<'_>) -> String {
     } else {
         (String::new(), String::new())
     };
+    // A bare "sarah.miller" in an empty field reads as a value already filled in, to people and to screen readers
+    // alike. Every field passes through here, so the prefix is added once rather than in each page's placeholder.
+    let extra = match f.extra.split_once(r#" placeholder=""#) {
+        Some((before, after)) if !after.starts_with("e.g. ") => {
+            format!(r#"{before} placeholder="e.g. {after}"#)
+        }
+        _ => f.extra.to_string(),
+    };
     format!(
         r#"<div class="g-field"><label class="g-field__label t-tag g-caps" for="{id}">{}</label><input class="g-input {}" id="{id}" name="{}" value="{}"{}{state}>{note}</div>"#,
         f.label,
         if f.mono { "t-mono" } else { "t-body" },
         f.name,
         esc(f.value),
-        f.extra
+        extra
     )
 }
 
@@ -580,6 +594,44 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn the_nav_foot_shows_the_role_only_when_it_differs_from_the_name() {
+        let foot = signed_in("admin, admin");
+        assert_eq!(foot.matches(">admin<").count(), 1, "{foot}");
+        let foot = signed_in("dana@example.com, admin");
+        assert!(
+            foot.contains(">dana@example.com<") && foot.contains(">admin<"),
+            "{foot}"
+        );
+        // The name is never the 12px grey: muted text is 13px at least.
+        assert!(!foot.contains("t-mono-sm"), "{foot}");
+    }
+
+    #[test]
+    fn a_field_placeholder_reads_as_an_example() {
+        let f = |extra| {
+            field(&Field {
+                id: "n",
+                name: "n",
+                label: "Name",
+                value: "",
+                mono: true,
+                extra,
+                hint: "",
+                error: "",
+            })
+        };
+        let html = f(r#" required placeholder="sarah.miller" autocomplete="off""#);
+        assert!(
+            html.contains(r#"placeholder="e.g. sarah.miller""#),
+            "{html}"
+        );
+        // Already an example, or no placeholder at all: left as written.
+        let html = f(r#" placeholder="e.g. payments""#);
+        assert!(html.contains(r#"placeholder="e.g. payments""#), "{html}");
+        assert!(!f(" required").contains("placeholder"));
+    }
 
     #[test]
     fn text_is_escaped_and_encoded() {

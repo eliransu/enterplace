@@ -120,3 +120,33 @@ a.g-tab{display:inline-flex;align-items:center;text-decoration:none}
 @keyframes g-row-new{from{background:var(--line)}to{background:transparent}}
 @keyframes g-row-new-edge{from{box-shadow:inset var(--space-1) 0 0 var(--lime)}to{box-shadow:inset var(--space-1) 0 0 transparent}}
 @media (prefers-reduced-motion:reduce){.g-row--new,.g-row--new td:first-child{animation:none}}
+/* UI review 2026-11-16. */
+/* #28: native scrollbars follow the theme; a white track was the brightest thing on a dark page. */
+[data-theme="dark"]{color-scheme:dark}
+[data-theme="light"]{color-scheme:light}
+.g-table-wrap,.g-code,.g-sheet,.g-nav--side,.g-command__text{scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
+/* #42, #49: the data was the smallest text on the page and its grey second lines were hard to read. Table bodies
+   step up from t-mono-sm to the t-mono step (13px/22px, tokens.css), still mono, so identifiers keep their face. */
+.g-table.t-mono-sm tbody,.g-table td.t-mono-sm,.g-table .g-table__sub.t-mono-sm{font-size:13px;line-height:22px}
+/* #48: every item reserves the disc's room, so the current one does not shift right when it gets the disc. */
+.g-nav--side .g-nav__item::before,.g-menu-sheet .g-menu__item::before{content:"";width:var(--disc);height:var(--disc);flex-shrink:0;border-radius:var(--radius-pill)}
+.g-menu-sheet .g-menu__item{justify-content:flex-start;gap:var(--space-3)}
+/* The disc sits in the item's left padding, so the labels line up with the group names above them. */
+.g-nav--side .g-nav__item{padding-left:calc(var(--space-4) - var(--disc) - var(--space-2))}
+@media (min-width:721px){
+  /* #27: the nav stays in view on a long page instead of leaving an empty column after one scroll. */
+  .g-nav--side{position:sticky;top:var(--space-4);max-height:calc(100vh - var(--space-8));overflow-y:auto}
+}
+@media (max-width:720px){
+  /* #44: a sideways-scrolling row hid its last options with no scrollbar to hint at them. */
+  .g-tabs{flex-wrap:wrap;overflow-x:visible}
+}
+/* #46, #48: in the phone menu the labels line up with the group names, and the group names sit closer to their
+   items, so the whole menu and Sign out fit one screen. */
+.g-menu-sheet .g-menu__item{gap:var(--space-2);padding-left:0}
+.g-menu-sheet .g-nav__group{padding-top:var(--space-2)}
+/* #46: a command broke mid-value ("http://127." over "0.0.1:18110"), which reads as two values. It still wraps
+   between words, and a value too long for the line scrolls sideways. A key or hash to copy (--value) keeps
+   wrapping, so a dialog shows all of it (Round 10). */
+.g-terminal,.g-command:not(.g-command--value) .g-command__text{overflow-wrap:normal}
+.g-terminal{overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
