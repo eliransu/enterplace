@@ -397,7 +397,7 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
         "First requests through Gantry",
         "What you are seeing",
         "claude-sonnet-5-5",
-        "Next step",
+        "Your steps",
         "Add a second person",
     ] {
         assert!(page.contains(part), "{part}: {page}");
@@ -876,7 +876,7 @@ async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent(
     );
     let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
     assert!(
-        page.contains("Next step") && page.contains("Add a second person"),
+        page.contains("Your steps") && page.contains("Add a second person"),
         "{page}"
     );
 
@@ -920,5 +920,48 @@ async fn every_agent_prompt_links_a_docs_page_that_exists() -> TestResult {
     }
     // Only the current step of each is shown open, with its prompt.
     assert!(prompts >= 6, "{prompts}");
+    Ok(())
+}
+
+/// The numbers of "N of M done" in a page's lead line.
+fn done_count(page: &str) -> Option<(usize, usize)> {
+    page.match_indices(" done").find_map(|(end, _)| {
+        let (before, total) = page[..end].rsplit_once(" of ")?;
+        let total = total.parse().ok()?;
+        let done = before.rsplit(' ').next()?.parse().ok()?;
+        Some((done, total))
+    })
+}
+
+#[tokio::test]
+async fn every_track_lists_all_its_steps_and_the_count_matches_them() -> TestResult {
+    let s = setup("counts")?;
+    let cookie = sign_in(&s.app, ADMIN_KEY).await?;
+    // Traffic has arrived, which used to hide the done steps on the tracks that show the first requests.
+    request(&s, "01START0000000000000000000", "noa.bar", "platform")?;
+    for (track, query) in [
+        ("coding", "track=coding&pay=api"),
+        ("coding", "track=coding&pay=subscriptions"),
+        ("apps", "track=apps"),
+        ("mcp", "track=mcp"),
+        ("limit", "track=limit"),
+        ("watch", "track=watch"),
+    ] {
+        let (_, _, page) = send(&s.app, get(&format!("/console/start?{query}"), &cookie)?).await?;
+        let (done, total) = done_count(&page).ok_or_else(|| format!("{query}: no count"))?;
+        let items = page.matches(r#"class="g-check__item""#).count();
+        let marked = page.matches(r#"data-state="done""#).count();
+        assert_eq!(items, total, "{query}: every step is listed");
+        assert_eq!(marked, done, "{query}: the done steps are listed");
+        if track == "watch" || query.contains("subscriptions") {
+            assert!(!page.contains("Connect a model"), "{query}");
+        } else {
+            // Connect a model never reads Now while the first request reads Done.
+            assert!(page.contains("Send your first request"), "{query}");
+            let connect = page.find("Connect a model").ok_or("no connect step")?;
+            let state = page[..connect].rfind("data-state=\"").ok_or("no state")?;
+            assert!(page[state..].starts_with("data-state=\"done\""), "{query}");
+        }
+    }
     Ok(())
 }
