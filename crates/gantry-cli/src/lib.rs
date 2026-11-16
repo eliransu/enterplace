@@ -2067,12 +2067,15 @@ async fn login(url: &str, no_browser: bool) -> Result<(), String> {
         got.expires,
         path.display()
     );
+    // Claude Code reads the key from its own settings, so nothing is pasted into a shell for it.
+    let settings = write_claude_settings(&url, &got.key, got.subscriptions)?;
     // UX12-3: the next login revokes this key, so a profile holding the key itself would break on schedule. The
     // profile reads this file instead, which every login rewrites and logout deletes.
     let env = path.with_file_name("env");
     save_credentials(&env, &env_lines(&url, &got.key, got.subscriptions))?;
     println!(
-        "Point your tools at Gantry: Claude Code and the OpenAI SDKs read these variables, and Codex reads GANTRY_KEY (see https://gantry-docs.enterplace.dev/integrations/codex/). They are in {env}, which the next `gantry login` rewrites. Add this line to your shell profile, and run it now in this shell:\n\n  . {env}\n\nThe key works within 2 seconds. Every request with it is recorded under {}.",
+        "Claude Code is pointed at Gantry: ANTHROPIC_BASE_URL and ANTHROPIC_CUSTOM_HEADERS are in the env block of {}, and its other settings are unchanged. Restart Claude Code to pick them up.\n\nFor the OpenAI SDKs and Codex (which reads GANTRY_KEY, see https://gantry-docs.enterplace.dev/integrations/codex/), and as a fallback for Claude Code, the same variables are in {env}, which the next `gantry login` rewrites. To use them, add this line to your shell profile, and run it now in this shell:\n\n  . {env}\n\nThe key works within 2 seconds. Every request with it is recorded under {}.",
+        settings.display(),
         got.name,
         env = env.display()
     );
@@ -2092,6 +2095,72 @@ fn env_lines(url: &str, key: &str, subscriptions: bool) -> String {
     format!(
         "# Written by gantry login. `gantry logout` deletes this file.\nexport ANTHROPIC_BASE_URL={url}\n{claude}export OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\nexport GANTRY_KEY={key}\n"
     )
+}
+
+/// `~/.claude/settings.json`, where Claude Code reads its `env` block.
+fn claude_settings_path() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| {
+            "HOME is not set, so ~/.claude/settings.json cannot be found. Set HOME and run `gantry login` again."
+                .to_string()
+        })?;
+    Ok(PathBuf::from(home).join(".claude").join("settings.json"))
+}
+
+/// Claude Code's settings with Gantry's variables in `env`. Every other key stays, and a file that is not a JSON
+/// object is refused rather than overwritten, because it holds the person's own settings.
+fn claude_settings(
+    existing: Option<&str>,
+    url: &str,
+    key: &str,
+    subscriptions: bool,
+) -> Result<String, String> {
+    let refuse = |why: &str| {
+        format!(
+            "~/.claude/settings.json {why}. Nothing was changed. Fix or move the file, then run `gantry login` again."
+        )
+    };
+    let mut root = match existing.map(str::trim).filter(|t| !t.is_empty()) {
+        None => serde_json::Map::new(),
+        Some(text) => match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(serde_json::Value::Object(map)) => map,
+            Ok(_) => return Err(refuse("is not a JSON object")),
+            Err(err) => return Err(refuse(&format!("is not valid JSON ({err})"))),
+        },
+    };
+    let env = root
+        .entry("env")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let serde_json::Value::Object(env) = env else {
+        return Err(refuse("has an \"env\" that is not an object"));
+    };
+    env.insert("ANTHROPIC_BASE_URL".into(), url.into());
+    env.insert(
+        "ANTHROPIC_CUSTOM_HEADERS".into(),
+        format!("x-gantry-user: {key}").into(),
+    );
+    // Without subscription passthrough the key is Claude Code's API key. With it, the person's own Claude login
+    // stays and no key is set.
+    if !subscriptions {
+        env.insert("ANTHROPIC_API_KEY".into(), key.into());
+    }
+    let mut text = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+    text.push('\n');
+    Ok(text)
+}
+
+/// Writes the Gantry variables into `~/.claude/settings.json`, keeping its other keys. Returns the path.
+fn write_claude_settings(url: &str, key: &str, subscriptions: bool) -> Result<PathBuf, String> {
+    let path = claude_settings_path()?;
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(format!("{} cannot be read: {err}.", path.display())),
+    };
+    let text = claude_settings(existing.as_deref(), url, key, subscriptions)?;
+    save_credentials(&path, &text)?;
+    Ok(path)
 }
 
 async fn logout() -> Result<(), String> {
@@ -2810,5 +2879,33 @@ mod tests {
         assert!(text.contains("export ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: gantry_k\"\n"));
         assert!(text.contains("unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN\n"));
         assert!(!text.contains("export ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn the_login_writes_claude_codes_settings_and_keeps_its_other_keys() -> Result<(), String> {
+        let existing = r#"{"theme":"dark","env":{"FOO":"1","ANTHROPIC_BASE_URL":"old"},"permissions":{"allow":["Bash"]}}"#;
+        let text = super::claude_settings(Some(existing), "https://gw.example", "gantry_k", true)?;
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        assert_eq!(v["theme"], "dark");
+        assert_eq!(v["permissions"]["allow"][0], "Bash");
+        assert_eq!(v["env"]["FOO"], "1");
+        assert_eq!(v["env"]["ANTHROPIC_BASE_URL"], "https://gw.example");
+        assert_eq!(
+            v["env"]["ANTHROPIC_CUSTOM_HEADERS"],
+            "x-gantry-user: gantry_k"
+        );
+        assert!(v["env"].get("ANTHROPIC_API_KEY").is_none());
+        // No file yet: one is made with just the env block.
+        let fresh = super::claude_settings(None, "https://gw.example", "gantry_k", false)?;
+        let v: serde_json::Value = serde_json::from_str(&fresh).map_err(|e| e.to_string())?;
+        assert_eq!(v["env"]["ANTHROPIC_API_KEY"], "gantry_k");
+        // A file that is not a JSON object is never overwritten.
+        for bad in ["not json", "[1]", "{\"env\":3}"] {
+            let err = super::claude_settings(Some(bad), "https://gw.example", "k", true)
+                .err()
+                .ok_or("accepted a bad file")?;
+            assert!(err.contains("Nothing was changed"), "{err}");
+        }
+        Ok(())
     }
 }
