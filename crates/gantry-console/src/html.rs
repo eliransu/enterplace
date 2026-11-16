@@ -339,7 +339,7 @@ fn nav_links(current: &str, class: &str, extra: &str) -> String {
 fn signed_in(admin: &str) -> String {
     let (name, role) = admin.rsplit_once(", ").unwrap_or((admin, ""));
     format!(
-        r#"<span class="g-live t-small">Checking requests</span><span class="g-stack" style="gap: 0"><span class="t-mono-sm g-muted">{}</span><span class="t-small g-muted">{}</span></span><a class="t-small" href="/console/sign-out">Sign out</a>"#,
+        r#"<span class="g-live t-small" data-live="checking" data-live-last-request="">Checking requests</span><span class="g-stack" style="gap: 0"><span class="t-mono-sm g-muted">{}</span><span class="t-small g-muted">{}</span></span><a class="t-small" href="/console/sign-out">Sign out</a>"#,
         esc(name),
         esc(role)
     )

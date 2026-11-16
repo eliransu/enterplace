@@ -2346,20 +2346,20 @@ async fn live_json(State(console): State<Console>, headers: HeaderMap) -> Respon
         let body = serde_json::json!({ "error": { "code": "not_signed_in", "message": "Sign in to the console again." } });
         return (StatusCode::UNAUTHORIZED, json, body.to_string()).into_response();
     }
-    let signature = std::fs::metadata(&console.config().audit).map_or_else(
-        |_| "none".to_string(),
-        |m| {
-            let changed = m
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_millis());
-            format!("{}-{changed}", m.len())
-        },
+    let meta = std::fs::metadata(&console.config().audit).ok();
+    // The log's time of change is when the last record was written; null before the first.
+    let changed = meta
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|d| u64::try_from(d.as_millis()).ok());
+    let signature = meta.as_ref().map_or_else(
+        || "none".to_string(),
+        |m| format!("{}-{}", m.len(), changed.unwrap_or(0)),
     );
     (
         json,
-        serde_json::json!({ "signature": signature }).to_string(),
+        serde_json::json!({ "signature": signature, "last_request_ms": changed }).to_string(),
     )
         .into_response()
 }

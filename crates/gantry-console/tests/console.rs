@@ -325,6 +325,7 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
     assert!(
         page.contains(r#"g-muted">noa.bar</span><span class="t-small g-muted">admin</span>"#)
             && page.contains("Checking requests")
+            && page.contains(r#"data-live="checking""#)
     );
     let csp = headers
         .get(header::CONTENT_SECURITY_POLICY)
