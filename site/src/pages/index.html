@@ -10,13 +10,13 @@ description: Gantry is a self-hosted AI gateway. Every call from coding tools, a
       <a class="btn btn-main" href="docs:/getting-started/quickstart/">Start in two minutes</a>
       <button class="btn btn-line" type="button" data-copy="agent-setup">Set up with your agent</button>
     </div>
-    <figure class="code cmd"><pre>curl -fsSL https://gantry.eliran.me/install.sh | sh
+    <figure class="code cmd"><pre>curl -fsSL https://gantry.enterplace.dev/install.sh | sh
 gantry start</pre></figure>
     <details class="agent-setup">
       <summary class="muted">Show the agent prompt</summary>
 <pre id="agent-setup">Set up Gantry, the self-hosted AI gateway, on this machine, and route my Claude Code through it while I keep my own Claude subscription login (no API key).
 
-1. Install it: curl -fsSL https://gantry.eliran.me/install.sh | sh
+1. Install it: curl -fsSL https://gantry.enterplace.dev/install.sh | sh
    Then open a new shell, or run the PATH line it prints.
 2. Make a folder for it (~/gantry) and run "gantry start --no-open" there in the background.
    It serves http://127.0.0.1:8080 and already has the claude-subscriptions provider, which passes my Claude login on unchanged.
@@ -30,10 +30,10 @@ gantry start</pre></figure>
 5. Verify: in a new shell run: claude -p "say hello". It answers, and the request shows at http://127.0.0.1:8080/console/requests once I open the sign-in link.
 
 Docs as Markdown, read them for anything not covered here:
-https://gantry-docs.eliran.me/getting-started/quickstart.md
-https://gantry-docs.eliran.me/integrations/claude-code.md
-https://gantry-docs.eliran.me/governance/subscriptions.md
-Every page: https://gantry-docs.eliran.me/llms.txt</pre>
+https://gantry-docs.enterplace.dev/getting-started/quickstart.md
+https://gantry-docs.enterplace.dev/integrations/claude-code.md
+https://gantry-docs.enterplace.dev/governance/subscriptions.md
+Every page: https://gantry-docs.enterplace.dev/llms.txt</pre>
     </details>
   </div>
 

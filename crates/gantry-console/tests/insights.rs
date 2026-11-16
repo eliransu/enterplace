@@ -379,3 +379,26 @@ async fn analytics_show_totals_percentiles_rankings_and_forecasts() -> TestResul
     assert!(page.contains(">claude-code<") && page.contains("per hour"));
     Ok(())
 }
+
+#[tokio::test]
+async fn live_json_changes_when_a_record_is_written_and_needs_a_session() -> TestResult {
+    // The Requests, Analytics, Audit log and Spend pages ask this every 2 seconds and redraw when it changes, so
+    // a request shows on the page as it arrives.
+    let s = setup("live")?;
+    let (status, _, _) = send(&s.app, get("/console/live.json", "")?).await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let cookie = sign_in(&s.app, NOA).await?;
+    let read = async || -> Result<Value, Error> {
+        let (status, _, body) = send(&s.app, get("/console/live.json", &cookie)?).await?;
+        assert_eq!(status, StatusCode::OK);
+        Ok(serde_json::from_str(&body)?)
+    };
+    let (before, again) = (read().await?, read().await?);
+    assert_eq!(before, again, "nothing was written in between");
+    s.log.append_record(&object(json!({"event": "usage", "id": "01LIVE000000000000000000001", "provider": "openai", "model": "gpt-4o-mini", "status": 200, "input_tokens": 1, "output_tokens": 1})))?;
+    s.log.flush();
+    let after = read().await?;
+    assert_ne!(before["signature"], after["signature"]);
+    assert!(after["signature"].is_string());
+    Ok(())
+}

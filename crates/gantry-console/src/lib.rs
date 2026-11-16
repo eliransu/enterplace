@@ -568,6 +568,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .merge(edit::routes())
         .merge(start::routes())
         .route("/spend", get(spend_page))
+        .route("/live.json", get(live_json))
         .route("/requests", get(insights::requests_page))
         .route("/requests/body", post(insights::body_view))
         .route("/analytics", get(insights::analytics_page))
@@ -2332,6 +2333,35 @@ pub(crate) fn not_permitted(admin: &Admin, permission: Permission) -> Response {
             "Open the policy",
         ),
     )
+}
+
+/// What the pages that show requests ask every 2 seconds: a value that changes when a record is written. It is the
+/// audit log's size and time of change, which costs no read of the log, so the page redraws only when there is
+/// something new.
+// ponytail: polling, as Start here does, not a socket. One stat call per open tab every 2 seconds; a stream is the
+// upgrade if tabs are counted in hundreds.
+async fn live_json(State(console): State<Console>, headers: HeaderMap) -> Response {
+    let json = [(header::CONTENT_TYPE, "application/json")];
+    if console.admin(&headers).await.is_none() {
+        let body = serde_json::json!({ "error": { "code": "not_signed_in", "message": "Sign in to the console again." } });
+        return (StatusCode::UNAUTHORIZED, json, body.to_string()).into_response();
+    }
+    let signature = std::fs::metadata(&console.config().audit).map_or_else(
+        |_| "none".to_string(),
+        |m| {
+            let changed = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis());
+            format!("{}-{changed}", m.len())
+        },
+    );
+    (
+        json,
+        serde_json::json!({ "signature": signature }).to_string(),
+    )
+        .into_response()
 }
 
 /// The chain a person reads on the audit page, by organization (`""` for the install's) and path. Someone kept to an

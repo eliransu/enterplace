@@ -1,6 +1,6 @@
 # Gantry website
 
-The site at https://gantry.eliran.me. Static, hand-written HTML, CSS and one small script. No framework and no dependencies.
+The site at https://gantry.enterplace.dev. Static, hand-written HTML, CSS and one small script. No framework and no dependencies.
 
 ## Layout
 

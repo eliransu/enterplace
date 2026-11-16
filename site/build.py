@@ -18,8 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 SRC, OUT = ROOT / "src", ROOT / "public"
-SITE = "https://gantry.eliran.me"
-DOCS = "https://gantry-docs.eliran.me"
+SITE = "https://gantry.enterplace.dev"
+DOCS = "https://gantry-docs.enterplace.dev"
 VERSION = "0.1.0"
 ROOT_FILES = {"404"}  # written as public/<name>.html, left out of the sitemap
 

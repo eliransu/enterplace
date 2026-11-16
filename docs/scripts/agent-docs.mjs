@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pages = join(root, 'src/content/docs');
 const dist = join(root, 'dist');
-const site = (process.env.DOCS_SITE ?? 'https://gantry-docs.eliran.me').replace(/\/$/, '');
+const site = (process.env.DOCS_SITE ?? 'https://gantry-docs.enterplace.dev').replace(/\/$/, '');
 
 function walk(dir) {
 	return readdirSync(dir).flatMap((name) => {

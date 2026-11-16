@@ -1,9 +1,14 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  // The docs site: static files from `npm run build`, served at gantry-docs.eliran.me.
+  // The docs site: static files from `npm run build`, served at gantry-docs.enterplace.dev.
   "name": "gantry-docs",
   "compatibility_date": "2026-11-01",
   "assets": { "directory": "./dist", "not_found_handling": "404-page" },
-  "routes": [{ "pattern": "gantry-docs.eliran.me", "custom_domain": true }],
+  // The old hostname keeps serving: install commands people saved and the docs links inside binaries
+  // already installed name it.
+  "routes": [
+    { "pattern": "gantry-docs.enterplace.dev", "custom_domain": true },
+    { "pattern": "gantry-docs.eliran.me", "custom_domain": true }
+  ],
   "workers_dev": false
 }

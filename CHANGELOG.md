@@ -7,6 +7,12 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Codex on a ChatGPT subscription
+
+- `auth: passthrough` is allowed on a provider of kind `openai` (url `https://chatgpt.com/backend-api/codex`), so Codex
+  signed in with ChatGPT is governed with no OpenAI key. Codex's `session-id` header tells sessions apart when no
+  person is named. The refusals name Codex's fix: `requires_openai_auth = true` and `http_headers` with `x-gantry-user`.
+
 ### Fixed, found by running Claude Code and Codex through Gantry
 
 - `tpd` on a rule with no other limit was never applied: every request passed. It holds now, for subscription
@@ -29,6 +35,19 @@ one repository. How a release is made: RELEASING.md.
   `gantry start` prints it under. With only `GANTRY_ADMIN_KEY` read, the first `gantry kill` after a first run failed.
 - The console's Codex settings and its curl name a model this install serves (the demo model on a fresh install).
   Codex left to its default model, and the curl's `gpt-5-mini`, were refused with `unknown_model`.
+- The website and docs moved to gantry.enterplace.dev and gantry-docs.enterplace.dev. The old eliran.me
+  addresses keep serving the same pages, so saved install commands and links in installed binaries still work.
+- `gantry stop` stops the gateway that serves from the folder (or `--dir`), so a gateway started in another
+  terminal, or left running, no longer needs its process number.
+- `gantry start` checks the port before it writes anything. On a taken port it used to write a policy and an admin
+  key, fail to listen without showing the key, and leave the next start saying the key "was shown".
+- The console's Copy for your agent prompt for Claude Code holds no placeholder. With no person token made it is one
+  line (`ANTHROPIC_BASE_URL`) and tells the agent that no token is needed; an agent given `<person token>` stopped
+  and asked three questions. The step's own lines show the header line only once a token exists.
+- The Requests, Analytics, Audit log and Spend pages show records as they arrive: they redraw in place within 2
+  seconds, with no reload, and mark the rows that are new.
+- Docs: the Claude Code guide says that the Claude desktop app's Code tab sets `ANTHROPIC_BASE_URL` itself, so
+  subscription passthrough works from a terminal and VS Code and not from that app.
 - Docs: the quickstart is the first page of the sidebar and shows a first request with its answer; every tool guide
   says how to get a gateway and a key in one line and that `gantry-demo` works with no provider key; the pages that
   said Claude Team and Enterprise seats cannot go through a gateway now describe subscription passthrough; guides
@@ -106,7 +125,7 @@ one repository. How a release is made: RELEASING.md.
 
 ### One-command install of the CLI
 
-- `curl -fsSL https://gantry.eliran.me/install.sh | sh` installs `gantry` on macOS and Linux, x86_64 and arm64: it
+- `curl -fsSL https://gantry.enterplace.dev/install.sh | sh` installs `gantry` on macOS and Linux, x86_64 and arm64: it
   picks the latest stable release (or the `edge` pre-release while there is none; `GANTRY_VERSION=edge|vX.Y.Z`),
   verifies the release signature with `ssh-keygen` and the tarball's SHA256, installs to `~/.local/bin`
   (`GANTRY_INSTALL_DIR`, with sudo for a folder you cannot write), and prints the PATH line and `gantry start`.

@@ -1658,7 +1658,7 @@ pub(crate) fn document(routes: &[AdminRoute]) -> Value {
         "info": {
             "title": "Gantry admin API",
             "version": env!("CARGO_PKG_VERSION"),
-            "description": "Every call needs an admin key, or a key whose role has the route's permission (x-gantry-permission), as Authorization: Bearer gantry_... Every call is an admin record in the audit log. See https://gantry-docs.eliran.me/reference/admin-api/."
+            "description": "Every call needs an admin key, or a key whose role has the route's permission (x-gantry-permission), as Authorization: Bearer gantry_... Every call is an admin record in the audit log. See https://gantry-docs.enterplace.dev/reference/admin-api/."
         },
         "security": [{ "bearer": [] }],
         "components": {

@@ -261,7 +261,7 @@ pub const PRESETS: &[Preset] = &[
         "Gantry demo model (answered inside Gantry, no key, free)",
         Kind::Demo,
         "https://demo.gantry.invalid/v1",
-        "https://gantry-docs.eliran.me/getting-started/quickstart/",
+        "https://gantry-docs.enterplace.dev/getting-started/quickstart/",
     ),
     hosted(
         "digitalocean",

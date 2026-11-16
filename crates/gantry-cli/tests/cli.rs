@@ -1291,7 +1291,7 @@ fn key_new_makes_the_first_admin_and_prints_an_env_block_to_paste() -> TestResul
         format!("export OPENAI_API_KEY={key}\n"),
         // UX11 n13: the console's full address, not a path alone.
         "console at http://gw.internal:8080/console".to_string(),
-        "https://gantry-docs.eliran.me/integrations/codex/".to_string(),
+        "https://gantry-docs.enterplace.dev/integrations/codex/".to_string(),
     ] {
         assert!(stdout.contains(&line), "{line} missing from:\n{stdout}");
     }
@@ -2809,5 +2809,58 @@ fn an_identity_only_token_is_a_person_token_with_the_claude_code_lines() -> Test
     )?;
     assert!(!out.status.success());
     assert!(String::from_utf8(out.stderr)?.contains("--identity-only makes a person token"));
+    Ok(())
+}
+
+#[test]
+fn start_on_a_taken_port_writes_nothing_and_stop_stops_the_gateway_of_a_folder() -> TestResult {
+    use std::io::BufRead;
+    let dir = start_dir("stop")?;
+    let dir_s = dir.display().to_string();
+    // A port something else holds: start says so before it writes a policy or makes an admin key, which would be
+    // made, never shown, and reused by the next start.
+    let held = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let addr = held.local_addr()?.to_string();
+    let out = gantry(
+        &["start", "--no-open", "--dir", &dir_s, "--listen", &addr],
+        &[],
+    )?;
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(String::from_utf8(out.stderr)?.contains("could not listen on"));
+    assert!(!dir.join("gantry.keys.yaml").exists() && !dir.join("gantry.policy.yaml").exists());
+    // Nothing runs from the folder yet: stop says so, and that is no error.
+    let out = gantry(&["stop", "--dir", &dir_s], &[])?;
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8(out.stdout)?.contains("No Gantry is running"));
+    drop(held);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gantry"))
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .args(["start", "--no-open", "--dir", &dir_s, "--listen", &addr])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    let mut said_stop = false;
+    for line in std::io::BufReader::new(stdout).lines() {
+        let line = line?;
+        said_stop |= line.contains("gantry stop");
+        if line.contains("listening on") {
+            break;
+        }
+    }
+    assert!(said_stop, "the start block names gantry stop");
+    let out = gantry(&["stop", "--dir", &dir_s], &[])?;
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8(out.stdout)?.contains("Stopped Gantry"));
+    // The gateway is gone: the process start ran has ended, and the port is free again.
+    let status = child.wait()?;
+    assert!(status.code().is_some() || !status.success(), "{status:?}");
+    assert!(std::net::TcpListener::bind(&addr).is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }

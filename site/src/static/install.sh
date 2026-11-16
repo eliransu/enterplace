@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs the gantry CLI from the GitHub Releases of eliransu/gantry.
 #
-#   curl -fsSL https://gantry.eliran.me/install.sh | sh
+#   curl -fsSL https://gantry.enterplace.dev/install.sh | sh
 #
 # It picks the latest stable release, or the rolling `edge` pre-release (built from main) when there is none yet,
 # checks the release signature (ssh-keygen, the release key below) and the tarball's SHA256 against SHA256SUMS, and
@@ -171,7 +171,7 @@ add_to_path() {
     say "$INSTALL_DIR is not on your PATH, and GANTRY_NO_MODIFY_PATH=1 leaves $rc as it is. Add this line to it:"
   elif [ -f "$rc" ] && grep -qF "$INSTALL_DIR" "$rc"; then
     say "$rc already adds $INSTALL_DIR to the PATH: new terminals have gantry. To use it in this terminal now, run:"
-  elif mkdir -p "$(dirname "$rc")" 2> /dev/null && printf '\n# Added by the Gantry installer (https://gantry.eliran.me)\n%s\n' "$line" >> "$rc" 2> /dev/null; then
+  elif mkdir -p "$(dirname "$rc")" 2> /dev/null && printf '\n# Added by the Gantry installer (https://gantry.enterplace.dev)\n%s\n' "$line" >> "$rc" 2> /dev/null; then
     say "Added $INSTALL_DIR to your PATH in $rc: new terminals have gantry. To use it in this terminal now, run:"
   else
     say "$rc could not be written. Add this line to your shell's startup file, and run it in this terminal:"

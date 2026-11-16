@@ -2,7 +2,7 @@
 # CLI: doctl apps create --spec .do/app.yaml (then set OPENAI_API_KEY in the app's settings).
 # Button: .do/deploy.template.yaml is this spec under `spec:`; keep the two the same.
 # App Platform has no volumes: keys and the policy live in Postgres, the audit log on the container's own disk
-# starts a new chain at each deploy. See https://gantry-docs.eliran.me/deploy/one-click/#digitalocean
+# starts a new chain at each deploy. See https://gantry-docs.enterplace.dev/deploy/one-click/#digitalocean
 name: gantry
 services:
   - name: gantry

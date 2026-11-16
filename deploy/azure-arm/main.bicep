@@ -1,7 +1,7 @@
 // Gantry on Azure Container Apps with Azure Database for PostgreSQL flexible server as its store.
 // A first try or a small team: one replica, a Burstable database. The admin key is printed once in the container's
 // logs. The Deploy to Azure button uses azuredeploy.json, built from this file: az bicep build --file main.bicep --outfile azuredeploy.json
-// Production: https://gantry-docs.eliran.me/deploy/azure/
+// Production: https://gantry-docs.enterplace.dev/deploy/azure/
 
 @description('Name prefix for every resource.')
 param name string = 'gantry'

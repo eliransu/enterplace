@@ -490,7 +490,7 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
             "{path}: action"
         );
         assert!(
-            page.contains(&format!("https://gantry-docs.eliran.me{docs}")),
+            page.contains(&format!("https://gantry-docs.enterplace.dev{docs}")),
             "{path}: docs"
         );
     }
@@ -847,7 +847,7 @@ async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent(
         BASE,
         token.as_str(),
         "x-gantry-user",
-        "https://gantry-docs.eliran.me/integrations/claude-code.md",
+        "https://gantry-docs.enterplace.dev/integrations/claude-code.md",
         "claude -p",
     ] {
         assert!(prompt.contains(part), "{part}: {prompt}");
@@ -908,7 +908,7 @@ async fn every_agent_prompt_links_a_docs_page_that_exists() -> TestResult {
                 "{track}: the gateway's address: {prompt}"
             );
             let link = prompt
-                .split("https://gantry-docs.eliran.me/")
+                .split("https://gantry-docs.enterplace.dev/")
                 .nth(1)
                 .and_then(|rest| rest.split(".md").next())
                 .ok_or_else(|| format!("{track}: no docs link: {prompt}"))?;

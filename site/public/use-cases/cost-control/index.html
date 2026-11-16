@@ -7,15 +7,15 @@
 <meta name="description" content="See what each team, person and model costs, set budgets that cannot be overrun, try them before you enforce them, and get a forecast for each one. With the exact policy lines.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<link rel="canonical" href="https://gantry.eliran.me/use-cases/cost-control/">
+<link rel="canonical" href="https://gantry.enterplace.dev/use-cases/cost-control/">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Gantry">
-<meta property="og:url" content="https://gantry.eliran.me/use-cases/cost-control/">
+<meta property="og:url" content="https://gantry.enterplace.dev/use-cases/cost-control/">
 <meta property="og:title" content="AI cost control: spend per person, budgets that hold, forecasts">
 <meta property="og:description" content="See what each team, person and model costs, set budgets that cannot be overrun, try them before you enforce them, and get a forecast for each one. With the exact policy lines.">
-<meta property="og:image" content="https://gantry.eliran.me/og.png">
+<meta property="og:image" content="https://gantry.enterplace.dev/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
@@ -83,10 +83,10 @@ gantry</a>
       </div>
 
       <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
-      <a class="nav-link" href="https://gantry-docs.eliran.me/">Docs</a>
+      <a class="nav-link" href="https://gantry-docs.enterplace.dev/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
+        <a class="btn btn-main btn-sm" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Get started</a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
         </button>
@@ -149,7 +149,7 @@ gantry</a>
       <div class="guide-text">
         <h3>Add a monthly budget per team, on trial</h3>
         <p>Pick the amount from what step one showed you. While the policy is in observe mode, a request over the budget is forwarded and recorded as <code>would_refuse</code>. Its cost still counts, so the numbers are real on the day you enforce.</p>
-        <a class="more" href="https://gantry-docs.eliran.me/start/step-3-limit/">Step 3 in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://gantry-docs.enterplace.dev/start/step-3-limit/">Step 3 in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
       <figure class="code"><figcaption>gantry.policy.yaml (added)</figcaption><pre>limits:
@@ -166,7 +166,7 @@ gantry</a>
       <div class="guide-text">
         <h3>Add the narrower limits</h3>
         <p>A daily budget per person, a cap on one costly model, a rate limit, a budget on a single key. A new limit can run on trial by itself with <code>shadow_until</code>, while the rest of the policy is enforced.</p>
-        <a class="more" href="https://gantry-docs.eliran.me/governance/budgets-and-rate-limits/">Budgets and rate limits <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://gantry-docs.enterplace.dev/governance/budgets-and-rate-limits/">Budgets and rate limits <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
       <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>limits:
@@ -180,7 +180,7 @@ gantry</a>
       <div class="guide-text">
         <h3>Spend less on the same work</h3>
         <p>A rule with <code>cache</code> answers a repeated request from a stored answer, for the same person or team. A hit costs nothing and is still recorded. <code>prompt_cache: auto</code> asks Anthropic to cache the stable start of a request, so the next call pays the cached input price. The console shows what caching saved per team.</p>
-        <a class="more" href="https://gantry-docs.eliran.me/routing/caching/">Caching in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://gantry-docs.enterplace.dev/routing/caching/">Caching in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
     </li>
@@ -232,7 +232,7 @@ gantry</a>
   <div class="cta-box">
     <h2>Start with step one. Block nothing, and find out what is in use.</h2>
     <div class="actions">
-      <a class="btn btn-ink" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
       <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
       <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
     </div>
@@ -284,10 +284,10 @@ gantry</a>
       </div>
       <div>
         <h2>Project</h2>
-        <a href="https://gantry-docs.eliran.me/">Docs</a>
-        <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a>
-        <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>
-        <a href="https://gantry-docs.eliran.me/getting-started/changelog/">Changelog</a>
+        <a href="https://gantry-docs.enterplace.dev/">Docs</a>
+        <a href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
+        <a href="https://gantry-docs.enterplace.dev/getting-started/status/">Project status</a>
+        <a href="https://gantry-docs.enterplace.dev/getting-started/changelog/">Changelog</a>
       </div>
     </nav>
   </div>

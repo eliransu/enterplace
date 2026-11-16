@@ -3,7 +3,7 @@
 Railway templates are made in the Railway dashboard, not from a file in the repository (`railway.json` sets build
 and deploy options for a service built from source; it cannot name a prebuilt image or add a database). This is
 the template to make once, then publish. The docs page links its button:
-https://gantry-docs.eliran.me/deploy/one-click/#railway
+https://gantry-docs.enterplace.dev/deploy/one-click/#railway
 
 ## Make the template
 

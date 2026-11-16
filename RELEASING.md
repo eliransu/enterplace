@@ -66,7 +66,7 @@ transparency log. Code scanning results from CodeQL are on for this public repos
 
 ## Install script and Homebrew
 
-`install.sh` at the repository root (also served at https://gantry.eliran.me/install.sh) downloads the tarball for the
+`install.sh` at the repository root (also served at https://gantry.enterplace.dev/install.sh) downloads the tarball for the
 machine from the GitHub Release, checks `SHA256SUMS.sig` with `ssh-keygen -Y verify` against the release key it
 embeds (the same key as `release/allowed_signers`: change both together), checks the tarball's SHA256 and installs to
 `~/.local/bin`. `scripts/install_check.sh` tests it against a fake signed release on localhost (ci.yml, ubuntu and

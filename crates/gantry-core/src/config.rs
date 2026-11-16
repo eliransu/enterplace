@@ -961,7 +961,7 @@ struct ProviderFile {
     // openai (OCI Generative AI): requests are signed with an OCI API signing key instead of carrying a key.
     #[serde(default)]
     oci_signing: Option<OciSigningFile>,
-    // `passthrough`: each caller's own login (a Claude subscription) is sent on unchanged, and Gantry holds no key.
+    // `passthrough`: each caller's own login (a Claude or ChatGPT subscription) is sent on unchanged, and Gantry holds no key.
     #[serde(default)]
     auth: Option<String>,
     // With `auth: passthrough`: whether a request must name its person in x-gantry-user (`required`, the default).
@@ -1939,16 +1939,16 @@ fn provider_auth(
         Some("passthrough") => true,
         Some(other) => {
             errors.push(format!(
-                "{}: auth is \"{other}\". It is key (the default: Gantry sends the provider key the policy names) or passthrough (each caller's own login, such as a Claude Pro, Max, Team or Enterprise subscription, is sent on unchanged and Gantry holds no key).",
+                "{}: auth is \"{other}\". It is key (the default: Gantry sends the provider key the policy names) or passthrough (each caller's own login, such as a Claude or ChatGPT subscription, is sent on unchanged and Gantry holds no key).",
                 at("auth")
             ));
             false
         }
     };
     if passthrough {
-        if kind.is_some_and(|k| k != Kind::Anthropic) {
+        if kind.is_some_and(|k| !matches!(k, Kind::Anthropic | Kind::OpenAi)) {
             errors.push(format!(
-                "{}: auth: passthrough is for a provider of kind anthropic, which Claude Code signs in to with a Claude subscription. Use kind: anthropic with url https://api.anthropic.com, or remove auth.",
+                "{}: auth: passthrough is for a provider of kind anthropic (Claude Code on a Claude subscription, url https://api.anthropic.com) or kind openai (Codex on a ChatGPT subscription, url https://chatgpt.com/backend-api/codex). Use one of those, or remove auth.",
                 at("auth")
             ));
         }

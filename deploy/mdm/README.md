@@ -7,8 +7,8 @@ Codex (`~/.codex/config.toml`), OpenCode, Kilo CLI, Continue, Zed, Gemini CLI, Q
 file it documents, and the shell (`~/.config/gantry/env`). It puts them back if someone changes them, takes MCP servers
 an admin blocked out of the tools' MCP files (keeping each file as it was beside it, `<name>.gantry-backup`), and
 reports every coding tool, MCP server and AI app it finds. Owners read it on the console's Devices page. Docs:
-https://gantry-docs.eliran.me/operations/devices/ and, for Intune, Jamf, Kandji and Linux step by step,
-https://gantry-docs.eliran.me/operations/device-deployment/
+https://gantry-docs.enterplace.dev/operations/devices/ and, for Intune, Jamf, Kandji and Linux step by step,
+https://gantry-docs.enterplace.dev/operations/device-deployment/
 
 | File | What it is |
 |---|---|
@@ -54,7 +54,7 @@ prints what it would change and the report it would send, and writes nothing.
 ## Watch mode: Claude Code telemetry for Claude Team and Enterprise seats
 
 People on Claude subscriptions cannot be routed through the gateway; watch mode (license feature `watch`) receives
-Claude Code's own telemetry instead. Docs: https://gantry-docs.eliran.me/integrations/claude-team/
+Claude Code's own telemetry instead. Docs: https://gantry-docs.enterplace.dev/integrations/claude-team/
 
 1. `GANTRY_ADMIN_KEY=gantry_... gantry watch setup --gateway https://gantry.example.com --team engineering` creates
    a watch token and prints the settings (`--org <org>` for one organization's token). `claude-code-watch.managed-settings.json` here is the same block with

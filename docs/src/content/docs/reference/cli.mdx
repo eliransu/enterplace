@@ -16,7 +16,7 @@ gantry help
 ## Install
 
 ```bash
-curl -fsSL https://gantry.eliran.me/install.sh | sh
+curl -fsSL https://gantry.enterplace.dev/install.sh | sh
 ```
 
 | Variable | Default | Effect |
@@ -77,6 +77,20 @@ Admin key, shown once (Gantry keeps only its hash). Use it for the command line 
 The link's code is random, kept only as its hash, works once, for 10 minutes, and only from a loopback address (any address with `--container`); its sign-in is recorded as `console_sign_in` with `via: start_link`. The settings for each coding tool are on Start here in the dashboard, built from this gateway's address.
 
 Exit `2` when a provider in `--providers` has no key or is not one `start` knows, or a file cannot be written.
+
+## stop
+
+```bash
+gantry stop [--dir <path>]
+```
+
+Stops the gateway that serves from this folder (or `--dir`), the one `gantry start` or `gantry serve` runs there. It finishes the requests in flight and ends, as Ctrl-C in its terminal does. Gantry finds the process through the lock beside the audit log (`gantry-audit.jsonl.lock`).
+
+```text
+Stopped Gantry (process 97672) serving from /Users/maya/gantry.
+```
+
+With no gateway running from the folder it says so and exits 0. In Docker, use `docker stop gantry`.
 
 ## serve
 

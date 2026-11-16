@@ -2122,9 +2122,10 @@ pub(crate) fn customer_and_tags(
 }
 
 /// Headers a coding agent names its session in, the first found wins: Gantry's own, then Claude Code's and Codex's.
-const SESSION_HEADERS: [&str; 4] = [
+const SESSION_HEADERS: [&str; 5] = [
     "x-gantry-session",
     "x-claude-code-session-id",
+    "session-id",
     "session_id",
     "x-session-id",
 ];
@@ -2352,7 +2353,7 @@ fn subscription_login(
                 return Err(Refusal::new(
                     StatusCode::FORBIDDEN,
                     "person_needed",
-                    "Refused: this request carries a login that is not a Gantry key and does not name its person. With a Claude subscription, set ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <your person token>\" (from the console, Start here, Coding agents, or gantry login). Otherwise send your Gantry key.",
+                    "Refused: this request carries a login that is not a Gantry key and does not name its person. With a Claude subscription, set ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <your person token>\"; with Codex on ChatGPT, add http_headers = { \"x-gantry-user\" = \"<your person token>\" } to the Gantry model provider. Get the token from the console (Start here, Coding agents) or gantry login. Otherwise send your Gantry key.",
                 ));
             }
             (name, value, false)
@@ -2405,7 +2406,7 @@ fn login_fits(provider: &Upstream, login: Option<&Login>, model: &str) -> Result
             StatusCode::FORBIDDEN,
             "login_needed",
             format!(
-                "Refused: model \"{model}\" is served by provider \"{}\", which sends each caller's own Claude login and holds no key of Gantry's, and this request carries only a Gantry key. In Claude Code, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN, keep your normal Claude login, and send your person token with ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <token>\".",
+                "Refused: model \"{model}\" is served by provider \"{}\", which sends each caller's own Claude or ChatGPT login and holds no key of Gantry's, and this request carries only a Gantry key. In Claude Code, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN, keep your normal Claude login, and send your person token with ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <token>\". In Codex, sign in with ChatGPT and set requires_openai_auth = true and http_headers = {{ \"x-gantry-user\" = \"<token>\" }} on the Gantry model provider.",
                 provider.name
             ),
         )),
@@ -2413,7 +2414,7 @@ fn login_fits(provider: &Upstream, login: Option<&Login>, model: &str) -> Result
             StatusCode::FORBIDDEN,
             "login_not_accepted",
             format!(
-                "Refused: this request carries your own Claude login, and model \"{model}\" is served by provider \"{}\", which uses Gantry's provider key. A login is never swapped for Gantry's key. Ask a Gantry admin to serve it from a provider with auth: passthrough, or send your Gantry key in place of the login.",
+                "Refused: this request carries your own Claude or ChatGPT login, and model \"{model}\" is served by provider \"{}\", which uses Gantry's provider key. A login is never swapped for Gantry's key. Ask a Gantry admin to serve it from a provider with auth: passthrough, or send your Gantry key in place of the login.",
                 provider.name
             ),
         )),
@@ -2422,7 +2423,7 @@ fn login_fits(provider: &Upstream, login: Option<&Login>, model: &str) -> Result
                 StatusCode::FORBIDDEN,
                 "person_needed",
                 format!(
-                    "Refused: provider \"{}\" needs each request to name its person, and this one carries no x-gantry-user. Set ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <your person token>\" (from the console, Start here, Coding agents, or gantry login).",
+                    "Refused: provider \"{}\" needs each request to name its person, and this one carries no x-gantry-user. In Claude Code, set ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: <your person token>\"; in Codex, add http_headers = {{ \"x-gantry-user\" = \"<your person token>\" }} to the Gantry model provider. Get the token from the console (Start here, Coding agents) or gantry login.",
                     provider.name
                 ),
             ))
@@ -10158,7 +10159,7 @@ fn start_block(mode: &str, scheme: &str, addr: SocketAddr, loaded: &gantry_core:
     out.push_str(if container {
         "Restart: docker restart gantry. Start over: docker rm -f gantry && docker volume rm gantry-data\n\n"
     } else {
-        "Stop it with Ctrl-C. Start it again with gantry start in this folder.\n\n"
+        "Stop it with Ctrl-C, or gantry stop in this folder. Start it again with gantry start.\n\n"
     });
     print!("{out}");
 }

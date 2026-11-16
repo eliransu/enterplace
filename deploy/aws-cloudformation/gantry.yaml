@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Gantry on ECS Fargate behind an Application Load Balancer, with RDS for PostgreSQL as its store and the provider
   key in Secrets Manager. A first try or a small team: one task, one database, no NAT gateway. The admin key is
-  printed once in the log group named in the outputs. Production: https://gantry-docs.eliran.me/deploy/aws/
+  printed once in the log group named in the outputs. Production: https://gantry-docs.enterplace.dev/deploy/aws/
 
 Metadata:
   AWS::CloudFormation::Interface:

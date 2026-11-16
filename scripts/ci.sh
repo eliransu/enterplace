@@ -70,7 +70,7 @@ python3 scripts/check_deploy.py target/release/gantry
 step "every policy example in README and the docs passes gantry check"
 python3 scripts/check_examples.py target/release/gantry
 step "the website serves the same install.sh as the repository root"
-# gantry.eliran.me/install.sh is site/src/static/install.sh, copied into site/public by site/build.py.
+# gantry.enterplace.dev/install.sh is site/src/static/install.sh, copied into site/public by site/build.py.
 cmp install.sh site/src/static/install.sh
 cmp install.sh site/public/install.sh
 if [ "$bench" = 1 ]; then

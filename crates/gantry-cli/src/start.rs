@@ -111,7 +111,7 @@ fn choose(
 
 fn policy(chosen: &[Chosen], store: bool, env: &dyn Fn(&str) -> Option<String>) -> String {
     let mut text = String::from(
-        "# Written by gantry start. Every key may use every model. Observe mode: nothing is blocked, and what a\n# rule would refuse is recorded as would_refuse. Reference: https://gantry-docs.eliran.me/governance/policy/\nversion: 1\nmode: observe\nproviders:\n  # Answered inside Gantry with a sample text, free: a first request works before any provider key is set.\n  - name: demo\n    preset: demo\n    models: [gantry-demo]\n",
+        "# Written by gantry start. Every key may use every model. Observe mode: nothing is blocked, and what a\n# rule would refuse is recorded as would_refuse. Reference: https://gantry-docs.enterplace.dev/governance/policy/\nversion: 1\nmode: observe\nproviders:\n  # Answered inside Gantry with a sample text, free: a first request works before any provider key is set.\n  - name: demo\n    preset: demo\n    models: [gantry-demo]\n",
     );
     for c in chosen {
         if let Some(lines) =
@@ -186,6 +186,16 @@ pub async fn run(options: &Options<'_>) -> Result<(), String> {
     } else {
         "gantry start"
     };
+    // The port first: a start that wrote an admin key and then could not listen would never show the key, and the
+    // next start would say it was shown.
+    if options.serve {
+        std::net::TcpListener::bind(options.listen).map_err(|err| {
+            format!(
+                "could not listen on {}: {err}. Is the port in use? If it is an earlier Gantry, stop it with gantry stop in its folder (or docker stop gantry), or choose another port with --listen.",
+                options.listen
+            )
+        })?;
+    }
     std::fs::create_dir_all(options.dir).map_err(|e| {
         format!(
             "could not make {}: {e}. Give another folder with --dir.",
@@ -353,4 +363,67 @@ fn serve(
             Err(format!("gantry serve stopped with {status}."))
         }
     }
+}
+
+/// `gantry stop`: ends the gateway that serves from `dir`, found by the lock beside its audit log, which names
+/// the process. Says so when none runs: that is what the caller wanted, so it is no error.
+pub fn stop(dir: &Path) -> Result<String, String> {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let lock = gantry_core::audit::lock_path(&dir.join("gantry-audit.jsonl"));
+    let none = || {
+        format!(
+            "No Gantry is running from {}. Run gantry stop in the folder gantry start ran in, or name it with --dir. In Docker: docker stop gantry.",
+            dir.display()
+        )
+    };
+    let Ok(text) = std::fs::read_to_string(&lock) else {
+        return Ok(none());
+    };
+    let pid = text
+        .lines()
+        .find_map(|l| l.strip_prefix("pid "))
+        .filter(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        .ok_or_else(|| {
+            format!(
+                "{} names no process. Delete it if no Gantry runs here.",
+                lock.display()
+            )
+        })?;
+    // ponytail: ps and kill, not a signal crate (unsafe is forbidden here). Unix only; elsewhere, Ctrl-C.
+    let run = |program: &str, args: &[&str]| {
+        std::process::Command::new(program)
+            .args(args)
+            .output()
+            .map_err(|e| {
+                format!("could not run {program}: {e}. Stop Gantry with Ctrl-C in its terminal.")
+            })
+    };
+    // The lock outlives a Gantry that was killed, and its process number may be another program's by now.
+    let command =
+        String::from_utf8_lossy(&run("ps", &["-p", pid, "-o", "command="])?.stdout).into_owned();
+    if !command.contains("gantry") {
+        return Ok(none());
+    }
+    let killed = run("kill", &["-TERM", pid])?;
+    if !killed.status.success() {
+        return Err(format!(
+            "could not stop process {pid}: {}. It may belong to another user: stop it as that user.",
+            String::from_utf8_lossy(&killed.stderr).trim()
+        ));
+    }
+    for _ in 0..100 {
+        // Gone, or ended and not yet collected by the shell that started it (Z).
+        let state =
+            String::from_utf8_lossy(&run("ps", &["-p", pid, "-o", "stat="])?.stdout).into_owned();
+        if state.trim().is_empty() || state.trim().starts_with('Z') {
+            return Ok(format!(
+                "Stopped Gantry (process {pid}) serving from {}.",
+                dir.display()
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Err(format!(
+        "process {pid} is still finishing its requests after 10 seconds. Wait, or end it with: kill -9 {pid}"
+    ))
 }

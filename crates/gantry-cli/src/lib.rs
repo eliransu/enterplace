@@ -36,6 +36,9 @@ Commands:
         (default /var/lib/gantry), and only with neither writes one as above, on 0.0.0.0:8080 and opening no
         browser. With DATABASE_URL set it writes a policy kept in that Postgres (store: with policy_from: store)
         and puts the admin key there, made only when the store holds none.
+  stop [--dir <path>]
+        Stop the gateway that serves from this folder (or --dir), the one gantry start or gantry serve runs:
+        it finishes the requests in flight and ends. In Docker: docker stop gantry.
   check <policy> [--keys <file>]
         Check a policy file and its keys file. Prints every problem with its file and line.
   explain <policy> --key <hash prefix or name> --model <model> [--customer <name>] [--tags <a,b>] [--keys <file>]
@@ -648,6 +651,18 @@ pub async fn run(args: &[String]) -> ExitCode {
                 _ => None,
             }
         }
+        ["stop", rest @ ..] => match options(rest, &["--dir"]) {
+            Some((positional, named)) if positional.is_empty() => Some(
+                start::stop(Path::new(named.get("--dir").copied().unwrap_or("."))).map_or_else(
+                    fail,
+                    |said| {
+                        println!("{said}");
+                        ExitCode::SUCCESS
+                    },
+                ),
+            ),
+            _ => None,
+        },
         ["providers"] => {
             print!("{}", gantry_core::catalog::table());
             Some(ExitCode::SUCCESS)
@@ -724,6 +739,7 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["start", ..] => Some(
                 "gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--no-open] [--force] [--no-serve] [--container]",
             ),
+            ["stop", ..] => Some("gantry stop [--dir <path>]"),
             ["init", ..] => Some("gantry init [--provider <id>] [--models <a,b>] [--out <policy file>]"),
             ["login", ..] => Some("gantry login <gantry url> [--no-browser]"),
             ["logout", ..] => Some("gantry logout"),
@@ -1108,7 +1124,7 @@ fn person_token_new(
     }
     let url = url.unwrap_or("http://127.0.0.1:8080").trim_end_matches('/');
     println!(
-        "Person token for {name}, team {team}. It names {name} to Gantry and reaches no model on its own; it is shown once:\n\n  {key}\n\nClaude Code keeps its normal Claude login (Pro, Max, Team or Enterprise). Add these two lines to the shell profile, with ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: {key}\"\n\nThe gateway needs a provider with auth: passthrough (gantry start writes one). Docs: https://gantry-docs.eliran.me/integrations/claude-code/\n",
+        "Person token for {name}, team {team}. It names {name} to Gantry and reaches no model on its own; it is shown once:\n\n  {key}\n\nClaude Code keeps its normal Claude login (Pro, Max, Team or Enterprise). Add these two lines to the shell profile, with ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: {key}\"\n\nThe gateway needs a provider with auth: passthrough (gantry start writes one). Docs: https://gantry-docs.enterplace.dev/integrations/claude-code/\n",
         key = issued.key
     );
     Ok(())
@@ -1134,7 +1150,7 @@ fn key_new(
     );
     let url = url.unwrap_or("http://127.0.0.1:8080").trim_end_matches('/');
     println!(
-        "To hand it over, send these lines through your secret manager, never in chat. Claude Code and the OpenAI SDKs read them:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_API_KEY={key}\nexport OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\n\nFor Codex, put the key in GANTRY_KEY and see https://gantry-docs.eliran.me/integrations/codex/ for its provider settings.\n",
+        "To hand it over, send these lines through your secret manager, never in chat. Claude Code and the OpenAI SDKs read them:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_API_KEY={key}\nexport OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\n\nFor Codex, put the key in GANTRY_KEY and see https://gantry-docs.enterplace.dev/integrations/codex/ for its provider settings.\n",
         key = issued.key
     );
     if gantry_core::store::attached(keys).is_some() {
@@ -1370,7 +1386,7 @@ async fn import_litellm(
             println!("  - {line}");
         }
     }
-    println!("See https://gantry-docs.eliran.me/migrate/from-litellm/. Checking it now:");
+    println!("See https://gantry-docs.enterplace.dev/migrate/from-litellm/. Checking it now:");
     Ok(check(out, reissued.is_some().then_some(keys_out)))
 }
 
@@ -2058,7 +2074,7 @@ async fn login(url: &str, no_browser: bool) -> Result<(), String> {
     let env = path.with_file_name("env");
     save_credentials(&env, &env_lines(&url, &got.key, got.subscriptions))?;
     println!(
-        "Claude Code is pointed at Gantry: ANTHROPIC_BASE_URL and ANTHROPIC_CUSTOM_HEADERS are in the env block of {}, and its other settings are unchanged. Restart Claude Code to pick them up.\n\nFor the OpenAI SDKs and Codex (which reads GANTRY_KEY, see https://gantry-docs.eliran.me/integrations/codex/), and as a fallback for Claude Code, the same variables are in {env}, which the next `gantry login` rewrites. To use them, add this line to your shell profile, and run it now in this shell:\n\n  . {env}\n\nThe key works within 2 seconds. Every request with it is recorded under {}.",
+        "Claude Code is pointed at Gantry: ANTHROPIC_BASE_URL and ANTHROPIC_CUSTOM_HEADERS are in the env block of {}, and its other settings are unchanged. Restart Claude Code to pick them up.\n\nFor the OpenAI SDKs and Codex (which reads GANTRY_KEY, see https://gantry-docs.enterplace.dev/integrations/codex/), and as a fallback for Claude Code, the same variables are in {env}, which the next `gantry login` rewrites. To use them, add this line to your shell profile, and run it now in this shell:\n\n  . {env}\n\nThe key works within 2 seconds. Every request with it is recorded under {}.",
         settings.display(),
         got.name,
         env = env.display()
@@ -2795,7 +2811,7 @@ fn init(provider: &str, models: Option<&str>, out: &Path) -> ExitCode {
         ""
     };
     let policy = format!(
-        "# Written by gantry init. Reference: https://gantry-docs.eliran.me/governance/policy/\nversion: 1\nproviders:\n  - name: {id}\n    preset: {id}\n{private}    key_env: {variable}\n    models: [{list}]\nrules:\n  - name: everyone\n    principals: {{ any: true }}\n    models: [{list}]\n",
+        "# Written by gantry init. Reference: https://gantry-docs.enterplace.dev/governance/policy/\nversion: 1\nproviders:\n  - name: {id}\n    preset: {id}\n{private}    key_env: {variable}\n    models: [{list}]\nrules:\n  - name: everyone\n    principals: {{ any: true }}\n    models: [{list}]\n",
         id = preset.id,
         list = models.join(", ")
     );
