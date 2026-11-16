@@ -75,7 +75,7 @@ The link is the sign-in: it works once, only from a browser on the same machine,
 
 **The demo model.** The policy always has a provider named `demo` with the model `gantry-demo`. Gantry answers it itself with a short sample text (chat completions, responses and messages, streaming too), sends nothing anywhere and prices it at zero, so the first request works before any key is set. Its requests are recorded under the provider `demo`.
 
-**Restart and start over.** Stop it with Ctrl-C. `gantry start` in the same folder serves the same policy again and prints a new sign-in link (no new admin key). To start over, delete `gantry.policy.yaml`, `gantry.keys.yaml`, `gantry-credentials.json`, `gantry-master.key` and `gantry-audit.jsonl`, or run `gantry start --force` (which keeps the master key).
+**Restart and start over.** Stop it with Ctrl-C, or with `gantry stop` in the same folder from another terminal. `gantry start` in the same folder serves the same policy again and prints a new sign-in link (no new admin key). To start over, delete `gantry.policy.yaml`, `gantry.keys.yaml`, `gantry-credentials.json`, `gantry-master.key` and `gantry-audit.jsonl`, or run `gantry start --force` (which keeps the master key).
 
 ## The install script
 

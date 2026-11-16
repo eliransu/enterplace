@@ -21,6 +21,10 @@ claude
 
 Claude Code keeps your Claude login. Leave `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset. Send a prompt, and **Requests** in the console shows it, with the person `unknown` until you add a person token ([step 2 below](#claude-subscriptions)). No Gantry yet? See the [Quickstart](/getting-started/quickstart/).
 
+<Aside type="caution" title="Not in the Claude desktop app">
+This works in Claude Code in a terminal and in the VS Code extension (`claudeCode.environmentVariables`). The Code tab of the Claude desktop app sets `ANTHROPIC_BASE_URL` to `https://api.anthropic.com` itself, over your shell profile and `settings.json`, so its sessions never reach Gantry. Run `echo $ANTHROPIC_BASE_URL` inside a session to check. For the desktop app, use its [third-party inference setup](/integrations/claude-desktop/) with a Gantry key.
+</Aside>
+
 ## Three ways
 
 Three ways to bring Claude Code under Gantry, in order of preference:

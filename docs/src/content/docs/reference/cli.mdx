@@ -78,6 +78,20 @@ The link's code is random, kept only as its hash, works once, for 10 minutes, an
 
 Exit `2` when a provider in `--providers` has no key or is not one `start` knows, or a file cannot be written.
 
+## stop
+
+```bash
+gantry stop [--dir <path>]
+```
+
+Stops the gateway that serves from this folder (or `--dir`), the one `gantry start` or `gantry serve` runs there. It finishes the requests in flight and ends, as Ctrl-C in its terminal does. Gantry finds the process through the lock beside the audit log (`gantry-audit.jsonl.lock`).
+
+```text
+Stopped Gantry (process 97672) serving from /Users/maya/gantry.
+```
+
+With no gateway running from the folder it says so and exits 0. In Docker, use `docker stop gantry`.
+
 ## serve
 
 Runs the gateway: every request is identified, checked against the policy and recorded.

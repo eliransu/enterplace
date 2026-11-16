@@ -127,3 +127,48 @@ document.addEventListener("DOMContentLoaded", function () {
   document.addEventListener("visibilitychange", function () { if (!document.hidden && !timer) tick(); });
   timer = setTimeout(tick, 2000);
 });
+
+// Requests, Analytics, Audit log and Spend show records as they arrive. Every 2 seconds, while the tab is visible,
+// the page asks whether the audit log changed (/console/live.json) and, if it did, fetches itself and swaps its
+// content in place: no reload, the scroll stays, and rows that were not there before are marked for a moment.
+// Nothing is swapped while a field has the focus or a record's sheet is open, so nobody loses what they are doing.
+document.addEventListener("DOMContentLoaded", function () {
+  var main = document.getElementById("main");
+  if (!main || !window.fetch || !window.DOMParser) return;
+  if (!/^\/console\/(requests|analytics|audit|spend)\/?$/.test(location.pathname)) return;
+  var seen = null;
+  var timer = null;
+  function busy() {
+    var at = document.activeElement;
+    return /[?&]record=/.test(location.search) || (at && main.contains(at) && /^(INPUT|SELECT|TEXTAREA)$/.test(at.tagName));
+  }
+  function redraw() {
+    return fetch(location.href, { credentials: "same-origin", cache: "no-store" })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (html) {
+        var next = html && new DOMParser().parseFromString(html, "text/html").getElementById("main");
+        if (!next) return;
+        var before = {};
+        main.querySelectorAll("tbody tr").forEach(function (row) { before[row.textContent] = true; });
+        main.innerHTML = next.innerHTML;
+        main.querySelectorAll("tbody tr").forEach(function (row) {
+          if (!before[row.textContent]) row.classList.add("g-row--new");
+        });
+      });
+  }
+  function again() { timer = setTimeout(tick, 2000); }
+  function tick() {
+    if (document.hidden) { timer = null; return; }
+    fetch("/console/live.json", { credentials: "same-origin", cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (state) {
+        if (!state || state.signature === seen || busy()) { if (state && seen === null) seen = state.signature; return; }
+        var first = seen === null;
+        seen = state.signature;
+        if (!first) return redraw();
+      })
+      .then(again, again);
+  }
+  document.addEventListener("visibilitychange", function () { if (!document.hidden && !timer) tick(); });
+  tick();
+});

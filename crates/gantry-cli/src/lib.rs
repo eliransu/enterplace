@@ -36,6 +36,9 @@ Commands:
         (default /var/lib/gantry), and only with neither writes one as above, on 0.0.0.0:8080 and opening no
         browser. With DATABASE_URL set it writes a policy kept in that Postgres (store: with policy_from: store)
         and puts the admin key there, made only when the store holds none.
+  stop [--dir <path>]
+        Stop the gateway that serves from this folder (or --dir), the one gantry start or gantry serve runs:
+        it finishes the requests in flight and ends. In Docker: docker stop gantry.
   check <policy> [--keys <file>]
         Check a policy file and its keys file. Prints every problem with its file and line.
   explain <policy> --key <hash prefix or name> --model <model> [--customer <name>] [--tags <a,b>] [--keys <file>]
@@ -648,6 +651,18 @@ pub async fn run(args: &[String]) -> ExitCode {
                 _ => None,
             }
         }
+        ["stop", rest @ ..] => match options(rest, &["--dir"]) {
+            Some((positional, named)) if positional.is_empty() => Some(
+                start::stop(Path::new(named.get("--dir").copied().unwrap_or("."))).map_or_else(
+                    fail,
+                    |said| {
+                        println!("{said}");
+                        ExitCode::SUCCESS
+                    },
+                ),
+            ),
+            _ => None,
+        },
         ["providers"] => {
             print!("{}", gantry_core::catalog::table());
             Some(ExitCode::SUCCESS)
@@ -724,6 +739,7 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["start", ..] => Some(
                 "gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--no-open] [--force] [--no-serve] [--container]",
             ),
+            ["stop", ..] => Some("gantry stop [--dir <path>]"),
             ["init", ..] => Some("gantry init [--provider <id>] [--models <a,b>] [--out <policy file>]"),
             ["login", ..] => Some("gantry login <gantry url> [--no-browser]"),
             ["logout", ..] => Some("gantry logout"),

@@ -115,3 +115,8 @@ a.g-tab{display:inline-flex;align-items:center;text-decoration:none}
   .g-focus{padding:var(--space-4) var(--space-4) var(--space-10);gap:var(--space-6)}
 }
 @media (prefers-reduced-motion:reduce){.g-check__pulse{animation:none}}
+.g-row--new{animation:g-row-new calc(var(--dur-slow)*3) var(--ease-standard)}
+.g-row--new td:first-child{animation:g-row-new-edge calc(var(--dur-slow)*3) var(--ease-standard)}
+@keyframes g-row-new{from{background:var(--line)}to{background:transparent}}
+@keyframes g-row-new-edge{from{box-shadow:inset var(--space-1) 0 0 var(--lime)}to{box-shadow:inset var(--space-1) 0 0 transparent}}
+@media (prefers-reduced-motion:reduce){.g-row--new,.g-row--new td:first-child{animation:none}}

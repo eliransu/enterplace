@@ -29,6 +29,17 @@ one repository. How a release is made: RELEASING.md.
   `gantry start` prints it under. With only `GANTRY_ADMIN_KEY` read, the first `gantry kill` after a first run failed.
 - The console's Codex settings and its curl name a model this install serves (the demo model on a fresh install).
   Codex left to its default model, and the curl's `gpt-5-mini`, were refused with `unknown_model`.
+- `gantry stop` stops the gateway that serves from the folder (or `--dir`), so a gateway started in another
+  terminal, or left running, no longer needs its process number.
+- `gantry start` checks the port before it writes anything. On a taken port it used to write a policy and an admin
+  key, fail to listen without showing the key, and leave the next start saying the key "was shown".
+- The console's Copy for your agent prompt for Claude Code holds no placeholder. With no person token made it is one
+  line (`ANTHROPIC_BASE_URL`) and tells the agent that no token is needed; an agent given `<person token>` stopped
+  and asked three questions. The step's own lines show the header line only once a token exists.
+- The Requests, Analytics, Audit log and Spend pages show records as they arrive: they redraw in place within 2
+  seconds, with no reload, and mark the rows that are new.
+- Docs: the Claude Code guide says that the Claude desktop app's Code tab sets `ANTHROPIC_BASE_URL` itself, so
+  subscription passthrough works from a terminal and VS Code and not from that app.
 - Docs: the quickstart is the first page of the sidebar and shows a first request with its answer; every tool guide
   says how to get a gateway and a key in one line and that `gantry-demo` works with no provider key; the pages that
   said Claude Team and Enterprise seats cannot go through a gateway now describe subscription passthrough; guides

@@ -10158,7 +10158,7 @@ fn start_block(mode: &str, scheme: &str, addr: SocketAddr, loaded: &gantry_core:
     out.push_str(if container {
         "Restart: docker restart gantry. Start over: docker rm -f gantry && docker volume rm gantry-data\n\n"
     } else {
-        "Stop it with Ctrl-C. Start it again with gantry start in this folder.\n\n"
+        "Stop it with Ctrl-C, or gantry stop in this folder. Start it again with gantry start.\n\n"
     });
     print!("{out}");
 }

@@ -263,6 +263,8 @@ pub(crate) struct Facts {
     pub credentials_on: bool,
     /// A provider sends Claude Code's own subscription logins on (`auth: passthrough`).
     pub passthrough: bool,
+    /// That provider takes a request with no person token (`identity: optional`), recorded as the person unknown.
+    pub unnamed_ok: bool,
 }
 
 impl Facts {
@@ -355,6 +357,7 @@ pub(crate) async fn facts(console: &Console, admin: &Admin, base: String) -> Fac
             if p.passthrough {
                 // Not a connected model: it holds no key, and a first request with a Gantry key cannot use it.
                 f.passthrough = true;
+                f.unnamed_ok |= p.identity_optional;
             } else if p.kind == config::Kind::Demo {
                 f.demo_in_policy = true;
             } else {
@@ -1301,23 +1304,66 @@ fn person_token(c: &Ctx<'_>, owner: Option<&KeyEntry>) -> String {
 }
 
 /// The lines that point Claude Code at Gantry on a Claude subscription: the shell's, or managed settings for MDM.
-fn subscription_lines(base: &str, token: &str, mdm: bool) -> Vec<String> {
+/// Without a token there is no header line: a placeholder there is what a person, or their agent, pastes as is.
+fn subscription_lines(base: &str, token: Option<&str>, mdm: bool) -> Vec<String> {
     if mdm {
-        vec![
-            "{".into(),
-            "  \"env\": {".into(),
-            format!("    \"ANTHROPIC_BASE_URL\": \"{base}\","),
-            format!("    \"ANTHROPIC_CUSTOM_HEADERS\": \"x-gantry-user: {token}\""),
-            "  }".into(),
-            "}".into(),
-        ]
+        let mut lines = vec!["{".to_string(), "  \"env\": {".into()];
+        match token {
+            Some(token) => {
+                lines.push(format!("    \"ANTHROPIC_BASE_URL\": \"{base}\","));
+                lines.push(format!(
+                    "    \"ANTHROPIC_CUSTOM_HEADERS\": \"x-gantry-user: {token}\""
+                ));
+            }
+            None => lines.push(format!("    \"ANTHROPIC_BASE_URL\": \"{base}\"")),
+        }
+        lines.extend(["  }".to_string(), "}".into()]);
+        lines
     } else {
-        vec![
-            format!("export ANTHROPIC_BASE_URL={base}"),
-            format!("export ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: {token}\""),
-            "claude   # keep using your normal Claude login".into(),
-        ]
+        let mut lines = vec![format!("export ANTHROPIC_BASE_URL={base}")];
+        if let Some(token) = token {
+            lines.push(format!(
+                "export ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: {token}\""
+            ));
+        }
+        lines.push("claude   # keep using your normal Claude login".into());
+        lines
     }
+}
+
+/// The prompt that has a coding agent point Claude Code at Gantry. It holds every value the agent needs and
+/// nothing to fill in: with no token, one line when the provider takes unnamed requests, else the one thing to
+/// get from the person, said first.
+fn subscription_prompt(base: &str, token: Option<&str>, unnamed_ok: bool) -> String {
+    let lines = subscription_lines(base, token, false);
+    let lines = lines[..lines.len() - 1].join("\n");
+    let mut todo = Vec::new();
+    match token {
+        Some(_) => todo.push("1. Add these two lines to my shell profile (~/.zshrc or ~/.bashrc), replacing any earlier ANTHROPIC_BASE_URL or ANTHROPIC_CUSTOM_HEADERS lines:".to_string()),
+        None if unnamed_ok => todo.push("1. Add this one line to my shell profile (~/.zshrc or ~/.bashrc), replacing any earlier ANTHROPIC_BASE_URL line. Do not ask me for a token and do not make one: none is needed, and my requests show as the person unknown until I add a token on the page myself.".to_string()),
+        None => {
+            todo.push(format!("0. First ask me for my person token: I get it by pressing Make person token on {base}/console/start. It starts with gantry_u_."));
+            todo.push("1. Add this line to my shell profile (~/.zshrc or ~/.bashrc), and a second one, export ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: \" followed by that token inside the quotes:".to_string());
+        }
+    }
+    todo.push(lines);
+    todo.push("2. If ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is set in my profile, ~/.claude/settings.json or .env, remove it: Claude Code must keep using my Claude subscription login. Do not run claude /logout.".into());
+    todo.push("3. Open a new shell and run `claude -p \"say hello\"`.".into());
+    let mut values = vec![("ANTHROPIC_BASE_URL", base.to_string())];
+    if let Some(token) = token {
+        values.push((
+            "ANTHROPIC_CUSTOM_HEADERS",
+            format!("x-gantry-user: {token}"),
+        ));
+    }
+    prompt(
+        base,
+        "Route my Claude Code through the company's Gantry gateway while keeping my own Claude subscription login",
+        &values,
+        &todo,
+        "The prompt answers. If Gantry refuses it, the error names the cause and the fix.",
+        "/integrations/claude-code/",
+    )
 }
 
 /// The form that makes a person token, or what to do without the right to.
@@ -1401,7 +1447,12 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     ));
     let first = f.newest(false).or_else(|| f.people.last());
     let who = first.map_or("your first person".to_string(), |k| k.name.clone());
-    let token = person_token(c, first);
+    // A token made on this page, whole. Else a placeholder naming whose token goes there, but only where a name is
+    // needed or people already hold tokens: a first run shows one line.
+    let made = c.made.filter(|m| !m.start).map(|m| m.key.clone());
+    let token = made
+        .clone()
+        .or_else(|| (!f.unnamed_ok || first.is_some()).then(|| person_token(c, first)));
     let mdm = c.setup == "mdm";
     let seen = f.subscribed();
     let first_seen = seen.last();
@@ -1409,12 +1460,12 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         "Point Claude Code at Gantry",
         !seen.is_empty(),
         format!(
-            r#"<p class="t-body">Make a free person token and paste these lines where Claude Code runs. Keep your normal Claude login: there is no API key.</p>{}{}<p class="t-small g-check__muted">{}</p>{}"#,
+            r#"<p class="t-body">Paste this where Claude Code runs. Keep your normal Claude login: there is no API key. A free person token puts a name on the requests.</p>{}{}<p class="t-small g-check__muted">{}</p>{}"#,
             token_form(c, ("sarah.miller", "platform")),
             block(
                 "lines-subscription",
                 &tabs_by("setup", "How to set it", 2, &[("shell", "Shell"), ("mdm", "Managed settings (MDM)")], if mdm { "mdm" } else { "shell" }),
-                &subscription_lines(base, &token, mdm)
+                &subscription_lines(base, token.as_deref(), mdm)
             ),
             // One line under the lines shown: the paths only where the managed settings are, not under the shell lines.
             if mdm {
@@ -1441,23 +1492,7 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             r.cost_usd.map_or_else(|| "cost not known".into(), |c| format!("about ${} at API prices (an estimate)", insights::money(c)))
         )
     }))
-    .agent(prompt(
-        base,
-        "Route my Claude Code through the company's Gantry gateway while keeping my own Claude subscription login",
-        &[
-            ("ANTHROPIC_BASE_URL", base.to_string()),
-            ("ANTHROPIC_CUSTOM_HEADERS", format!("x-gantry-user: {token}")),
-        ],
-        &[
-            "1. Add these two lines to my shell profile (~/.zshrc or ~/.bashrc), replacing any earlier ANTHROPIC_BASE_URL or ANTHROPIC_CUSTOM_HEADERS lines:".into(),
-            subscription_lines(base, &token, false)[..2].join("\n"),
-            "   Or, if I use Claude Code's settings file instead, set the same two keys under \"env\" in ~/.claude/settings.json.".into(),
-            "2. Make sure ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN are not set anywhere (profile, settings.json, .env): Claude Code must keep using my Claude subscription login. Do not run claude /logout.".into(),
-            "3. Open a new shell and run `claude -p \"say hello\"`.".into(),
-        ],
-        "The prompt answers. If Gantry refuses it, the error names the cause and the fix.",
-        "/integrations/claude-code/",
-    ));
+    .agent(subscription_prompt(base, made.as_deref(), f.unnamed_ok));
     let subscribers = f.subscribers();
     let second = subscribers.get(1).cloned();
     let s3 = Step::new(
@@ -3416,6 +3451,42 @@ mod tests {
     use super::*;
 
     const POLICY: &str = "version: 1\nmode: observe\nproviders:\n  - name: openai\n    preset: openai\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n";
+
+    #[test]
+    fn the_claude_code_prompt_never_hands_an_agent_a_placeholder() {
+        // Found with a real agent: given `x-gantry-user: <person token>` it stopped and asked three questions.
+        let base = "http://127.0.0.1:8080";
+        // No token made, and the provider takes unnamed requests: one line, nothing to ask.
+        let one = subscription_prompt(base, None, true);
+        assert!(
+            one.contains("export ANTHROPIC_BASE_URL=http://127.0.0.1:8080"),
+            "{one}"
+        );
+        assert!(
+            !one.contains('<') && !one.contains("ANTHROPIC_CUSTOM_HEADERS="),
+            "{one}"
+        );
+        assert!(one.contains("Do not ask me for a token"), "{one}");
+        // A token made on the page goes in whole.
+        let two = subscription_prompt(base, Some("gantry_u_abc"), true);
+        assert!(
+            two.contains("export ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: gantry_u_abc\""),
+            "{two}"
+        );
+        assert!(!two.contains('<'), "{two}");
+        // A provider that needs a name, and no token yet: the one thing to get from me is said first.
+        let ask = subscription_prompt(base, None, false);
+        assert!(
+            ask.contains("Make person token") && !ask.contains("<person token"),
+            "{ask}"
+        );
+        // The lines on the page: one line until a token exists.
+        assert_eq!(subscription_lines(base, None, false).len(), 2);
+        assert_eq!(
+            subscription_lines(base, Some("gantry_u_abc"), false).len(),
+            3
+        );
+    }
 
     #[test]
     fn the_lines_for_a_tool_name_a_model_this_install_serves() {

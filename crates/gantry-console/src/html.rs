@@ -354,6 +354,14 @@ pub fn shell(
     overlay: &str,
     menu: bool,
 ) -> String {
+    // A page served by a nested router knows its path without the prefix (`/start`): the Menu link of Start here
+    // went to /start?menu=1, which is no console page, and a phone got a JSON refusal.
+    let here = if here.starts_with("/console") {
+        here.to_string()
+    } else {
+        format!("/console{here}")
+    };
+    let here = here.as_str();
     let sheet = if menu {
         format!(
             r#"<div class="g-scrim g-menu-sheet">
@@ -448,6 +456,21 @@ pub fn field(f: &Field<'_>) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_menu_link_of_a_nested_page_stays_in_the_console() {
+        let page = super::shell("/console/start", "admin, admin", "/start", "", "", false);
+        assert!(page.contains(r#"href="/console/start?menu=1""#), "{page}");
+        let page = super::shell(
+            "/console/audit",
+            "admin, admin",
+            "/console/audit",
+            "",
+            "",
+            false,
+        );
+        assert!(page.contains(r#"href="/console/audit?menu=1""#), "{page}");
+    }
+
     use super::*;
 
     #[test]
