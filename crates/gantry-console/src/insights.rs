@@ -206,70 +206,61 @@ pub(crate) async fn requests_page(
         icon("search"),
         esc(&query.id)
     );
+    // A labeled field, as the design system's Field draws one, sized so five share a row on a desktop and two on a phone.
     let field = |name: &str, label: &str, value: &str, kind: &str| {
         format!(
-            r#"<input class="g-input t-body" style="flex: 1 1 calc(var(--space-24) * 2); width: auto; min-width: 0" type="{kind}" name="{name}" value="{}" aria-label="{label}" placeholder="{label}">"#,
+            r#"<div class="g-field" style="flex: 1 1 calc(var(--space-24) + var(--space-10)); min-width: 0"><label class="g-field__label t-tag g-caps" for="f-{name}">{label}</label><input class="g-input t-body" style="min-width: 0" id="f-{name}" type="{kind}" name="{name}" value="{}"></div>"#,
             esc(value)
         )
     };
-    let mut filters = String::new();
+    let label = |name: &str| {
+        query
+            .labels
+            .iter()
+            .find(|(k, _)| k == name)
+            .map_or("", |(_, v)| v.as_str())
+    };
+    // A date picker only holds a day: a link that carries a full time keeps it in a text field instead.
+    let day = |v: &str| if v.len() > 10 { "text" } else { "date" };
+    let up_front = ["person", "team", "model"];
+    let mut front: String = up_front
+        .iter()
+        .filter_map(|name| DIMENSIONS.iter().find(|d| d.name == *name))
+        .map(|d| field(d.name, d.label, label(d.name), "text"))
+        .collect();
+    front.push_str(&field("from", "From", &query.from, day(&query.from)));
+    front.push_str(&field("to", "To", &query.to, day(&query.to)));
+    let mut folded = String::new();
     // The session an events guardrail gave a request is filtered by like a dimension; its turn is read in the row.
     for d in DIMENSIONS
         .iter()
+        .filter(|d| !up_front.contains(&d.name))
         .chain(LINKS.iter().filter(|d| d.name == "session"))
     {
-        let value = query
-            .labels
-            .iter()
-            .find(|(k, _)| k == d.name)
-            .map_or("", |(_, v)| v.as_str());
-        filters.push_str(&field(d.name, d.label, value, "text"));
+        folded.push_str(&field(d.name, d.label, label(d.name), "text"));
     }
     let number = |v: Option<f64>| v.map(|v| v.to_string()).unwrap_or_default();
     let whole = |v: Option<u64>| v.map(|v| v.to_string()).unwrap_or_default();
-    for (name, label, value, kind) in [
-        ("code", "Refusal code", query.code.clone(), "text"),
-        (
-            "finding",
-            "Guardrail finding",
-            query.finding.clone(),
-            "text",
-        ),
-        ("from", "From (UTC date)", query.from.clone(), "text"),
-        ("to", "To (UTC date)", query.to.clone(), "text"),
-        (
-            "min_cost",
-            "Cost at least, USD",
-            number(query.min_cost),
-            "text",
-        ),
-        (
-            "max_cost",
-            "Cost at most, USD",
-            number(query.max_cost),
-            "text",
-        ),
-        (
-            "min_ms",
-            "Latency at least, ms",
-            whole(query.min_ms),
-            "text",
-        ),
-        ("max_ms", "Latency at most, ms", whole(query.max_ms), "text"),
+    for (name, label, value) in [
+        ("code", "Refusal code", query.code.clone()),
+        ("finding", "Guardrail finding", query.finding.clone()),
+        ("min_cost", "Cost at least, USD", number(query.min_cost)),
+        ("max_cost", "Cost at most, USD", number(query.max_cost)),
+        ("min_ms", "Latency at least, ms", whole(query.min_ms)),
+        ("max_ms", "Latency at most, ms", whole(query.max_ms)),
     ] {
-        filters.push_str(&field(name, label, &value, kind));
+        folded.push_str(&field(name, label, &value, "text"));
     }
-    // Folded away until asked for, and open while any of them is set, so the list stays first on a phone.
-    let set = query
-        .pairs()
-        .iter()
-        .any(|(k, _)| k != "outcome" && k != "id");
+    // Folded until asked for, and open while one of its own filters is set, so a set filter is never hidden.
+    let set = query.pairs().iter().any(|(k, _)| {
+        !matches!(k.as_str(), "outcome" | "id" | "from" | "to") && !up_front.contains(&k.as_str())
+    });
     let filter_form = format!(
-        r#"<details{}><summary class="t-body">Filters: person, team, key, model, provider, tag, agent, session, code, finding, time, cost, latency</summary><form class="g-toolbar" method="get" action="/console/requests"><input type="hidden" name="outcome" value="{}">{filters}{}{}</form></details>"#,
-        if set { " open" } else { "" },
+        r#"<form class="g-stack" method="get" action="/console/requests"><input type="hidden" name="outcome" value="{}"><div class="g-toolbar" style="align-items: flex-end">{front}{}{}</div><details{} class="g-stack" style="gap: var(--space-3)"><summary class="t-small g-link">More filters</summary><div class="g-toolbar" style="align-items: flex-end">{folded}</div></details></form>"#,
         esc(&query.outcome),
         button("Filter", "quiet", "submit", ""),
-        link("Clear", "quiet", "/console/requests", false)
+        link("Clear", "quiet", "/console/requests", false),
+        if set { " open" } else { "" },
     );
 
     let mut body = String::new();
@@ -395,16 +386,94 @@ pub(crate) async fn requests_page(
     )
 }
 
+/// The request in words, for the sheet's title: who, which model, and what Gantry did.
+fn row_title(row: &Row) -> String {
+    let or = |v: &str, none: &str| {
+        if v.is_empty() {
+            none.to_string()
+        } else {
+            v.to_string()
+        }
+    };
+    let outcome = match row.outcome() {
+        Outcome::Allowed => "allowed".to_string(),
+        Outcome::Refused if row.code == "guardrail_blocked" => "blocked".to_string(),
+        Outcome::Refused if !row.code.is_empty() => format!("refused ({})", row.code),
+        Outcome::Refused => "refused".to_string(),
+        Outcome::Error => "error".to_string(),
+    };
+    format!(
+        "{}, {}, {outcome}",
+        or(row.label("person"), "unknown person"),
+        or(row.label("model"), "no model")
+    )
+}
+
+/// One closed section of the sheet: what a reader opens only when the six facts do not answer.
+fn folded(title: &str, inner: &str) -> String {
+    format!(
+        r#"<details class="g-stack" style="gap: var(--space-3)"><summary class="t-small g-link">{title}</summary>{inner}</details>"#
+    )
+}
+
 fn row_sheet(row: &Row, close: &str) -> String {
-    let labels: Vec<(&str, String)> = DIMENSIONS
+    let tokens = match (row.input_tokens, row.output_tokens) {
+        (None, None) => "-".to_string(),
+        (i, o) => format!(
+            "{} ({} in, {} out)",
+            count(i.unwrap_or(0) + o.unwrap_or(0)),
+            i.map_or("-".into(), count),
+            o.map_or("-".into(), count)
+        ),
+    };
+    let or_dash = |v: &str| {
+        if v.is_empty() {
+            "-".to_string()
+        } else {
+            esc(v)
+        }
+    };
+    let six = facts(&[
+        ("Time", esc(&time_full(&row.time))),
+        ("Person", or_dash(row.label("person"))),
+        ("Model", or_dash(row.label("model"))),
+        ("Tokens", tokens),
+        (
+            if row.estimate { "Cost, est." } else { "Cost" },
+            cost_text(row),
+        ),
+        ("Rule", or_dash(&row.rule)),
+    ]);
+    // Everything else the records hold, minus what the six facts and the title already say.
+    let mut more: Vec<(&str, String)> = DIMENSIONS
         .iter()
         .chain(LINKS)
+        .filter(|d| d.name != "person" && d.name != "model")
         .filter_map(|d| {
             row.labels
                 .get(d.name)
                 .map(|v| (d.label, esc(&v.join(", "))))
         })
         .collect();
+    more.push(("Outcome", outcome_tag(row)));
+    more.push(("Latency", ms(row.latency_ms)));
+    more.push(("Route", esc(&row.path)));
+    if !row.findings.is_empty() {
+        more.push(("Findings", esc(&row.findings.join(", "))));
+    }
+    if let Some(status) = row.status {
+        more.push(("Provider status", status.to_string()));
+    }
+    more.push(("Charged", money(row.charged_usd)));
+    if !row.stages.is_empty() {
+        // Where the time went inside Gantry, in the order the request passed each stage.
+        let stages: Vec<String> = row
+            .stages
+            .iter()
+            .map(|(name, took)| format!("{} {took:.2} ms", name.replace('_', " ")))
+            .collect();
+        more.push(("Time by stage", esc(&stages.join(", "))));
+    }
     let proof = match (row.checks_out(), row.linked) {
         (true, true) => {
             "The decision record hashes to the hash the chain holds for it, and follows the record before it."
@@ -416,61 +485,38 @@ fn row_sheet(row: &Row, close: &str) -> String {
             "The decision record does not hash to the hash it carries: it was changed after it was written. Run gantry audit verify on that gateway."
         }
     };
-    let mut pairs: Vec<(&str, String)> = vec![
-        ("Decision", esc(&row.id)),
-        ("Time", esc(&time_full(&row.time))),
-        ("Outcome", outcome_tag(row)),
-        ("Rule", esc(&row.rule)),
-        ("Route", esc(&row.path)),
-    ];
-    pairs.extend(labels);
-    pairs.extend([
-        ("Findings", esc(&row.findings.join(", "))),
-        (
-            "Provider status",
-            row.status
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "-".into()),
-        ),
-        (
-            "Tokens in, out",
-            format!(
-                "{}, {}",
-                row.input_tokens.map_or("-".into(), count),
-                row.output_tokens.map_or("-".into(), count)
+    let chain = esc(&format!(
+        "{} record {}",
+        if row.replica.is_empty() {
+            "this gateway,"
+        } else {
+            row.replica.as_str()
+        },
+        row.n
+    ));
+    let proof = folded(
+        "Proof",
+        &format!(
+            r#"{}<p class="t-small g-muted" style="margin: 0">{proof}</p>{}"#,
+            facts(&[
+                ("Decision", esc(&row.id)),
+                ("Chain", chain),
+                ("Hash", esc(&row.hash)),
+            ]),
+            link(
+                "Open its audit record",
+                "quiet",
+                &format!("/console/audit?record={}", enc(&row.id)),
+                true
             ),
         ),
-        (
-            if row.estimate { "Cost, est." } else { "Cost" },
-            cost_text(row),
-        ),
-        ("Charged", money(row.charged_usd)),
-        ("Latency", ms(row.latency_ms)),
-    ]);
-    if !row.stages.is_empty() {
-        // Where the time went inside Gantry, in the order the request passed each stage.
-        let stages: Vec<String> = row
-            .stages
-            .iter()
-            .map(|(name, took)| format!("{} {took:.2} ms", name.replace('_', " ")))
-            .collect();
-        pairs.push(("Time by stage", esc(&stages.join(", "))));
-    }
-    pairs.extend([
-        (
-            "Chain",
-            esc(&format!(
-                "{} record {}",
-                if row.replica.is_empty() {
-                    "this gateway,"
-                } else {
-                    row.replica.as_str()
-                },
-                row.n
-            )),
-        ),
-        ("Hash", esc(&row.hash)),
-    ]);
+    );
+    // A proof that fails is the one thing worth seeing before opening anything.
+    let failed = if row.checks_out() && row.linked {
+        String::new()
+    } else {
+        proof_tag(row)
+    };
     let body = if row.body {
         format!(
             r#"<form method="post" action="/console/requests/body"><input type="hidden" name="id" value="{}">{}</form><p class="t-small g-muted" style="margin: 0">Its rule keeps the redacted request and answer. Reading them is recorded in the audit log, and only the rule's viewers may.</p>"#,
@@ -485,26 +531,19 @@ fn row_sheet(row: &Row, close: &str) -> String {
 <aside class="g-sheet" role="dialog" aria-modal="true" aria-labelledby="row-title">
 <div class="g-pager"><span></span><a class="g-btn g-btn--quiet g-btn--icon" href="{}" aria-label="Close" data-close>{}</a></div>
 <div class="g-stack">
-<h2 class="t-md" id="row-title" style="margin: 0">Request {}</h2>
-{}
-<p class="t-small" style="margin: 0">{}</p>
-<p class="t-small g-muted" style="margin: 0">{proof}</p>
-{}
+<h2 class="t-md" id="row-title" style="margin: 0">{}</h2>
+{failed}
+{six}
 {body}
+{}
+{proof}
 </div>
 </aside>
 </div>"#,
         esc(close),
         icon("close"),
-        esc(&row.id),
-        proof_tag(row),
-        facts(&pairs),
-        link(
-            "Open its audit record",
-            "quiet",
-            &format!("/console/audit?record={}", enc(&row.id)),
-            true
-        ),
+        esc(&row_title(row)),
+        folded("Details", &facts(&more)),
     )
 }
 
@@ -649,17 +688,29 @@ pub(crate) async fn body_view(
 fn chart(label: &str, points: &[(String, f64)], show: impl Fn(f64) -> String) -> String {
     let top = points.iter().map(|p| p.1).fold(0.0, f64::max);
     let top = if top > 0.0 { top } else { 1.0 };
+    // Capped so one day is not one wide block, muted so the eye lands on the last bar: today, in lime, edged in
+    // text so it holds on a light panel as the live dot does.
+    let last = points.len().saturating_sub(1);
     let bars: String = points
         .iter()
-        .map(|(at, v)| {
+        .enumerate()
+        .map(|(i, (at, v))| {
             format!(
-                r#"<div class="g-bar" style="--g-bar-value: {:.1}%" title="{}: {}"></div>"#,
+                r#"<div class="g-bar" style="--g-bar-value: {:.1}%; max-width: var(--space-6); {}" title="{}: {}"></div>"#,
                 v / top * 100.0,
+                if i == last {
+                    "background: var(--lime); border: var(--hairline) solid var(--text); border-bottom: 0"
+                } else {
+                    "background: var(--line-strong)"
+                },
                 esc(at),
                 esc(&show(*v))
             )
         })
         .collect();
+    // Each mark sits under its bar: as wide, and centred even when the text is wider than the bar.
+    let mark =
+        "max-width: var(--space-6); display: flex; justify-content: center; white-space: nowrap";
     let every = points.len().div_ceil(6).max(1);
     let marks: String = points
         .iter()
@@ -667,14 +718,14 @@ fn chart(label: &str, points: &[(String, f64)], show: impl Fn(f64) -> String) ->
         .map(|(i, (at, _))| {
             if i % every == 0 {
                 format!(
-                    "<span>{}</span>",
+                    r#"<span style="{mark}">{}</span>"#,
                     esc(&match at.get(11..13) {
                         Some(hour) => format!("{hour}:00"),
                         None => at.get(5..).unwrap_or(at).to_string(),
                     })
                 )
             } else {
-                "<span></span>".into()
+                format!(r#"<span style="{mark}"></span>"#)
             }
         })
         .collect();
@@ -685,6 +736,9 @@ fn chart(label: &str, points: &[(String, f64)], show: impl Fn(f64) -> String) ->
         esc(&show(top / 2.0))
     )
 }
+
+/// A metric the chart can switch to: its query value, its title, how to read it off an hour or day, and its unit.
+type Metric = (&'static str, &'static str, fn(&Stats) -> f64, &'static str);
 
 fn stat(figure: &str, label: &str) -> String {
     format!(
@@ -730,11 +784,20 @@ pub(crate) async fn analytics_page(
     }
     query.limit = insights::MAX_ROWS;
     // With a store the sums come from SQL over every matching request; the local chain folds up to MAX_ROWS.
-    let summed = match insights::attached(&console.config().audit).index {
-        Some(index) => index.analytics(&query, window.2, dimension.name).await,
-        None => rows(&console, &query)
-            .await
-            .map(|found| insights::analytics(&found, window.2, dimension.name)),
+    // The local rows are kept to tell which breakdowns hold anything; the store's sums do not say, so with a store
+    // every breakdown is offered.
+    let (summed, found) = match insights::attached(&console.config().audit).index {
+        Some(index) => (
+            index.analytics(&query, window.2, dimension.name).await,
+            None,
+        ),
+        None => match rows(&console, &query).await {
+            Ok(found) => (
+                Ok(insights::analytics(&found, window.2, dimension.name)),
+                Some(found),
+            ),
+            Err(problem) => (Err(problem), None),
+        },
     };
     let summed = match summed {
         Ok(summed) => summed,
@@ -779,45 +842,32 @@ pub(crate) async fn analytics_page(
     let per = |f: &dyn Fn(&Stats) -> f64| -> Vec<(String, f64)> {
         series.iter().map(|(k, s)| (k.clone(), f(s))).collect()
     };
-    let charts = [
-        ("Requests", per(&|s| s.requests as f64), "requests"),
+    let metrics: [Metric; 5] = [
+        ("requests", "Requests", |s| s.requests as f64, "requests"),
         (
+            "errors",
             "Refused and errors",
-            per(&|s| (s.refused + s.errors) as f64),
+            |s| (s.refused + s.errors) as f64,
             "requests",
         ),
-        ("Cost, USD", per(&|s| s.cost_usd), "usd"),
+        ("cost", "Cost, USD", |s| s.cost_usd, "usd"),
         (
+            "tokens",
             "Tokens",
-            per(&|s| (s.input_tokens + s.output_tokens) as f64),
+            |s| (s.input_tokens + s.output_tokens) as f64,
             "tokens",
         ),
         (
+            "latency",
             "Latency p95",
-            per(&|s| s.percentile(95.0).unwrap_or_default() as f64),
+            |s| s.percentile(95.0).unwrap_or_default() as f64,
             "ms",
         ),
     ];
-    let mut panels = String::new();
-    for (title, points, unit) in charts {
-        let show = move |v: f64| match unit {
-            "usd" => money(v),
-            "ms" => ms(Some(v as u64)),
-            _ => count(v.round() as u64),
-        };
-        let _ = write!(
-            panels,
-            r#"<div class="g-panel g-stack"><h2 class="t-md" style="margin: 0">{title}, per {}</h2>{}</div>"#,
-            if window.2 { "hour" } else { "day" },
-            if all.requests == 0 {
-                r#"<p class="t-small g-muted" style="margin: 0">No requests in this window.</p>"#
-                    .to_string()
-            } else {
-                chart(title, &points, show)
-            }
-        );
-    }
-
+    let metric = metrics
+        .iter()
+        .find(|m| m.0 == form.get("metric"))
+        .unwrap_or(&metrics[0]);
     let base: Vec<(String, String)> = query
         .pairs()
         .into_iter()
@@ -828,31 +878,72 @@ pub(crate) async fn analytics_page(
             base.iter().filter(|(k, _)| k != name).cloned().collect();
         pairs.push(("window".into(), window.0.into()));
         pairs.push(("by".into(), dimension.name.into()));
+        pairs.push(("metric".into(), metric.0.into()));
         pairs.retain(|(k, _)| k != name);
         pairs.push((name.into(), value.into()));
         href("/console/analytics", &pairs)
     };
+    let tab = |name: &str, value: &str, label: &str, pressed: bool| {
+        format!(
+            r#"<a class="g-tab t-body" href="{}" aria-pressed="{pressed}" style="text-decoration: none">{label}</a>"#,
+            esc(&pick(name, value))
+        )
+    };
     let windows: String = [("24h", "24 hours"), ("7d", "7 days"), ("30d", "30 days")]
         .iter()
-        .map(|(v, l)| {
-            format!(
-                r#"<a class="g-tab t-body" href="{}" aria-pressed="{}" style="text-decoration: none">{l}</a>"#,
-                esc(&pick("window", v)),
-                window.0 == *v
-            )
-        })
+        .map(|(v, l)| tab("window", v, l, window.0 == *v))
         .collect();
-    let bys: String = DIMENSIONS
+    let switch: String = metrics
         .iter()
-        .map(|d| {
-            format!(
-                r#"<a class="g-tab t-body" href="{}" aria-pressed="{}" style="text-decoration: none">{}</a>"#,
-                esc(&pick("by", d.name)),
-                d.name == dimension.name,
-                d.label
-            )
-        })
+        .map(|m| tab("metric", m.0, m.1, m.0 == metric.0))
         .collect();
+    let points = per(&metric.2);
+    let unit = metric.3;
+    let show = move |v: f64| match unit {
+        "usd" => money(v),
+        "ms" => ms(Some(v as u64)),
+        _ => count(v.round() as u64),
+    };
+    let panel = format!(
+        r#"<div class="g-panel g-stack"><h2 class="t-md" style="margin: 0">{}, per {}</h2><div class="g-tabs" role="group" aria-label="Metric">{switch}</div>{}</div>"#,
+        metric.1,
+        if window.2 { "hour" } else { "day" },
+        if all.requests == 0 {
+            r#"<p class="t-small g-muted" style="margin: 0">No requests in this window.</p>"#
+                .to_string()
+        } else {
+            chart(metric.1, &points, show)
+        }
+    );
+    // Four breakdowns answer most questions; the rest wait under More, and one with nothing in it is not offered.
+    let first = ["team", "person", "model", "provider"];
+    let has_data = |name: &str| {
+        found
+            .as_ref()
+            .is_none_or(|f| f.iter().any(|r| !r.label(name).is_empty()))
+    };
+    let mut bys: String = first
+        .iter()
+        .filter_map(|name| DIMENSIONS.iter().find(|d| d.name == *name))
+        .map(|d| tab("by", d.name, d.label, d.name == dimension.name))
+        .collect();
+    let rest: String = DIMENSIONS
+        .iter()
+        .filter(|d| !first.contains(&d.name))
+        .filter(|d| d.name == dimension.name || has_data(d.name))
+        .map(|d| tab("by", d.name, d.label, d.name == dimension.name))
+        .collect();
+    if !rest.is_empty() {
+        let _ = write!(
+            bys,
+            r#"<details{} style="display: flex; flex-wrap: wrap; gap: var(--space-1)"><summary class="g-tab t-body" style="list-style: none; display: inline-flex; align-items: center">More</summary>{rest}</details>"#,
+            if first.contains(&dimension.name) {
+                ""
+            } else {
+                " open"
+            }
+        );
+    }
     let ranked = summed.ranking;
     let ranking_rows: String = ranked
         .iter()
@@ -896,7 +987,7 @@ pub(crate) async fn analytics_page(
         )
     };
     let main = format!(
-        "{}\n<div class=\"g-tabs\" role=\"group\" aria-label=\"Window\">{windows}</div>\n{stats}\n<div class=\"g-split\">{panels}</div>\n{ranking}\n{forecasts}",
+        "{}\n<div class=\"g-tabs\" role=\"group\" aria-label=\"Window\">{windows}</div>\n{stats}\n{panel}\n{ranking}\n{forecasts}",
         head("Analytics", &format!("Over {}.{filtered}", window.3), "")
     );
     console.page(StatusCode::OK, &admin, "Analytics", &uri, &main)

@@ -263,7 +263,9 @@ async fn the_request_log_filters_and_proves_each_row() -> TestResult {
         page.contains("ses_0123456789abcdef01234567") && page.contains("turn_0123456789abcdef"),
         "the session and the turn are in the row's detail"
     );
-    assert!(page.contains(r#"name="session""#) && page.contains(r#"placeholder="Session""#));
+    assert!(
+        page.contains(r#"name="session""#) && page.contains(r#"for="f-session">Session</label>"#)
+    );
     let (_, _, page) = send(
         &s.app,
         get(
@@ -381,6 +383,143 @@ async fn analytics_show_totals_percentiles_rankings_and_forecasts() -> TestResul
     )
     .await?;
     assert!(page.contains(">claude-code<") && page.contains("per hour"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_request_filters_show_four_labeled_up_front_and_fold_the_rest() -> TestResult {
+    let s = setup("filters")?;
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (_, _, page) = send(&s.app, get("/console/requests", &cookie)?).await?;
+    let more = page
+        .find(">More filters</summary>")
+        .ok_or("no More filters")?;
+    for name in ["person", "team", "model", "from", "to"] {
+        let at = page
+            .find(&format!(r#"name="{name}""#))
+            .ok_or(format!("no {name} field"))?;
+        assert!(at < more, "{name} is shown before More filters");
+        assert!(
+            page.contains(&format!(r#"for="f-{name}""#)),
+            "{name} has a label"
+        );
+    }
+    for name in ["key", "provider", "session", "code", "min_cost", "max_ms"] {
+        let at = page
+            .find(&format!(r#"name="{name}""#))
+            .ok_or(format!("no {name} field"))?;
+        assert!(at > more, "{name} is behind More filters");
+    }
+    assert!(!page.contains("Filters: person, team"), "{page}");
+    assert!(!page.contains(r#"type="text" name="person" value="" aria-label"#));
+    assert!(
+        page.contains(r#"type="date" name="from""#),
+        "the range is a date picker"
+    );
+    // More filters is closed until one of its own filters is set.
+    assert!(!page.contains("<details open"), "{page}");
+    let (_, _, page) = send(&s.app, get("/console/requests?team=payments", &cookie)?).await?;
+    assert!(
+        !page.contains("<details open"),
+        "a filter up front opens nothing"
+    );
+    let (_, _, page) = send(&s.app, get("/console/requests?min_ms=1000", &cookie)?).await?;
+    assert!(
+        page.contains("<details open"),
+        "a folded filter that is set shows"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_request_sheet_says_who_what_and_how_and_folds_its_proof() -> TestResult {
+    let s = setup("sheet")?;
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (_, _, page) = send(
+        &s.app,
+        get(
+            "/console/requests?open=01PAY0000000000000000000001",
+            &cookie,
+        )?,
+    )
+    .await?;
+    let sheet = page
+        .find(r#"<aside class="g-sheet""#)
+        .and_then(|at| page.get(at..))
+        .ok_or("no sheet")?;
+    assert!(
+        sheet.contains(">maya.cohen, gpt-4o-mini, allowed</h2>"),
+        "{sheet}"
+    );
+    assert!(!sheet.contains(">Request 01PAY"), "no ID as the title");
+    assert!(sheet.contains(">Proof</summary>"), "no Proof section");
+    let fold = sheet.find("<details").ok_or("nothing folded")?;
+    let (facts, folded) = sheet.split_at(fold);
+    assert_eq!(facts.matches("<dt ").count(), 6, "{facts}");
+    for fact in [
+        ">Time<", ">Person<", ">Model<", ">Tokens<", ">Cost<", ">Rule<",
+    ] {
+        assert!(facts.contains(fact), "{fact} is one of the six");
+    }
+    assert!(
+        !facts.contains(">Hash<") && folded.contains(">Hash<"),
+        "the hash is folded"
+    );
+    assert!(
+        !sheet.contains("<details open"),
+        "the folded sections start closed"
+    );
+    let (_, _, page) = send(
+        &s.app,
+        get(
+            "/console/requests?open=01REF0000000000000000000003",
+            &cookie,
+        )?,
+    )
+    .await?;
+    assert!(
+        page.contains(">dana.levi, gpt-4o-mini, refused (model_not_allowed)</h2>"),
+        "{page}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn analytics_draw_one_chart_with_a_metric_switch_and_four_tabs_up_front() -> TestResult {
+    let s = setup("analytics-tabs")?;
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (_, _, page) = send(&s.app, get("/console/analytics", &cookie)?).await?;
+    assert_eq!(page.matches(r#"<div class="g-chart""#).count(), 1, "{page}");
+    assert!(
+        page.contains("metric=cost") && page.contains("metric=tokens"),
+        "{page}"
+    );
+    // Bars are capped and muted, and today's is lime.
+    assert!(page.contains("max-width: var(--space-6)") && page.contains("background: var(--lime)"));
+    assert_eq!(
+        page.matches("background: var(--lime)").count(),
+        1,
+        "only today is lime"
+    );
+    let (_, _, cost) = send(&s.app, get("/console/analytics?metric=cost", &cookie)?).await?;
+    assert!(cost.contains("Cost, USD, per day"), "{cost}");
+
+    let more = page.find(">More</summary>").ok_or("no More")?;
+    for label in ["Team", "Person", "Model", "Provider"] {
+        let at = page
+            .find(&format!(">{label}</a>"))
+            .ok_or(format!("no {label} tab"))?;
+        assert!(at < more, "{label} is up front");
+    }
+    // The local chain has requests with keys' coding agent but none with a customer: that tab is not shown.
+    assert!(
+        page.find(">Coding agent</a>").is_some_and(|at| at > more),
+        "{page}"
+    );
+    assert!(
+        !page.contains(">Customer</a>") && !page.contains(">Organization</a>"),
+        "{page}"
+    );
     Ok(())
 }
 
