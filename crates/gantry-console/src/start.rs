@@ -31,7 +31,7 @@ use crate::{
 };
 
 /// The docs site every step links into.
-pub(crate) const DOCS: &str = "https://gantry-docs.eliran.me";
+pub(crate) const DOCS: &str = "https://gantry-docs.enterplace.dev";
 
 pub(crate) fn routes() -> Router<Console> {
     Router::new()

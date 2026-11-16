@@ -29,6 +29,8 @@ one repository. How a release is made: RELEASING.md.
   `gantry start` prints it under. With only `GANTRY_ADMIN_KEY` read, the first `gantry kill` after a first run failed.
 - The console's Codex settings and its curl name a model this install serves (the demo model on a fresh install).
   Codex left to its default model, and the curl's `gpt-5-mini`, were refused with `unknown_model`.
+- The website and docs moved to gantry.enterplace.dev and gantry-docs.enterplace.dev. The old eliran.me
+  addresses keep serving the same pages, so saved install commands and links in installed binaries still work.
 - `gantry stop` stops the gateway that serves from the folder (or `--dir`), so a gateway started in another
   terminal, or left running, no longer needs its process number.
 - `gantry start` checks the port before it writes anything. On a taken port it used to write a policy and an admin
@@ -117,7 +119,7 @@ one repository. How a release is made: RELEASING.md.
 
 ### One-command install of the CLI
 
-- `curl -fsSL https://gantry.eliran.me/install.sh | sh` installs `gantry` on macOS and Linux, x86_64 and arm64: it
+- `curl -fsSL https://gantry.enterplace.dev/install.sh | sh` installs `gantry` on macOS and Linux, x86_64 and arm64: it
   picks the latest stable release (or the `edge` pre-release while there is none; `GANTRY_VERSION=edge|vX.Y.Z`),
   verifies the release signature with `ssh-keygen` and the tarball's SHA256, installs to `~/.local/bin`
   (`GANTRY_INSTALL_DIR`, with sudo for a folder you cannot write), and prints the PATH line and `gantry start`.

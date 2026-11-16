@@ -716,7 +716,7 @@ fn token_prices(checked: &'static str) -> Vec<BuiltinPrice> {
         BuiltinPrice {
             model: DEMO_MODEL,
             price: Price::per_mtok(0.0, 0.0, 0.0, 0.0, 0.0, 1_024),
-            source: "https://gantry-docs.eliran.me/getting-started/quickstart/",
+            source: "https://gantry-docs.enterplace.dev/getting-started/quickstart/",
             checked,
         },
         BuiltinPrice {

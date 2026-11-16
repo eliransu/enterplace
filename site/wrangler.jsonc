@@ -1,9 +1,14 @@
 {
   "$schema": "../docs/node_modules/wrangler/config-schema.json",
-  // The website: public/ is built from src/ by build.py and served at gantry.eliran.me.
+  // The website: public/ is built from src/ by build.py and served at gantry.enterplace.dev.
   "name": "gantry-site",
   "compatibility_date": "2026-11-01",
   "assets": { "directory": "./public", "not_found_handling": "404-page" },
-  "routes": [{ "pattern": "gantry.eliran.me", "custom_domain": true }],
+  // The old hostname keeps serving: install commands people saved and the docs links inside binaries
+  // already installed name it.
+  "routes": [
+    { "pattern": "gantry.enterplace.dev", "custom_domain": true },
+    { "pattern": "gantry.eliran.me", "custom_domain": true }
+  ],
   "workers_dev": false
 }

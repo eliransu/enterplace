@@ -7,15 +7,15 @@
 <meta name="description" content="Keep AI requests in the regions a rule allows, mask personal data before it leaves, and hold a hash-chained record of every request. Self-hosted in your own cloud account, with the exact policy lines and the limits.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<link rel="canonical" href="https://gantry.eliran.me/use-cases/regulated-data/">
+<link rel="canonical" href="https://gantry.enterplace.dev/use-cases/regulated-data/">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Gantry">
-<meta property="og:url" content="https://gantry.eliran.me/use-cases/regulated-data/">
+<meta property="og:url" content="https://gantry.enterplace.dev/use-cases/regulated-data/">
 <meta property="og:title" content="Regulated data and residency: regions, masking and a record per request">
 <meta property="og:description" content="Keep AI requests in the regions a rule allows, mask personal data before it leaves, and hold a hash-chained record of every request. Self-hosted in your own cloud account, with the exact policy lines and the limits.">
-<meta property="og:image" content="https://gantry.eliran.me/og.png">
+<meta property="og:image" content="https://gantry.enterplace.dev/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
@@ -83,10 +83,10 @@ gantry</a>
       </div>
 
       <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
-      <a class="nav-link" href="https://gantry-docs.eliran.me/">Docs</a>
+      <a class="nav-link" href="https://gantry-docs.enterplace.dev/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-main btn-sm" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Get started</a>
+        <a class="btn btn-main btn-sm" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Get started</a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
         </button>
@@ -153,7 +153,7 @@ license check      offline, no network call</pre></figure>
       <div class="guide-text">
         <h3>Label deployments and name the allowed regions</h3>
         <p>An alias serves one model name from several deployments. Label each one with its region. A rule with <code>regions: [eu]</code> reaches only those. A request with nowhere allowed to go is refused with <code>region_not_allowed</code>. It is never sent elsewhere, even when every allowed deployment is failing.</p>
-        <a class="more" href="https://gantry-docs.eliran.me/routing/strategies/">Residency in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://gantry-docs.enterplace.dev/routing/strategies/">Residency in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
       <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>aliases:
@@ -171,7 +171,7 @@ rules:
       <div class="guide-text">
         <h3>Mask personal data and your own identifiers</h3>
         <p>The <code>pii</code> detector finds email addresses, phone numbers, card numbers and similar. <code>mask</code> replaces each finding and forwards the rest. A <code>regex</code> guardrail does the same for identifiers only you know, such as a record number.</p>
-        <a class="more" href="https://gantry-docs.eliran.me/governance/guardrails/">Guardrails in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://gantry-docs.enterplace.dev/governance/guardrails/">Guardrails in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
       <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>guardrails:
@@ -191,7 +191,7 @@ rules:
       <div class="guide-text">
         <h3>Keep the record, and check it</h3>
         <p>Put the audit log on storage that outlives the container and verify its chain. Copy the last hash somewhere the Gantry host cannot write. Each record carries the regions the rule allows and the region the request went to.</p>
-        <a class="more" href="https://gantry-docs.eliran.me/start/step-5-prove/">Step 5 in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://gantry-docs.enterplace.dev/start/step-5-prove/">Step 5 in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
       <figure class="code"><figcaption>Verify, then pin the last hash</figcaption><pre>gantry audit verify /var/lib/gantry/gantry-audit.jsonl
@@ -203,7 +203,7 @@ gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
       <div class="guide-text">
         <h3>Add export, retention and legal hold <span class="ent">Enterprise</span></h3>
         <p>Gantry Enterprise sends every record to Splunk, Datadog, Elasticsearch, Microsoft Sentinel or object storage as it is written. Retention deletes records older than a set number of days while the chain stays verifiable, and a legal hold stops all deletion until an owner lifts it. In the open source edition you ship the audit file with Vector, Fluent Bit or the OpenTelemetry Collector.</p>
-        <a class="more" href="https://gantry-docs.eliran.me/operations/retention/">Retention and legal hold <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://gantry-docs.enterplace.dev/operations/retention/">Retention and legal hold <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
     </li>
@@ -245,7 +245,7 @@ gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
   <div class="cta-box">
     <h2>Start with step one. Block nothing, and find out what is in use.</h2>
     <div class="actions">
-      <a class="btn btn-ink" href="https://gantry-docs.eliran.me/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
       <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
       <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
     </div>
@@ -297,10 +297,10 @@ gantry</a>
       </div>
       <div>
         <h2>Project</h2>
-        <a href="https://gantry-docs.eliran.me/">Docs</a>
-        <a href="https://gantry-docs.eliran.me/getting-started/quickstart/">Quickstart</a>
-        <a href="https://gantry-docs.eliran.me/getting-started/status/">Project status</a>
-        <a href="https://gantry-docs.eliran.me/getting-started/changelog/">Changelog</a>
+        <a href="https://gantry-docs.enterplace.dev/">Docs</a>
+        <a href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
+        <a href="https://gantry-docs.enterplace.dev/getting-started/status/">Project status</a>
+        <a href="https://gantry-docs.enterplace.dev/getting-started/changelog/">Changelog</a>
       </div>
     </nav>
   </div>

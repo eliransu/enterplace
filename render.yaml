@@ -2,7 +2,7 @@
 # One web service from the published image and one Render Postgres. Render asks for the provider keys (fill at least
 # one). The first start prints the admin key once in the service's logs; the console is at <service URL>/console.
 # Keys and the policy live in Postgres, so a redeploy keeps them. The audit log is on the container's own disk and
-# starts a new chain at each deploy: see https://gantry-docs.eliran.me/deploy/one-click/
+# starts a new chain at each deploy: see https://gantry-docs.enterplace.dev/deploy/one-click/
 services:
   - type: web
     name: gantry

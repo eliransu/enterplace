@@ -3,7 +3,7 @@
 # the tap as Formula/gantry.rb. Do not edit the tap's copy by hand.
 class Gantry < Formula
   desc "Open source AI gateway built for governance"
-  homepage "https://gantry.eliran.me"
+  homepage "https://gantry.enterplace.dev"
   version "@VERSION@"
   # The binary is the single Gantry build: Apache-2.0 crates plus enterprise/ under its own license, which stays off
   # without a license key. Both license files are in the tarball.

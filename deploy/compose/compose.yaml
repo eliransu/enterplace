@@ -3,7 +3,7 @@
 # The admin key, printed once: docker compose logs gantry | grep GANTRY_KEY
 # The console: http://localhost:8080/console
 # Provider keys are read from the shell or a .env file beside this one (OPENAI_API_KEY, ANTHROPIC_API_KEY,
-# GEMINI_API_KEY). The full guide, with your own policy file: https://gantry-docs.eliran.me/deploy/docker/
+# GEMINI_API_KEY). The full guide, with your own policy file: https://gantry-docs.enterplace.dev/deploy/docker/
 name: gantry
 
 services:

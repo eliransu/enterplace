@@ -1,7 +1,7 @@
 # Gantry with Docker Compose
 
 The Compose file, the `.env` file and the trial override live in one place: the Docker guide,
-https://gantry-docs.eliran.me/deploy/docker/ (`docs/src/content/docs/deploy/docker.mdx`). A customer copies them
+https://gantry-docs.enterplace.dev/deploy/docker/ (`docs/src/content/docs/deploy/docker.mdx`). A customer copies them
 from the page into an empty folder and runs the published image; nothing is cloned or built.
 
 ## Test

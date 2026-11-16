@@ -111,7 +111,7 @@ fn choose(
 
 fn policy(chosen: &[Chosen], store: bool, env: &dyn Fn(&str) -> Option<String>) -> String {
     let mut text = String::from(
-        "# Written by gantry start. Every key may use every model. Observe mode: nothing is blocked, and what a\n# rule would refuse is recorded as would_refuse. Reference: https://gantry-docs.eliran.me/governance/policy/\nversion: 1\nmode: observe\nproviders:\n  # Answered inside Gantry with a sample text, free: a first request works before any provider key is set.\n  - name: demo\n    preset: demo\n    models: [gantry-demo]\n",
+        "# Written by gantry start. Every key may use every model. Observe mode: nothing is blocked, and what a\n# rule would refuse is recorded as would_refuse. Reference: https://gantry-docs.enterplace.dev/governance/policy/\nversion: 1\nmode: observe\nproviders:\n  # Answered inside Gantry with a sample text, free: a first request works before any provider key is set.\n  - name: demo\n    preset: demo\n    models: [gantry-demo]\n",
     );
     for c in chosen {
         if let Some(lines) =

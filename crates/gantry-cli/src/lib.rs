@@ -1124,7 +1124,7 @@ fn person_token_new(
     }
     let url = url.unwrap_or("http://127.0.0.1:8080").trim_end_matches('/');
     println!(
-        "Person token for {name}, team {team}. It names {name} to Gantry and reaches no model on its own; it is shown once:\n\n  {key}\n\nClaude Code keeps its normal Claude login (Pro, Max, Team or Enterprise). Add these two lines to the shell profile, with ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: {key}\"\n\nThe gateway needs a provider with auth: passthrough (gantry start writes one). Docs: https://gantry-docs.eliran.me/integrations/claude-code/\n",
+        "Person token for {name}, team {team}. It names {name} to Gantry and reaches no model on its own; it is shown once:\n\n  {key}\n\nClaude Code keeps its normal Claude login (Pro, Max, Team or Enterprise). Add these two lines to the shell profile, with ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_CUSTOM_HEADERS=\"x-gantry-user: {key}\"\n\nThe gateway needs a provider with auth: passthrough (gantry start writes one). Docs: https://gantry-docs.enterplace.dev/integrations/claude-code/\n",
         key = issued.key
     );
     Ok(())
@@ -1150,7 +1150,7 @@ fn key_new(
     );
     let url = url.unwrap_or("http://127.0.0.1:8080").trim_end_matches('/');
     println!(
-        "To hand it over, send these lines through your secret manager, never in chat. Claude Code and the OpenAI SDKs read them:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_API_KEY={key}\nexport OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\n\nFor Codex, put the key in GANTRY_KEY and see https://gantry-docs.eliran.me/integrations/codex/ for its provider settings.\n",
+        "To hand it over, send these lines through your secret manager, never in chat. Claude Code and the OpenAI SDKs read them:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_API_KEY={key}\nexport OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\n\nFor Codex, put the key in GANTRY_KEY and see https://gantry-docs.enterplace.dev/integrations/codex/ for its provider settings.\n",
         key = issued.key
     );
     if gantry_core::store::attached(keys).is_some() {
@@ -1386,7 +1386,7 @@ async fn import_litellm(
             println!("  - {line}");
         }
     }
-    println!("See https://gantry-docs.eliran.me/migrate/from-litellm/. Checking it now:");
+    println!("See https://gantry-docs.enterplace.dev/migrate/from-litellm/. Checking it now:");
     Ok(check(out, reissued.is_some().then_some(keys_out)))
 }
 
@@ -2072,7 +2072,7 @@ async fn login(url: &str, no_browser: bool) -> Result<(), String> {
     let env = path.with_file_name("env");
     save_credentials(&env, &env_lines(&url, &got.key, got.subscriptions))?;
     println!(
-        "Point your tools at Gantry: Claude Code and the OpenAI SDKs read these variables, and Codex reads GANTRY_KEY (see https://gantry-docs.eliran.me/integrations/codex/). They are in {env}, which the next `gantry login` rewrites. Add this line to your shell profile, and run it now in this shell:\n\n  . {env}\n\nThe key works within 2 seconds. Every request with it is recorded under {}.",
+        "Point your tools at Gantry: Claude Code and the OpenAI SDKs read these variables, and Codex reads GANTRY_KEY (see https://gantry-docs.enterplace.dev/integrations/codex/). They are in {env}, which the next `gantry login` rewrites. Add this line to your shell profile, and run it now in this shell:\n\n  . {env}\n\nThe key works within 2 seconds. Every request with it is recorded under {}.",
         got.name,
         env = env.display()
     );
@@ -2742,7 +2742,7 @@ fn init(provider: &str, models: Option<&str>, out: &Path) -> ExitCode {
         ""
     };
     let policy = format!(
-        "# Written by gantry init. Reference: https://gantry-docs.eliran.me/governance/policy/\nversion: 1\nproviders:\n  - name: {id}\n    preset: {id}\n{private}    key_env: {variable}\n    models: [{list}]\nrules:\n  - name: everyone\n    principals: {{ any: true }}\n    models: [{list}]\n",
+        "# Written by gantry init. Reference: https://gantry-docs.enterplace.dev/governance/policy/\nversion: 1\nproviders:\n  - name: {id}\n    preset: {id}\n{private}    key_env: {variable}\n    models: [{list}]\nrules:\n  - name: everyone\n    principals: {{ any: true }}\n    models: [{list}]\n",
         id = preset.id,
         list = models.join(", ")
     );

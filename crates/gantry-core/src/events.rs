@@ -1535,7 +1535,7 @@ impl Verdict {
 }
 
 const MAX_REASON: usize = 500;
-const DOCS: &str = "https://gantry-docs.eliran.me/governance/plugin-events/";
+const DOCS: &str = "https://gantry-docs.enterplace.dev/governance/plugin-events/";
 
 /// Reads a plugin's answer to a call that carried `sent`.
 pub fn parse_verdict(bytes: &[u8], sent: &[Event]) -> Result<Verdict, String> {

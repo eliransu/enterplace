@@ -3,7 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 // Served at the root of its own domain on Cloudflare.
-const site = process.env.DOCS_SITE ?? 'https://gantry-docs.eliran.me';
+const site = process.env.DOCS_SITE ?? 'https://gantry-docs.enterplace.dev';
 const base = process.env.DOCS_BASE ?? '/';
 
 const group = (label, directory) => ({ label, items: [{ autogenerate: { directory } }] });
