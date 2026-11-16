@@ -105,6 +105,7 @@ strong { font-weight: 600; }
 .theme { width: 44px; height: 44px; border-radius: 999px; border: 1px solid var(--line-strong); background: none; color: var(--text); display: grid; place-items: center; cursor: pointer; flex: none; }
 .theme:hover { background: var(--surface); }
 a.theme { text-decoration: none; }
+.gh-phone { display: none; }
 .ftr-legal a { color: inherit; }
 .burger { display: none; margin-left: auto; width: 44px; height: 44px; border-radius: 999px; border: 1px solid var(--line-strong); background: none; cursor: pointer; place-items: center; }
 .burger span, .burger span::before { display: block; width: 16px; height: 2px; border-radius: 2px; background: var(--text); transition: transform 240ms var(--ease); }
@@ -114,7 +115,9 @@ a.theme { text-decoration: none; }
 .hdr.open .burger span::before { transform: rotate(-90deg); }
 
 @media (max-width: 1080px) {
-  .burger { display: grid; }
+  .burger { display: grid; margin-left: 8px; }
+  .gh-phone { display: grid; margin-left: auto; }
+  .gh-wide { display: none; }
   .nav { display: none; position: absolute; top: 69px; left: 0; right: 0; height: calc(100dvh - 69px); background: var(--ground); overflow-y: auto; overscroll-behavior: contain; flex-direction: column; align-items: stretch; gap: 0; padding: 8px 20px 40px; }
   .hdr.open .nav { display: flex; }
   .nav-btn { width: 100%; height: auto; padding: 22px 0 6px; font-size: 14px; color: var(--muted); pointer-events: none; border-radius: 0; }
@@ -162,7 +165,8 @@ a.theme { text-decoration: none; }
 .code pre { padding: 18px 20px; font: 13px/22px var(--mono); overflow-x: auto; white-space: pre; tab-size: 2; }
 /* The install command under a headline: narrow, and wrapped on a phone, never cut off. */
 .cmd { max-width: 520px; }
-.cmd pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmd pre { white-space: pre-wrap; overflow-wrap: normal; }
+@media (max-width: 420px) { .cmd pre { padding: 16px; font-size: 12px; } }
 .code .c { color: #7d7d7d; } .code .ok { color: var(--lime); } .code .no { color: var(--stage-flame); } .code .hi { color: #ffffff; }
 p code, li code, dd code, td code { background: var(--surface); border-radius: 6px; padding: 1px 6px; overflow-wrap: anywhere; }
 .sheet p code, .sheet li code, .sheet td code, .sheet dd code { background: var(--well); }
