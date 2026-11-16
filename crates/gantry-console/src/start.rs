@@ -25,7 +25,9 @@ use gantry_core::{
 use serde_json::{Value, json};
 
 use crate::{
-    Act, Admin, Console, Form, NOT_RECORDED, Tls, edit, foreign,
+    Act, Admin, Console, Form, NOT_RECORDED, Tls, edit,
+    figures::{EST_TIP, money, money_est, time_list},
+    foreign,
     html::{Field, code, empty, enc, esc, field, head, icon, motif, tag},
     insights, page, pages, read_only, record, redirect, same_origin, secure,
 };
@@ -660,8 +662,7 @@ fn mono(text: &str) -> String {
 }
 
 fn clock(time: &str) -> String {
-    time.get(11..16)
-        .map_or_else(|| esc(time), |t| format!("{t} UTC"))
+    format!("{} UTC", esc(&time_list(time)))
 }
 
 fn ent() -> String {
@@ -897,12 +898,9 @@ fn cost(r: &Row) -> String {
         || "cost not known".into(),
         |c| {
             if r.estimate {
-                format!(
-                    "about ${} at API prices (an estimate: a subscription pays by the seat)",
-                    insights::money(c)
-                )
+                format!(r#"<span title="{}">{}</span>"#, esc(EST_TIP), money_est(c))
             } else {
-                format!("${}", insights::money(c))
+                money(c)
             }
         },
     )
@@ -1428,7 +1426,7 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         "Turn on Claude subscriptions",
         f.passthrough,
         format!(
-            r#"<p class="t-body">Gantry sends each developer's own Claude login (Pro, Max, Team or Enterprise) to Anthropic unchanged, and never keeps it. Nobody makes an Anthropic API key. Gantry records tokens and an API-equivalent cost estimate, and every rule, guardrail and kill switch applies.</p>{}{}"#,
+            r#"<p class="t-body">Gantry sends each developer's own Claude login (Pro, Max, Team or Enterprise) to Anthropic unchanged, and never keeps it. Nobody makes an Anthropic API key. Gantry records tokens and cost (est.), and every rule, guardrail and kill switch applies.</p>{}{}"#,
             acts(&turn_on),
             acts(&docs("Read Subscriptions", "/governance/subscriptions/"))
         ),
@@ -1482,7 +1480,7 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             acts(&docs("Read the Claude Code guide", "/integrations/claude-code/"))
         ),
         &format!("The first request from {who} on a Claude subscription arrives."),
-        "Requests shows each prompt with the person, model, tokens and an API-equivalent cost estimate.",
+        "Requests shows each prompt with the person, model, tokens and cost (est. for a subscription).",
     )
     .listening(
         format!("Listening for the first request from {}. This step turns done by itself.", esc(&who)),
@@ -1495,7 +1493,7 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             mono(r.label("person")),
             agent(r),
             mono(r.label("model")),
-            r.cost_usd.map_or_else(|| "cost not known".into(), |c| format!("about ${} at API prices (an estimate)", insights::money(c)))
+            cost(r)
         )
     }))
     .agent(subscription_prompt(base, made.as_deref(), f.unnamed_ok));
@@ -1818,9 +1816,9 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     )
     .finished(f.requests.last().map_or_else(String::new, |r| {
         format!(
-            "First request at {}. Spent so far: ${}.",
+            "First request at {}. Spent so far: {}.",
             clock(&r.time),
-            insights::money(spent)
+            money(spent)
         )
     }));
     let s3 = Step::new(
@@ -1986,7 +1984,7 @@ fn watch(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             acts(&docs("Read Claude Team and Enterprise", "/integrations/claude-team/"))
         ),
         "Claude Code telemetry arrives.",
-        "Watch lists each person by their Claude email, with sessions, tokens and estimated cost.",
+        "Watch lists each person by their Claude email, with sessions, tokens and cost (est.).",
     )
     .listening(
         "Listening for Claude Code telemetry. People appear within a few minutes of their next session.".into(),
@@ -2196,7 +2194,7 @@ fn first_data(f: &Facts) -> String {
             };
             format!(
                 r#"<tr><td class="t-mono-sm g-table__wide">{}</td><td class="t-mono-sm">{}<span class="g-table__sub t-mono-sm">{}</span></td><td class="t-mono-sm g-table__wide">{}</td><td class="t-mono-sm g-table__num g-table__wide">{}</td><td class="t-mono-sm g-table__num">{}</td><td class="g-table__wide">{decision}</td></tr>"#,
-                esc(r.time.get(11..19).unwrap_or(&r.time)),
+                esc(&time_list(&r.time)),
                 esc(r.label("person")),
                 esc(r.label("model")),
                 esc(r.label("agent").split('/').next().unwrap_or("")),
@@ -2242,7 +2240,7 @@ fn first_data(f: &Facts) -> String {
             people.to_string(),
             if people == 1 { "Person" } else { "People" }
         ),
-        stat(format!("${}", insights::money(total)), "Cost"),
+        stat(money(total), "Cost"),
         acts(&format!(
             "{}{}",
             glink("Open Requests", "/console/requests", true),

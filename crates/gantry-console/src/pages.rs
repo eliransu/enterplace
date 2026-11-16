@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use crate::{
     Form, Verified,
+    figures::{money, time_full, time_list},
     html::{
         Field, button, close_link, code, dialog, document, empty, enc, esc, facts, field, head,
         icon, link, motif, pager, row, shell, tag, thousands, yaml_line,
@@ -52,30 +53,6 @@ fn ago(at: Instant) -> String {
 
 fn s<'a>(record: &'a Value, key: &str) -> &'a str {
     record.get(key).and_then(Value::as_str).unwrap_or("")
-}
-
-/// "14:02:11.482" for today, "2026-11-11 14:02:11" before.
-fn short_time(time: &str, today: &str) -> String {
-    match (time.get(..10), time.get(11..23), time.get(11..19)) {
-        (Some(date), Some(clock), _) if date == today => clock.to_string(),
-        (Some(date), _, Some(clock)) => format!("{date} {clock}"),
-        _ => time.to_string(),
-    }
-}
-
-/// "13 Nov 2026, 01:03:03.467 UTC", as the record sheet shows a time.
-pub(crate) fn long_time(time: &str) -> String {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let part =
-        |range: std::ops::Range<usize>| time.get(range).and_then(|p| p.parse::<usize>().ok());
-    match (part(0..4), part(5..7), part(8..10), time.get(11..23)) {
-        (Some(year), Some(month @ 1..=12), Some(day), Some(clock)) => {
-            format!("{day} {} {year}, {clock} UTC", MONTHS[month - 1])
-        }
-        _ => time.to_string(),
-    }
 }
 
 /// The paging links of a list: `href(page)` for a page number.
@@ -362,15 +339,6 @@ fn words_whole(text: &str) -> String {
         .join(" ")
 }
 
-/// "06:15 UTC" for a time today, "13 Nov, 06:15 UTC" before.
-fn minute_time(time: &str, today: &str) -> String {
-    match (time.get(..10), time.get(11..16)) {
-        (Some(date), Some(clock)) if date == today => format!("{clock} UTC"),
-        (Some(date), Some(clock)) => format!("{}, {clock} UTC", day_words(date, true)),
-        _ => time.to_string(),
-    }
-}
-
 /// The banner over the audit log while a kill switch is on: one block per switch, as the KillSwitch design reads,
 /// with what it stops, why, since when and by whom, and the command that turns it off.
 fn kills_banner(kills: &Result<Vec<Kill>, String>) -> String {
@@ -381,15 +349,14 @@ fn kills_banner(kills: &Result<Vec<Kill>, String>) -> String {
         )),
         Ok(kills) if kills.is_empty() => String::new(),
         Ok(kills) => {
-            let today = today();
             let blocks: String = kills
                 .iter()
                 .map(|k| {
                     format!(
-                        r#"<div class="g-stack" style="gap: var(--space-1)"><span class="t-mono">{}</span><span class="t-body">{}</span><span class="t-small g-muted">Traffic is stopped since {} by {}. <span class="t-mono">{}</span> turns it off.</span></div>"#,
+                        r#"<div class="g-stack" style="gap: var(--space-1)"><span class="t-mono">{}</span><span class="t-body">{}</span><span class="t-small g-muted">Traffic is stopped since {} UTC by {}. <span class="t-mono">{}</span> turns it off.</span></div>"#,
                         esc(&k.label()),
                         esc(&k.reason),
-                        esc(&minute_time(&k.at, &today)),
+                        esc(&time_list(&k.at)),
                         esc(&k.by),
                         words_whole(&unkill_command(k))
                     )
@@ -479,7 +446,7 @@ fn killed_story(record: &Value, ctx: &Context<'_>) -> Story {
     let lead = format!(
         "Kill switch <span class=\"t-mono\">{label}</span> was on: {}. {by} set it at {}. {none_sent} {}",
         esc(kill.reason.trim_end_matches('.')),
-        esc(&long_time(&kill.at)),
+        esc(&time_full(&kill.at)),
         if still_on {
             "It is still on: the people it stops see this reason in their tool."
         } else {
@@ -494,7 +461,7 @@ fn killed_story(record: &Value, ctx: &Context<'_>) -> Story {
     let mut facts = vec![
         ("Switch", format!("{label} {state}")),
         ("Reason", esc(&kill.reason)),
-        ("Set by", format!("{by}, {}", esc(&long_time(&kill.at)))),
+        ("Set by", format!("{by}, {}", esc(&time_full(&kill.at)))),
     ];
     if still_on {
         facts.push(("Turn off", words_whole(&unkill_command(&kill))));
@@ -745,13 +712,7 @@ fn trigger_word(trigger: &str) -> &str {
     }
 }
 
-fn audit_table(
-    rows: &[&Value],
-    selected: &str,
-    filter: &Filter<'_>,
-    page: usize,
-    today: &str,
-) -> String {
+fn audit_table(rows: &[&Value], selected: &str, filter: &Filter<'_>, page: usize) -> String {
     let mut body = String::new();
     for record in rows {
         let id = rid(record);
@@ -776,7 +737,7 @@ fn audit_table(
             ident(&who(record)),
             esc(&sub),
             verdict(record),
-            esc(&short_time(s(record, "time"), today)),
+            esc(&time_list(s(record, "time"))),
             filter.href(page, &id),
             esc(&label),
             esc(&text),
@@ -803,7 +764,6 @@ fn changes_table(
     selected: &str,
     filter: &Filter<'_>,
     page: usize,
-    today: &str,
     ctx: &Context<'_>,
 ) -> String {
     let mut body = String::new();
@@ -826,7 +786,7 @@ fn changes_table(
             r#"<tr{sel}><td>{}</td><td><span class="t-body">{title}</span><span class="g-table__sub">{}</span></td><td>{}<span class="g-table__sub"><a href="{}" aria-label="{}">{}</a></span></td></tr>"#,
             ident(&who(record)),
             verdict(record),
-            esc(&short_time(s(record, "time"), today)),
+            esc(&time_list(s(record, "time"))),
             filter.href(page, &id),
             esc(&label),
             esc(&text),
@@ -910,15 +870,11 @@ fn limit_story(record: &Value, ctx: &Context<'_>) -> Option<Story> {
     };
     let spent = spent_before(ctx.usage, time, per_day, |u| s(u, field) == value);
     let (per, reset) = (budget.per.word(), reset_day(time, per_day));
-    let summary = format!(
-        "${} of ${} spent this {per}",
-        money(spent),
-        money(budget.usd)
-    );
+    let summary = format!("{} of {} spent this {per}", money(spent), money(budget.usd));
     Some((
         format!("{whose}'s budget is spent"),
         format!(
-            "{summary}, plus what requests in flight held, and this request could have cost more than the rest of the ${} that rule {rule_name} at line {} allows. Refused until {reset}. {none_sent}",
+            "{summary}, plus what requests in flight held, and this request could have cost more than the rest of the {} that rule {rule_name} at line {} allows. Refused until {reset}. {none_sent}",
             money(budget.usd),
             rule.line
         ),
@@ -1140,7 +1096,7 @@ fn key_story(record: &Value, ctx: &Context<'_>) -> Story {
     });
     let reset = reset_day(time, per_day);
     let summary = format!(
-        "${} of ${} spent {}",
+        "{} of {} spent {}",
         money(spent),
         money(budget.usd),
         if per_day { "today" } else { "this month" }
@@ -1153,7 +1109,7 @@ fn key_story(record: &Value, ctx: &Context<'_>) -> Story {
     (
         format!("{person}'s key budget is spent"),
         format!(
-            "{summary}, plus what requests in flight held, and this request could have cost more than the rest of the ${} the keys file gives key {key}. Refused until {until}. {none_sent}",
+            "{summary}, plus what requests in flight held, and this request could have cost more than the rest of the {} the keys file gives key {key}. Refused until {until}. {none_sent}",
             money(budget.usd)
         ),
         vec![
@@ -1276,7 +1232,7 @@ fn story(record: &Value, ctx: &Context<'_>) -> Story {
                     format!(
                         r#"Revoked by {} at {}, <a href="/console/audit?record={}">record {}</a>"#,
                         esc(s(r, "person")),
-                        esc(&long_time(s(r, "time"))),
+                        esc(&time_full(s(r, "time"))),
                         enc(&rid(r)),
                         r.get("n").and_then(Value::as_u64).unwrap_or(0)
                     ),
@@ -1712,7 +1668,7 @@ fn record_sheet(record: &Value, ctx: &Context<'_>, close: &str) -> String {
     let mut pairs: Vec<(&str, String)> = vec![
         ("Record", n.to_string()),
         ("Decision", id.to_string()),
-        ("Time", long_time(s(record, "time"))),
+        ("Time", time_full(s(record, "time"))),
         ("Person", both(s(record, "person"), s(record, "team"))),
         ("Client", s(record, "client").to_string()),
         ("Key hash", key_hash.to_string()),
@@ -2149,14 +2105,11 @@ pub fn audit(view: &AuditView<'_>) -> String {
         };
         let (table, noun) = if shown_now == "changes" {
             (
-                changes_table(rows, selected, &filter, page, &today, &ctx),
+                changes_table(rows, selected, &filter, page, &ctx),
                 "changes",
             )
         } else {
-            (
-                audit_table(rows, selected, &filter, page, &today),
-                "decisions",
-            )
+            (audit_table(rows, selected, &filter, page), "decisions")
         };
         format!(
             "<div class=\"g-panel g-stack\">\n{caution}\n{table}\n{}\n</div>",
@@ -2486,7 +2439,7 @@ fn key_status(
         let over = refused || spent >= b.usd;
         let pct = (spent / b.usd * 100.0).round().clamp(0.0, 100.0) as u32;
         let html = format!(
-            r#"<div class="g-meter"{} style="--g-meter-value: {pct}%; min-width: calc(var(--space-24) * 2)"><div class="g-meter__row"><span class="t-small g-muted">Key budget</span><span class="t-mono-sm">${} of ${} {}</span></div><div class="g-meter__track" role="meter" aria-valuenow="{pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Key budget used"><div class="g-meter__fill"></div></div></div>"#,
+            r#"<div class="g-meter"{} style="--g-meter-value: {pct}%; min-width: calc(var(--space-24) * 2)"><div class="g-meter__row"><span class="t-small g-muted">Key budget</span><span class="t-mono-sm">{} of {} {}</span></div><div class="g-meter__track" role="meter" aria-valuenow="{pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Key budget used"><div class="g-meter__fill"></div></div></div>"#,
             if over { r#" data-state="over""# } else { "" },
             money(spent),
             money(b.usd),
@@ -2762,7 +2715,7 @@ pub fn people(view: &PeopleView<'_>) -> String {
             let last = if last.is_empty() {
                 "never".to_string()
             } else {
-                short_time(&last, &today)
+                time_list(&last)
             };
             // A model switch stops one model, not the person: only the switches that stop every request of this key.
             let stopped = view.kills.iter().find(|k| {
@@ -3073,7 +3026,7 @@ pub fn credentials(view: &CredentialsView<'_>) -> String {
                 used.join(", ")
             };
             let rotated = match (&c.rotated_at, &c.rotated_by) {
-                (Some(at), Some(by)) => format!("{} by {}", long_time(at), esc(by)),
+                (Some(at), Some(by)) => format!("{} by {}", time_full(at), esc(by)),
                 _ => "never".to_string(),
             };
             let actions = if view.read_only {
@@ -3098,7 +3051,7 @@ pub fn credentials(view: &CredentialsView<'_>) -> String {
                 esc(&c.provider),
                 esc(&c.fingerprint),
                 esc(&used),
-                long_time(&c.created_at),
+                time_full(&c.created_at),
                 esc(&c.created_by),
             );
         }
@@ -3251,7 +3204,7 @@ pub fn policy(
                         let _ = write!(meta, " Guardrails: {}.", names.join(", "));
                     }
                     if let Some(b) = r.limits.budget() {
-                        let _ = write!(meta, " Budget ${} a {}.", money(b.usd), b.per.word());
+                        let _ = write!(meta, " Budget {} a {}.", money(b.usd), b.per.word());
                     }
                     if let Some(rpm) = r.limits.rpm {
                         let _ = write!(meta, " {rpm} requests a minute each.");
@@ -3395,19 +3348,6 @@ const MONTHS: [&str; 12] = [
     "November",
     "December",
 ];
-
-/// Dollars as the design writes them: "3,912", "1,604.12", and four places below a cent so a small spend is not 0.
-pub(crate) fn money(usd: f64) -> String {
-    if usd > 0.0 && usd < 0.01 {
-        return format!("{usd:.4}");
-    }
-    let cents = (usd * 100.0).round() as u64;
-    let whole = thousands(usize::try_from(cents / 100).unwrap_or(usize::MAX));
-    match cents % 100 {
-        0 => whole,
-        c => format!("{whole}.{c:02}"),
-    }
-}
 
 /// The smallest of 1, 2, 5 or 10 times a power of ten that is at least `x`: the top of a chart's scale.
 fn nice_top(x: f64) -> f64 {
@@ -3664,7 +3604,7 @@ pub fn spend(view: &SpendView<'_>) -> String {
         (day, time.get(11..16).unwrap_or("").to_string())
     };
     // The lead: the month's total, who ran out, and who is on pace to.
-    let mut lead = format!("${} spent in {name} so far.", money(total));
+    let mut lead = format!("{} spent in {name} so far.", money(total));
     let mut on_pace = Vec::new();
     for (meter, who) in &meters {
         if meter.label.is_empty() {
@@ -3686,7 +3626,7 @@ pub fn spend(view: &SpendView<'_>) -> String {
                 };
                 let _ = write!(
                     lead,
-                    " {whose} spent its ${} on {day} {name} and is refused until {until}.",
+                    " {whose} spent its {} on {day} {name} and is refused until {until}.",
                     money(meter.usd)
                 );
             }
@@ -3758,7 +3698,7 @@ pub fn spend(view: &SpendView<'_>) -> String {
         if i < day_now {
             let _ = write!(
                 bars,
-                r#"<div class="g-bar" style="--g-bar-value: {:.1}%" title="{} {name}: ${}"></div>"#,
+                r#"<div class="g-bar" style="--g-bar-value: {:.1}%" title="{} {name}: {}"></div>"#,
                 value / top * 100.0,
                 i + 1,
                 money(*value)
@@ -3791,7 +3731,7 @@ pub fn spend(view: &SpendView<'_>) -> String {
         String::new()
     };
     let label = format!(
-        "Spend per day in {name}. The highest day is {peak} {name} at {} dollars.{later}",
+        "Spend per day in {name}. The highest day is {peak} {name} at {}.{later}",
         money(daily.get(peak - 1).copied().unwrap_or_default())
     );
     let pace_line = if pace > 0.0 {
@@ -3803,14 +3743,15 @@ pub fn spend(view: &SpendView<'_>) -> String {
         String::new()
     };
     let chart = format!(
-        r#"<div class="g-chart" role="img" aria-label="{label}"><div class="g-chart__scale t-mono-sm"><span>${}</span><span>${}</span><span>$0</span></div><div class="g-chart__plot"><span class="g-chart__grid" style="--g-at: 50%"></span><span class="g-chart__grid" style="--g-at: 100%"></span>{pace_line}{bars}</div><div class="g-chart__days t-mono-sm">{day_marks}</div></div>"#,
+        r#"<div class="g-chart" role="img" aria-label="{label}"><div class="g-chart__scale t-mono-sm"><span>{}</span><span>{}</span><span>{}</span></div><div class="g-chart__plot"><span class="g-chart__grid" style="--g-at: 50%"></span><span class="g-chart__grid" style="--g-at: 100%"></span>{pace_line}{bars}</div><div class="g-chart__days t-mono-sm">{day_marks}</div></div>"#,
         money(top),
-        money(top / 2.0)
+        money(top / 2.0),
+        money(0.0)
     );
     let mut caption = if pace > 0.0 {
         let above = daily.iter().take(day_now).filter(|v| **v > pace).count();
         format!(
-            "The dashed line is ${} a day, the pace that keeps every monthly budget inside its limit. {} of the {} days so far {} above it.",
+            "The dashed line is {} a day, the pace that keeps every monthly budget inside its limit. {} of the {} days so far {} above it.",
             money(pace),
             above,
             day_now,
@@ -3842,7 +3783,7 @@ pub fn spend(view: &SpendView<'_>) -> String {
             row(
                 &esc(person),
                 &format!(
-                    r#"Sent {} {}, ${}, most of it on <span class="t-mono" style="white-space: nowrap">{}</span>."#,
+                    r#"Sent {} {}, {}, most of it on <span class="t-mono" style="white-space: nowrap">{}</span>."#,
                     thousands(tally.requests),
                     if tally.requests == 1 {
                         "request"
@@ -3885,7 +3826,7 @@ pub fn spend(view: &SpendView<'_>) -> String {
             &motif(&["", "", ""], &["empty", "empty"], (3, 1), false, true),
             "No budgets yet",
             &format!(
-                "Spend is being recorded: ${} in {name} so far. Nothing stops it, because the policy sets no budget for any team.",
+                "Spend is being recorded: {} in {name} so far. Nothing stops it, because the policy sets no budget for any team.",
                 money(total)
             ),
             &link("Add a budget to the policy", "", "/console/policy", false),
@@ -3960,7 +3901,7 @@ pub fn spend(view: &SpendView<'_>) -> String {
             let per = if meter.per_day { " today" } else { "" };
             let _ = write!(
                 out,
-                r#"<div class="g-meter"{state} style="--g-meter-value: {pct}%"><div class="g-meter__row"><span class="t-mono-lg">{}</span><span class="t-mono-sm">${} of ${}{per}</span></div><div class="g-meter__track" role="meter" aria-valuenow="{pct}" aria-valuemin="0" aria-valuemax="100" aria-label="{} budget used"><div class="g-meter__fill"></div></div><span class="t-small g-muted">{note}</span></div>"#,
+                r#"<div class="g-meter"{state} style="--g-meter-value: {pct}%"><div class="g-meter__row"><span class="t-mono-lg">{}</span><span class="t-mono-sm">{} of {}{per}</span></div><div class="g-meter__track" role="meter" aria-valuenow="{pct}" aria-valuemin="0" aria-valuemax="100" aria-label="{} budget used"><div class="g-meter__fill"></div></div><span class="t-small g-muted">{note}</span></div>"#,
                 esc(label),
                 money(meter.spent),
                 money(meter.usd),
@@ -3987,7 +3928,7 @@ pub fn spend(view: &SpendView<'_>) -> String {
             format!(
                 r#"<tr><td>{}</td><td class="g-table__num">{}</td><td class="g-table__wide">{}<span class="g-table__sub">{}</span></td><td class="g-table__num g-table__wide">{}</td><td class="g-table__num g-table__wide">{}</td></tr>"#,
                 esc(model),
-                money_cents(t.usd),
+                money(t.usd),
                 esc(provider),
                 esc(&priced.join("; ")),
                 thousands(t.requests),
@@ -4081,19 +4022,6 @@ fn price_word(source: &str) -> String {
         "litellm" => "from the LiteLLM table".into(),
         _ => "none: cost unknown".into(),
     }
-}
-
-/// "1,604.12": the table always shows cents, and "under 0.01" for a spend that would round to nothing.
-fn money_cents(usd: f64) -> String {
-    if usd > 0.0 && usd < 0.01 {
-        return "under 0.01".into();
-    }
-    let cents = (usd * 100.0).round() as u64;
-    format!(
-        "{}.{:02}",
-        thousands(usize::try_from(cents / 100).unwrap_or(usize::MAX)),
-        cents % 100
-    )
 }
 
 // ---- First run ----
@@ -4242,10 +4170,8 @@ mod tests {
     #[test]
     fn record_times_read_as_the_designs_write_them() {
         let t = "2026-11-13T01:03:03.467Z";
-        assert_eq!(long_time(t), "13 Nov 2026, 01:03:03.467 UTC");
-        assert_eq!(short_time(t, "2026-11-13"), "01:03:03.467");
-        assert_eq!(short_time(t, "2026-11-14"), "2026-11-13 01:03:03");
-        assert_eq!(long_time("garbled"), "garbled");
+        assert_eq!(time_full(t), "13 Nov 2026, 01:03:03.467 UTC");
+        assert_eq!(time_full("garbled"), "garbled");
         assert_eq!(today().len(), 10);
         assert_eq!(day_words("2026-11-01", false), "1 November 2026");
         assert_eq!(day_words("2027-03-31T18:00:00Z", true), "31 Mar");

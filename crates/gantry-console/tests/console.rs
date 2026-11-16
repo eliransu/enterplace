@@ -920,14 +920,14 @@ async fn spend_shows_this_months_usage_against_the_budgets() -> TestResult {
     assert_eq!(status, StatusCode::OK);
     for expected in [
         "$1.10 spent in",
-        "payments spent its $1 on",
+        "payments spent its $1.00 on",
         "Edit the payments budget in the policy",
         "/console/policy?line=10",
         r#"data-state="over""#,
-        "$1.10 of $1",
+        "$1.10 of $1.00",
         "g-chart__pace",
         "g-chart__mark",
-        "<td>gpt-4o-mini</td><td class=\"g-table__num\">1.10</td>",
+        "<td>gpt-4o-mini</td><td class=\"g-table__num\">$1.10</td>",
         "/console/audit?q=maya.cohen",
         // The model is an identifier: it never breaks at its dash.
         r#"Sent 2 requests, $1.10, most of it on <span class="t-mono" style="white-space: nowrap">gpt-4o-mini</span>."#,
@@ -967,7 +967,7 @@ async fn people_shows_a_keys_expiry_and_budget() -> TestResult {
     // Round 11: the status says the key is live and when it expires, and its budget is a meter.
     for expected in [
         r#"<span class="g-tag g-tag--allow t-tag">Active</span><span class="g-table__sub" style="white-space: normal">expires 2099-01-01</span>"#,
-        "$0 of $20 this month",
+        "$0.00 of $20.00 this month",
     ] {
         assert!(people.contains(expected), "missing {expected}: {people}");
     }
@@ -1389,7 +1389,7 @@ async fn a_budget_refusal_sheet_names_the_budget_what_was_spent_and_when_it_rese
         "{sheet}"
     );
     assert!(
-        sheet.contains("$0.88 of $1 spent this month") && sheet.contains("Refused until 1 "),
+        sheet.contains("$0.88 of $1.00 spent this month") && sheet.contains("Refused until 1 "),
         "{sheet}"
     );
     Ok(())
@@ -1480,7 +1480,7 @@ async fn key_budget_and_expired_key_sheets_name_the_key_its_amounts_and_the_way_
     .await?;
     for expected in [
         "maya.cohen's key budget is spent",
-        "$0.82 of $1 spent today",
+        "$0.82 of $1.00 spent today",
         "Refused until 00:00 UTC",
         "<dt class=\"t-tag\">Budget</dt>",
         "<dt class=\"t-tag\">Resets</dt>",
@@ -1518,7 +1518,7 @@ async fn people_shows_each_keys_status_its_budget_meter_and_the_fix() -> TestRes
         r#"<span class="g-tag g-tag--refused t-tag">Expired</span>"#,
         // m12-3: "$0.82 of $1" is not spent; the next request would pass it.
         r#"<span class="g-tag g-tag--refused t-tag">Budget reached</span>"#,
-        "$0.82 of $1 today",
+        "$0.82 of $1.00 today",
         r#"role="meter""#,
         "Issue a new key",
         "/console/people?issue=1&amp;name=ci.release&amp;team=platform",
@@ -1618,9 +1618,9 @@ async fn the_issue_dialog_takes_an_expiry_and_a_budget() -> TestResult {
         keys.contains("expires: 2099-01-31") && keys.contains("budget: { usd: 0.005, per: day }"),
         "{keys}"
     );
-    // A small budget reads in real cents, not as $0.00.
+    // A small budget reads in four places under a cent, not as $0.00.
     let (_, _, people) = send(&s.app, get("/console/people", &cookie)?).await?;
-    assert!(people.contains("$0 of $0.0050 today"), "{people}");
+    assert!(people.contains("$0.00 of $0.0050 today"), "{people}");
     let (status, _, page) = send(
         &s.app,
         post(
@@ -1678,7 +1678,7 @@ async fn spend_lists_key_budgets_with_the_team_ones() -> TestResult {
     let cookie = sign_in(&s.app).await?;
     let (_, _, page) = send(&s.app, get("/console/spend", &cookie)?).await?;
     assert!(
-        page.contains("maya.cohen&#39;s key") && page.contains("$0.82 of $1 today"),
+        page.contains("maya.cohen&#39;s key") && page.contains("$0.82 of $1.00 today"),
         "{page}"
     );
     Ok(())
@@ -2218,8 +2218,7 @@ async fn an_answer_guardrail_shows_on_its_request_and_the_price_source_shows() -
     assert!(
         spend.contains("priced from the LiteLLM table")
             && spend.contains("Prices this month came from the LiteLLM table")
-            && spend.contains("under 0.01")
-            && !spend.contains(r#"<td class="g-table__num">0.0035"#),
+            && spend.contains(r#"<td class="g-table__num">$0.0035</td>"#),
         "{spend}"
     );
     Ok(())
