@@ -1,0 +1,15 @@
+name: Feature or integration
+description: Something Gantry should do, or a tool it should work with
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would solve it

@@ -119,6 +119,11 @@ Gantry is pre-1.0 (0.1.0, see [CHANGELOG.md](CHANGELOG.md)) and runs as one node
 
 ## Contributing
 
+New here? [CONTRIBUTING.md](CONTRIBUTING.md) gets you from clone to a running gateway in five minutes, and
+[ARCHITECTURE.md](ARCHITECTURE.md) shows where each part lives. Issues labeled
+[good first issue](https://github.com/eliransu/gantry/issues?q=is%3Aopen+label%3A%22good+first+issue%22) name the files
+to change and the test that proves it.
+
 ```bash
 scripts/ci.sh
 ```

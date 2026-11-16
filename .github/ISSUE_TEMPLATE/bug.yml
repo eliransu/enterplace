@@ -1,0 +1,29 @@
+name: Bug
+description: Gantry did something wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The request you sent and what came back. Remove keys, tokens and personal data first.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `gantry --version`, or the image tag.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run it
+      options: [install script, Docker or Compose, Helm, Terraform, cargo build, other]
