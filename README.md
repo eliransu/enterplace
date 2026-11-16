@@ -133,6 +133,8 @@ Gantry is one repository with two licenses, as LiteLLM is:
 - `enterprise/` is under the [Gantry Commercial License](enterprise/LICENSE): the source is there to read, and
   running it in production needs a valid Gantry license key.
 
+The [NOTICE](NOTICE) file at the root states the same split, as LiteLLM's root license does.
+
 The open source crates build, test and run without `enterprise/` and never import it. The `gantry` binary in the
 image is the enterprise build: with no license key it is the open source gateway, and a key unlocks the enterprise
 features. See [License key](https://gantry-docs.enterplace.dev/operations/license/).

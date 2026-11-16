@@ -1,0 +1,9 @@
+Gantry
+Copyright 2026 Gantry
+
+Portions of this software are licensed as follows:
+
+* All content under the enterprise/ directory of this repository is licensed under the Gantry Commercial License in
+  enterprise/LICENSE. Its source is available to read, test and audit; production use needs a valid Gantry license
+  key.
+* All content outside enterprise/ is licensed under the Apache License 2.0 in LICENSE.
