@@ -23,6 +23,7 @@ use gantry_core::policy::Permission;
 
 use crate::{
     Admin, Console, Form,
+    figures::{EST_HEADER, EST_TIP, money, money_est, time_full, time_list},
     html::{button, empty, enc, esc, facts, head, icon, link, motif, pager, tag, thousands},
     not_permitted, page, pages, redirect, same_origin,
 };
@@ -42,18 +43,6 @@ pub(crate) fn scoped(admin: &Admin, query: &mut Query) {
             .within
             .push(("customer".into(), admin.customers.clone()));
     }
-}
-
-pub(crate) fn money(usd: f64) -> String {
-    if usd > 0.0 && usd < 0.01 {
-        return format!("{usd:.4}");
-    }
-    let cents = (usd * 100.0).round() as u64;
-    format!(
-        "{}.{:02}",
-        thousands(usize::try_from(cents / 100).unwrap_or(usize::MAX)),
-        cents % 100
-    )
 }
 
 /// A list on its first page: an empty one there means nothing at all.
@@ -314,12 +303,7 @@ pub(crate) async fn requests_page(
         let _ = writeln!(
             body,
             r#"<tr><td>{}<span class="g-table__sub">{}</span></td><td>{}<span class="g-table__sub">{}</span></td><td>{}</td><td class="g-table__wide">{}<span class="g-table__sub">{}</span></td><td class="g-table__num">{}</td><td class="g-table__num">{}</td><td class="g-table__wide">{}<span class="g-table__sub"><a href="{}">Open</a></span></td></tr>"#,
-            esc(row
-                .time
-                .get(..19)
-                .unwrap_or(&row.time)
-                .replace('T', " ")
-                .as_str()),
+            esc(&time_list(&row.time)),
             esc(&row.id),
             cell("person"),
             cell("team"),
@@ -349,8 +333,12 @@ pub(crate) async fn requests_page(
                 if query.pairs().is_empty() { "?" } else { "&" }
             ))
         };
+        let est_head = format!(
+            r#"<th class="g-table__num" title="{}">USD ({EST_HEADER})</th>"#,
+            esc(EST_TIP)
+        );
         format!(
-            "<div class=\"g-table-wrap\"><table class=\"g-table g-table--stack t-mono-sm\">\n<thead class=\"t-tag\"><tr><th>Time (UTC) and decision</th><th>Person and team</th><th>Outcome</th><th>Model and provider</th><th class=\"g-table__num\">USD</th><th class=\"g-table__num\">Latency</th><th>Proof</th></tr></thead>\n<tbody>\n{body}</tbody>\n</table></div>\n{}",
+            "<div class=\"g-table-wrap\"><table class=\"g-table g-table--stack t-mono-sm\">\n<thead class=\"t-tag\"><tr><th>Time (UTC) and decision</th><th>Person and team</th><th>Outcome</th><th>Model and provider</th>{est_head}<th class=\"g-table__num\">Latency</th><th>Proof</th></tr></thead>\n<tbody>\n{body}</tbody>\n</table></div>\n{}",
             pager(
                 &format!("Page {page_no}, {} requests", shown.len()),
                 (
@@ -432,7 +420,7 @@ fn row_sheet(row: &Row, close: &str) -> String {
     };
     let mut pairs: Vec<(&str, String)> = vec![
         ("Decision", esc(&row.id)),
-        ("Time", esc(&row.time)),
+        ("Time", esc(&time_full(&row.time))),
         ("Outcome", outcome_tag(row)),
         ("Rule", esc(&row.rule)),
         ("Route", esc(&row.path)),
@@ -455,14 +443,10 @@ fn row_sheet(row: &Row, close: &str) -> String {
             ),
         ),
         (
-            if row.estimate {
-                "Cost, USD (API-equivalent estimate)"
-            } else {
-                "Cost, USD"
-            },
+            if row.estimate { "Cost, est." } else { "Cost" },
             cost_text(row),
         ),
-        ("Charged, USD", money(row.charged_usd)),
+        ("Charged", money(row.charged_usd)),
         ("Latency", ms(row.latency_ms)),
     ]);
     if !row.stages.is_empty() {
@@ -783,7 +767,7 @@ pub(crate) async fn analytics_page(
             &count(all.input_tokens + all.output_tokens),
             "tokens in and out"
         ),
-        stat(&format!("${}", money(all.cost_usd)), "cost"),
+        stat(&money(all.cost_usd), "cost"),
         stat(&pct(&all, 50.0), "latency p50"),
         stat(&pct(&all, 95.0), "latency p95"),
         stat(&pct(&all, 99.0), "latency p99"),
@@ -826,7 +810,7 @@ pub(crate) async fn analytics_page(
     let mut panels = String::new();
     for (title, points, unit) in charts {
         let show = move |v: f64| match unit {
-            "usd" => format!("${}", money(v)),
+            "usd" => money(v),
             "ms" => ms(Some(v as u64)),
             _ => count(v.round() as u64),
         };
@@ -1030,12 +1014,9 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> String {
             Pace::Lasts => "At this pace it lasts the period.".to_string(),
             Pace::RunsOut(at) => format!(
                 "At this pace it runs out at {} UTC.",
-                gantry_core::audit::rfc3339(
+                time_list(&gantry_core::audit::rfc3339(
                     std::time::UNIX_EPOCH + std::time::Duration::from_secs(at)
-                )
-                .get(..16)
-                .unwrap_or_default()
-                .replace('T', " ")
+                ))
             ),
         };
         let pct = if budget.usd > 0.0 {
@@ -1053,7 +1034,7 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> String {
         };
         let _ = write!(
             out,
-            r#"<div class="g-meter"{state} style="--g-meter-value: {pct}%"><div class="g-meter__row"><span class="t-mono-lg">{}</span><span class="t-mono-sm">${} of ${} per {}</span></div><div class="g-meter__track" role="meter" aria-valuenow="{pct}" aria-valuemin="0" aria-valuemax="100" aria-label="{} budget used"><div class="g-meter__fill"></div></div><span class="t-small g-muted">Rule {}. {note}</span></div>"#,
+            r#"<div class="g-meter"{state} style="--g-meter-value: {pct}%"><div class="g-meter__row"><span class="t-mono-lg">{}</span><span class="t-mono-sm">{} of {} per {}</span></div><div class="g-meter__track" role="meter" aria-valuenow="{pct}" aria-valuemin="0" aria-valuemax="100" aria-label="{} budget used"><div class="g-meter__fill"></div></div><span class="t-small g-muted">Rule {}. {note}</span></div>"#,
             esc(&label),
             money(spent),
             money(budget.usd),
@@ -1071,7 +1052,13 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> String {
 fn cost_text(row: &gantry_core::insights::Row) -> String {
     match row.cost_usd {
         None => "-".into(),
-        Some(cost) if row.estimate => format!("~{} (est.)", money(cost)),
+        Some(cost) if row.estimate => {
+            format!(
+                r#"<span title="{}">{}</span>"#,
+                esc(EST_TIP),
+                money_est(cost)
+            )
+        }
         Some(cost) => money(cost),
     }
 }

@@ -29,13 +29,15 @@ use gantry_core::{
 use serde_json::json;
 
 use crate::{
-    Act, Admin, Console, Form, NOT_RECORDED, foreign,
+    Act, Admin, Console, Form, NOT_RECORDED,
+    figures::{money, time_full, time_list},
+    foreign,
     html::{
         Field, button, close_link, code, dialog, empty, enc, esc, facts, field, head, icon, link,
         motif, tag,
     },
     page,
-    pages::{self, PolicySource, alert, long_time, money, tool_page},
+    pages::{self, PolicySource, alert, tool_page},
     people_body, read_only, record, redirect, same_origin,
 };
 
@@ -618,7 +620,7 @@ async fn teams_page(State(console): State<Console>, headers: HeaderMap, uri: Uri
         let rule = loaded.policy.rule_for(&probe);
         let budget = rule.and_then(|r| r.limits.budget()).map_or_else(
             || "none".to_string(),
-            |b| format!("${} a {}", money(b.usd), b.per.describe()),
+            |b| format!("{} a {}", money(b.usd), b.per.describe()),
         );
         let rule = rule.map_or_else(
             || "none: refused".to_string(),
@@ -1081,7 +1083,7 @@ fn versions_body(console: &Console, admin: &Admin, query: &Form, error: &str) ->
     let mut rows = String::new();
     for v in all.iter() {
         let decided = match (&v.decided_by, &v.decided_at) {
-            (Some(by), Some(at)) => format!("{} by {}", long_time(at), esc(by)),
+            (Some(by), Some(at)) => format!("{} by {}", time_full(at), esc(by)),
             _ => String::new(),
         };
         let _ = write!(
@@ -1090,7 +1092,7 @@ fn versions_body(console: &Console, admin: &Admin, query: &Form, error: &str) ->
             v.id,
             state_tag(&v.state),
             esc(&v.created_by),
-            long_time(&v.created_at),
+            time_full(&v.created_at),
             esc(&v.note),
         );
     }
@@ -1178,7 +1180,7 @@ fn version_detail(
         state_tag(&v.state),
         facts(&[
             ("Saved by", esc(&v.created_by)),
-            ("Saved at", long_time(&v.created_at)),
+            ("Saved at", time_full(&v.created_at)),
             ("Note", esc(&v.note)),
             ("SHA-256", esc(&v.sha256[..16])),
         ]),
@@ -1375,7 +1377,7 @@ fn dry_run_report(run: &DryRun) -> String {
             .map(|r| {
                 format!(
                     "<tr><td>{}</td><td>{}<span class=\"g-table__sub\">{}</span></td><td>{}</td><td>{} to {}</td><td class=\"g-table__wide\">{} to {}</td></tr>",
-                    long_time(&r.time),
+                    time_list(&r.time),
                     esc(&r.person),
                     esc(&r.team),
                     esc(&r.model),
@@ -1403,7 +1405,7 @@ fn dry_run_report(run: &DryRun) -> String {
             tag("warn", "Changes", "")
         },
         gantry_core::count(run.replayed, "request"),
-        long_time(&run.since),
+        time_full(&run.since),
         changed,
         gantry_core::count(run.skipped, "request"),
         esc(&run.note),

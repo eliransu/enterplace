@@ -6,6 +6,7 @@
 
 pub mod cli;
 mod edit;
+mod figures;
 pub mod html;
 mod insights;
 mod pages;
