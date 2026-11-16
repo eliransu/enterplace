@@ -28,6 +28,7 @@ http-body.workspace = true
 ring = "0.17"
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
+posthog-rs = "0.31"
 
 [dev-dependencies]
 futures-core = "0.3"

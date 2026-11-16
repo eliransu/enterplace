@@ -1589,6 +1589,8 @@ pub(crate) struct Admitted {
     key: String,
     model: String,
     provider: String,
+    /// The provider's API family, used by AI Observability rather than the operator's route name.
+    provider_kind: String,
     /// The version that decided the request, as on its decision record.
     version: (String, String),
     price: Option<Price>,
@@ -1642,6 +1644,10 @@ pub(crate) struct Admitted {
     captured: Option<Bytes>,
     /// A streamed answer's frames, kept only for a captured request.
     stream_copy: Option<Vec<Bytes>>,
+    /// The model request and streamed response while an enabled PostHog client needs AI Observability content.
+    ai_request: Option<Bytes>,
+    ai_stream_copy: Option<Vec<Bytes>>,
+    ai_streamed: bool,
     /// A background response (`background: true`): when its answer says it is still queued or running, nothing is
     /// charged now and its reservation is handed on here, held until the response is settled.
     deferred: Option<tokio::sync::oneshot::Sender<Deferred>>,
@@ -1740,6 +1746,7 @@ pub(crate) struct Ask<'a> {
     /// The model name the caller sent: an alias's name when `model` is one of its deployments.
     pub sent: &'a str,
     pub provider: &'a str,
+    pub provider_kind: &'a str,
     /// The policy and keys hashes of the version that decided the request.
     pub version: (&'a str, &'a str),
     pub prices: &'a PriceOverrides,
@@ -1789,6 +1796,7 @@ pub(crate) async fn admit(
         key: ask.person.key.clone(),
         model: ask.model.to_string(),
         provider: ask.provider.to_string(),
+        provider_kind: ask.provider_kind.to_string(),
         version: (ask.version.0.to_string(), ask.version.1.to_string()),
         price: price_for(ask.model, ask.prices),
         reservations: Vec::new(),
@@ -1826,6 +1834,9 @@ pub(crate) async fn admit(
             .filter(|c| c.wanted(&ask.person.team))
             .map(|_| ask.body.clone()),
         stream_copy: None,
+        ai_request: crate::posthog::captures_ai_generation(ask.route).then(|| ask.body.clone()),
+        ai_stream_copy: None,
+        ai_streamed: false,
         deferred: None,
         on_tokens: None,
         stages: None,
@@ -2775,9 +2786,18 @@ impl Admitted {
 
     /// A fallback or another deployment of an alias answered: the usage record names it, and it is charged at its
     /// model's price.
-    pub(crate) fn served_by(&mut self, provider: &str, model: &str, price: Option<Price>) {
+    pub(crate) fn served_by(
+        &mut self,
+        provider: &str,
+        provider_kind: &str,
+        model: &str,
+        price: Option<Price>,
+    ) {
         if self.provider != provider {
             self.provider = provider.to_string();
+        }
+        if self.provider_kind != provider_kind {
+            self.provider_kind = provider_kind.to_string();
         }
         if !model.is_empty() && self.model != model {
             self.model = model.to_string();
@@ -3056,6 +3076,31 @@ impl Admitted {
             usage.as_ref().filter(|_| !hit),
             self.started.elapsed(),
         );
+        if !hit && let Some(request) = self.ai_request.take() {
+            let streamed_answer = self
+                .ai_stream_copy
+                .take()
+                .map(|frames| Bytes::from(frames.concat()));
+            let answer = streamed_answer
+                .as_ref()
+                .or_else(|| answer.as_ref().map(|(_, body)| body));
+            crate::posthog::capture_ai_generation(
+                &format!("gantry:{}", self.key),
+                &self.decision,
+                self.session.as_ref().map(|(session, _)| session.as_str()),
+                &self.model,
+                &self.provider_kind,
+                &self.route,
+                &request,
+                answer,
+                self.ai_streamed,
+                usage.as_ref(),
+                (!left).then_some(status.as_u16()),
+                self.started.elapsed().as_secs_f64(),
+                !status.is_success() || !complete,
+                cost,
+            );
+        }
         // What caching saved: a hit, what its answer cost when made; a provider's prompt cache, the prompt priced
         // as if none of it were cached, less what it cost. A cache write costs more than input, so that can be less
         // than nothing.
@@ -3343,7 +3388,12 @@ impl Metered {
         let kind = content_type.as_ref().and_then(|v| v.to_str().ok());
         let aws = kind.is_some_and(|v| v.starts_with("application/vnd.amazon.eventstream"));
         let stream = aws || kind.is_some_and(|v| v.starts_with("text/event-stream"));
-        let keep = !stream || admitted.capture.is_some() || admitted.captured.is_some();
+        let keep = !stream
+            || admitted.capture.is_some()
+            || admitted.captured.is_some()
+            || admitted.ai_request.is_some();
+        let mut admitted = admitted;
+        admitted.ai_streamed = stream;
         response.map(|inner| {
             Body::new(Metered {
                 inner,
@@ -3377,7 +3427,10 @@ impl Metered {
                 }
                 // Handed to the embedder's capture only when it wants this request's text.
                 if admitted.captured.is_some() {
-                    admitted.stream_copy = frames;
+                    admitted.stream_copy = frames.clone();
+                }
+                if admitted.ai_request.is_some() {
+                    admitted.ai_stream_copy = frames;
                 }
                 admitted.streamed = scanner.streamed_output();
                 let (usage, done) = scanner.finish_final();

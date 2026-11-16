@@ -49,6 +49,8 @@ mod mcp;
 mod metrics;
 pub mod oci;
 mod policy_api;
+mod posthog;
+mod posthog_logs;
 mod realtime;
 mod reload;
 mod spend;
@@ -70,6 +72,7 @@ use hyper_util::{
     server::{conn::auto::Builder, graceful::GracefulShutdown},
     service::TowerToHyperService,
 };
+use posthog_rs::Event;
 pub use reload::{
     Governed, Host, OrgChain, Reload, Reloader, Trigger, governed, governed_with, open_store,
 };
@@ -5447,6 +5450,13 @@ async fn decide(
             ));
         }
     }
+    if guard_check.is_none()
+        && outcome.is_ok()
+        && let (Some(person), Some(client)) = (seen.person, posthog::client())
+    {
+        let distinct_id = posthog::distinct_id(person);
+        client.capture(Event::new("model_request_authorized", &distinct_id));
+    }
     if let (Some(admitted), Ok(Next::Answer(response))) = (seen.hit.take(), &outcome) {
         (*admitted).settle(response.status(), spend::Ended::Complete, None, true, None);
     }
@@ -5513,6 +5523,7 @@ async fn limit(
         model,
         sent,
         provider: &provider.name,
+        provider_kind: provider.kind.word(),
         version: (&version.policy_sha256, &version.keys_sha256),
         prices: policy.prices(),
         headers: &parts.headers,
@@ -7365,6 +7376,7 @@ async fn send(
         Some(mut admitted) => {
             admitted.served_by(
                 &version.providers[served].name,
+                version.providers[served].kind.word(),
                 &served_model,
                 price.clone(),
             );
@@ -9952,7 +9964,13 @@ pub async fn serve_on(
     timeouts: Timeouts,
     stop: impl Future<Output = ()>,
 ) {
+    posthog::init().await;
+    posthog_logs::init().await;
+    posthog_logs::info("gantry_server_started");
     accept_loop(listener, app, timeouts, stop, None).await;
+    posthog_logs::info("gantry_server_stopping");
+    posthog_logs::shutdown().await;
+    posthog::shutdown().await;
 }
 
 /// `serve_on` with TLS terminated by Gantry: every connection must finish a TLS handshake first.
@@ -9963,7 +9981,13 @@ pub async fn serve_on_tls(
     stop: impl Future<Output = ()>,
     tls: tokio_rustls::TlsAcceptor,
 ) {
+    posthog::init().await;
+    posthog_logs::init().await;
+    posthog_logs::info("gantry_server_started");
     accept_loop(listener, app, timeouts, stop, Some(tls)).await;
+    posthog_logs::info("gantry_server_stopping");
+    posthog_logs::shutdown().await;
+    posthog::shutdown().await;
 }
 
 /// Reads a PEM certificate chain and private key for `gantry serve --tls-cert --tls-key`.

@@ -10,13 +10,14 @@ use axum::{
     http::{HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use gantry_core::store::{self, Store};
 use gantry_core::{
     audit,
     config::{self, valid_name},
     id, keyfile, kill,
     policy::{Permission, Policy, Principal, Role},
+    store::{self, Store},
 };
+use posthog_rs::Event;
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
 
@@ -531,6 +532,31 @@ async fn admin(state: &AppState, request: Request, decision: &str) -> Result<Res
             Some(&refusal.message),
         )
         .await?;
+    }
+    if done.is_ok()
+        && matches!(
+            call.action,
+            Some(
+                "issue_key"
+                    | "revoke_own_key"
+                    | "rotate_key"
+                    | "revoke_key"
+                    | "update_key"
+                    | "set_kill"
+                    | "clear_kill"
+                    | "add_credential"
+                    | "rotate_credential"
+                    | "remove_credential"
+                    | "test_guardrail"
+            )
+        )
+        && let (Some(person), Some(action), Some(client)) =
+            (call.person.as_ref(), call.action, crate::posthog::client())
+    {
+        let distinct_id = crate::posthog::distinct_id(person);
+        let mut event = Event::new("admin_action_completed", &distinct_id);
+        let _ = event.insert_prop("action", action);
+        client.capture(event);
     }
     done
 }
