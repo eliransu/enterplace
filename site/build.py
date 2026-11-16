@@ -131,6 +131,8 @@ def check():
                 if frag not in ids:
                     bad.append(f"{page.relative_to(OUT)}: #{frag} is not on the page")
                 continue
+            if target.startswith("/_"):
+                continue  # served by site/worker.js, not a file
             f = OUT / target.lstrip("/")
             f = f / "index.html" if target.endswith("/") else f
             if not f.is_file():

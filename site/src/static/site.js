@@ -5,13 +5,6 @@
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const root = document.documentElement;
 
-  // Clicks and copies go to site/worker.js, which records them with no cookie. Capture runs before a button relabels itself.
-  const send = (e) => { try { navigator.sendBeacon('/_e', JSON.stringify({ e, p: location.pathname })); } catch (err) { /* not counted */ } };
-  document.addEventListener('click', (ev) => {
-    const el = ev.target.closest && ev.target.closest('a, button');
-    if (el) send((el.getAttribute('aria-label') || el.textContent).trim().replace(/\s+/g, ' ').slice(0, 60) || el.getAttribute('href') || '');
-  }, true);
-  document.addEventListener('copy', () => { const t = String(getSelection()).trim(); if (t) send('copy: ' + t.replace(/\s+/g, ' ').slice(0, 60)); });
 
   // A button that copies the text of the element its data-copy names: the prompt that has a coding agent set Gantry up.
   $$('button[data-copy]').forEach((b) => b.addEventListener('click', () => {

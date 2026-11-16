@@ -21,6 +21,6 @@ q "SELECT source, kind, count(*) n FROM hits WHERE $since AND source != '' GROUP
 echo "Agents:"
 q "SELECT agent, count(*) n, count(DISTINCT path) pages FROM hits WHERE $since AND agent != '' GROUP BY agent ORDER BY n DESC LIMIT 20"
 echo "Clicks and copies:"
-q "SELECT event, path, count(*) n FROM hits WHERE $since AND kind = 'click' GROUP BY event, path ORDER BY n DESC LIMIT 20"
+q "SELECT event, detail, path, count(*) n FROM hits WHERE $since AND kind = 'click' GROUP BY event, detail, path ORDER BY n DESC LIMIT 25"
 echo "Countries, browsers:"
 q "SELECT country, count(*) n FROM hits WHERE $since AND kind = 'view' GROUP BY country ORDER BY n DESC LIMIT 10"
