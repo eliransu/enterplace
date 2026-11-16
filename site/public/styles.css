@@ -104,6 +104,8 @@ strong { font-weight: 600; }
 .nav-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .theme { width: 44px; height: 44px; border-radius: 999px; border: 1px solid var(--line-strong); background: none; color: var(--text); display: grid; place-items: center; cursor: pointer; flex: none; }
 .theme:hover { background: var(--surface); }
+a.theme { text-decoration: none; }
+.ftr-legal a { color: inherit; }
 .burger { display: none; margin-left: auto; width: 44px; height: 44px; border-radius: 999px; border: 1px solid var(--line-strong); background: none; cursor: pointer; place-items: center; }
 .burger span, .burger span::before { display: block; width: 16px; height: 2px; border-radius: 2px; background: var(--text); transition: transform 240ms var(--ease); }
 .burger span { transform: translateY(-3px); }

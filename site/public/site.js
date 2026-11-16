@@ -65,7 +65,7 @@
   matchMedia('(min-width: 1081px)').addEventListener('change', () => sheet(false));
 
   // Theme: follows the system until the visitor picks one.
-  $('.theme').addEventListener('click', () => {
+  $('button.theme').addEventListener('click', () => {
     const now = root.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     root.dataset.theme = now === 'dark' ? 'light' : 'dark';
     try { localStorage.setItem('theme', root.dataset.theme); } catch (e) { /* private mode: the choice lasts for this page */ }
