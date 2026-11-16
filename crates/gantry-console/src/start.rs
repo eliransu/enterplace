@@ -1340,7 +1340,7 @@ fn token_form(c: &Ctx<'_>, placeholders: (&str, &str)) -> String {
             value: "",
             mono: true,
             extra: &format!(r#" placeholder="{n}" required autocomplete="off""#),
-            hint: "Free: it names the person and reaches no model on its own.",
+            hint: "",
             error: "",
         }),
         field(&Field {
@@ -1409,14 +1409,19 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         "Point Claude Code at Gantry",
         !seen.is_empty(),
         format!(
-            r#"<p class="t-body">Make a person token, then paste the lines where Claude Code runs. Keep using your normal Claude login: there is no API key to set. The token only names the person to Gantry.</p>{}{}<p class="t-small g-check__muted">Leave ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset, or Claude Code stops using your subscription. For a rollout, put the managed settings on each machine with your MDM, one token per person: {}.</p>{}"#,
+            r#"<p class="t-body">Make a free person token and paste these lines where Claude Code runs. Keep your normal Claude login: there is no API key.</p>{}{}<p class="t-small g-check__muted">{}</p>{}"#,
             token_form(c, ("sarah.miller", "platform")),
             block(
                 "lines-subscription",
                 &tabs_by("setup", "How to set it", 2, &[("shell", "Shell"), ("mdm", "Managed settings (MDM)")], if mdm { "mdm" } else { "shell" }),
                 &subscription_lines(base, &token, mdm)
             ),
-            esc(MANAGED_SETTINGS),
+            // One line under the lines shown: the paths only where the managed settings are, not under the shell lines.
+            if mdm {
+                format!("One file per machine, one token per person: {}.", esc(MANAGED_SETTINGS))
+            } else {
+                "Leave ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset, or Claude Code stops using your subscription.".to_string()
+            },
             acts(&docs("Read the Claude Code guide", "/integrations/claude-code/"))
         ),
         &format!("The first request from {who} on a Claude subscription arrives."),
