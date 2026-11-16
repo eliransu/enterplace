@@ -400,5 +400,7 @@ async fn live_json_changes_when_a_record_is_written_and_needs_a_session() -> Tes
     let after = read().await?;
     assert_ne!(before["signature"], after["signature"]);
     assert!(after["signature"].is_string());
+    // The sidebar indicator shows when the last request arrived: the time the log last changed, in milliseconds.
+    assert!(before["last_request_ms"].is_u64() && after["last_request_ms"].is_u64());
     Ok(())
 }

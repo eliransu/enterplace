@@ -128,19 +128,30 @@ document.addEventListener("DOMContentLoaded", function () {
   timer = setTimeout(tick, 2000);
 });
 
-// Requests, Analytics, Audit log and Spend show records as they arrive. Every 2 seconds, while the tab is visible,
-// the page asks whether the audit log changed (/console/live.json) and, if it did, fetches itself and swaps its
-// content in place: no reload, the scroll stays, and rows that were not there before are marked for a moment.
+// Every console page polls /console/live.json every 2 seconds while the tab is visible. The sidebar's indicator
+// (data-live: checking, live or paused; data-live-last-request: the last record's time in ms, empty when none)
+// follows the poll: paused when the poll fails or the tab is hidden. Requests, Analytics, Audit log and Spend also
+// show records as they arrive: when the audit log changed, the page fetches itself and swaps its content in place,
+// with no reload, the scroll kept, and rows that were not there before marked for a moment.
 // Nothing is swapped while a field has the focus or a record's sheet is open, so nobody loses what they are doing.
 document.addEventListener("DOMContentLoaded", function () {
   var main = document.getElementById("main");
-  if (!main || !window.fetch || !window.DOMParser) return;
-  if (!/^\/console\/(requests|analytics|audit|spend)\/?$/.test(location.pathname)) return;
+  var indicator = document.querySelector("[data-live]");
+  var swaps = /^\/console\/(requests|analytics|audit|spend)\/?$/.test(location.pathname);
+  if (!window.fetch || (!indicator && !(main && swaps && window.DOMParser))) return;
   var seen = null;
   var timer = null;
+  function show(state, last) {
+    if (!indicator) return;
+    var known = typeof last === "number";
+    indicator.setAttribute("data-live", state);
+    indicator.setAttribute("data-live-last-request", known ? String(last) : "");
+    var when = known ? "last request " + new Date(last).toLocaleTimeString() : "no requests yet";
+    indicator.textContent = state === "live" ? "Live, " + when : state === "paused" ? "Paused" : "Checking requests";
+  }
   function busy() {
     var at = document.activeElement;
-    return /[?&]record=/.test(location.search) || (at && main.contains(at) && /^(INPUT|SELECT|TEXTAREA)$/.test(at.tagName));
+    return /[?&]record=/.test(location.search) || (at && main && main.contains(at) && /^(INPUT|SELECT|TEXTAREA)$/.test(at.tagName));
   }
   function redraw() {
     return fetch(location.href, { credentials: "same-origin", cache: "no-store" })
@@ -158,17 +169,24 @@ document.addEventListener("DOMContentLoaded", function () {
   }
   function again() { timer = setTimeout(tick, 2000); }
   function tick() {
-    if (document.hidden) { timer = null; return; }
+    if (document.hidden) { timer = null; show("paused"); return; }
     fetch("/console/live.json", { credentials: "same-origin", cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
       .then(function (state) {
-        if (!state || state.signature === seen || busy()) { if (state && seen === null) seen = state.signature; return; }
+        if (!state) { show("paused"); return; }
+        show("live", state.last_request_ms);
+        if (!swaps || !main) return;
+        if (state.signature === seen || busy()) { if (seen === null) seen = state.signature; return; }
         var first = seen === null;
         seen = state.signature;
         if (!first) return redraw();
       })
       .then(again, again);
   }
-  document.addEventListener("visibilitychange", function () { if (!document.hidden && !timer) tick(); });
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) show("paused");
+    else if (!timer) tick();
+  });
   tick();
 });
