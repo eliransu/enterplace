@@ -315,7 +315,7 @@ def main():
             check(chrome.js("document.querySelector(\"button[data-copy='agent-step-2']\").textContent") in ("Copied", "Copy for your agent"),
                   "the Copy for your agent button ran")
             check(token in prompt and gateway in prompt and "x-gantry-user" in prompt, "Copy for your agent holds the token and the gateway")
-            md = re.search(r"https://gantry-docs\.eliran\.me/(\S+?)\.md", prompt)
+            md = re.search(r"https://gantry-docs\.enterplace\.dev/(\S+?)\.md", prompt)
             check(md is not None, "Copy for your agent links the docs as Markdown")
             built = ROOT / "docs" / "dist" / f"{md.group(1)}.md"
             if (ROOT / "docs" / "dist").exists():
@@ -337,7 +337,8 @@ def main():
             chrome.wait("document.querySelector('#step-2[data-state=done]') || document.body.innerText.includes('Your first requests arrived')",
                         "Point Claude Code at Gantry to turn done", 15)
             chrome.go(f"{gateway}/console/requests")
-            check("(est.)" in chrome.js("document.body.innerText"), "Requests shows the cost as an estimate")
+            # Table headers are set in capitals by CSS, so innerText reads "(EST.)".
+            check("(est.)" in chrome.js("document.body.innerText").lower(), "Requests shows the cost as an estimate")
             chrome.shot(out / "8-subscription-request.png")
         finally:
             chrome.close()

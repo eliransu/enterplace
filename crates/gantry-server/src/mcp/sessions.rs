@@ -129,6 +129,9 @@ async fn page(
     let Some(admin) = console.signed_in(headers).await else {
         return gantry_console::redirect("/console/sign-in");
     };
+    if let Some(page) = super::console::no_servers(mcp, console, &admin, headers, uri, SESSIONS) {
+        return page;
+    }
     let listed = mcp.sessions(&reach_of(&admin)).await;
     let text = |v: &Value, f: &str| html::esc(v[f].as_str().unwrap_or("-"));
     let end = |id: &str, label: &str| {

@@ -399,15 +399,22 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
 
     // The first data on Start here, with the next step under it.
     let (_, _, page) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
+    // The live strip: tools, the gate, providers, a count of the last 10 minutes and the newest requests.
     for part in [
         "Your first requests arrived",
-        "First requests through Gantry",
+        r#"aria-label="Live traffic""#,
+        "in the last 10 minutes",
+        r#"<span class="t-mono-sm">claude-code</span>"#,
+        r#"<span class="t-mono-sm">anthropic</span>"#,
         "claude-sonnet-5-5",
+        r#"class="g-flowing__disc" data-outcome="pass""#,
         "Your steps",
         "Add a second person",
     ] {
         assert!(page.contains(part), "{part}: {page}");
     }
+    // Only the newest request's disc moves: the page redraws when one arrives, and each new one crosses once.
+    assert_eq!(page.matches("g-flowing__disc--new").count(), 1, "{page}");
 
     // A second person, then the five steps once the required steps are done.
     let made = std::fs::read_to_string(s.dir.join("gantry.keys.yaml"))?;

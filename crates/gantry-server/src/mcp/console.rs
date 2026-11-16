@@ -342,6 +342,29 @@ pub(super) fn extension(mcp: Shared) -> gantry_console::Extension {
     }
 }
 
+/// With no MCP server in the policy, every MCP page says what fills it and opens the Start here step for it. The pages
+/// are served whenever the policy can reload, so a server added later shows without a restart.
+pub(super) fn no_servers(
+    mcp: &Mcp,
+    console: &Console,
+    admin: &gantry_console::Admin,
+    headers: &HeaderMap,
+    uri: &Uri,
+    title: &str,
+) -> Option<Response> {
+    if !mcp.servers().is_empty() {
+        return None;
+    }
+    let base = gantry_console::gateway_origin(headers, uri, &None);
+    let main = format!(
+        "{}{}{}",
+        html::head(title, "", ""),
+        html::page_tabs(&MCP_PAGES, title),
+        gantry_console::empty_page(APPROVALS, &base, !admin.read_only)
+    );
+    Some(console.page(StatusCode::OK, admin, title, uri, &main))
+}
+
 /// Without MCP servers in the policy, MCP approvals says what fills it and opens the Start here step for it.
 pub(crate) fn empty_extension() -> gantry_console::Extension {
     let routes = Router::new().route(
@@ -394,6 +417,9 @@ async fn tools_page(
     let Some(admin) = console.signed_in(headers).await else {
         return gantry_console::redirect("/console/sign-in");
     };
+    if let Some(page) = no_servers(mcp, console, &admin, headers, uri, TOOLS) {
+        return page;
+    }
     let pins = mcp.keep.list("pin").await.unwrap_or_default();
     let used = mcp.usage();
     let kills = mcp
@@ -623,6 +649,9 @@ async fn approvals_page(
     let Some(admin) = console.signed_in(headers).await else {
         return gantry_console::redirect("/console/sign-in");
     };
+    if let Some(page) = no_servers(mcp, console, &admin, headers, uri, APPROVALS) {
+        return page;
+    }
     let waiting = mcp.keep.list("approval").await.unwrap_or_default();
     let mut rows = String::new();
     for (id, call) in waiting.iter().filter(|(_, c)| c["status"] == "pending") {

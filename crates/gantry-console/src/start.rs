@@ -2113,60 +2113,90 @@ fn checklist(steps: &[Step], states: &[&str]) -> String {
     out + "</ol>"
 }
 
-/// The first requests on Start here, with a reading of each part.
-fn first_data(f: &Facts) -> String {
-    let rows: Vec<&Row> = f.requests.iter().take(5).collect();
-    let since = f
-        .requests
-        .last()
-        .map(|r| clock(&r.time))
-        .unwrap_or_default();
-    let people = {
-        let mut p: Vec<&str> = f.requests.iter().map(|r| r.label("person")).collect();
-        p.sort_unstable();
-        p.dedup();
-        p.len()
+/// The live strip on Start here: where requests come from, the gate, where they go, how many in the last 10 minutes,
+/// and the newest three. The page redraws when a request arrives (console.js), and only the newest one's disc moves,
+/// so each new request crosses the gate once: lime when it passed, flame and held at the gate when it was refused.
+fn live_strip(f: &Facts) -> String {
+    let since = gantry_core::audit::rfc3339(
+        std::time::SystemTime::now() - std::time::Duration::from_secs(600),
+    );
+    // Same format, all UTC: the newest-first times compare as text.
+    let recent: Vec<&Row> = f
+        .tries
+        .iter()
+        .take_while(|r| r.time.as_str() >= since.as_str())
+        .collect();
+    let refused = recent.iter().filter(|r| r.verdict == "refused").count();
+    let distinct = |of: &dyn Fn(&Row) -> String| {
+        let mut seen: Vec<String> = Vec::new();
+        for r in &f.tries {
+            let v = of(r);
+            if !v.is_empty() && !seen.contains(&v) {
+                seen.push(v);
+            }
+            if seen.len() == 3 {
+                break;
+            }
+        }
+        seen
     };
-    let total: f64 = f.requests.iter().filter_map(|r| r.cost_usd).sum();
-    let stat = |figure: String, label: &str| {
-        format!(
-            r#"<div class="g-stat"><p class="g-stat__figure t-lg">{figure}</p><p class="g-stat__label t-small">{label}</p></div>"#
-        )
+    let tags = |items: Vec<String>| -> String {
+        items
+            .iter()
+            // An identifier keeps its case, in mono: the tag's own text style would uppercase it.
+            .map(|t| {
+                format!(
+                    r#"<span class="g-tag"><span class="t-mono-sm">{}</span></span>"#,
+                    esc(t)
+                )
+            })
+            .collect()
     };
-    let body: String = rows
+    let tools = tags(distinct(&|r: &Row| {
+        gantry_core::audit::tool_of(Some(r.label("agent")).filter(|a| !a.is_empty()))
+    }));
+    let providers = tags(distinct(&|r: &Row| r.label("provider").to_string()));
+    let newest: Vec<&Row> = f.tries.iter().take(3).collect();
+    let discs: String = newest
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            format!(
+                r#"<span class="g-flowing__disc{}" data-outcome="{}" style="--lane: {i}"></span>"#,
+                if i == 0 { " g-flowing__disc--new" } else { "" },
+                if r.verdict == "refused" {
+                    "stop"
+                } else {
+                    "pass"
+                }
+            )
+        })
+        .collect();
+    let rows: String = newest
         .iter()
         .map(|r| {
-            let decision = if r.line.contains("would_refuse") {
-                tag("refused", "Would refuse", "")
+            let outcome = if r.verdict == "refused" {
+                tag("refused", "Refused:", &crate::pages::code_words(&r.code))
             } else {
-                tag("allow", "Allowed", "")
+                r#"<span class="t-small">Allowed</span>"#.to_string()
             };
             format!(
-                r#"<tr><td class="t-mono-sm g-table__wide">{}</td><td class="t-mono-sm">{}<span class="g-table__sub t-mono-sm">{}</span></td><td class="t-mono-sm g-table__wide">{}</td><td class="t-mono-sm g-table__num g-table__wide">{}</td><td class="t-mono-sm g-table__num">{}</td><td class="g-table__wide">{decision}</td></tr>"#,
+                r#"<tr><td class="t-mono-sm">{}</td><td class="t-mono-sm">{}</td><td class="t-mono-sm g-table__wide">{}</td><td>{outcome}</td></tr>"#,
                 esc(&time_list(&r.time)),
                 esc(r.label("person")),
                 esc(r.label("model")),
-                esc(r.label("agent").split('/').next().unwrap_or("")),
-                crate::html::thousands(
-                    usize::try_from(r.input_tokens.unwrap_or(0) + r.output_tokens.unwrap_or(0)).unwrap_or(0)
-                ),
-                cost(r)
             )
         })
         .collect();
     format!(
-        r#"<div><section class="g-panel g-stack" style="align-content: start"><div class="g-stack" style="gap: var(--space-1)"><h2 class="t-sm">First requests through Gantry</h2><p class="t-small g-muted">Since {since}.</p></div><div class="g-stats">{}{}{}</div><div class="g-table-wrap"><table class="g-table g-table--stack"><thead><tr><th class="t-tag">Time (UTC)</th><th class="t-tag">Person and model</th><th class="t-tag g-table__wide">Tool</th><th class="t-tag g-table__num g-table__wide">Tokens</th><th class="t-tag g-table__num">Cost</th><th class="t-tag g-table__wide">Decision</th></tr></thead><tbody>{body}</tbody></table></div>{}</section></div>"#,
-        stat(crate::html::thousands(f.requests.len()), "Requests"),
-        stat(
-            people.to_string(),
-            if people == 1 { "Person" } else { "People" }
-        ),
-        stat(money(total), "Cost"),
-        acts(&format!(
-            "{}{}",
-            glink("Open Requests", "/console/requests", true),
-            glink("Open Analytics", "/console/analytics", true)
-        )),
+        r#"<section class="g-panel g-stack" aria-label="Live traffic"><div class="g-flowing__head"><h2 class="t-sm" style="margin: 0">Live</h2><p class="t-small g-muted" style="margin: 0">{} in the last 10 minutes{}</p></div><div class="g-flowing" aria-hidden="true"><div class="g-flowing__side">{tools}</div><div class="g-flowing__lanes"><span class="g-flowing__gate"></span>{discs}</div><div class="g-flowing__side g-flowing__side--end">{providers}</div></div><div class="g-table-wrap"><table class="g-table g-table--stack"><tbody>{rows}</tbody></table></div>{}</section>"#,
+        gantry_core::count(recent.len(), "request"),
+        if refused == 0 {
+            String::new()
+        } else {
+            format!(", {refused} refused")
+        },
+        glink("All requests", "/console/requests", true)
     )
 }
 
@@ -2503,26 +2533,21 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
             list.len(),
             f.senders().len()
         );
+        let live = if admin.may(Permission::SeeRecords) && !f.tries.is_empty() {
+            live_strip(f)
+        } else {
+            String::new()
+        };
         format!(
-            "{problem}{}{folded}{}{}",
-            head(
-                "Start here",
-                &format!(
-                    "{} is set up. Gantry now checks the five steps of a rollout against its own records.",
-                    track.name()
-                ),
-                ""
-            ),
+            "{problem}{}{live}{folded}{}{}",
+            head("Start here", &format!("{} is set up.", track.name()), ""),
             strip(f, track),
             others()
         )
     } else {
         // The first rows are records: shown only to someone who may see records.
-        let traffic = admin.may(Permission::SeeRecords)
-            && matches!(track, Track::Coding | Track::Apps | Track::Limit)
-            && list.get(1).is_some_and(|s| s.done)
-            && !f.requests.is_empty()
-            && !finished;
+        // Any track, as soon as a request arrived: the live strip leads, the steps follow.
+        let traffic = admin.may(Permission::SeeRecords) && !f.tries.is_empty();
         let sig = signature(Some(track), &st, finished);
         let poll = if st.contains(&"listening") {
             format!(r#" data-start-poll="{}""#, esc(&sig))
@@ -2550,7 +2575,7 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
         let body = if traffic {
             format!(
                 r#"{}<div class="g-stack"><h2 class="t-sm">Your steps</h2>{}</div>"#,
-                first_data(f),
+                live_strip(f),
                 checklist(&list, &st)
             )
         } else {

@@ -150,3 +150,20 @@ a.g-tab{display:inline-flex;align-items:center;text-decoration:none}
    wrapping, so a dialog shows all of it (Round 10). */
 .g-terminal,.g-command:not(.g-command--value) .g-command__text{overflow-wrap:normal}
 .g-terminal{overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
+/* The live strip on Start here: tools, the lime gate, providers. A disc rests where its request ended (lime past the
+   gate, flame at it); only the newest one moves, once, as the page redraws for it. */
+.g-flowing__head{display:flex;flex-wrap:wrap;gap:var(--space-4);align-items:baseline;justify-content:space-between}
+.g-flowing{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,2fr) minmax(0,1fr);gap:var(--space-4);align-items:center}
+.g-flowing__side{display:flex;flex-direction:column;gap:var(--space-2);align-items:flex-start}
+.g-flowing__side--end{align-items:flex-end}
+.g-flowing__lanes{position:relative;height:calc(var(--space-12) * 2);background:repeating-linear-gradient(to bottom,transparent 0,transparent calc(var(--space-8) - var(--hairline)),var(--line) calc(var(--space-8) - var(--hairline)),var(--line) var(--space-8))}
+.g-flowing__gate{position:absolute;left:calc(50% - var(--space-1));top:0;bottom:0;width:var(--space-2);border-radius:var(--radius-pill);background:var(--lime)}
+.g-flowing__disc{position:absolute;top:calc(var(--space-8) * var(--lane) + var(--space-4) - var(--space-2));width:var(--space-3);height:var(--space-3);border-radius:var(--radius-pill);border:var(--hairline) solid var(--text)}
+.g-flowing__disc[data-outcome="pass"]{left:calc(100% - var(--space-3));background:var(--lime)}
+.g-flowing__disc[data-outcome="stop"]{left:calc(50% - var(--space-6));background:var(--flame)}
+.g-flowing__disc--new[data-outcome="pass"]{animation:g-flow-pass calc(var(--dur-slow) * 2) var(--ease-standard)}
+.g-flowing__disc--new[data-outcome="stop"]{animation:g-flow-stop calc(var(--dur-slow) * 2) var(--ease-standard)}
+@keyframes g-flow-pass{0%{left:0;background:var(--surface)}50%{background:var(--surface)}55%{background:var(--lime)}100%{left:calc(100% - var(--space-3))}}
+@keyframes g-flow-stop{0%{left:0;background:var(--surface)}70%{background:var(--surface)}100%{left:calc(50% - var(--space-6));background:var(--flame)}}
+@media (max-width:720px){.g-flowing{grid-template-columns:minmax(0,1fr)}.g-flowing__side,.g-flowing__side--end{flex-direction:row;flex-wrap:wrap;align-items:center}}
+@media (prefers-reduced-motion:reduce){.g-flowing__disc--new{animation:none}}

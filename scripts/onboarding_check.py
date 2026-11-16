@@ -124,7 +124,7 @@ audit: {{ path: gantry-audit.jsonl }}
 
         for path, title in [("requests", "No requests yet"), ("analytics", "Nothing to rank yet"), ("spend", "No spend and no budgets yet"),
                             ("people", "Only your admin key so far"), ("teams", "No teams yet"), ("policy", "One rule lets everyone in"),
-                            ("mcp/approvals", "No MCP servers behind Gantry"), ("audit", "Only setup records so far")]:
+                            ("mcp/approvals", "No MCP servers yet"), ("audit", "Only setup records so far")]:
             chrome.go(f"{base}/console/{path}")
             check(title in chrome.js("document.body.innerText") and chrome.js("!!document.querySelector('.g-empty a.g-btn[href^=\"/console/start\"]')"),
                   f"{path} says what fills it and opens the Start here step")
@@ -152,7 +152,7 @@ audit: {{ path: gantry-audit.jsonl }}
         check(ask(base, key) == 200, "a request with the new key goes through the gateway")
         chrome.wait("document.body.innerText.includes('Your first requests arrived')", "step 2 turning done without a reload", seconds=15)
         text = chrome.js("document.body.innerText")
-        check("Your first requests arrived" in text and "First requests through Gantry" in text, "the first requests show on Start here")
+        check("Your first requests arrived" in text and "in the last 10 minutes" in text, "the first requests show on Start here")
         shots("3-first-data", dark=True)
 
         chrome.js("""(() => { const f = document.querySelector('form[action="/console/start/key"]');

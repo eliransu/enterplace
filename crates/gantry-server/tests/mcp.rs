@@ -1777,3 +1777,40 @@ async fn a_key_and_a_header_narrow_the_rules_tools_and_never_widen_them() -> Tes
     assert_eq!(ok["result"]["content"][0]["text"], "docs ran search");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn with_no_mcp_server_the_mcp_pages_say_how_to_add_one() -> TestResult {
+    // The pages are served whenever the policy can reload, so a server added later shows at once. With none yet,
+    // they must say what fills them, not "No call is waiting".
+    let dir = std::env::temp_dir().join(format!("gantry-mcp-{}-none", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(
+        dir.join("gantry.policy.yaml"),
+        "version: 1\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:1\n    allow_private: true\n    key_env: MOCK_PROVIDER_KEY\n    models: [model-a]\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [model-a]\n",
+    )?;
+    std::fs::write(
+        dir.join("gantry.keys.yaml"),
+        format!(
+            "keys:\n{}    admin: true\n",
+            entry("ops.admin", "ops", ADMIN)
+        ),
+    )?;
+    let app = gateway(&dir)?;
+    let cookie = admin_cookie(&app).await?;
+    for path in [
+        "/console/mcp/tools",
+        "/console/mcp/approvals",
+        "/console/mcp/sessions",
+    ] {
+        let (status, _, page) =
+            http(&app, "GET", path, &[("cookie", &cookie)], String::new()).await?;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert!(
+            page.contains("No MCP servers yet") && page.contains("/console/start?track=mcp"),
+            "{path}: {page}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

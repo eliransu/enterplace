@@ -26,6 +26,11 @@ one repository. How a release is made: RELEASING.md.
   prove says so.
 - Audit log: a kill switch reads "Traffic stopped for ... since ... by ...: reason" with a Restore traffic button,
   recorded as `clear_kill` like `gantry unkill`. Verify chain sits under the records.
+- Start here leads with a live strip once requests arrive: the tools seen, the lime gate, the providers, how many
+  requests in the last 10 minutes and how many were refused, and the newest three. The page redraws as a request
+  arrives and its disc crosses the gate once: lime when it passed, flame and held at the gate when it was refused.
+- With no MCP server in the policy, MCP tools, approvals and sessions say what fills them and open the Start here
+  step for it, instead of "No call is waiting".
 - The rest of the console review: verdicts in words everywhere ("Allowed", "Refused: unknown key", "Admin: signed
   in"); the time opens a record and IDs show only in its sheet; Requests shows Person, Team, Model and a date range
   with labels and folds the other filters; a request's sheet is a title in words and six facts, with Details and

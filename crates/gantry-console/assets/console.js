@@ -137,7 +137,8 @@ document.addEventListener("DOMContentLoaded", function () {
 document.addEventListener("DOMContentLoaded", function () {
   var main = document.getElementById("main");
   var indicator = document.querySelector("[data-live]");
-  var swaps = /^\/console\/(requests|analytics|audit|spend)\/?$/.test(location.pathname);
+  // Start here too: its live strip shows each new request crossing the gate.
+  var swaps = /^\/console\/(requests|analytics|audit|spend|start)\/?$/.test(location.pathname);
   if (!window.fetch || (!indicator && !(main && swaps && window.DOMParser))) return;
   var seen = null;
   var timer = null;
@@ -151,7 +152,9 @@ document.addEventListener("DOMContentLoaded", function () {
   }
   function busy() {
     var at = document.activeElement;
-    return /[?&]record=/.test(location.search) || (at && main && main.contains(at) && /^(INPUT|SELECT|TEXTAREA)$/.test(at.tagName));
+    // An open section (such as "Add your name") or a field in use would be lost by a redraw.
+    return /[?&]record=/.test(location.search) || !!(main && main.querySelector && main.querySelector("details[open]")) ||
+      (at && main && main.contains(at) && /^(INPUT|SELECT|TEXTAREA)$/.test(at.tagName));
   }
   function redraw() {
     return fetch(location.href, { credentials: "same-origin", cache: "no-store" })
