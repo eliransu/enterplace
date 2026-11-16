@@ -28,8 +28,10 @@ async fn the_mock_waits_and_self_time_leaves_the_wait_out() -> Result<(), BoxErr
     let own = through
         .own
         .ok_or("the gateway sent no Server-Timing header")?;
+    // Counting the wait would put it in every sample, so the median shows it. The p99 of 30 samples is the single
+    // slowest one, which a stalled CI runner can push past the wait on its own.
     assert!(
-        own.p99 < wait / 4,
+        own.p50 < wait / 4,
         "self-time counted the upstream's wait: {own:?}"
     );
     Ok(())
