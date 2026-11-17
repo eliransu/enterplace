@@ -21,6 +21,7 @@ use gantry_core::{
     store::PolicyVersion,
     versions::{self, Refused},
 };
+use posthog_rs::Event;
 use serde_json::{Value, json};
 
 use crate::{
@@ -102,6 +103,19 @@ async fn run(state: &AppState, request: Request, decision: &str) -> Result<Respo
             Some(&refusal.message),
         )
         .await?;
+    }
+    if done.is_ok()
+        && matches!(
+            call.action,
+            Some("propose_policy" | "approve_policy" | "reject_policy" | "rollback_policy")
+        )
+        && let (Some(person), Some(action), Some(client)) =
+            (call.person.as_ref(), call.action, crate::posthog::client())
+    {
+        let distinct_id = crate::posthog::distinct_id(person);
+        let mut event = Event::new("policy_change_completed", &distinct_id);
+        let _ = event.insert_prop("action", action);
+        client.capture(event);
     }
     done
 }
