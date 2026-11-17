@@ -608,7 +608,109 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
             state.clone(),
             with_client,
         ))
+        .layer(axum::middleware::from_fn(return_after_sign_in))
         .with_state(state)
+}
+
+/// The cookie that holds where a person was going when the console sent them to sign in. It is no secret, and the
+/// sign-in page adds the part after `#` to it (an app route), which a server never sees.
+const NEXT_COOKIE: &str = "enterplace_next";
+
+/// A console page to return to after signing in: a path under /console/ on this origin, nothing that signs in or out,
+/// and nothing that could leave the console. `None` for anything else, so a link cannot send a person elsewhere.
+pub(crate) fn next_page(next: &str) -> Option<&str> {
+    let ok = next.starts_with("/console/")
+        && next.len() <= 512
+        && !next.contains("//")
+        && !next.contains('\\')
+        && !next.contains("..")
+        && next.bytes().all(|b| b.is_ascii_graphic())
+        && ![
+            "/console/sign-in",
+            "/console/sign-out",
+            "/console/sso",
+            "/console/saml",
+            "/console/cli",
+            "/console/setup",
+        ]
+        .iter()
+        .any(|p| next.starts_with(p));
+    ok.then_some(next)
+}
+
+/// Returns a person to where they were going once they sign in, by every way of signing in (key, single sign-on,
+/// SAML): a page that sends them to sign in names itself in `next`, the sign-in page keeps it in a cookie, and the
+/// redirect that follows a new session goes there instead of Start here.
+async fn return_after_sign_in(
+    request: axum::extract::Request,
+    run: axum::middleware::Next,
+) -> Response {
+    // Nested under /console, the router sees the path without it.
+    let path = request.uri().clone();
+    let wanted = path
+        .path_and_query()
+        .map_or_else(|| path.path().to_string(), |p| p.as_str().to_string());
+    let wanted = if wanted.starts_with("/console/") {
+        wanted
+    } else {
+        format!("/console{wanted}")
+    };
+    let get = request.method() == axum::http::Method::GET;
+    let on_sign_in = path.path().ends_with("/sign-in");
+    let from_query = Form::of(&path).get("next").to_string();
+    let from_cookie = cookie_value(request.headers(), NEXT_COOKIE)
+        .map(|v| Form::parse(&format!("v={v}")).get("v").to_string())
+        .unwrap_or_default();
+    let mut response = run.run(request).await;
+    if response.status() != StatusCode::SEE_OTHER {
+        if get && on_sign_in && next_page(&from_query).is_some() {
+            let cookie = format!(
+                "{NEXT_COOKIE}={}; Path=/console; SameSite=Lax; Max-Age=600",
+                html::enc(&from_query)
+            );
+            if let Ok(value) = HeaderValue::from_str(&cookie) {
+                response.headers_mut().append(header::SET_COOKIE, value);
+            }
+        }
+        return response;
+    }
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    if get && location == "/console/sign-in" && next_page(&wanted).is_some() {
+        if let Ok(value) =
+            HeaderValue::from_str(&format!("/console/sign-in?next={}", html::enc(&wanted)))
+        {
+            response.headers_mut().insert(header::LOCATION, value);
+        }
+        return response;
+    }
+    let signed_in_now = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .any(|v| {
+            v.to_str()
+                .is_ok_and(|v| v.starts_with("enterplace_console="))
+        });
+    if location == HOME && (signed_in_now || on_sign_in) {
+        let next = [from_query.as_str(), from_cookie.as_str()]
+            .into_iter()
+            .find_map(next_page)
+            .map(str::to_string);
+        if let Some(Ok(value)) = next.map(|n| HeaderValue::from_str(&n)) {
+            response.headers_mut().insert(header::LOCATION, value);
+            if let Ok(clear) = HeaderValue::from_str(&format!(
+                "{NEXT_COOKIE}=; Path=/console; SameSite=Lax; Max-Age=0"
+            )) {
+                response.headers_mut().append(header::SET_COOKIE, clear);
+            }
+        }
+    }
+    response
 }
 
 /// Query or form pairs, decoded.

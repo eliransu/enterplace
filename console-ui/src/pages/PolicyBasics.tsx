@@ -13,10 +13,11 @@ import { api, part, type Me } from "@/lib/api";
 import { useData, words } from "@/lib/use";
 
 type Rule = { name: string; who: { kind: string; value: string }; models: string[]; guardrails: string[] };
-type Budget = { scope: string; name: string; usd: number; per: string };
-type Guardrail = { name: string; type: string; action: string | null; on: boolean };
+type Entry = Record<string, unknown>;
+type Limit = { index: number; entry: Entry };
+type Guardrail = { name: string; type: string; action: string | null; on: boolean; entry: Entry };
 type Alias = { name: string; deployments: { provider: string; model: string }[]; fallbacks: string[] };
-type Data = { mode: string; rules: Rule[]; budgets: Budget[]; other_limits: number; guardrails: Guardrail[]; aliases: Alias[] };
+type Data = { mode: string; rules: Rule[]; limits: Limit[]; guardrails: Guardrail[]; aliases: Alias[] };
 type Change = (run: () => Promise<{ message: string }>) => Promise<string>;
 
 const WHO: Record<string, string> = { any: "Everyone", team: "A team", name: "A person", tag: "A tag" };
@@ -25,7 +26,8 @@ const who = (r: Rule) => (r.who.kind === "any" ? "everyone" : r.who.kind === "ot
 export function PolicyBasics({ me }: { me: Me | null }) {
   const { data, error, change } = useData<Data>("policy");
   const [rule, setRule] = useState<Rule | "new" | null>(null);
-  const [budget, setBudget] = useState<Budget | "new" | null>(null);
+  const [limit, setLimit] = useState<Limit | "new" | null>(null);
+  const [guard, setGuard] = useState<Guardrail | "new" | null>(null);
   const [alias, setAlias] = useState<Alias | "new" | null>(null);
   const may = !!me?.edit_policy;
   return (
@@ -98,38 +100,45 @@ export function PolicyBasics({ me }: { me: Me | null }) {
           </Panel>
 
           <Panel
-            title="Budgets"
-            note={data.other_limits ? `${data.other_limits} other limits (rates, per model, per key) are kept in the raw policy.` : "A request that would pass a budget is refused until it resets."}
+            title="Limits"
+            note="Budgets in US dollars, request and token rates, and requests in flight, for everyone or one scope. A request counts against every limit that applies to it."
             actions={
-              <Button size="sm" disabled={!may} onClick={() => setBudget("new")}>
-                Set a budget
+              <Button size="sm" disabled={!may} onClick={() => setLimit("new")}>
+                Add a limit
               </Button>
             }
           >
-            {data.budgets.length === 0 ? (
-              <Empty title="No budgets" body="Spend is counted but nothing stops it. Set a budget for everyone, a team or a person." />
+            {data.limits.length === 0 ? (
+              <Empty title="No limits" body="Spend is counted but nothing stops it. Add a budget for everyone, a team or a person, or a rate for a key." />
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>For</TableHead>
-                    <TableHead className="text-right">USD</TableHead>
-                    <TableHead>Resets every</TableHead>
+                    <TableHead>Budget</TableHead>
+                    <TableHead>Rate</TableHead>
+                    <TableHead className="text-right">Parallel</TableHead>
                     <TableHead>Change</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.budgets.map((b) => (
-                    <TableRow key={`${b.scope}/${b.name}`}>
-                      <TableCell>{b.scope === "global" ? "everyone together" : `${b.scope} ${b.name}`}</TableCell>
-                      <TableCell className="text-right tabular-nums">{b.usd}</TableCell>
-                      <TableCell>{b.per}</TableCell>
+                  {data.limits.map((l) => (
+                    <TableRow key={l.index}>
+                      <TableCell>{limitScope(l.entry)}</TableCell>
+                      <TableCell>{limitBudget(l.entry)}</TableCell>
+                      <TableCell>{limitRate(l.entry)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{String(l.entry.parallel ?? "none")}</TableCell>
                       <TableCell>
                         <div className="flex gap-2">
-                          <Button variant="outline" size="sm" disabled={!may} onClick={() => setBudget(b)}>
+                          <Button variant="outline" size="sm" disabled={!may} onClick={() => setLimit(l)}>
                             Edit
                           </Button>
-                          <Remove what="this budget" disabled={!may} detail="Spend keeps being counted, and nothing stops it." onConfirm={() => change(() => api.del(`policy/budgets/${part(b.scope)}/${part(b.name)}`))} />
+                          <Remove
+                            what="this limit"
+                            disabled={!may}
+                            detail="What it capped is no longer capped by it. Spend keeps being counted."
+                            onConfirm={() => change(() => api.del(`policy/limits/${l.index}`, { was: l.entry }))}
+                          />
                         </div>
                       </TableCell>
                     </TableRow>
@@ -139,22 +148,59 @@ export function PolicyBasics({ me }: { me: Me | null }) {
             )}
           </Panel>
 
-          <Panel title="Guardrails" note="On: runs on every request, before the rule's own guardrails. Adding a guardrail is done in the raw policy.">
+          <Panel
+            title="Guardrails"
+            note="On: runs on every request, before the rule's own guardrails. Off: runs only for rules that name it."
+            actions={
+              <Button size="sm" disabled={!may} onClick={() => setGuard("new")}>
+                Add a guardrail
+              </Button>
+            }
+          >
             {data.guardrails.length === 0 ? (
-              <Empty title="No guardrails defined" body="Define one in the raw policy, for example type: secrets, then turn it on here." />
+              <Empty title="No guardrails" body="Add one, for example type secrets to block API keys and passwords in prompts." />
             ) : (
-              <div className="grid gap-2">
-                {data.guardrails.map((g) => (
-                  <label key={g.name} className="t-body flex min-h-11 items-center gap-3">
-                    <Switch checked={g.on} disabled={!may} onCheckedChange={(on) => change(() => api.put(`policy/guardrails/${part(g.name)}`, { on }))} />
-                    <span className="t-mono">{g.name}</span>
-                    <span className="text-muted-foreground">
-                      {g.type}
-                      {g.action ? `, ${g.action}` : ""}
-                    </span>
-                  </label>
-                ))}
-              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>On</TableHead>
+                    <TableHead>Guardrail</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Change</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.guardrails.map((g) => (
+                    <TableRow key={g.name}>
+                      <TableCell>
+                        <Switch
+                          aria-label={`Run ${g.name} on every request`}
+                          checked={g.on}
+                          disabled={!may}
+                          onCheckedChange={(on) => change(() => api.put(`policy/guardrails/${part(g.name)}/on`, { on }))}
+                        />
+                      </TableCell>
+                      <TableCell>{g.name}</TableCell>
+                      <TableCell>{g.type}</TableCell>
+                      <TableCell>{g.action ?? "block"}</TableCell>
+                      <TableCell>
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm" disabled={!may} onClick={() => setGuard(g)}>
+                            Edit
+                          </Button>
+                          <Remove
+                            what={`guardrail ${g.name}`}
+                            disabled={!may}
+                            detail="It stops running, and the rules that named it no longer do."
+                            onConfirm={() => change(() => api.del(`policy/guardrails/${part(g.name)}`))}
+                          />
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
           </Panel>
 
@@ -202,7 +248,8 @@ export function PolicyBasics({ me }: { me: Me | null }) {
         </>
       ) : null}
       {data && rule ? <RuleForm rule={rule === "new" ? null : rule} guardrails={data.guardrails} onClose={() => setRule(null)} change={change} /> : null}
-      {budget ? <BudgetForm budget={budget === "new" ? null : budget} onClose={() => setBudget(null)} change={change} /> : null}
+      {limit ? <LimitForm limit={limit === "new" ? null : limit} onClose={() => setLimit(null)} change={change} /> : null}
+      {guard ? <GuardForm guard={guard === "new" ? null : guard} onClose={() => setGuard(null)} change={change} /> : null}
       {alias ? <AliasForm alias={alias === "new" ? null : alias} onClose={() => setAlias(null)} change={change} /> : null}
     </>
   );
@@ -288,64 +335,277 @@ function RuleForm({ rule, guardrails, onClose, change }: { rule: Rule | null; gu
   );
 }
 
-function BudgetForm({ budget, onClose, change }: { budget: Budget | null; onClose: () => void; change: Change }) {
-  const [scope, setScope] = useState(budget?.scope ?? "team");
-  const [name, setName] = useState(budget?.name ?? "");
-  const [usd, setUsd] = useState(budget?.usd.toString() ?? "");
-  const [per, setPer] = useState(budget?.per ?? "month");
+const SCOPES: Record<string, string> = {
+  global: "Everyone together",
+  org: "An organization",
+  team: "A team",
+  person: "A person",
+  key: "A key (first 8 hex of its hash)",
+  customer: "An end customer",
+  tag: "A tag",
+  model: "A model",
+  model_group: "A model group",
+};
+const RATES = [
+  ["rpm", "Requests per minute"],
+  ["rph", "Requests per hour"],
+  ["rpd", "Requests per day"],
+  ["tpm", "Tokens per minute"],
+  ["tpd", "Tokens per day"],
+] as const;
+
+function scopeOf(e: Entry): [string, string] {
+  if (e.global === true) return ["global", ""];
+  for (const k of Object.keys(SCOPES)) if (k !== "global" && k !== "org" && e[k] !== undefined) return [k, String(e[k])];
+  return e.org !== undefined ? ["org", String(e.org)] : ["global", ""];
+}
+function limitScope(e: Entry) {
+  const [k, v] = scopeOf(e);
+  const base = k === "global" ? "everyone together" : `${k.replace("_", " ")} ${v}`;
+  return k !== "org" && e.org !== undefined ? `${base} in ${String(e.org)}` : base;
+}
+function budgetOf(e: Entry): { usd: unknown; per: unknown } | null {
+  const b = e.budget;
+  if (b && typeof b === "object" && !Array.isArray(b)) return b as { usd: unknown; per: unknown };
+  return null;
+}
+function limitBudget(e: Entry) {
+  if (Array.isArray(e.budget)) return `${e.budget.length} budgets, see the raw policy`;
+  const b = budgetOf(e);
+  return b ? `$${String(b.usd)} a ${typeof b.per === "string" ? b.per : "window"}` : "none";
+}
+function limitRate(e: Entry) {
+  const r = (e.rate ?? {}) as Record<string, unknown>;
+  const parts = RATES.filter(([k]) => r[k] !== undefined).map(([k]) => `${String(r[k])} ${k}`);
+  return parts.join(", ") || "none";
+}
+
+function LimitForm({ limit, onClose, change }: { limit: Limit | null; onClose: () => void; change: Change }) {
+  const e = limit?.entry ?? {};
+  const [scope0, value0] = scopeOf(e);
+  const b = budgetOf(e);
+  const r = (e.rate ?? {}) as Record<string, unknown>;
+  const [scope, setScope] = useState(limit ? scope0 : "team");
+  const [value, setValue] = useState(value0);
+  const [org, setOrg] = useState(scope0 !== "org" && e.org !== undefined ? String(e.org) : "");
+  const [usd, setUsd] = useState(b ? String(b.usd) : "");
+  const [per, setPer] = useState(b && typeof b.per === "string" ? b.per : "month");
+  const [rates, setRates] = useState<Record<string, string>>(Object.fromEntries(RATES.map(([k]) => [k, r[k] === undefined ? "" : String(r[k])])));
+  const [parallel, setParallel] = useState(e.parallel === undefined ? "" : String(e.parallel));
   const [refused, setRefused] = useState("");
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const answer = await change(() => api.put("policy/budgets", { scope, name, usd, per }));
+  const submit = async (ev: React.FormEvent) => {
+    ev.preventDefault();
+    const body = { scope, value, org, usd, per, parallel, ...rates, ...(limit ? { was: limit.entry } : {}) };
+    const answer = await change(() => (limit ? api.put(`policy/limits/${limit.index}`, body) : api.post("policy/limits", body)));
     if (answer) setRefused(answer);
     else onClose();
   };
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
-        <DialogTitle>{budget ? "Edit the budget" : "Set a budget"}</DialogTitle>
-        <DialogDescription>What may be spent, in US dollars, before requests are refused until it resets.</DialogDescription>
+        <DialogTitle>{limit ? "Edit the limit" : "Add a limit"}</DialogTitle>
+        <DialogDescription>Fill in what to cap. Leave a field empty for no cap on it.</DialogDescription>
         <form className="grid gap-6" onSubmit={submit}>
-          {budget ? null : (
-            <>
-              <Field id="scope" label="For">
-                <Select value={scope} onValueChange={setScope}>
-                  <SelectTrigger id="scope">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="global">Everyone together</SelectItem>
-                    <SelectItem value="team">A team</SelectItem>
-                    <SelectItem value="person">A person</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              {scope === "global" ? null : (
-                <Field id="budget-name" label={scope === "team" ? "Team" : "Person"}>
-                  <Input id="budget-name" className="t-mono" value={name} onChange={(e) => setName(e.target.value)} required />
-                </Field>
-              )}
-            </>
-          )}
-          <Field id="usd" label="USD">
-            <Input id="usd" type="number" min={0} step="any" className="t-mono" value={usd} onChange={(e) => setUsd(e.target.value)} required />
-          </Field>
-          <Field id="per" label="Resets every">
-            <Select value={per} onValueChange={setPer}>
-              <SelectTrigger id="per">
+          <Field id="scope" label="For">
+            <Select value={scope} onValueChange={setScope}>
+              <SelectTrigger id="scope">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {["hour", "day", "week", "month"].map((p) => (
-                  <SelectItem key={p} value={p}>
-                    {p}
+                {Object.entries(SCOPES).map(([k, v]) => (
+                  <SelectItem key={k} value={k}>
+                    {v}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </Field>
+          {scope === "global" ? null : (
+            <Field id="scope-value" label="Name" hint={'"*" sets the same limit for each one.'}>
+              <Input id="scope-value" className="t-mono" value={value} onChange={(ev) => setValue(ev.target.value)} required />
+            </Field>
+          )}
+          {scope === "global" || scope === "org" ? null : (
+            <Field id="org" label="Only in organization, optional">
+              <Input id="org" className="t-mono" value={org} onChange={(ev) => setOrg(ev.target.value)} />
+            </Field>
+          )}
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field id="usd" label="Budget, USD">
+              <Input id="usd" type="number" min={0} step="any" className="t-mono" value={usd} onChange={(ev) => setUsd(ev.target.value)} />
+            </Field>
+            <Field id="per" label="Resets every">
+              <Select value={per} onValueChange={setPer}>
+                <SelectTrigger id="per">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["hour", "day", "week", "month"].map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {p}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            {RATES.map(([k, label]) => (
+              <Field key={k} id={k} label={label}>
+                <Input id={k} type="number" min={1} step={1} className="t-mono" value={rates[k]} onChange={(ev) => setRates({ ...rates, [k]: ev.target.value })} />
+              </Field>
+            ))}
+            <Field id="parallel" label="Requests in flight">
+              <Input id="parallel" type="number" min={1} step={1} className="t-mono" value={parallel} onChange={(ev) => setParallel(ev.target.value)} />
+            </Field>
+          </div>
           <Refusal text={refused} />
           <Actions onClose={onClose} label="Save" />
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const GUARD_TYPES = [
+  "secrets", "pii", "regex", "keywords", "webhook", "openai_moderation", "presidio", "lakera", "bedrock_guardrail",
+  "azure_content_safety", "azure_prompt_shield", "llama_guard", "model_armor", "pangea", "nemo_guardrails", "hiddenlayer",
+  "lasso", "guardrails_ai", "aporia", "prisma_airs", "enkrypt", "grayswan", "cisco_ai_defense", "mistral_moderation",
+  "judge", "transform", "events",
+];
+const FORM_KEYS = ["name", "type", "action", "on", "url", "key_env", "model", "timeout_ms", "on_failure", "patterns", "keywords", "region"];
+
+function GuardForm({ guard, onClose, change }: { guard: Guardrail | null; onClose: () => void; change: Change }) {
+  const e = guard?.entry ?? {};
+  const str = (k: string) => (e[k] === undefined ? "" : String(e[k]));
+  const map = (k: string, join: (v: unknown) => string) =>
+    Object.entries((e[k] ?? {}) as Record<string, unknown>)
+      .map(([n, v]) => `${n}: ${join(v)}`)
+      .join("\n");
+  const other = Object.entries(e)
+    .filter(([k, v]) => !FORM_KEYS.includes(k) && typeof v !== "object")
+    .map(([k, v]) => `${k}: ${String(v)}`)
+    .join("\n");
+  const sides = Array.isArray(e.on) ? (e.on as string[]) : ["request"];
+  const [name, setName] = useState(guard?.name ?? "");
+  const [type, setType] = useState(str("type") || "secrets");
+  const [action, setAction] = useState(str("action") || "block");
+  const [on, setOn] = useState<string[]>(sides);
+  const [fields, setFields] = useState<Record<string, string>>({
+    url: str("url"),
+    key_env: str("key_env"),
+    model: str("model"),
+    region: str("region"),
+    timeout_ms: str("timeout_ms"),
+    on_failure: str("on_failure"),
+    patterns: map("patterns", String),
+    keywords: map("keywords", (v) => (Array.isArray(v) ? v.join(", ") : String(v))),
+    settings: other,
+  });
+  const [refused, setRefused] = useState("");
+  const set = (k: string) => (ev: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setFields({ ...fields, [k]: ev.target.value });
+  const submit = async (ev: React.FormEvent) => {
+    ev.preventDefault();
+    const body = { name, type, action, on, ...fields };
+    const answer = await change(() => (guard ? api.put(`policy/guardrails/${part(guard.name)}`, body) : api.post("policy/guardrails", body)));
+    if (answer) setRefused(answer);
+    else onClose();
+  };
+  const area = "t-mono min-h-24 w-full rounded-box border border-input bg-background px-6 py-3 text-foreground hover:border-foreground";
+  const service = !["secrets", "pii", "regex", "keywords"].includes(type);
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogTitle>{guard ? `Edit guardrail ${guard.name}` : "Add a guardrail"}</DialogTitle>
+        <DialogDescription>A detector requests or answers pass through. The check names any setting its type still needs.</DialogDescription>
+        <form className="grid gap-6" onSubmit={submit}>
+          {guard ? null : (
+            <Field id="guard-name" label="Name">
+              <Input id="guard-name" className="t-mono" value={name} onChange={(ev) => setName(ev.target.value)} placeholder="no-secrets" required />
+            </Field>
+          )}
+          <Field id="guard-type" label="Type">
+            <Select value={type} onValueChange={setType}>
+              <SelectTrigger id="guard-type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {GUARD_TYPES.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {t}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field id="guard-action" label="Action" hint="Block refuses, mask replaces each finding and forwards, warn forwards and records.">
+            <Select value={action} onValueChange={setAction}>
+              <SelectTrigger id="guard-action">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {["block", "mask", "warn"].map((a) => (
+                  <SelectItem key={a} value={a}>
+                    {a}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <fieldset className="grid gap-2 border-0 p-0">
+            <legend className="t-tag mb-2 uppercase">Checks</legend>
+            {["request", "answer"].map((side) => (
+              <label key={side} className="t-body flex min-h-11 items-center gap-3">
+                <Checkbox checked={on.includes(side)} onCheckedChange={(c) => setOn(c ? [...on, side] : on.filter((x) => x !== side))} />
+                The {side}
+              </label>
+            ))}
+          </fieldset>
+          {type === "regex" ? (
+            <Field id="patterns" label="Patterns" hint="One per line: name: regular expression. The name is the finding's kind.">
+              <textarea id="patterns" className={area} value={fields.patterns} onChange={set("patterns")} placeholder="card: \b\d{16}\b" />
+            </Field>
+          ) : null}
+          {type === "keywords" ? (
+            <Field id="keywords" label="Word lists" hint="One per line: name: word, phrase, word.">
+              <textarea id="keywords" className={area} value={fields.keywords} onChange={set("keywords")} placeholder="projects: atlas, blue harbor" />
+            </Field>
+          ) : null}
+          {service ? (
+            <>
+              <Field id="guard-url" label="URL, if the service needs one">
+                <Input id="guard-url" className="t-mono" value={fields.url} onChange={set("url")} />
+              </Field>
+              <Field id="guard-key" label="Environment variable with its key" hint="The value never goes in the policy.">
+                <Input id="guard-key" className="t-mono" value={fields.key_env} onChange={set("key_env")} />
+              </Field>
+              <Field id="guard-model" label="Model, for a model that checks">
+                <Input id="guard-model" className="t-mono" value={fields.model} onChange={set("model")} />
+              </Field>
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field id="guard-timeout" label="Timeout, ms">
+                  <Input id="guard-timeout" type="number" min={1} className="t-mono" value={fields.timeout_ms} onChange={set("timeout_ms")} />
+                </Field>
+                <Field id="guard-failure" label="When it cannot be reached">
+                  <Select value={fields.on_failure || "fail_closed"} onValueChange={(v) => setFields({ ...fields, on_failure: v })}>
+                    <SelectTrigger id="guard-failure">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="fail_closed">Refuse the request</SelectItem>
+                      <SelectItem value="fail_open">Let it through, recorded</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </div>
+              <Field id="guard-region" label="Region, for a cloud service">
+                <Input id="guard-region" className="t-mono" value={fields.region} onChange={set("region")} />
+              </Field>
+            </>
+          ) : null}
+          <Field id="guard-settings" label="Other settings, optional" hint="One per line: setting: value, for the type's own settings such as guardrail_id or threshold.">
+            <textarea id="guard-settings" className={area} value={fields.settings} onChange={set("settings")} />
+          </Field>
+          <Refusal text={refused} />
+          <Actions onClose={onClose} label={guard ? "Save" : "Add guardrail"} />
         </form>
       </DialogContent>
     </Dialog>

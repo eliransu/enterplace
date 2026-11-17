@@ -7,6 +7,17 @@
 })();
 
 document.addEventListener("DOMContentLoaded", function () {
+  // The console sent this person to sign in from a page and kept that page in a cookie: an app route lives after the
+  // #, which never reaches the server, so it is added here and the person lands on it once signed in.
+  if (location.pathname === "/console/sign-in" && location.hash) {
+    var kept = document.cookie.split("; ").filter(function (c) { return c.indexOf("enterplace_next=") === 0; })[0];
+    if (kept) {
+      var next = decodeURIComponent(kept.slice("enterplace_next=".length));
+      if (next.indexOf("#") < 0) {
+        document.cookie = "enterplace_next=" + encodeURIComponent(next + location.hash) + "; path=/console; samesite=lax; max-age=600";
+      }
+    }
+  }
   // A button that copies the text of the element its data-copy names, such as the prompt for a coding agent.
   // Listened for on the document, not on each button: pages that redraw in place (Start here, Requests) replace the
   // buttons, and a listener on the old one would be gone. Without the Clipboard API (a page served over plain http

@@ -341,7 +341,7 @@ pub fn set_section(text: &str, name: &str, value: Option<Value>) -> Result<Strin
             map.remove(name);
         }
     }
-    Ok(to_yaml(&Value::Object(map)))
+    Ok(with_comments(text, &to_yaml(&Value::Object(map))))
 }
 
 /// Puts the entry named `item` into the list section `name` (replacing one of that name, else appending), or
@@ -392,7 +392,7 @@ pub fn set_item(
             ));
         }
     }
-    Ok(to_yaml(&Value::Object(map)))
+    Ok(with_comments(text, &to_yaml(&Value::Object(map))))
 }
 
 /// Adds `model` to provider `provider`, with a price in US dollars per million tokens (input, output) and other
@@ -449,7 +449,7 @@ pub fn add_model(
             }));
         }
     }
-    Ok(to_yaml(&Value::Object(map)))
+    Ok(with_comments(text, &to_yaml(&Value::Object(map))))
 }
 
 /// Puts team `name` in the policy's `teams:` as `team` (a mapping with its fields), replacing the one of that name,
@@ -480,14 +480,14 @@ pub fn set_team(text: &str, name: &str, team: Option<Value>) -> Result<String, S
     if list.is_empty() {
         map.remove("teams");
     }
-    Ok(to_yaml(&Value::Object(map)))
+    Ok(with_comments(text, &to_yaml(&Value::Object(map))))
 }
 
 /// Sets the price of `model` in US dollars per million tokens (input, output). Returns the new text.
 pub fn set_price(text: &str, model: &str, price: (f64, f64)) -> Result<String, String> {
     let mut map = tree(text)?;
     set_price_in(&mut map, model, price);
-    Ok(to_yaml(&Value::Object(map)))
+    Ok(with_comments(text, &to_yaml(&Value::Object(map))))
 }
 
 fn set_price_in(map: &mut Map<String, Value>, model: &str, (input, output): (f64, f64)) {
@@ -508,6 +508,179 @@ fn set_price_in(map: &mut Map<String, Value>, model: &str, (input, output): (f64
         } else {
             *entry = serde_json::json!({ "input": number(input), "output": number(output) });
         }
+    }
+}
+
+/// Where each line of a block YAML text sits in the tree, as a path such as `providers[openai].models`: a list entry
+/// is named by its `name`, else by its place in the list. `None` for a blank line, a comment or a line inside a
+/// block scalar's text. It reads the shape [`to_yaml`] writes and the shape people write; a line it cannot place
+/// keeps the path of the line before it, so at worst a comment moves a little, never into a value.
+fn line_paths(text: &str) -> Vec<Option<String>> {
+    // (indent, segment, is a list entry)
+    let mut stack: Vec<(usize, String, bool)> = Vec::new();
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut scalar_at: Option<usize> = None;
+    let mut out = Vec::new();
+    let joined = |stack: &[(usize, String, bool)]| {
+        stack.iter().fold(String::new(), |mut acc, (_, seg, item)| {
+            if !*item && !acc.is_empty() {
+                acc.push('.');
+            }
+            acc.push_str(seg);
+            acc
+        })
+    };
+    for line in text.lines() {
+        let content = line.trim_start();
+        let indent = line.len() - content.len();
+        if let Some(at) = scalar_at {
+            if content.is_empty() || indent > at {
+                out.push(None);
+                continue;
+            }
+            scalar_at = None;
+        }
+        if content.is_empty() || content.starts_with('#') {
+            out.push(None);
+            continue;
+        }
+        let mut indent = indent;
+        let mut rest = content;
+        if let Some(item) =
+            content
+                .strip_prefix("- ")
+                .or(if content == "-" { Some("") } else { None })
+        {
+            while stack
+                .last()
+                .is_some_and(|(i, _, is_item)| *i > indent || (*i == indent && *is_item))
+            {
+                stack.pop();
+            }
+            let parent = joined(&stack);
+            let named = item
+                .strip_prefix("name:")
+                .map(|n| n.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+                .filter(|n| !n.is_empty());
+            let count = counts.entry(parent).or_insert(0);
+            let seg = match named {
+                Some(n) => format!("[{n}]"),
+                None => format!("[#{count}]"),
+            };
+            *count += 1;
+            stack.push((indent, seg, true));
+            indent += 2;
+            rest = item;
+        }
+        if let Some((key, value)) = key_of(rest) {
+            while stack.last().is_some_and(|(i, _, _)| *i >= indent) {
+                stack.pop();
+            }
+            stack.push((indent, key.to_string(), false));
+            let value = value.trim();
+            if value.starts_with('|') || value.starts_with('>') {
+                scalar_at = Some(indent);
+            }
+        }
+        out.push(Some(joined(&stack)));
+    }
+    out
+}
+
+/// `key: value` or `key:` at the start of a line, with the key plain or quoted.
+fn key_of(line: &str) -> Option<(&str, &str)> {
+    if line.starts_with('{') || line.starts_with('[') {
+        return None;
+    }
+    let (key, value) = line.split_once(':')?;
+    if !(value.is_empty() || value.starts_with(' ')) {
+        return None;
+    }
+    let key = key.trim().trim_matches(|c| c == '"' || c == '\'');
+    (!key.is_empty() && !key.contains(' ')).then_some((key, value))
+}
+
+/// Where a comment at the end of a line starts: a `#` after a space, outside quotes. `None` when there is none.
+fn trailing_comment(line: &str) -> Option<usize> {
+    let (mut single, mut double) = (false, false);
+    let mut before = ' ';
+    for (i, c) in line.char_indices() {
+        match c {
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '#' if !single && !double && before.is_whitespace() && i > 0 => return Some(i),
+            _ => {}
+        }
+        before = c;
+    }
+    None
+}
+
+/// `new` (a policy text a form edit wrote) with the comments and blank lines of `old` put back where they were: a
+/// comment above an entry goes above the same entry, a comment after a value goes after the same value. A comment on
+/// something the edit removed goes with it. When the result would not read as the same tree as `new`, `new` is
+/// returned as it is: a comment is never worth a changed policy.
+pub fn with_comments(old: &str, new: &str) -> String {
+    let mut before: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut after: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut pending: Vec<String> = Vec::new();
+    for (line, path) in old.lines().zip(line_paths(old)) {
+        let content = line.trim_start();
+        match path {
+            None if content.starts_with('#') => pending.push(content.to_string()),
+            None if content.is_empty() => {
+                // A blank line is kept only where it separates something.
+                if pending.last().is_none_or(|l| !l.is_empty()) {
+                    pending.push(String::new());
+                }
+            }
+            None => {}
+            Some(path) => {
+                if let Some(at) = trailing_comment(line) {
+                    after.insert(path.clone(), line[at..].to_string());
+                }
+                if !pending.is_empty() {
+                    before.entry(path).or_default().append(&mut pending);
+                }
+            }
+        }
+    }
+    let mut out = String::new();
+    for (line, path) in new.lines().zip(line_paths(new)) {
+        if let Some(path) = &path {
+            if let Some(lines) = before.remove(path) {
+                let indent = &line[..line.len() - line.trim_start().len()];
+                for comment in lines {
+                    if comment.is_empty() {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                    } else {
+                        out.push_str(indent);
+                        out.push_str(&comment);
+                        out.push('\n');
+                    }
+                }
+            }
+        }
+        out.push_str(line);
+        if let Some(comment) = path.as_ref().and_then(|p| after.get(p)) {
+            if trailing_comment(line).is_none() {
+                out.push(' ');
+                out.push_str(comment);
+            }
+        }
+        out.push('\n');
+    }
+    // What was written after the last entry stays at the end.
+    for comment in pending.into_iter().filter(|c| !c.is_empty()) {
+        out.push_str(&comment);
+        out.push('\n');
+    }
+    match (tree(&out), tree(new)) {
+        (Ok(kept), Ok(plain)) if kept == plain => out,
+        _ => new.to_string(),
     }
 }
 
@@ -832,6 +1005,50 @@ pub fn dry_run_log(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_form_edit_keeps_the_comments_where_they_were() -> Result<(), String> {
+        let old = "# Who may use which model.\nversion: 1\nproviders:\n  # The main account.\n  - name: openai\n    kind: openai\n    url: https://api.openai.com # no /v1\n    key_env: OPENAI_API_KEY\n    models: [gpt-4o-mini]\n  # Kept for the night batch.\n  - name: groq\n    preset: groq\n    key_env: GROQ_API_KEY\n    models: [llama-3.3-70b]\n\n# Rules: the first that matches decides.\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"] # everyone gets everything\n# end of policy\n";
+        // Add: a model joins openai, and every comment stays.
+        let added = add_model(old, "openai", "gpt-4o", None, &[])?;
+        for comment in [
+            "# Who may use which model.",
+            "  # The main account.",
+            "url: \"https://api.openai.com\" # no /v1",
+            "  # Kept for the night batch.",
+            "\n# Rules: the first that matches decides.\nrules:",
+            "models: [\"*\"] # everyone gets everything",
+            "# end of policy",
+        ] {
+            assert!(added.contains(comment), "{comment}:\n{added}");
+        }
+        assert!(added.contains("gpt-4o-mini, gpt-4o"), "{added}");
+        // Edit: a rule's models change, its trailing comment stays on it.
+        let mut map = tree(&added)?;
+        if let Some(Value::Array(rules)) = map.get_mut("rules") {
+            rules[0]["models"] = serde_json::json!(["gpt-4o"]);
+        }
+        let edited = with_comments(&added, &to_yaml(&Value::Object(map)));
+        assert!(
+            edited.contains("models: [gpt-4o] # everyone gets everything"),
+            "{edited}"
+        );
+        // Remove: the comment on the removed provider goes with it, the others stay.
+        let removed = set_item(&edited, "providers", "groq", None)?;
+        assert!(
+            !removed.contains("night batch") && !removed.contains("groq"),
+            "{removed}"
+        );
+        assert!(
+            removed.contains("  # The main account.\n  - name: openai"),
+            "{removed}"
+        );
+        assert_eq!(
+            tree(&removed)?,
+            tree(&to_yaml(&Value::Object(tree(&removed)?)))?
+        );
+        Ok(())
+    }
+
     use super::*;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;

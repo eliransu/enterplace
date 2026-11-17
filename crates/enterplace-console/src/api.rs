@@ -13,7 +13,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
 };
 use enterplace_core::{
     catalog, config,
@@ -48,9 +48,17 @@ pub(crate) fn routes() -> Router<Console> {
             "/api/policy/rules/{name}",
             put(rule_edit).delete(rule_remove),
         )
-        .route("/api/policy/budgets", put(budget_set))
-        .route("/api/policy/budgets/{scope}/{name}", delete(budget_remove))
-        .route("/api/policy/guardrails/{name}", put(guardrail_set))
+        .route("/api/policy/limits", post(limit_add))
+        .route(
+            "/api/policy/limits/{index}",
+            put(limit_edit).delete(limit_remove),
+        )
+        .route("/api/policy/guardrails", post(guard_add))
+        .route(
+            "/api/policy/guardrails/{name}",
+            put(guard_edit).delete(guard_remove),
+        )
+        .route("/api/policy/guardrails/{name}/on", put(guardrail_set))
         .route("/api/policy/aliases", post(alias_add))
         .route(
             "/api/policy/aliases/{name}",
@@ -302,7 +310,7 @@ async fn commit(
         let _ = record(console, &act(target), Some("invalid_request"), None).await;
         return Err(bad(error));
     }
-    let after = versions::to_yaml(&Value::Object(tree));
+    let after = versions::with_comments(&before, &versions::to_yaml(&Value::Object(tree)));
     if after == before {
         return Ok(ok(
             json!({ "message": "Nothing changed: the policy already says this." }),
@@ -1009,26 +1017,21 @@ async fn mcp_tools(
 
 // ---------------------------------------------------------------- policy basics
 
-/// The scopes a budget form sets: everyone, one team, one person.
-const SCOPES: [&str; 3] = ["global", "team", "person"];
+/// What a limit is for: one of these scopes, as `limits:` names them. Any but global and org may be kept to one
+/// organization with `org:` beside it.
+const SCOPES: [&str; 9] = [
+    "global",
+    "org",
+    "team",
+    "person",
+    "key",
+    "customer",
+    "tag",
+    "model",
+    "model_group",
+];
 const PERIODS: [&str; 4] = ["hour", "day", "week", "month"];
-
-/// A `limits:` entry this page shows: one budget of one scope and nothing else that narrows it.
-fn simple_limit(limit: &Map<String, Value>) -> Option<(String, String)> {
-    let narrows = ["org", "key", "customer", "tag", "model", "model_group"];
-    if narrows.iter().any(|k| limit.contains_key(*k)) {
-        return None;
-    }
-    if limit.get("global").and_then(Value::as_bool) == Some(true) {
-        return Some(("global".into(), "everyone".into()));
-    }
-    for scope in ["team", "person"] {
-        if let Some(name) = limit.get(scope).and_then(Value::as_str) {
-            return Some((scope.into(), name.into()));
-        }
-    }
-    None
-}
+const RATES: [&str; 5] = ["rpm", "tpm", "rph", "rpd", "tpd"];
 
 async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Response {
     answer(async {
@@ -1058,21 +1061,16 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
                 })
             })
             .collect();
-        let limits: Vec<&Map<String, Value>> = str_objects(tree.get("limits")).collect();
-        let mut budgets = Vec::new();
-        let mut other_limits = 0;
-        for limit in &limits {
-            let budget = limit.get("budget").and_then(Value::as_object);
-            match (simple_limit(limit), budget) {
-                (Some((scope, name)), Some(b)) if b.get("per").is_some_and(Value::is_string) => budgets.push(json!({
-                    "scope": scope,
-                    "name": name,
-                    "usd": b.get("usd").cloned().unwrap_or(Value::Null),
-                    "per": b.get("per").cloned().unwrap_or(Value::Null),
-                })),
-                _ => other_limits += 1,
-            }
-        }
+        // Each limit with its place in the list and its text as read: a change names both, so it is refused when
+        // someone else changed the list meanwhile.
+        let limits: Vec<Value> = tree
+            .get("limits")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .map(|(i, l)| json!({ "index": i, "entry": l }))
+            .collect();
         let defaults = str_list(tree.get("default_guardrails"));
         let guardrails: Vec<Value> = str_objects(tree.get("guardrails"))
             .map(|g| {
@@ -1082,6 +1080,7 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
                     "type": g.get("type").cloned().unwrap_or(Value::Null),
                     "action": g.get("action").cloned().unwrap_or(Value::Null),
                     "on": defaults.iter().any(|d| d == name),
+                    "entry": g,
                 })
             })
             .collect();
@@ -1100,8 +1099,7 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
         Ok(ok(json!({
             "mode": tree.get("mode").and_then(Value::as_str).unwrap_or("enforce"),
             "rules": rules,
-            "budgets": budgets,
-            "other_limits": other_limits,
+            "limits": limits,
             "guardrails": guardrails,
             "aliases": aliases,
         })))
@@ -1247,109 +1245,437 @@ async fn rule_remove(
     )
 }
 
-fn limit_at(limits: &[Value], scope: &str, name: &str) -> Option<usize> {
-    limits.iter().position(|l| {
-        l.as_object()
-            .and_then(simple_limit)
-            .is_some_and(|(s, n)| s == scope && (scope == "global" || n == name))
-    })
+/// A number from a form: a JSON number or a string of one. `Ok(None)` for empty.
+fn number(body: &Map<String, Value>, name: &str) -> Result<Option<f64>, String> {
+    match body.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(n)) => Ok(n.as_f64()),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(Value::String(s)) => s
+            .trim()
+            .parse::<f64>()
+            .map(Some)
+            .map_err(|_| format!("{name} is a number, for example 500. \"{s}\" is not one.")),
+        Some(_) => Err(format!("{name} is a number, for example 500.")),
+    }
 }
 
-async fn budget_set(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
+/// A whole number is written as one: `usd: 500`, as people write it, not `500.0`.
+fn as_written(n: f64) -> Value {
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        json!(n as i64)
+    } else {
+        json!(n)
+    }
+}
+
+/// A `limits:` entry from the limit form: who it is for, what it narrows to, its budget, rates and parallel cap.
+/// Keys the form does not set (a shadow date, a sliding window) are kept from `old`.
+fn limit_entry(
+    body: &Map<String, Value>,
+    old: Option<&Map<String, Value>>,
+) -> Result<Value, String> {
+    let mut entry = old.cloned().unwrap_or_default();
+    for key in SCOPES.iter().chain(["budget", "rate", "parallel"].iter()) {
+        entry.remove(*key);
+    }
+    let scope = text(body, "scope");
+    let value = text(body, "value");
+    match scope {
+        "global" => {
+            entry.insert("global".into(), true.into());
+        }
+        s if SCOPES.contains(&s) => {
+            if value.is_empty() {
+                return Err(format!("Name the {s} the limit is for."));
+            }
+            entry.insert(s.into(), value.into());
+        }
+        _ => return Err("Pick what the limit is for: everyone, an organization, a team, a person, a key, a customer, a tag, a model or a model group.".into()),
+    }
+    let org = text(body, "org");
+    if !org.is_empty() {
+        if scope == "global" || scope == "org" {
+            return Err("Keeping a limit to one organization goes with a team, person, key, customer, tag or model. For a whole organization, pick organization.".into());
+        }
+        entry.insert("org".into(), org.into());
+    }
+    let mut set = false;
+    if let Some(usd) = number(body, "usd")? {
+        if !(usd.is_finite() && usd > 0.0) {
+            return Err("A budget is a number of US dollars above 0, for example 500.".into());
+        }
+        let per = text(body, "per");
+        if !PERIODS.contains(&per) {
+            return Err("A budget resets every hour, day, week or month. Pick one.".into());
+        }
+        entry.insert(
+            "budget".into(),
+            json!({ "usd": as_written(usd), "per": per }),
+        );
+        set = true;
+    }
+    let mut rate = Map::new();
+    for key in RATES {
+        if let Some(n) = number(body, key)? {
+            if n.fract() != 0.0 || n < 1.0 {
+                return Err(format!(
+                    "{key} is a whole number above 0, for example 600. Leave it empty for no limit."
+                ));
+            }
+            rate.insert(key.into(), as_written(n));
+        }
+    }
+    if !rate.is_empty() {
+        entry.insert("rate".into(), Value::Object(rate));
+        set = true;
+    }
+    if let Some(n) = number(body, "parallel")? {
+        if n.fract() != 0.0 || n < 1.0 {
+            return Err("Parallel is a whole number of requests above 0, for example 10.".into());
+        }
+        entry.insert("parallel".into(), as_written(n));
+        set = true;
+    }
+    if !set {
+        return Err(
+            "Set a budget, a rate or a parallel cap: a limit with none of them limits nothing."
+                .into(),
+        );
+    }
+    Ok(Value::Object(entry))
+}
+
+/// The limit at `index`, when it is still the one the person read (`was`).
+fn limit_at<'a>(
+    tree: &'a mut Map<String, Value>,
+    index: usize,
+    body: &Map<String, Value>,
+) -> Result<&'a mut Value, String> {
+    let limits = section(tree, "limits")?;
+    match limits.get_mut(index) {
+        Some(l) if body.get("was") == Some(&*l) => Ok(l),
+        _ => Err("The limits changed since this page read them, so nothing was changed. Reload the page and make the change again.".into()),
+    }
+}
+
+async fn limit_add(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
     answer(
         async {
             let admin = signed_in(&console, &headers, true).await?;
             let body = body_of(&bytes)?;
-            let (scope, name, per) = (
-                text(&body, "scope").to_string(),
-                text(&body, "name").to_string(),
-                text(&body, "per").to_string(),
-            );
-            let usd = match body.get("usd") {
-                Some(Value::Number(n)) => n.as_f64(),
-                Some(Value::String(s)) => s.trim().parse::<f64>().ok(),
-                _ => None,
-            };
-            let target = json!({ "scope": scope, "name": name, "usd": usd, "per": per });
-            let note = format!("Set the {scope} budget {name}");
-            commit(&console, &admin, "set_budget", note, target, |tree| {
-                if !SCOPES.contains(&scope.as_str()) {
-                    return Err(
-                        "A budget is for everyone (global), a team or a person. Pick one.".into(),
-                    );
-                }
-                if scope != "global" {
-                    name_ok(&name, scope.as_str(), "payments")?;
-                }
-                let usd = usd
-                    .filter(|u| u.is_finite() && *u > 0.0)
-                    .ok_or("A budget is a number of US dollars above 0, for example 500.")?;
-                if !PERIODS.contains(&per.as_str()) {
-                    return Err("A budget resets every hour, day, week or month. Pick one.".into());
-                }
-                // A whole number is written as one: `usd: 500`, as people write it, not `500.0`.
-                let usd = if usd.fract() == 0.0 && usd < 1e15 {
-                    json!(usd as u64)
-                } else {
-                    json!(usd)
-                };
-                let budget = json!({ "usd": usd, "per": per });
-                let limits = section(tree, "limits")?;
-                match limit_at(limits, &scope, &name) {
-                    Some(at) => {
-                        if let Value::Object(l) = &mut limits[at] {
-                            l.insert("budget".into(), budget);
-                        }
-                    }
-                    None => {
-                        let mut l = Map::new();
-                        if scope == "global" {
-                            l.insert("global".into(), true.into());
-                        } else {
-                            l.insert(scope.clone(), name.clone().into());
-                        }
-                        l.insert("budget".into(), budget);
-                        limits.push(Value::Object(l));
-                    }
-                }
-                Ok(())
-            })
+            let target = json!({ "limit": body });
+            commit(
+                &console,
+                &admin,
+                "add_limit",
+                "Add a limit".into(),
+                target,
+                |tree| {
+                    let entry = limit_entry(&body, None)?;
+                    section(tree, "limits")?.push(entry);
+                    Ok(())
+                },
+            )
             .await
         }
         .await,
     )
 }
 
-async fn budget_remove(
+async fn limit_edit(
     State(console): State<Console>,
-    Path((scope, name)): Path<(String, String)>,
+    Path(index): Path<usize>,
     headers: HeaderMap,
+    bytes: Bytes,
 ) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let body = body_of(&bytes)?;
+            let target = json!({ "limit": body });
+            commit(
+                &console,
+                &admin,
+                "change_limit",
+                "Change a limit".into(),
+                target,
+                |tree| {
+                    let at = limit_at(tree, index, &body)?;
+                    *at = limit_entry(&body, at.as_object())?;
+                    Ok(())
+                },
+            )
+            .await
+        }
+        .await,
+    )
+}
+
+async fn limit_remove(
+    State(console): State<Console>,
+    Path(index): Path<usize>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let body = body_of(&bytes)?;
+            let target = json!({ "limit": body.get("was").cloned().unwrap_or(Value::Null) });
+            commit(
+                &console,
+                &admin,
+                "remove_limit",
+                "Remove a limit".into(),
+                target,
+                |tree| {
+                    limit_at(tree, index, &body)?;
+                    let limits = section(tree, "limits")?;
+                    limits.remove(index);
+                    if limits.is_empty() {
+                        tree.remove("limits");
+                    }
+                    Ok(())
+                },
+            )
+            .await
+        }
+        .await,
+    )
+}
+
+// ---------------------------------------------------------------- guardrail definitions
+
+/// The keys the guardrail form sets; any other key of an entry (a vendor's own setting) is kept on an edit.
+const GUARD_FORM_KEYS: [&str; 11] = [
+    "type",
+    "action",
+    "on",
+    "url",
+    "key_env",
+    "model",
+    "timeout_ms",
+    "on_failure",
+    "patterns",
+    "keywords",
+    "region",
+];
+
+/// A scalar as YAML would read it: a number or true/false when it is one, else the text.
+fn scalar(text: &str) -> Value {
+    match text {
+        "true" => true.into(),
+        "false" => false.into(),
+        _ => text
+            .parse::<i64>()
+            .map(Value::from)
+            .or_else(|_| text.parse::<f64>().map(as_written))
+            .unwrap_or_else(|_| text.into()),
+    }
+}
+
+/// Lines of `name: value` (or `name = value`) into a map, for a regex's patterns and a vendor's settings.
+fn pairs(text: &str, what: &str) -> Result<Vec<(String, String)>, String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            l.split_once(": ")
+                .or_else(|| l.split_once('='))
+                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+                .filter(|(k, v)| !k.is_empty() && !v.is_empty())
+                .ok_or_else(|| format!("\"{l}\" is not name: value. Write one {what} per line, for example card: \\d{{16}}."))
+        })
+        .collect()
+}
+
+/// Sets what the guardrail form changes of a guardrail.
+fn guard_fields(entry: &mut Map<String, Value>, body: &Map<String, Value>) -> Result<(), String> {
+    for key in GUARD_FORM_KEYS {
+        entry.remove(key);
+    }
+    let kind = text(body, "type");
+    if kind.is_empty() {
+        return Err("Pick the guardrail's type, for example secrets or pii.".into());
+    }
+    entry.insert("type".into(), kind.into());
+    match text(body, "action") {
+        "" => {}
+        a @ ("block" | "mask" | "warn") => {
+            entry.insert("action".into(), a.into());
+        }
+        other => {
+            return Err(format!(
+                "Action \"{other}\" is not one. Pick block, mask or warn."
+            ));
+        }
+    }
+    let sides = list(body, "on");
+    if !sides.is_empty() {
+        if let Some(bad) = sides.iter().find(|s| *s != "request" && *s != "answer") {
+            return Err(format!(
+                "\"{bad}\" is not a side. A guardrail checks the request, the answer, or both."
+            ));
+        }
+        entry.insert("on".into(), strings(&sides));
+    }
+    for key in ["url", "key_env", "model", "region"] {
+        let v = text(body, key);
+        if !v.is_empty() {
+            entry.insert(key.into(), v.into());
+        }
+    }
+    if let Some(ms) = number(body, "timeout_ms")? {
+        entry.insert("timeout_ms".into(), as_written(ms));
+    }
+    match text(body, "on_failure") {
+        "" => {}
+        f @ ("fail_closed" | "fail_open") => {
+            entry.insert("on_failure".into(), f.into());
+        }
+        other => {
+            return Err(format!(
+                "On failure \"{other}\" is not one. Pick fail_closed or fail_open."
+            ));
+        }
+    }
+    let patterns = pairs(text(body, "patterns"), "pattern")?;
+    if !patterns.is_empty() {
+        entry.insert(
+            "patterns".into(),
+            Value::Object(patterns.into_iter().map(|(k, v)| (k, v.into())).collect()),
+        );
+    }
+    let keywords = pairs(text(body, "keywords"), "list")?;
+    if !keywords.is_empty() {
+        entry.insert(
+            "keywords".into(),
+            Value::Object(
+                keywords
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            strings(
+                                &v.split(',')
+                                    .map(|w| w.trim().to_string())
+                                    .filter(|w| !w.is_empty())
+                                    .collect::<Vec<_>>(),
+                            ),
+                        )
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    for (key, value) in pairs(text(body, "settings"), "setting")? {
+        if key == "name" || GUARD_FORM_KEYS.contains(&key.as_str()) {
+            return Err(format!(
+                "{key} has its own field in this form: set it there, not under other settings."
+            ));
+        }
+        entry.insert(key, scalar(&value));
+    }
+    Ok(())
+}
+
+async fn guard_add(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
     answer(async {
         let admin = signed_in(&console, &headers, true).await?;
-        let note = format!("Remove the {scope} budget {name}");
-        commit(&console, &admin, "remove_budget", note, json!({ "scope": scope, "name": name }), |tree| {
-            let limits = section(tree, "limits")?;
-            let at = limit_at(limits, &scope, &name)
-                .ok_or_else(|| format!("There is no {scope} budget for \"{name}\": someone removed it already. Reload the page."))?;
-            let keep = match &mut limits[at] {
-                Value::Object(l) => {
-                    l.remove("budget");
-                    // What is left still limits (a rate, parallel requests): only the budget goes.
-                    l.keys().any(|k| !SCOPES.contains(&k.as_str()))
-                }
-                _ => false,
-            };
-            if !keep {
-                limits.remove(at);
+        let body = body_of(&bytes)?;
+        let name = text(&body, "name").to_string();
+        let note = format!("Add guardrail {name}");
+        commit(&console, &admin, "add_guardrail", note, json!({ "guardrail": name }), |tree| {
+            name_ok(&name, "guardrail", "no-secrets")?;
+            let guards = section(tree, "guardrails")?;
+            if named(guards, &name).is_some() {
+                return Err(format!("There is a guardrail named \"{name}\" already. Pick another name, or edit that one."));
             }
-            if limits.is_empty() {
-                tree.remove("limits");
-            }
+            let mut entry = Map::new();
+            entry.insert("name".into(), name.clone().into());
+            guard_fields(&mut entry, &body)?;
+            guards.push(Value::Object(entry));
             Ok(())
         })
         .await
     }.await)
+}
+
+async fn guard_edit(
+    State(console): State<Console>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let body = body_of(&bytes)?;
+            let note = format!("Change guardrail {name}");
+            commit(
+                &console,
+                &admin,
+                "change_guardrail",
+                note,
+                json!({ "guardrail": name }),
+                |tree| guard_fields(entry(tree, "guardrails", &name, "guardrail")?, &body),
+            )
+            .await
+        }
+        .await,
+    )
+}
+
+async fn guard_remove(
+    State(console): State<Console>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let note = format!("Remove guardrail {name}");
+            commit(
+                &console,
+                &admin,
+                "remove_guardrail",
+                note,
+                json!({ "guardrail": name }),
+                |tree| {
+                    remove_named(tree, "guardrails", &name, "guardrail")?;
+                    // A rule or the defaults naming a guardrail that is gone does not load: the name goes from them too.
+                    let defaults: Vec<String> = str_list(tree.get("default_guardrails"))
+                        .into_iter()
+                        .filter(|g| *g != name)
+                        .collect();
+                    if defaults.is_empty() {
+                        tree.remove("default_guardrails");
+                    } else {
+                        tree.insert("default_guardrails".into(), strings(&defaults));
+                    }
+                    for list in ["rules", "profiles"] {
+                        if let Some(Value::Array(items)) = tree.get_mut(list) {
+                            for item in items.iter_mut().filter_map(Value::as_object_mut) {
+                                let kept: Vec<String> = str_list(item.get("guardrails"))
+                                    .into_iter()
+                                    .filter(|g| *g != name)
+                                    .collect();
+                                if kept.is_empty() {
+                                    item.remove("guardrails");
+                                } else if item.contains_key("guardrails") {
+                                    item.insert("guardrails".into(), strings(&kept));
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                },
+            )
+            .await
+        }
+        .await,
+    )
 }
 
 async fn guardrail_set(

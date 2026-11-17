@@ -41,8 +41,13 @@ export function App() {
   return (
     <div className="grid min-h-screen md:grid-cols-[var(--nav)_1fr]">
       <nav aria-label="Console" className="grid content-start gap-1 border-b border-border p-4 md:border-r md:border-b-0">
-        <a href="/console/start" className="t-sm flex min-h-11 items-center gap-2 px-4 no-underline text-foreground">
-          Enterplace
+        <a href="/console/start" className="flex min-h-11 items-center gap-2 px-4 no-underline text-foreground">
+          {/* The Enterplace mark, as the console's g-mark draws it: a dot and a bar. */}
+          <span aria-hidden="true" className="inline-flex flex-none items-center gap-1">
+            <span className="size-3 rounded-pill bg-foreground" />
+            <span className="h-6 w-2 rounded-pill bg-foreground" />
+          </span>
+          <span className="t-sm">Enterplace</span>
         </a>
         <span className="t-tag px-4 pt-4 uppercase text-muted-foreground">Manage</span>
         {PAGES.map((p) => (

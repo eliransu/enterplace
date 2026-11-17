@@ -165,7 +165,7 @@ async fn extension_pages_share_the_session_and_appear_in_the_nav() -> TestResult
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(
         headers.get(header::LOCATION).and_then(|v| v.to_str().ok()),
-        Some("/console/sign-in")
+        Some("/console/sign-in?next=%2Fconsole%2Freport")
     );
     // The sign-in page offers the extension's way in beside the key.
     let (_, _, page) = send(&s.app, get_page("/console/sign-in", "")?).await?;

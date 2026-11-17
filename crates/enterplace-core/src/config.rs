@@ -208,6 +208,8 @@ const KNOWN: &[&str] = &[
     "org",
     "limits",
     "global",
+    // A `limits:` entry for one key, by the first 8 hex characters of its hash.
+    "key",
     "person",
     "customer",
     "customers",

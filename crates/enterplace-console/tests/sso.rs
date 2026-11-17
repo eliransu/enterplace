@@ -918,7 +918,7 @@ async fn a_read_only_person_cannot_revoke_and_a_person_removed_from_the_policy_i
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(
         headers.get(header::LOCATION).and_then(|v| v.to_str().ok()),
-        Some("/console/sign-in")
+        Some("/console/sign-in?next=%2Fconsole%2Faudit")
     );
     Ok(())
 }

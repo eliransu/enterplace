@@ -10,6 +10,7 @@ use axum::{
     http::{Request, StatusCode, header},
 };
 use enterplace_console::{ConsoleConfig, router};
+use enterplace_core::store::Store as _;
 use enterplace_core::{audit::AuditLog, id::sha256_hex};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -383,7 +384,7 @@ async fn mcp_servers_are_added_edited_given_tool_access_and_removed() -> TestRes
 }
 
 #[tokio::test]
-async fn policy_basics_change_rules_budgets_guardrails_aliases_and_mode() -> TestResult {
+async fn policy_basics_change_rules_limits_guardrails_aliases_and_mode() -> TestResult {
     let s = setup("basics")?;
     let cookie = sign_in(&s, ADMIN_KEY).await?;
     let (status, policy) = call(&s, "GET", "/console/api/policy", &cookie, None).await?;
@@ -435,62 +436,156 @@ async fn policy_basics_change_rules_budgets_guardrails_aliases_and_mode() -> Tes
     .await?;
     assert_eq!(status, StatusCode::OK, "{done}");
 
-    // Budgets per team and per person.
+    // Limits: budgets per team and per person, tokens per key, a cap on one model.
     for body in [
-        json!({ "scope": "team", "name": "payments", "usd": 500, "per": "month" }),
-        json!({ "scope": "person", "name": "maya.cohen", "usd": "20", "per": "day" }),
+        json!({ "scope": "team", "value": "payments", "usd": 500, "per": "month" }),
+        json!({ "scope": "person", "value": "maya.cohen", "usd": "20", "per": "day" }),
+        json!({ "scope": "key", "value": "1a2b3c4d", "tpm": "100000", "parallel": 4 }),
+        json!({ "scope": "model", "value": "gpt-4o", "usd": 1000, "per": "month", "parallel": 20 }),
     ] {
         let (status, done) = call(
             &s,
-            "PUT",
-            "/console/api/policy/budgets",
+            "POST",
+            "/console/api/policy/limits",
             &cookie,
             Some(body),
         )
         .await?;
         assert_eq!(status, StatusCode::OK, "{done}");
     }
+    let (_, policy) = call(&s, "GET", "/console/api/policy", &cookie, None).await?;
+    let limits = policy["limits"].as_array().cloned().unwrap_or_default();
+    assert_eq!(limits.len(), 4, "{policy}");
+    assert_eq!(
+        limits[2]["entry"],
+        json!({ "key": "1a2b3c4d", "rate": { "tpm": 100000 }, "parallel": 4 })
+    );
+    assert_eq!(limits[3]["entry"]["model"], "gpt-4o");
+    // Edit: names the limit as it was read.
+    let was = limits[0]["entry"].clone();
     let (status, done) = call(
         &s,
         "PUT",
-        "/console/api/policy/budgets",
+        "/console/api/policy/limits/0",
         &cookie,
-        Some(json!({ "scope": "team", "name": "payments", "usd": 800, "per": "month" })),
+        Some(json!({ "was": was, "scope": "team", "value": "payments", "usd": 800, "per": "month", "rpd": 5000 })),
     )
     .await?;
     assert_eq!(status, StatusCode::OK, "{done}");
     let (_, policy) = call(&s, "GET", "/console/api/policy", &cookie, None).await?;
-    assert_eq!(
-        policy["budgets"].as_array().map(Vec::len),
-        Some(2),
-        "{policy}"
-    );
-    assert_eq!(policy["budgets"][0]["usd"], 800);
+    assert_eq!(policy["limits"][0]["entry"]["budget"]["usd"], 800);
+    assert_eq!(policy["limits"][0]["entry"]["rate"]["rpd"], 5000);
+    // The same edit again names a limit that is no longer there as read: refused, nothing changed.
     let (status, refused) = call(
         &s,
         "PUT",
-        "/console/api/policy/budgets",
+        "/console/api/policy/limits/0",
         &cookie,
-        Some(json!({ "scope": "team", "name": "payments", "usd": -1, "per": "month" })),
+        Some(
+            json!({ "was": was, "scope": "team", "value": "payments", "usd": 900, "per": "month" }),
+        ),
     )
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(error(&refused).contains("above 0"), "{refused}");
+    assert!(error(&refused).contains("Reload"), "{refused}");
+    for (body, says) in [
+        (
+            json!({ "scope": "team", "value": "payments", "usd": -1, "per": "month" }),
+            "above 0",
+        ),
+        (
+            json!({ "scope": "team", "value": "payments" }),
+            "limits nothing",
+        ),
+        (
+            json!({ "scope": "team", "value": "payments", "rpm": 1.5 }),
+            "whole number",
+        ),
+    ] {
+        let (status, refused) = call(
+            &s,
+            "POST",
+            "/console/api/policy/limits",
+            &cookie,
+            Some(body),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(error(&refused).contains(says), "{says}: {refused}");
+    }
+    let was = policy["limits"][1]["entry"].clone();
     let (status, done) = call(
         &s,
         "DELETE",
-        "/console/api/policy/budgets/person/maya.cohen",
+        "/console/api/policy/limits/1",
+        &cookie,
+        Some(json!({ "was": was })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(!s.policy()?.contains("maya.cohen"));
+
+    // Guardrail definitions: add one, change it, and the check refuses a type that does not exist.
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/policy/guardrails",
+        &cookie,
+        Some(json!({ "name": "card-numbers", "type": "regex", "action": "mask", "on": ["request", "answer"], "patterns": "card: \\b\\d{16}\\b" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (status, done) = call(
+        &s,
+        "PUT",
+        "/console/api/policy/guardrails/card-numbers",
+        &cookie,
+        Some(json!({ "type": "regex", "action": "block", "patterns": "card: \\b\\d{16}\\b\niban: \\bIL\\d{21}\\b" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (_, policy) = call(&s, "GET", "/console/api/policy", &cookie, None).await?;
+    let guard = policy["guardrails"]
+        .as_array()
+        .and_then(|g| g.iter().find(|g| g["name"] == "card-numbers").cloned())
+        .ok_or("no guardrail")?;
+    assert_eq!(guard["entry"]["action"], "block");
+    assert!(guard["entry"]["patterns"]["iban"].is_string(), "{guard}");
+    let (status, refused) = call(
+        &s,
+        "POST",
+        "/console/api/policy/guardrails",
+        &cookie,
+        Some(json!({ "name": "odd", "type": "telepathy" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(error(&refused).contains("enterplace check"), "{refused}");
+    // A rule uses it; removing it takes it out of the rule too.
+    call(
+        &s,
+        "POST",
+        "/console/api/policy/rules",
+        &cookie,
+        Some(json!({ "name": "cards", "who": { "kind": "team", "value": "payments" }, "models": ["gpt-4o"], "guardrails": ["card-numbers"] })),
+    )
+    .await?;
+    let (status, done) = call(
+        &s,
+        "DELETE",
+        "/console/api/policy/guardrails/card-numbers",
         &cookie,
         None,
     )
     .await?;
     assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(!s.policy()?.contains("card-numbers"), "{}", s.policy()?);
 
     // Guardrails on and off for every request.
     let (status, done) = call(
         &s,
         "PUT",
-        "/console/api/policy/guardrails/no-secrets",
+        "/console/api/policy/guardrails/no-secrets/on",
         &cookie,
         Some(json!({ "on": true })),
     )
@@ -504,7 +599,7 @@ async fn policy_basics_change_rules_budgets_guardrails_aliases_and_mode() -> Tes
     call(
         &s,
         "PUT",
-        "/console/api/policy/guardrails/no-secrets",
+        "/console/api/policy/guardrails/no-secrets/on",
         &cookie,
         Some(json!({ "on": false })),
     )
@@ -601,13 +696,13 @@ async fn a_role_without_edit_policy_and_a_foreign_form_change_nothing() -> TestR
             json!({ "mode": "observe" }),
         ),
         (
-            "PUT",
-            "/console/api/policy/budgets",
-            json!({ "scope": "team", "name": "x", "usd": 1, "per": "day" }),
+            "POST",
+            "/console/api/policy/limits",
+            json!({ "scope": "team", "value": "x", "usd": 1, "per": "day" }),
         ),
         (
             "PUT",
-            "/console/api/policy/guardrails/no-secrets",
+            "/console/api/policy/guardrails/no-secrets/on",
             json!({ "on": true }),
         ),
     ];
@@ -631,5 +726,330 @@ async fn a_role_without_edit_policy_and_a_foreign_form_change_nothing() -> TestR
     let response = s.app.clone().oneshot(request).await?;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(s.policy()?, POLICY);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_commented_policy_keeps_its_comments_through_add_edit_and_remove() -> TestResult {
+    let s = setup("comments")?;
+    let commented = POLICY
+        .replace(
+            "version: 1\n",
+            "# Owned by the platform team.\nversion: 1\n",
+        )
+        .replace(
+            "  - name: openai\n",
+            "  # The main account.\n  - name: openai\n",
+        )
+        .replace(
+            "    models: [\"*\"]\n",
+            "    models: [\"*\"] # everyone, for now\n",
+        )
+        + "# Last line.\n";
+    std::fs::write(s.dir.join("enterplace.policy.yaml"), &commented)?;
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+    let comments = [
+        "# Owned by the platform team.",
+        "  # The main account.\n  - name: openai",
+        "# everyone, for now",
+        "# Last line.",
+    ];
+    let steps = [
+        (
+            "POST",
+            "/console/api/providers",
+            Some(
+                json!({ "preset": "groq", "key_env": "GROQ_API_KEY", "models": ["llama-3.3-70b"] }),
+            ),
+        ),
+        (
+            "PUT",
+            "/console/api/providers/openai",
+            Some(json!({ "models": ["gpt-4o-mini"] })),
+        ),
+        ("DELETE", "/console/api/providers/groq", None),
+    ];
+    for (method, path, body) in steps {
+        let (status, done) = call(&s, method, path, &cookie, body).await?;
+        assert_eq!(status, StatusCode::OK, "{path}: {done}");
+        let policy = s.policy()?;
+        for comment in comments {
+            assert!(
+                policy.contains(comment),
+                "{method} {path} lost {comment}:\n{policy}"
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn raw(
+    s: &Setup,
+    method: &str,
+    path: &str,
+    cookie: &str,
+    form: &str,
+) -> Result<(StatusCode, axum::http::HeaderMap), Box<dyn std::error::Error>> {
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("http://{HOST}"))
+        .header(header::COOKIE, cookie)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(form.to_string()))?;
+    let response = s.app.clone().oneshot(request).await?;
+    Ok((response.status(), response.headers().clone()))
+}
+
+fn location(headers: &axum::http::HeaderMap) -> String {
+    headers
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string()
+}
+
+#[tokio::test]
+async fn signing_in_returns_to_the_page_the_person_was_going_to() -> TestResult {
+    let s = setup("next")?;
+    // A page sends a person who is not signed in to sign in, naming itself.
+    let (_, headers) = raw(&s, "GET", "/console/app/", "", "").await?;
+    assert_eq!(
+        location(&headers),
+        "/console/sign-in?next=%2Fconsole%2Fapp%2F"
+    );
+    let (_, headers) = raw(&s, "GET", "/console/models?add=1", "", "").await?;
+    assert_eq!(
+        location(&headers),
+        "/console/sign-in?next=%2Fconsole%2Fmodels%3Fadd%3D1"
+    );
+    // The sign-in page keeps it; the app's # route is added by the page's script, as here.
+    let (status, headers) = raw(
+        &s,
+        "GET",
+        "/console/sign-in?next=%2Fconsole%2Fapp%2F",
+        "",
+        "",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let kept = headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.starts_with("enterplace_next=%2Fconsole%2Fapp%2F;"));
+    assert!(kept, "{headers:?}");
+    let (status, headers) = raw(
+        &s,
+        "POST",
+        "/console/sign-in",
+        "enterplace_next=%2Fconsole%2Fapp%2F%23%2Fpolicy",
+        &format!("key={ADMIN_KEY}"),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location(&headers), "/console/app/#/policy");
+    // Anything that is not a console page on this origin is ignored: Start here, as before.
+    for bad in [
+        "https%3A%2F%2Fevil.example%2F",
+        "%2F%2Fevil.example%2Fconsole%2F",
+        "%2Fconsole%2F..%2F..%2Fadmin",
+        "%2Fconsole%2Fsign-out",
+        "%2Fconsole%5C%5Cevil.example",
+    ] {
+        let (_, headers) = raw(
+            &s,
+            "POST",
+            "/console/sign-in",
+            &format!("enterplace_next={bad}"),
+            &format!("key={ADMIN_KEY}"),
+        )
+        .await?;
+        assert_eq!(location(&headers), "/console/start", "{bad}");
+    }
+    Ok(())
+}
+
+/// The policy kept as versions in a store, in memory, as `store.policy_from: store` keeps it in Postgres.
+#[derive(Debug, Default)]
+struct Versions(std::sync::Mutex<Vec<enterplace_core::store::PolicyVersion>>);
+
+impl enterplace_core::store::Credentials for Versions {}
+
+impl enterplace_core::store::Store for Versions {
+    fn keys_text(&self) -> String {
+        String::new()
+    }
+    fn kills(&self) -> Arc<Vec<enterplace_core::kill::Kill>> {
+        Arc::default()
+    }
+    fn add_key(&self, _: &enterplace_core::config::KeyEntry) -> Result<bool, String> {
+        Ok(false)
+    }
+    fn revoke(&self, _: &str) -> Result<Option<enterplace_core::keyfile::Revoked>, String> {
+        Ok(None)
+    }
+    fn set_kill(
+        &self,
+        _: &enterplace_core::kill::Kill,
+    ) -> Result<Option<enterplace_core::kill::Kill>, String> {
+        Ok(None)
+    }
+    fn clear_kill(&self, _: &str, _: &str) -> Result<Option<enterplace_core::kill::Kill>, String> {
+        Ok(None)
+    }
+    fn reserve(
+        &self,
+        _: enterplace_core::store::Bucket,
+        _: f64,
+        _: f64,
+    ) -> enterplace_core::store::Pending<enterplace_core::store::Reserve> {
+        Box::pin(async { Ok(enterplace_core::store::Reserve::Done) })
+    }
+    fn settle(&self, _: Vec<enterplace_core::store::Change>) {}
+    fn lease(
+        &self,
+        _: String,
+        _: u64,
+        _: u64,
+        _: u64,
+    ) -> enterplace_core::store::Pending<enterplace_core::store::Lease> {
+        Box::pin(async { Ok(enterplace_core::store::Lease::Over { wait: 1 }) })
+    }
+    fn give_back(&self, _: i64, _: i64) {}
+    fn cooling(&self) -> Arc<std::collections::HashMap<String, std::time::Instant>> {
+        Arc::default()
+    }
+    fn cooled(&self, _: &str, _: std::time::Duration) {}
+    fn warmed(&self, _: &str) {}
+    fn open_session(
+        &self,
+        _: String,
+        _: String,
+        _: std::time::Duration,
+    ) -> enterplace_core::store::Pending<()> {
+        Box::pin(async { Ok(()) })
+    }
+    fn session(&self, _: String) -> enterplace_core::store::Pending<Option<String>> {
+        Box::pin(async { Ok(None) })
+    }
+    fn end_session(&self, _: String) {}
+    fn policy_versions(&self) -> Result<Arc<Vec<enterplace_core::store::PolicyVersion>>, String> {
+        Ok(Arc::new(self.0.lock().map_err(|e| e.to_string())?.clone()))
+    }
+    fn live_policy(&self) -> Option<enterplace_core::store::PolicyVersion> {
+        self.0
+            .lock()
+            .ok()?
+            .iter()
+            .rev()
+            .find(|v| v.state == enterplace_core::store::LIVE)
+            .cloned()
+    }
+    fn add_policy_version(
+        &self,
+        new: &enterplace_core::store::NewVersion,
+    ) -> Result<enterplace_core::store::PolicyVersion, enterplace_core::store::VersionError> {
+        let mut versions = self
+            .0
+            .lock()
+            .map_err(|e| enterplace_core::store::VersionError::Store(e.to_string()))?;
+        let live = versions
+            .iter()
+            .rev()
+            .find(|v| v.state == enterplace_core::store::LIVE)
+            .map(|v| v.id);
+        if new.base != live {
+            return Err(enterplace_core::store::VersionError::Conflict(
+                "another version went live first. Reload and make the change again.".into(),
+            ));
+        }
+        if !new.pending {
+            for v in versions
+                .iter_mut()
+                .filter(|v| v.state == enterplace_core::store::LIVE)
+            {
+                v.state = enterplace_core::store::RETIRED.into();
+            }
+        }
+        let version = enterplace_core::store::PolicyVersion {
+            id: versions.len() as i64 + 1,
+            text: new.text.clone(),
+            sha256: sha256_hex(new.text.as_bytes()),
+            base: new.base,
+            note: new.note.clone(),
+            created_by: new.by.clone(),
+            created_at: String::new(),
+            state: if new.pending {
+                enterplace_core::store::PENDING
+            } else {
+                enterplace_core::store::LIVE
+            }
+            .into(),
+            decided_by: None,
+            decided_at: None,
+        };
+        versions.push(version.clone());
+        Ok(version)
+    }
+}
+
+#[tokio::test]
+async fn in_store_mode_each_change_is_a_new_live_version_and_the_file_is_untouched() -> TestResult {
+    let s = setup("store")?;
+    let versions = Versions::default();
+    versions
+        .add_policy_version(&enterplace_core::store::NewVersion {
+            text: POLICY.into(),
+            base: None,
+            note: "imported".into(),
+            by: "test".into(),
+            pending: false,
+        })
+        .map_err(|e| format!("{e:?}"))?;
+    let store: Arc<dyn enterplace_core::store::Store> = Arc::new(versions);
+    enterplace_core::store::attach_policy(&s.dir.join("enterplace.policy.yaml"), &store);
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+    let (_, me) = call(&s, "GET", "/console/api/me", &cookie, None).await?;
+    assert_eq!(me["source"], "store");
+
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/policy/limits",
+        &cookie,
+        Some(json!({ "scope": "team", "value": "payments", "usd": 500, "per": "month" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(
+        done["message"].as_str().unwrap_or("").contains("version 2"),
+        "{done}"
+    );
+    let live = store.live_policy().ok_or("no live version")?;
+    assert_eq!((live.id, live.created_by.as_str()), (2, "noa.bar"));
+    assert!(
+        live.text.contains("payments") && live.text.contains("usd: 500"),
+        "{}",
+        live.text
+    );
+    let (_, policy) = call(&s, "GET", "/console/api/policy", &cookie, None).await?;
+    assert_eq!(policy["limits"][0]["entry"]["budget"]["usd"], 500);
+    // The file is only the store's starting point: it is not written.
+    assert_eq!(s.policy()?, POLICY);
+    // A change the check refuses makes no version.
+    let (status, refused) = call(
+        &s,
+        "PUT",
+        "/console/api/providers/openai",
+        &cookie,
+        Some(json!({ "models": ["gpt-4o-mini"], "fallback": "nobody" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(error(&refused).contains("enterplace check"), "{refused}");
+    assert_eq!(store.policy_versions()?.len(), 2);
+    assert!(s.audit()?.contains(r#""action":"add_limit""#));
     Ok(())
 }

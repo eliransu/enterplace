@@ -291,7 +291,12 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
         for cookie in ["", "enterplace_console=not-a-session"] {
             let (status, headers, page) = send(&s.app, get(path, cookie)?).await?;
             assert_eq!(status, StatusCode::SEE_OTHER, "{path} {cookie}");
-            assert_eq!(location(&headers), "/console/sign-in", "{path}");
+            // Sent to sign in, naming the page to come back to.
+            assert!(
+                location(&headers).starts_with("/console/sign-in?next=%2Fconsole"),
+                "{path}: {}",
+                location(&headers)
+            );
             assert!(!page.contains("maya.cohen"), "{path}");
         }
     }
