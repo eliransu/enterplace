@@ -1053,3 +1053,129 @@ async fn in_store_mode_each_change_is_a_new_live_version_and_the_file_is_untouch
     assert!(s.audit()?.contains(r#""action":"add_limit""#));
     Ok(())
 }
+
+#[tokio::test]
+async fn people_edits_a_key_issues_a_person_token_and_refuses_what_a_role_may_not() -> TestResult {
+    let s = setup("people")?;
+    let admin = sign_in(&s, ADMIN_KEY).await?;
+    let viewer_sha = sha256_hex(VIEWER_KEY.as_bytes());
+    // Edit: what the key may do changes, the key does not.
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/people/edit",
+        &admin,
+        Some(json!({ "sha256": viewer_sha, "tpm": "5000", "models": "gpt-4o-mini", "budget": "", "expires": "", "admin": true })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let keys = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
+    assert!(
+        keys.contains("tpm: 5000") && keys.contains(&viewer_sha),
+        "{keys}"
+    );
+    let (_, people) = call(&s, "GET", "/console/api/people", &admin, None).await?;
+    let row = people["entries"]
+        .as_array()
+        .and_then(|e| e.iter().find(|e| e["sha256"] == viewer_sha).cloned())
+        .ok_or("no row")?;
+    assert_eq!(row["fields"]["tpm"], "5000");
+    assert!(
+        row["status"]["notes"]
+            .to_string()
+            .contains("5,000 tokens a minute"),
+        "{row}"
+    );
+    // The last admin key keeps its admin.
+    std::fs::write(
+        s.dir.join("enterplace.keys.yaml"),
+        format!(
+            "keys:\n  - name: noa.bar\n    team: platform\n    sha256: {}\n    admin: true\n",
+            sha256_hex(ADMIN_KEY.as_bytes())
+        ),
+    )?;
+    let (status, refused) = call(
+        &s,
+        "POST",
+        "/console/api/people/edit",
+        &admin,
+        Some(json!({ "sha256": sha256_hex(ADMIN_KEY.as_bytes()), "admin": false })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(error(&refused).contains("only admin key"), "{refused}");
+    // A person token: named for the person, reaching no model on its own, shown once.
+    let (status, made) = call(
+        &s,
+        "POST",
+        "/console/api/people/issue",
+        &admin,
+        Some(json!({ "name": "maya.cohen", "team": "payments", "person_token": true })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    assert!(
+        made["key"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("enterplace_u_"),
+        "{made}"
+    );
+    assert!(s.audit()?.contains(r#""person_token":true"#));
+    // A key that is not in the file is named as gone, with what to do.
+    let (status, refused) = call(
+        &s,
+        "POST",
+        "/console/api/people/rotate",
+        &admin,
+        Some(json!({ "sha256": "00" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(error(&refused).contains("Reload"), "{refused}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_viewer_sees_the_keys_and_changes_none() -> TestResult {
+    let s = setup("people-viewer")?;
+    let viewer = sign_in(&s, VIEWER_KEY).await?;
+    let (status, people) = call(&s, "GET", "/console/api/people", &viewer, None).await?;
+    assert_eq!(status, StatusCode::OK, "{people}");
+    assert_eq!(
+        (
+            people["may"]["issue"].as_bool(),
+            people["may"]["revoke"].as_bool()
+        ),
+        (Some(false), Some(false))
+    );
+    let before = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
+    let sha = sha256_hex(ADMIN_KEY.as_bytes());
+    for (path, body) in [
+        (
+            "/console/api/people/issue",
+            json!({ "name": "x", "team": "y" }),
+        ),
+        (
+            "/console/api/people/revoke",
+            json!({ "sha256": sha, "confirm": "noa.bar" }),
+        ),
+        (
+            "/console/api/people/edit",
+            json!({ "sha256": sha, "tpm": "1" }),
+        ),
+        ("/console/api/people/rotate", json!({ "sha256": sha })),
+    ] {
+        let (status, refused) = call(&s, "POST", path, &viewer, Some(body)).await?;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}: {refused}");
+        assert!(
+            error(&refused).contains("ask an admin") || error(&refused).contains("Ask an admin"),
+            "{path}: {refused}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?,
+        before
+    );
+    Ok(())
+}

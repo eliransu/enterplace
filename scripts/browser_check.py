@@ -79,9 +79,10 @@ class Chrome:
         said = self.js("(document.querySelector('[role=dialog], main') || document.body).innerText.slice(0, 600)")
         raise AssertionError(f"waited {seconds} s for {what}; the page is at {self.js('location.href')} and says: {said}")
 
-    def go(self, url: str):
+    def go(self, url: str, landed: str = ""):
+        """Opens `url` and waits for it, or for `landed` when the server redirects (an old page moved to the app)."""
         self.call("Page.navigate", url=url)
-        self.wait(f"location.href === {json.dumps(url)} && document.readyState === 'complete'", url)
+        self.wait(f"location.href === {json.dumps(landed or url)} && document.readyState === 'complete'", landed or url)
 
     def type(self, text: str):
         self.call("Input.insertText", text=text)
@@ -209,8 +210,9 @@ def run(chrome: Chrome, base: str, key: str, enterplace: str, folder: pathlib.Pa
     chrome.wait("!document.querySelector('[aria-modal]') && document.readyState === 'complete'", "the sheet to close on Escape")
     check(chrome.js("document.activeElement.getAttribute('href')") == opener, "focus is back on the link that opened the sheet")
 
-    # Issue a key: name, Tab, team, Enter.
-    chrome.go(f"{base}/console/people?issue=1")
+    # Issue a key: name, Tab, team, Enter. The old address opens the console app's dialog.
+    chrome.go(f"{base}/console/people?issue=1", f"{base}/console/app/#/people?issue=1")
+    chrome.wait("document.getElementById('issue-name') && document.activeElement && document.activeElement.id === 'issue-name'", "the issue dialog")
     check(chrome.js("document.activeElement.id") == "issue-name", "the issue dialog puts focus in its first field")
     chrome.type("browser.check")
     chrome.key("Tab")
@@ -222,20 +224,21 @@ def run(chrome: Chrome, base: str, key: str, enterplace: str, folder: pathlib.Pa
     for width in (1440, 1024, 390):
         chrome.size(width)
         fits = chrome.js("""(() => {
-          const d = document.querySelector('.g-dialog').getBoundingClientRect();
+          const d = document.querySelector('[role="dialog"]').getBoundingClientRect();
           const inside = el => { const r = el.getBoundingClientRect(); return r.left >= d.left - 0.5 && r.right <= d.right + 0.5 };
-          return inside(document.getElementById('new-key')) && inside(document.querySelector('[data-copy]'))
-            && [...document.querySelectorAll('.g-dialog a')].every(inside)
+          return inside(document.getElementById('new-key')) && inside(document.querySelector('[role="dialog"] [data-copy]'))
+            && [...document.querySelectorAll('[role="dialog"] button')].every(inside)
             && document.documentElement.scrollWidth <= innerWidth })()""")
         check(fits, f"the key, Copy and Done stay inside the dialog at {width}")
     chrome.size(1440)
 
     # Revoke it: type the name, Enter.
     sha = hashlib.sha256(new_key.encode()).hexdigest()
-    chrome.go(f"{base}/console/people?revoke={sha}")
+    chrome.go(f"{base}/console/people?revoke={sha}", f"{base}/console/app/#/people?revoke={sha}")
+    chrome.wait("document.getElementById('revoke-type') && document.activeElement && document.activeElement.id === 'revoke-type'", "the revoke dialog")
     chrome.type("browser.check")
     chrome.key("Enter")
-    chrome.wait("location.search.includes('revoked=browser.check')", "the revoke to finish")
+    chrome.wait("!location.hash.includes('revoke=')", "the revoke to finish")
     check(sha not in (folder / "enterplace.keys.yaml").read_text(), "the key is revoked from a real browser form")
 
     # Verify the chain, and check the hash the console shows with the CLI.

@@ -532,12 +532,12 @@ async fn the_console_adds_a_model_edits_a_key_and_shows_teams_and_versions() -> 
     let maya = enterplace_core::id::sha256_hex(MAYA.as_bytes());
     let (status, _, page) = send(form(
         "POST",
-        "/console/people/edit",
+        "/console/api/people/edit",
         &cookie,
         &format!("sha256={maya}&tpm=5000&models=m&budget=&per=month&expires="),
     )?)
     .await?;
-    assert!(status.is_redirection(), "{status}: {page}");
+    assert_eq!(status, StatusCode::OK, "{page}");
     let keys = enterplace_core::store::attached(&gw.loaded.keys_path)
         .ok_or("no store")?
         .keys_text();

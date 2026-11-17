@@ -212,10 +212,10 @@ async fn an_account_session_is_checked_on_every_request_and_recorded() -> TestRe
     );
     let (status, _, _) = send(
         &s.app,
-        post_form("/console/people/issue", &cookie, "name=x&team=y")?,
+        post_form("/console/api/people/issue", &cookie, "name=x&team=y")?,
     )
     .await?;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "a viewer issued a key");
+    assert_eq!(status, StatusCode::FORBIDDEN, "a viewer issued a key");
     // The extension stops vouching for the account: its session ends at once.
     s.allowed.store(false, Ordering::SeqCst);
     let (status, _, _) = send(&s.app, get_page("/console/audit", &cookie)?).await?;

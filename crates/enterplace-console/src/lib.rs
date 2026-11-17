@@ -11,6 +11,7 @@ mod figures;
 pub mod html;
 mod insights;
 mod pages;
+mod people;
 mod saml;
 mod sso;
 mod start;
@@ -575,14 +576,12 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         )
         .route("/audit", get(audit_page))
         .route("/audit/verify", post(verify))
-        .route("/people", get(people_page))
-        .route("/people/issue", post(issue))
-        .route("/people/revoke", post(revoke))
         .route("/credentials", get(credentials_page))
         .route("/credentials/{action}", post(credential_change))
         .route("/policy", get(policy_page))
         .merge(edit::routes())
         .merge(api::routes())
+        .merge(people::routes())
         .merge(start::routes())
         .route("/spend", get(spend_page))
         .route("/live.json", get(live_json))
@@ -754,6 +753,11 @@ impl Form {
 
     pub fn of(uri: &Uri) -> Self {
         Self::parse(uri.query().unwrap_or(""))
+    }
+
+    /// Every name and value, in the order given.
+    pub fn pairs(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.0.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 
     /// The last value given for a name, or "".
@@ -2718,41 +2722,6 @@ async fn verify(State(console): State<Console>, headers: HeaderMap, uri: Uri) ->
     }
 }
 
-async fn people_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    if !admin.may(Permission::SeeKeys) {
-        return not_permitted(&admin, Permission::SeeKeys);
-    }
-    let query = Form::of(&uri);
-    // A read-only person gets no dialog for an action they cannot take, even from a typed address.
-    let dialog = if admin.read_only {
-        pages::Dialog::None
-    } else {
-        pages::Dialog::from_query(&query)
-    };
-    let body = people_body(&console, &admin, &query, dialog);
-    page(StatusCode::OK, body)
-}
-
-fn people_body(console: &Console, admin: &Admin, query: &Form, dialog: pages::Dialog) -> String {
-    let config = console.config();
-    pages::people(&pages::PeopleView {
-        admin: &admin.label(),
-        query,
-        keys_path: &config.keys,
-        keys: keys_for(admin, &config.keys, config::read_keys(&config.keys)),
-        log: records_for(admin, &config.audit).ok().flatten(),
-        dialog,
-        read_only: admin.read_only,
-        // A list that cannot be read shows no one stopped here; the audit log's banner says it cannot be read.
-        kills: enterplace_core::kill::read(&enterplace_core::kill::path_beside(&config.keys))
-            .unwrap_or_default(),
-        may_restore: admin.may(Permission::Kill),
-    })
-}
-
 /// The keys file as a person may see it: whole, or written again with only their organization's keys.
 fn keys_for(
     admin: &Admin,
@@ -2772,114 +2741,6 @@ fn keys_for(
             keyfile::keys_text(&mine)
         })
     })
-}
-
-async fn issue(State(console): State<Console>, headers: HeaderMap, body: String) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let form = Form::parse(&body);
-    let (name, team) = (
-        form.get("name").trim().to_string(),
-        form.get("team").trim().to_string(),
-    );
-    let admin_key = form.get("admin") == "1";
-    let (expires, budget, per) = (
-        form.get("expires").trim().to_string(),
-        form.get("budget").trim().to_string(),
-        form.get("per").to_string(),
-    );
-    let attributes = keyfile::Attributes {
-        admin: admin_key,
-        expires: (!expires.is_empty()).then(|| expires.clone()),
-        // Text that is not a number becomes NaN, which the keys file refuses with the budget's own message.
-        budget: (!budget.is_empty()).then(|| enterplace_core::policy::Budget {
-            usd: budget.parse().unwrap_or(f64::NAN),
-            per: if per == "day" {
-                enterplace_core::policy::Period::Day
-            } else {
-                enterplace_core::policy::Period::Month
-            },
-        }),
-        // A person kept to one organization issues keys in it, and one kept to one customer keys for it.
-        org: admin.org.clone().unwrap_or_default(),
-        customer: match admin.customers.as_slice() {
-            [one] => Some(one.clone()),
-            _ => None,
-        },
-        ..keyfile::Attributes::default()
-    };
-    if admin.may(Permission::IssueKeys)
-        && !admin.covers(&attributes.org, &team, attributes.customer.as_deref())
-    {
-        let error = format!(
-            "Your role keeps you to team{} {}{}: issue the key in one of them.",
-            if admin.teams.len() == 1 { "" } else { "s" },
-            admin.teams.join(", "),
-            if admin.customers.len() > 1 {
-                format!(
-                    " and customers {}, and your role cannot pick one here",
-                    admin.customers.join(", ")
-                )
-            } else {
-                String::new()
-            }
-        );
-        read_only(&console, &admin, "issue_key").await;
-        return page(
-            StatusCode::BAD_REQUEST,
-            people_body(
-                &console,
-                &admin,
-                &Form(Vec::new()),
-                pages::Dialog::Issue {
-                    name,
-                    team,
-                    expires,
-                    budget,
-                    per,
-                    error,
-                },
-            ),
-        );
-    }
-    if !admin.may(Permission::IssueKeys) {
-        read_only(&console, &admin, "issue_key").await;
-        return page(
-            StatusCode::BAD_REQUEST,
-            people_body(&console, &admin, &Form(Vec::new()), pages::Dialog::None),
-        );
-    }
-    let made = issued(&console, &admin, &name, &team, attributes).await;
-    let (status, dialog) = match made {
-        Ok((key, rotated)) => (
-            StatusCode::OK,
-            pages::Dialog::Issued {
-                name,
-                team,
-                key,
-                rotated,
-            },
-        ),
-        Err(error) => (
-            StatusCode::BAD_REQUEST,
-            pages::Dialog::Issue {
-                name,
-                team,
-                expires,
-                budget,
-                per,
-                error,
-            },
-        ),
-    };
-    page(
-        status,
-        people_body(&console, &admin, &Form(Vec::new()), dialog),
-    )
 }
 
 /// Holds a key about to be issued to the policy's `key_bounds:` for `role` (`None`: a key from `enterplace login`).
@@ -2981,53 +2842,6 @@ async fn issued_as(
             Err(error)
         }
     }
-}
-
-async fn revoke(State(console): State<Console>, headers: HeaderMap, body: String) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let form = Form::parse(&body);
-    let sha256 = form.get("sha256").to_string();
-    let typed = form.get("confirm").trim().to_string();
-    let keys = console.config().keys.clone();
-    let entry = config::read_keys(&keys)
-        .ok()
-        .flatten()
-        .and_then(|text| config::key_entries(&keys, &text).ok())
-        .and_then(|entries| entries.into_iter().find(|e| e.sha256 == sha256));
-    let Some(entry) = entry.filter(|e| admin.covers_entry(e)) else {
-        return redirect("/console/people");
-    };
-    if !admin.may(Permission::RevokeKeys) {
-        read_only(&console, &admin, "revoke_key").await;
-        return page(
-            StatusCode::BAD_REQUEST,
-            people_body(&console, &admin, &Form(Vec::new()), pages::Dialog::None),
-        );
-    }
-    let error = if typed == entry.name {
-        match revoked(&console, &admin, &entry).await {
-            Ok(()) => {
-                return redirect(&format!(
-                    "/console/people?revoked={}&hash={}",
-                    html::enc(&entry.name),
-                    &entry.sha256[..8]
-                ));
-            }
-            Err(error) => error,
-        }
-    } else {
-        format!("Type {} exactly, to confirm which key goes.", entry.name)
-    };
-    let dialog = pages::Dialog::Revoke { sha256, error };
-    page(
-        StatusCode::BAD_REQUEST,
-        people_body(&console, &admin, &Form(Vec::new()), dialog),
-    )
 }
 
 /// Records a change refused to a read-only person. The page says why in its banner.

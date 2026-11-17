@@ -97,7 +97,7 @@ async fn app_file(Path(file): Path<String>) -> Response {
 // ---------------------------------------------------------------- answers
 
 /// A refusal: its status and what to tell the person, naming the cause and the fix.
-pub(crate) struct Fail(StatusCode, String);
+pub(crate) struct Fail(pub(crate) StatusCode, pub(crate) String);
 
 impl IntoResponse for Fail {
     fn into_response(self) -> Response {
@@ -107,11 +107,11 @@ impl IntoResponse for Fail {
     }
 }
 
-fn bad(message: impl Into<String>) -> Fail {
+pub(crate) fn bad(message: impl Into<String>) -> Fail {
     Fail(StatusCode::BAD_REQUEST, message.into())
 }
 
-fn ok(value: Value) -> Response {
+pub(crate) fn ok(value: Value) -> Response {
     let mut response = (
         [(header::CONTENT_TYPE, "application/json")],
         value.to_string(),
@@ -123,14 +123,14 @@ fn ok(value: Value) -> Response {
     guarded(response)
 }
 
-type Answer = Result<Response, Fail>;
+pub(crate) type Answer = Result<Response, Fail>;
 
-fn answer(result: Answer) -> Response {
+pub(crate) fn answer(result: Answer) -> Response {
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
 /// A message from the core, as a sentence.
-fn sentence(text: &str) -> String {
+pub(crate) fn sentence(text: &str) -> String {
     let mut text = text.trim().to_string();
     if let Some(first) = text.get_mut(..1) {
         first.make_ascii_uppercase();
@@ -139,7 +139,11 @@ fn sentence(text: &str) -> String {
 }
 
 /// The signed-in admin, and for a change also a form from this console: a change from another site is refused.
-async fn signed_in(console: &Console, headers: &HeaderMap, change: bool) -> Result<Admin, Fail> {
+pub(crate) async fn signed_in(
+    console: &Console,
+    headers: &HeaderMap,
+    change: bool,
+) -> Result<Admin, Fail> {
     if change && !same_origin(headers) {
         return Err(Fail(
             StatusCode::FORBIDDEN,
@@ -155,16 +159,21 @@ async fn signed_in(console: &Console, headers: &HeaderMap, change: bool) -> Resu
     })
 }
 
-fn body_of(bytes: &Bytes) -> Result<Map<String, Value>, Fail> {
+pub(crate) fn body_of(bytes: &Bytes) -> Result<Map<String, Value>, Fail> {
     match serde_json::from_slice::<Value>(bytes) {
         Ok(Value::Object(map)) => Ok(map),
+        // A plain HTML form (name=value&...) is read too, so a page can post without script.
+        _ if bytes.contains(&b'=') => Ok(crate::Form::parse(&String::from_utf8_lossy(bytes))
+            .pairs()
+            .map(|(k, v)| (k.to_string(), Value::String(v.to_string())))
+            .collect()),
         _ => Err(bad(
             "The request body is not a JSON object. Send the form's fields as JSON, for example {\"name\": \"openai\"}.",
         )),
     }
 }
 
-fn text<'a>(body: &'a Map<String, Value>, name: &str) -> &'a str {
+pub(crate) fn text<'a>(body: &'a Map<String, Value>, name: &str) -> &'a str {
     body.get(name).and_then(Value::as_str).unwrap_or("").trim()
 }
 
@@ -437,6 +446,9 @@ async fn me(State(console): State<Console>, headers: HeaderMap) -> Response {
                 "credentials": admin.may(Permission::Credentials) && !admin.confined(),
                 "source": if edit::live(&console).is_some() { "store" } else { "file" },
                 "policy": console.config().policy.display().to_string(),
+            // Every page says so, as the server-rendered pages do: nothing the policy refuses is stopped.
+            "observe": config::load(&console.config().policy, Some(&console.config().keys))
+                .is_ok_and(|l| l.policy.mode() == enterplace_core::policy::Mode::Observe),
             })))
         }
         .await,

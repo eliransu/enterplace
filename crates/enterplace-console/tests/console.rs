@@ -153,6 +153,62 @@ fn post(path: &str, cookie: &str, form: &str) -> Result<Request<Body>, axum::htt
         .body(Body::from(form.to_string()))
 }
 
+/// A call to the console app's JSON API, signed in with `cookie`, and its answer as JSON.
+async fn call(
+    app: &Router,
+    method: &str,
+    path: &str,
+    cookie: &str,
+    body: serde_json::Value,
+) -> Result<(StatusCode, HeaderMap, serde_json::Value), Box<dyn std::error::Error>> {
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("http://{HOST}"))
+        .header(header::COOKIE, cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(if body.is_null() {
+            String::new()
+        } else {
+            body.to_string()
+        }))?;
+    let (status, headers, text) = send(app, request).await?;
+    Ok((
+        status,
+        headers,
+        serde_json::from_str(&text).unwrap_or(serde_json::Value::Null),
+    ))
+}
+
+/// The People page's keys, as the app reads them.
+async fn people(
+    app: &Router,
+    cookie: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let (status, _, people) = call(
+        app,
+        "GET",
+        "/console/api/people",
+        cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{people}");
+    Ok(people)
+}
+
+/// One key of the People page, by name.
+fn key_named<'a>(
+    people: &'a serde_json::Value,
+    name: &str,
+) -> Result<&'a serde_json::Value, String> {
+    people["entries"]
+        .as_array()
+        .and_then(|e| e.iter().find(|e| e["name"] == name))
+        .ok_or_else(|| format!("no key for {name}: {people}"))
+}
+
 fn location(headers: &HeaderMap) -> &str {
     headers
         .get(header::LOCATION)
@@ -283,7 +339,8 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
     for path in [
         "/console",
         "/console/audit",
-        "/console/people",
+        // People moved to the app: its old address only points there, and the app needs the session.
+        "/console/app/",
         "/console/policy",
         "/console/spend",
         "/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAA1",
@@ -300,17 +357,31 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
             assert!(!page.contains("maya.cohen"), "{path}");
         }
     }
-    for (path, form) in [
-        ("/console/people/issue", "name=x&team=y"),
-        ("/console/people/revoke", "sha256=00&confirm=x"),
-        ("/console/audit/verify", ""),
-    ] {
+    for (path, form) in [("/console/audit/verify", "")] {
         let (status, headers, _) =
             send(&s.app, post(path, "enterplace_console=forged", form)?).await?;
         assert_eq!(
             (status, location(&headers)),
             (StatusCode::SEE_OTHER, "/console/sign-in"),
             "{path}"
+        );
+    }
+    for (path, body) in [
+        (
+            "/console/api/people/issue",
+            serde_json::json!({ "name": "x", "team": "y" }),
+        ),
+        (
+            "/console/api/people/revoke",
+            serde_json::json!({ "sha256": "00", "confirm": "x" }),
+        ),
+    ] {
+        let (status, _, refused) =
+            call(&s.app, "POST", path, "enterplace_console=forged", body).await?;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
+        assert!(
+            refused["error"].as_str().unwrap_or("").contains("Sign in"),
+            "{refused}"
         );
     }
     assert!(
@@ -478,22 +549,32 @@ async fn verify_chain_now_reports_an_unbroken_chain_and_a_broken_one() -> TestRe
 async fn people_policy_and_spend_render_from_the_files() -> TestResult {
     let s = setup("pages")?;
     let cookie = sign_in(&s.app).await?;
-    let (status, _, people) = send(&s.app, get("/console/people", &cookie)?).await?;
-    assert_eq!(status, StatusCode::OK);
-    let maya = &sha256_hex(MAYA_KEY.as_bytes())[..8];
-    assert!(
-        people.contains("maya.cohen")
-            && people.contains("payments")
-            && people.contains(&format!(">{maya}</td>"))
+    // The old address opens the same view in the app.
+    let (status, headers, _) = send(&s.app, get("/console/people", &cookie)?).await?;
+    assert_eq!(
+        (status, location(&headers)),
+        (StatusCode::SEE_OTHER, "/console/app/#/people")
     );
-    assert!(
-        people.contains("platform, admin")
-            && people.contains("2 keys for 2 people and workloads in 2 teams")
+    let people = people(&s.app, &cookie).await?;
+    let maya = &sha256_hex(MAYA_KEY.as_bytes())[..8];
+    let row = key_named(&people, "maya.cohen")?;
+    assert_eq!(
+        (row["team"].as_str(), row["hash"].as_str()),
+        (Some("payments"), Some(maya))
+    );
+    let admin = key_named(&people, "noa.bar")?;
+    assert_eq!(
+        (admin["team"].as_str(), admin["admin"].as_bool()),
+        (Some("platform"), Some(true))
+    );
+    assert_eq!(
+        people["lead"],
+        "2 keys for 2 people and workloads in 2 teams. A key is shown once: Enterplace keeps only its hash."
     );
     // maya.cohen sent two requests; noa.bar none.
-    assert!(
-        people.contains(r#"<td class="g-table__num g-table__wide">2</td>"#)
-            && people.contains("never")
+    assert_eq!(
+        (row["requests"].as_u64(), admin["last"].as_str()),
+        (Some(2), Some("never"))
     );
 
     let (_, _, policy) = send(&s.app, get("/console/policy?line=10", &cookie)?).await?;
@@ -540,32 +621,48 @@ async fn people_policy_and_spend_render_from_the_files() -> TestResult {
 async fn an_issued_key_is_shown_once_and_its_hash_is_appended() -> TestResult {
     let s = setup("issue")?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, dialog) = send(&s.app, get("/console/people?issue=1", &cookie)?).await?;
-    assert!(dialog.contains(r#"action="/console/people/issue""#));
-
-    let before = std::fs::read_to_string(s.keys())?;
-    let (status, headers, page) = send(
+    // The old Issue link opens the app's Issue dialog.
+    let (_, headers, _) = send(
         &s.app,
-        post(
-            "/console/people/issue",
+        get(
+            "/console/people?issue=1&name=ci.release&team=platform",
             &cookie,
-            "name=svc-invoice-bot&team=payments",
         )?,
     )
     .await?;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        location(&headers),
+        "/console/app/#/people?issue=1&name=ci.release&team=platform"
+    );
+
+    let before = std::fs::read_to_string(s.keys())?;
+    let (status, headers, made) = call(
+        &s.app,
+        "POST",
+        "/console/api/people/issue",
+        &cookie,
+        serde_json::json!({ "name": "svc-invoice-bot", "team": "payments" }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{made}");
     assert_eq!(
         headers
             .get(header::CACHE_CONTROL)
             .and_then(|v| v.to_str().ok()),
         Some("no-store")
     );
-    let at = page
-        .find(r#"id="new-key">"#)
-        .ok_or("the key is not shown")?
-        + r#"id="new-key">"#.len();
-    let key = &page[at..at + 11 + 64];
-    assert!(key.starts_with("enterplace_"), "{key}");
+    let key = made["key"].as_str().ok_or("the key is not in the answer")?;
+    assert!(
+        key.starts_with("enterplace_") && key.len() == 11 + 64,
+        "{key}"
+    );
+    // The lines for each tool carry the key.
+    assert!(
+        made["lines"].as_array().is_some_and(|l| l
+            .iter()
+            .any(|l| l.as_str() == Some(&format!("export OPENAI_API_KEY={key}")))),
+        "{made}"
+    );
     let after = std::fs::read_to_string(s.keys())?;
     assert!(
         after.starts_with(&before),
@@ -577,13 +674,22 @@ async fn an_issued_key_is_shown_once_and_its_hash_is_appended() -> TestResult {
             && !after.contains(key)
     );
 
-    let (status, _, page) = send(
+    let (status, _, refused) = call(
         &s.app,
-        post("/console/people/issue", &cookie, "name=bad%20name&team=t")?,
+        "POST",
+        "/console/api/people/issue",
+        &cookie,
+        serde_json::json!({ "name": "bad name", "team": "t" }),
     )
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(page.contains(r#"aria-invalid="true""#) && page.contains("letters, digits"));
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("letters, digits"),
+        "{refused}"
+    );
     assert_eq!(std::fs::read_to_string(s.keys())?, after);
     Ok(())
 }
@@ -593,47 +699,51 @@ async fn a_key_is_revoked_only_with_its_name_typed_and_never_the_last_admin() ->
     let s = setup("revoke")?;
     let cookie = sign_in(&s.app).await?;
     let maya = sha256_hex(MAYA_KEY.as_bytes());
-    let (_, _, dialog) = send(
+    // The old Revoke link opens the app's dialog for the same key.
+    let (_, headers, _) = send(
         &s.app,
         get(&format!("/console/people?revoke={maya}"), &cookie)?,
     )
     .await?;
-    assert!(
-        dialog.contains("Revoke this key?")
-            && dialog.contains("The key of maya.cohen stops working")
-            && dialog.contains(r#"data-confirm="maya.cohen""#)
-            && dialog.contains("g-btn--flame")
+    assert_eq!(
+        location(&headers),
+        format!("/console/app/#/people?revoke={maya}")
     );
 
     let before = std::fs::read_to_string(s.keys())?;
-    let (status, _, page) = send(
+    let (status, _, refused) = call(
         &s.app,
-        post(
-            "/console/people/revoke",
-            &cookie,
-            &format!("sha256={maya}&confirm=maya"),
-        )?,
+        "POST",
+        "/console/api/people/revoke",
+        &cookie,
+        serde_json::json!({ "sha256": maya, "confirm": "maya" }),
     )
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(page.contains("Type maya.cohen exactly"));
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Type maya.cohen exactly"),
+        "{refused}"
+    );
     assert_eq!(std::fs::read_to_string(s.keys())?, before);
 
-    let (status, headers, _) = send(
+    let (status, _, done) = call(
         &s.app,
-        post(
-            "/console/people/revoke",
-            &cookie,
-            &format!("sha256={maya}&confirm=maya.cohen"),
-        )?,
+        "POST",
+        "/console/api/people/revoke",
+        &cookie,
+        serde_json::json!({ "sha256": maya, "confirm": "maya.cohen" }),
     )
     .await?;
-    assert_eq!(
-        (status, location(&headers)),
-        (
-            StatusCode::SEE_OTHER,
-            format!("/console/people?revoked=maya.cohen&hash={}", &maya[..8]).as_str()
-        )
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(
+        done["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains(&format!("key hash {}", &maya[..8])),
+        "{done}"
     );
     let after = std::fs::read_to_string(s.keys())?;
     assert!(
@@ -643,17 +753,22 @@ async fn a_key_is_revoked_only_with_its_name_typed_and_never_the_last_admin() ->
     assert!(enterplace_core::config::keys_problems(Path::new("k"), &after).is_empty());
 
     let admin = sha256_hex(ADMIN_KEY.as_bytes());
-    let (status, _, page) = send(
+    let (status, _, refused) = call(
         &s.app,
-        post(
-            "/console/people/revoke",
-            &cookie,
-            &format!("sha256={admin}&confirm=noa.bar"),
-        )?,
+        "POST",
+        "/console/api/people/revoke",
+        &cookie,
+        serde_json::json!({ "sha256": admin, "confirm": "noa.bar" }),
     )
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(page.contains("only admin key"));
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("only admin key"),
+        "{refused}"
+    );
     assert!(std::fs::read_to_string(s.keys())?.contains(&admin));
     Ok(())
 }
@@ -677,26 +792,23 @@ async fn sign_in_sign_out_issue_and_revoke_are_each_recorded_with_who_did_them()
     )
     .await?;
     let cookie = sign_in(&s.app).await?;
-    let (status, _, page) = send(
+    let (status, _, made) = call(
         &s.app,
-        post(
-            "/console/people/issue",
-            &cookie,
-            "name=ops.lead&team=ops&admin=1",
-        )?,
+        "POST",
+        "/console/api/people/issue",
+        &cookie,
+        serde_json::json!({ "name": "ops.lead", "team": "ops", "admin": true }),
     )
     .await?;
-    assert_eq!(status, StatusCode::OK, "{page}");
-    let at = page.find(r#"id="new-key">"#).ok_or("no key")? + r#"id="new-key">"#.len();
-    let key = page[at..at + 11 + 64].to_string();
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let key = made["key"].as_str().ok_or("no key")?.to_string();
     let maya = sha256_hex(MAYA_KEY.as_bytes());
-    send(
+    call(
         &s.app,
-        post(
-            "/console/people/revoke",
-            &cookie,
-            &format!("sha256={maya}&confirm=maya.cohen"),
-        )?,
+        "POST",
+        "/console/api/people/revoke",
+        &cookie,
+        serde_json::json!({ "sha256": maya, "confirm": "maya.cohen" }),
     )
     .await?;
     send(&s.app, get("/console/sign-out", &cookie)?).await?;
@@ -777,17 +889,15 @@ async fn sign_in_sign_out_issue_and_revoke_are_each_recorded_with_who_did_them()
 async fn the_issue_dialog_has_an_admin_choice() -> TestResult {
     let s = setup("admin-choice")?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, dialog) = send(&s.app, get("/console/people?issue=1", &cookie)?).await?;
-    assert!(
-        dialog.contains(
-            r#"<label class="g-choice t-body"><input type="checkbox" name="admin" value="1">"#
-        ),
-        "{dialog}"
-    );
+    // The admin choice is offered to an admin of the whole install.
+    assert_eq!(people(&s.app, &cookie).await?["may"]["full_admin"], true);
     // A plain issue stays a plain key.
-    send(
+    call(
         &s.app,
-        post("/console/people/issue", &cookie, "name=bot&team=ops")?,
+        "POST",
+        "/console/api/people/issue",
+        &cookie,
+        serde_json::json!({ "name": "bot", "team": "ops" }),
     )
     .await?;
     let entries =
@@ -980,15 +1090,15 @@ async fn people_shows_a_keys_expiry_and_budget() -> TestResult {
         ),
     )?;
     let cookie = sign_in(&s.app).await?;
-    let (status, _, people) = send(&s.app, get("/console/people", &cookie)?).await?;
-    assert_eq!(status, StatusCode::OK);
+    let people = people(&s.app, &cookie).await?;
     // Round 11: the status says the key is live and when it expires, and its budget is a meter.
-    for expected in [
-        r#"<span class="g-tag g-tag--allow t-tag">Active</span><span class="g-table__sub" style="white-space: normal">expires 2099-01-01</span>"#,
-        "$0.00 of $20.00 this month",
-    ] {
-        assert!(people.contains(expected), "missing {expected}: {people}");
-    }
+    let status = &key_named(&people, "ci.bot")?["status"];
+    assert_eq!(
+        (status["tag"].as_str(), status["kind"].as_str()),
+        (Some("Active"), Some("allow"))
+    );
+    assert_eq!(status["notes"], serde_json::json!(["expires 2099-01-01"]));
+    assert_eq!(status["meter"]["text"], "$0.00 of $20.00 this month");
     Ok(())
 }
 
@@ -1211,13 +1321,12 @@ async fn issue_and_revoke_records_name_the_key_hash_and_search_finds_them() -> T
     let s = setup("hash-search")?;
     let cookie = sign_in(&s.app).await?;
     let maya = sha256_hex(MAYA_KEY.as_bytes());
-    send(
+    call(
         &s.app,
-        post(
-            "/console/people/revoke",
-            &cookie,
-            &format!("sha256={maya}&confirm=maya.cohen"),
-        )?,
+        "POST",
+        "/console/api/people/revoke",
+        &cookie,
+        serde_json::json!({ "sha256": maya, "confirm": "maya.cohen" }),
     )
     .await?;
     // A request with the revoked key, as the gateway records it.
@@ -1260,8 +1369,8 @@ async fn issue_and_revoke_records_name_the_key_hash_and_search_finds_them() -> T
         used.contains("Revoked by noa.bar") && used.contains(&format!("record={id}")),
         "{used}"
     );
-    // The toast after a revoke names the key hash too.
-    let (_, _, people) = send(
+    // A link to the revoke's toast keeps the key hash, for the app to say.
+    let (_, headers, _) = send(
         &s.app,
         get(
             &format!("/console/people?revoked=maya.cohen&hash={}", &maya[..8]),
@@ -1269,9 +1378,12 @@ async fn issue_and_revoke_records_name_the_key_hash_and_search_finds_them() -> T
         )?,
     )
     .await?;
-    assert!(
-        people.contains(&format!("key hash {}", &maya[..8])),
-        "{people}"
+    assert_eq!(
+        location(&headers),
+        format!(
+            "/console/app/#/people?revoked=maya.cohen&hash={}",
+            &maya[..8]
+        )
     );
     Ok(())
 }
@@ -1529,22 +1641,27 @@ async fn people_shows_each_keys_status_its_budget_meter_and_the_fix() -> TestRes
     let s = setup("people-status")?;
     limited(&s)?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, people) = send(&s.app, get("/console/people", &cookie)?).await?;
-    for expected in [
-        "<th>Status</th>",
-        r#"<th aria-label="Actions"></th>"#,
-        r#"<span class="g-tag g-tag--refused t-tag">Expired</span>"#,
-        // m12-3: "$0.82 of $1" is not spent; the next request would pass it.
-        r#"<span class="g-tag g-tag--refused t-tag">Budget reached</span>"#,
-        "$0.82 of $1.00 today",
-        r#"role="meter""#,
-        "Issue a new key",
-        "/console/people?issue=1&amp;name=ci.release&amp;team=platform",
-    ] {
-        assert!(people.contains(expected), "missing {expected}: {people}");
-    }
-    // The sub line keeps the team; expiry and budget live in the status.
-    assert!(!people.contains("budget $1.00 a day"), "{people}");
+    let people = people(&s.app, &cookie).await?;
+    let ci = &key_named(&people, "ci.release")?["status"];
+    assert_eq!(
+        (ci["tag"].as_str(), ci["kind"].as_str()),
+        (Some("Expired"), Some("refused"))
+    );
+    assert_eq!(
+        ci["fix"],
+        serde_json::json!({ "kind": "reissue", "name": "ci.release", "team": "platform" })
+    );
+    // m12-3: "$0.82 of $1" is not spent; the next request would pass it.
+    let maya = &key_named(&people, "maya.cohen")?["status"];
+    assert_eq!(maya["tag"], "Budget reached");
+    assert_eq!(maya["meter"]["text"], "$0.82 of $1.00 today");
+    assert_eq!(maya["meter"]["over"], true);
+    assert_eq!(maya["fix"]["kind"], "refusals");
+    // The expiry and budget live in the status, not beside the team.
+    assert!(
+        !people.to_string().contains("budget $1.00 a day"),
+        "{people}"
+    );
     Ok(())
 }
 
@@ -1612,46 +1729,41 @@ async fn sheets_of_the_request_refusals_say_the_cause_and_the_fix() -> TestResul
 async fn the_issue_dialog_takes_an_expiry_and_a_budget() -> TestResult {
     let s = setup("issue-limits")?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, page) = send(&s.app, get("/console/people?issue=1", &cookie)?).await?;
-    for expected in [
-        r#"type="date""#,
-        r#"name="expires""#,
-        r#"name="budget""#,
-        r#"name="per""#,
-    ] {
-        assert!(page.contains(expected), "missing {expected}: {page}");
-    }
-    let (status, _, _) = send(
+    let (status, _, made) = call(
         &s.app,
-        post(
-            "/console/people/issue",
-            &cookie,
-            "name=lior.amit&team=platform&expires=2099-01-31&budget=0.005&per=day",
-        )?,
+        "POST",
+        "/console/api/people/issue",
+        &cookie,
+        serde_json::json!({ "name": "lior.amit", "team": "platform", "expires": "2099-01-31", "budget": "0.005", "per": "day" }),
     )
     .await?;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{made}");
     let keys = std::fs::read_to_string(s.keys())?;
     assert!(
         keys.contains("expires: 2099-01-31") && keys.contains("budget: { usd: 0.005, per: day }"),
         "{keys}"
     );
     // A small budget reads in four places under a cent, not as $0.00.
-    let (_, _, people) = send(&s.app, get("/console/people", &cookie)?).await?;
-    assert!(people.contains("$0.00 of $0.0050 today"), "{people}");
-    let (status, _, page) = send(
+    let people = people(&s.app, &cookie).await?;
+    assert_eq!(
+        key_named(&people, "lior.amit")?["status"]["meter"]["text"],
+        "$0.00 of $0.0050 today"
+    );
+    let (status, _, refused) = call(
         &s.app,
-        post(
-            "/console/people/issue",
-            &cookie,
-            "name=lior.amit&team=platform&budget=-3&per=day",
-        )?,
+        "POST",
+        "/console/api/people/issue",
+        &cookie,
+        serde_json::json!({ "name": "lior.amit", "team": "platform", "budget": "-3", "per": "day" }),
     )
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
-        page.contains("a budget is a number of US dollars above 0"),
-        "{page}"
+        refused["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("a budget is a number of US dollars above 0"),
+        "{refused}"
     );
     Ok(())
 }
@@ -2174,15 +2286,23 @@ async fn people_shows_a_stopped_person_and_a_keys_own_models_and_tpm() -> TestRe
         at: enterplace_core::audit::timestamp(),
     })?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, page) = send(&s.app, get("/console/people", &cookie)?).await?;
+    let people = people(&s.app, &cookie).await?;
+    let status = &key_named(&people, "maya.cohen")?["status"];
+    assert_eq!(
+        (status["tag"].as_str(), status["kind"].as_str()),
+        (Some("Stopped"), Some("refused"))
+    );
+    let notes = status["notes"].to_string();
     assert!(
-        page.contains(r#"g-tag--refused t-tag">Stopped</span>"#)
-            && page.contains("retrying a ticket in a loop")
-            && page.contains(r#"<input type="hidden" name="value" value="maya.cohen"><button class="g-btn g-btn--sm t-small" type="submit">Restore traffic</button>"#)
-            && page.contains("models gpt-4o-mini")
-            && page.contains("50,000 tokens a minute")
-            && !page.contains("T06:16:26Z"),
-        "{page}"
+        notes.contains("retrying a ticket in a loop")
+            && notes.contains("models gpt-4o-mini")
+            && notes.contains("50,000 tokens a minute")
+            && !people.to_string().contains("expires 2026-12-13T06:16:26Z"),
+        "{status}"
+    );
+    assert_eq!(
+        status["fix"],
+        serde_json::json!({ "kind": "restore", "scope": "person", "value": "maya.cohen" })
     );
     Ok(())
 }
@@ -2304,10 +2424,20 @@ async fn a_custom_role_sees_only_the_pages_it_may_and_an_org_role_only_its_keys(
     let fin = cookie_of(&headers);
     let (status, _, _) = send(&s.app, get("/console/spend", &fin)?).await?;
     assert_eq!(status, StatusCode::OK);
-    let (status, _, body) = send(&s.app, get("/console/people", &fin)?).await?;
+    let (status, _, body) = call(
+        &s.app,
+        "GET",
+        "/console/api/people",
+        &fin,
+        serde_json::Value::Null,
+    )
+    .await?;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert!(
-        body.contains("does not have the see_keys permission"),
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("does not have the see_keys permission"),
         "{body}"
     );
     // The audit log is not its page: it starts on spend.
@@ -2323,16 +2453,18 @@ async fn a_custom_role_sees_only_the_pages_it_may_and_an_org_role_only_its_keys(
     )
     .await?;
     let keeper = cookie_of(&headers);
-    let (status, _, body) = send(&s.app, get("/console/people", &keeper)?).await?;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let body = people(&s.app, &keeper).await?.to_string();
     assert!(
         body.contains("acme-bot") && !body.contains("maya.cohen"),
         "an org role sees its org's keys only"
     );
     // It may issue a key, and the key goes into its organization.
-    let (status, _, body) = send(
+    let (status, _, body) = call(
         &s.app,
-        post("/console/people/issue", &keeper, "name=acme-new&team=bots")?,
+        "POST",
+        "/console/api/people/issue",
+        &keeper,
+        serde_json::json!({ "name": "acme-new", "team": "bots" }),
     )
     .await?;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -2341,16 +2473,15 @@ async fn a_custom_role_sees_only_the_pages_it_may_and_an_org_role_only_its_keys(
     assert!(new.contains("org: acme"), "{saved}");
     // It may not revoke: revoke_keys is not in its role.
     let bot = sha256_hex(b"enterplace_acme_bot_key");
-    let (status, _, _) = send(
+    let (status, _, refused) = call(
         &s.app,
-        post(
-            "/console/people/revoke",
-            &keeper,
-            &format!("sha256={bot}&confirm=acme-bot"),
-        )?,
+        "POST",
+        "/console/api/people/revoke",
+        &keeper,
+        serde_json::json!({ "sha256": bot, "confirm": "acme-bot" }),
     )
     .await?;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
     assert!(std::fs::read_to_string(s.keys())?.contains(&bot));
     Ok(())
 }
@@ -2366,12 +2497,17 @@ async fn every_page_says_when_observe_mode_lets_everything_through() -> TestResu
         format!("mode: observe\n{POLICY}"),
     )?;
     // One short line, the same on every page, once.
-    for path in [
-        "/console/audit",
-        "/console/people",
-        "/console/policy",
-        "/console/start",
-    ] {
+    // The app says it on every page of its own, from what it reads of the signed-in person.
+    let (_, _, me) = call(
+        &s.app,
+        "GET",
+        "/console/api/me",
+        &cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(me["observe"], true);
+    for path in ["/console/audit", "/console/policy", "/console/start"] {
         let (status, _, page) = send(&s.app, get(path, &cookie)?).await?;
         assert_eq!(status, StatusCode::OK, "{path}");
         assert_eq!(
@@ -2475,56 +2611,49 @@ async fn a_key_is_rotated_from_its_page_shown_once_and_the_old_one_ends_after_th
     let s = setup("rotate")?;
     let cookie = sign_in(&s.app).await?;
     let old = sha256_hex(MAYA_KEY.as_bytes());
-    let (status, _, page) = send(
-        &s.app,
-        get(&format!("/console/people/edit?sha256={old}"), &cookie)?,
-    )
-    .await?;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        page.contains(r#"action="/console/people/rotate""#) && page.contains(r#"name="grace""#),
-        "the key's page offers the rotation"
-    );
+    let rotate = |grace: &str| serde_json::json!({ "sha256": old, "grace": grace });
 
     // A grace that is not a time changes nothing and says how to write one.
-    let (status, _, page) = send(
+    let (status, _, refused) = call(
         &s.app,
-        post(
-            "/console/people/rotate",
-            &cookie,
-            &format!("sha256={old}&grace=soon"),
-        )?,
+        "POST",
+        "/console/api/people/rotate",
+        &cookie,
+        rotate("soon"),
     )
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(page.contains("48h"), "{page}");
+    assert!(
+        refused["error"].as_str().unwrap_or("").contains("48h"),
+        "{refused}"
+    );
     assert!(!std::fs::read_to_string(s.keys())?.contains("replaced_by"));
 
-    let (status, headers, page) = send(
+    let (status, headers, made) = call(
         &s.app,
-        post(
-            "/console/people/rotate",
-            &cookie,
-            &format!("sha256={old}&grace=48h"),
-        )?,
+        "POST",
+        "/console/api/people/rotate",
+        &cookie,
+        rotate("48h"),
     )
     .await?;
-    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(status, StatusCode::OK, "{made}");
     assert_eq!(
         headers
             .get(header::CACHE_CONTROL)
             .and_then(|v| v.to_str().ok()),
         Some("no-store")
     );
-    let at = page
-        .find(r#"id="new-key">"#)
-        .ok_or("the new key is not shown")?
-        + r#"id="new-key">"#.len();
-    let key = &page[at..at + 11 + 64];
+    let key = made["key"]
+        .as_str()
+        .ok_or("the new key is not in the answer")?;
     assert!(key.starts_with("enterplace_") && key != MAYA_KEY, "{key}");
     assert!(
-        page.contains("key_rotated"),
-        "the page says how to find who still uses the old key"
+        made["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("key_rotated"),
+        "the answer says how to find who still uses the old key"
     );
     let new = sha256_hex(key.as_bytes());
     let entries =
@@ -2548,6 +2677,14 @@ async fn a_key_is_rotated_from_its_page_shown_once_and_the_old_one_ends_after_th
         ("maya.cohen", "payments")
     );
     assert!(!std::fs::read_to_string(s.keys())?.contains(key));
+    // The People page says the old key was replaced, for its editor.
+    let people = people(&s.app, &cookie).await?;
+    let rows = people["entries"].as_array().cloned().unwrap_or_default();
+    assert!(
+        rows.iter()
+            .any(|e| e["sha256"] == old && e["fields"]["replaced_by"] == new[..8]),
+        "{people}"
+    );
 
     // Recorded with both hash prefixes and never the key; a second rotation of the old key is refused.
     s.log.flush();
@@ -2558,17 +2695,22 @@ async fn a_key_is_rotated_from_its_page_shown_once_and_the_old_one_ends_after_th
         .ok_or("the rotation is not recorded")?;
     assert_eq!(rotated["target"]["sha256_prefix"], old[..8]);
     assert!(!std::fs::read_to_string(s.audit())?.contains(key));
-    let (status, _, page) = send(
+    let (status, _, refused) = call(
         &s.app,
-        post(
-            "/console/people/rotate",
-            &cookie,
-            &format!("sha256={old}&grace=1h"),
-        )?,
+        "POST",
+        "/console/api/people/rotate",
+        &cookie,
+        rotate("1h"),
     )
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(page.contains("already rotated"), "{page}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("already rotated"),
+        "{refused}"
+    );
     Ok(())
 }
 
@@ -2626,32 +2768,36 @@ async fn audit_rows_say_verdicts_in_words_and_open_on_their_time() -> TestResult
 async fn people_rows_offer_edit_and_the_key_forms_keep_one_hint() -> TestResult {
     let s = setup("people-actions")?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, people) = send(&s.app, get("/console/people", &cookie)?).await?;
+    let people = people(&s.app, &cookie).await?;
+    // Every row may be edited by an admin of the whole install; revoke is in the editor, not on the row.
     assert!(
-        people.contains(r#"<th aria-label="Actions"></th>"#)
-            && people.contains(">Edit</a>")
-            && !people.contains("<th>Fix</th>")
-            && !people.contains("Revoke key")
-            && !people.contains("of 2 keys"),
+        people["entries"]
+            .as_array()
+            .is_some_and(|e| e.iter().all(|e| e["editable"] == true)),
         "{people}"
     );
+    assert_eq!(
+        (
+            people["may"]["issue"].as_bool(),
+            people["may"]["revoke"].as_bool()
+        ),
+        (Some(true), Some(true))
+    );
     let maya = sha256_hex(MAYA_KEY.as_bytes());
-    let (_, _, edit) = send(
+    // The old editor address opens the app's editor for the same key.
+    let (_, headers, _) = send(
         &s.app,
         get(&format!("/console/people/edit?sha256={maya}"), &cookie)?,
     )
     .await?;
-    assert!(
-        edit.contains(&format!(
-            r#"href="/console/people?revoke={maya}">Revoke key</a>"#
-        )) && edit.contains(r#"id="key-expires" name="expires" value="" type="date""#)
-            && edit.contains(r#"<h2 class="t-md" style="margin: 0">Rotate key</h2>"#)
-            && !edit.contains("Rotate: how long")
-            && edit.matches("g-field__hint").count() == 1,
-        "{edit}"
+    assert_eq!(
+        location(&headers),
+        format!("/console/app/#/people?edit={maya}")
     );
-    let (_, _, issue) = send(&s.app, get("/console/people?issue=1", &cookie)?).await?;
-    assert_eq!(issue.matches("g-field__hint").count(), 1, "{issue}");
+    // The editor's fields start from the key as it is.
+    let fields = &key_named(&people, "maya.cohen")?["fields"];
+    assert_eq!(fields["expires"], "");
+    assert!(fields["replaced_by"].is_null(), "{fields}");
     Ok(())
 }
 

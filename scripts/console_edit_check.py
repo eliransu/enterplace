@@ -134,9 +134,10 @@ audit: {{ path: enterplace-audit.jsonl }}
         check("maya.cohen" in chrome.js("document.body.textContent"), "teams list the people")
         chrome.shot(out / "teams.png")
 
-        chrome.go(f"{base}/console/people")
-        chrome.js("document.querySelector('a[href^=\"/console/people/edit\"]').click()")
-        chrome.wait("location.pathname === '/console/people/edit' && document.readyState === 'complete'", "the key editor")
+        chrome.go(f"{base}/console/app/#/people")
+        chrome.wait("[...document.querySelectorAll('main button')].some(b => b.textContent === 'Edit')", "the People page")
+        chrome.js("[...document.querySelectorAll('main button')].find(b => b.textContent === 'Edit').click()")
+        chrome.wait("location.hash.includes('edit=') && document.querySelector('[role=\"dialog\"]')", "the key editor")
         chrome.shot(out / "key-edit.png")
 
         # A draft that narrows everyone's models: saved for approval, then dry-run from the editor.

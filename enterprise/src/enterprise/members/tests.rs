@@ -432,11 +432,11 @@ async fn invited_people_sign_in_with_their_password() -> Result<(), Error> {
         .go(
             &gw.app,
             "POST",
-            "/console/people/issue",
+            "/console/api/people/issue",
             &[("name", "x"), ("team", "y")],
         )
         .await?;
-    assert_eq!(issue.status, StatusCode::BAD_REQUEST);
+    assert_eq!(issue.status, StatusCode::FORBIDDEN);
     // A form from another site is refused.
     let foreign = axum::http::Request::post("/console/sign-in/password")
         .header("host", HOST)

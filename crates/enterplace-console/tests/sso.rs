@@ -574,32 +574,34 @@ async fn an_es256_viewer_signs_in_read_only_and_cannot_issue_a_key() -> TestResu
         "enterplace_console={}",
         set_cookie(&headers, "enterplace_console")
     );
-    let (_, _, page) = send(&s.app, "GET", "/console/people", &cookie, "").await?;
+    let (_, _, page) = send(&s.app, "GET", "/console/policy", &cookie, "").await?;
     // The name on one line and the role on the next.
     assert!(
         page.contains(r#"<span class="t-mono g-muted">guest@partner.org</span><span class="t-small g-muted">read only</span>"#),
         "{page}"
     );
-    // A read-only person never sees an action they cannot take, and is told why.
-    assert!(
-        !page.contains("/console/people?issue=1")
-            && !page.contains("Revoke key")
-            && page.contains("You are signed in read only"),
-        "{page}"
+    // A read-only person is offered no action they cannot take, and the People page says why.
+    let (_, _, people) = send(&s.app, "GET", "/console/api/people", &cookie, "").await?;
+    let people: serde_json::Value = serde_json::from_str(&people)?;
+    assert_eq!(people["read_only"], true);
+    assert_eq!(
+        (
+            people["may"]["issue"].as_bool(),
+            people["may"]["revoke"].as_bool()
+        ),
+        (Some(false), Some(false))
     );
-    let (_, _, page) = send(&s.app, "GET", "/console/people?issue=1", &cookie, "").await?;
-    assert!(!page.contains(r#"role="dialog""#), "{page}");
 
     let keys_before = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
     let (status, _, page) = send(
         &s.app,
         "POST",
-        "/console/people/issue",
+        "/console/api/people/issue",
         &cookie,
-        "name=x.y&team=t",
+        r#"{"name":"x.y","team":"t"}"#,
     )
     .await?;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(page.contains("signed in read only"), "{page}");
     assert_eq!(
         std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?,
@@ -889,12 +891,12 @@ async fn a_read_only_person_cannot_revoke_and_a_person_removed_from_the_policy_i
     let (status, _, page) = send(
         &s.app,
         "POST",
-        "/console/people/revoke",
+        "/console/api/people/revoke",
         &cookie,
-        &format!("sha256={sha}&confirm=noa.bar"),
+        &serde_json::json!({ "sha256": sha, "confirm": "noa.bar" }).to_string(),
     )
     .await?;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{page}");
+    assert_eq!(status, StatusCode::FORBIDDEN, "{page}");
     assert_eq!(std::fs::read_to_string(&keys)?, before);
     let last = admin_records(&s)?.pop().ok_or("no record")?;
     assert_eq!(
@@ -1627,7 +1629,7 @@ async fn a_role_kept_to_a_team_signs_in_by_group_and_sees_only_that_team() -> Te
     assert_eq!(signed_in["team"], "payments");
     assert_eq!(signed_in["target"]["role"], "payments-lead");
 
-    let (_, _, page) = send(&s.app, "GET", "/console/people", &cookie, "").await?;
+    let (_, _, page) = send(&s.app, "GET", "/console/api/people", &cookie, "").await?;
     assert!(
         page.contains("maya.ci") && !page.contains("omer.ci"),
         "{page}"
@@ -1640,9 +1642,9 @@ async fn a_role_kept_to_a_team_signs_in_by_group_and_sees_only_that_team() -> Te
     let (status, _, page) = send(
         &s.app,
         "POST",
-        "/console/people/issue",
+        "/console/api/people/issue",
         &cookie,
-        "name=x.y&team=web",
+        r#"{"name":"x.y","team":"web"}"#,
     )
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -1651,9 +1653,9 @@ async fn a_role_kept_to_a_team_signs_in_by_group_and_sees_only_that_team() -> Te
     let (status, _, page) = send(
         &s.app,
         "POST",
-        "/console/people/issue",
+        "/console/api/people/issue",
         &cookie,
-        "name=x.y&team=payments",
+        r#"{"name":"x.y","team":"payments"}"#,
     )
     .await?;
     assert_eq!(status, StatusCode::OK, "{page}");

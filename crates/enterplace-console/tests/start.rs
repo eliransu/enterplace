@@ -490,12 +490,6 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
             "/governance/budgets-and-rate-limits/",
         ),
         (
-            "/console/people",
-            "Only your admin key so far",
-            "/console/start?track=coding#step-2",
-            "/governance/keys/",
-        ),
-        (
             "/console/teams",
             "No teams yet",
             "/console/start?track=coding#step-2",
@@ -514,6 +508,22 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
             "/governance/audit-log/",
         ),
     ];
+    // People is in the app: its API carries the same empty state for the app to show.
+    let request = Request::get("/console/api/people")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())?;
+    let (_, _, people) = send(&s.app, request).await?;
+    let people: serde_json::Value = serde_json::from_str(&people)?;
+    assert_eq!(people["empty"]["title"], "Only your admin key so far");
+    assert_eq!(
+        people["empty"]["action"]["href"],
+        "/console/start?track=coding#step-2"
+    );
+    assert_eq!(
+        people["empty"]["docs"],
+        "https://docs.enterplace.dev/governance/keys/"
+    );
     for (path, title, action, docs) in pages {
         let (status, _, page) = send(&s.app, get(path, &cookie)?).await?;
         assert_eq!(status, StatusCode::OK, "{path}");

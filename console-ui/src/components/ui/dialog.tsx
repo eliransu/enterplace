@@ -12,7 +12,7 @@ function DialogContent({ className, children, ...props }: React.ComponentProps<t
       <DialogPrimitive.Overlay className="fixed inset-0 bg-overlay" />
       <DialogPrimitive.Content
         className={cn(
-          "fixed top-1/2 left-1/2 grid max-h-[90vh] w-[calc(100%-var(--space-8))] max-w-dialog -translate-x-1/2 -translate-y-1/2 gap-6 overflow-y-auto rounded-dialog border border-input bg-background p-10 text-foreground",
+          "fixed top-1/2 left-1/2 grid max-h-[90vh] w-[calc(100%-var(--space-8))] max-w-dialog -translate-x-1/2 -translate-y-1/2 grid-cols-[minmax(0,1fr)] gap-6 overflow-y-auto rounded-dialog border border-input bg-background p-10 text-foreground",
           className,
         )}
         {...props}

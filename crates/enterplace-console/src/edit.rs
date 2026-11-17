@@ -1,5 +1,5 @@
-//! Editing the policy and the keys in the console: Models, Teams, a key's fields, and the policy's versions (the
-//! editor, its diff, approval, a dry run, rollback, export and import).
+//! Editing the policy in the console: Models, Teams, and the policy's versions (the editor, its diff, approval, a dry
+//! run, rollback, export and import). A key's fields moved to the console app's People page (`people.rs`).
 //!
 //! The policy changes only when it is kept in the store (`store.policy_from: store`): each save is a new version,
 //! checked as `enterplace check` checks a file, recorded in the audit chain first, and live on every gateway within
@@ -20,8 +20,7 @@ use axum::{
 };
 use enterplace_core::{
     config::{self, Loaded},
-    keyfile,
-    policy::{Budget, Period, Permission, Who},
+    policy::{Permission, Who},
     store::{self, PolicyVersion},
     usage,
     versions::{self, DryRun, Refused},
@@ -38,7 +37,7 @@ use crate::{
     },
     page,
     pages::{self, PolicySource, alert, tool_page},
-    people_body, read_only, record, redirect, same_origin,
+    read_only, record, redirect, same_origin,
 };
 
 pub(crate) fn routes() -> Router<Console> {
@@ -46,8 +45,6 @@ pub(crate) fn routes() -> Router<Console> {
         .route("/models", get(models_page))
         .route("/models/{action}", post(models_change))
         .route("/teams", get(teams_page))
-        .route("/people/edit", get(key_page).post(key_change))
-        .route("/people/rotate", post(key_rotate))
         .route("/policy/versions", get(versions_page))
         .route("/policy/versions/{id}/{action}", post(version_action))
         .route("/policy/edit", get(editor_page))
@@ -700,18 +697,18 @@ pub(crate) fn edits_policy(admin: &Admin) -> bool {
 }
 
 /// Whether the person may change this key: `issue_keys`, in the key's organization when kept to one.
-fn edits_key(admin: &Admin, entry: &config::KeyEntry) -> bool {
+pub(crate) fn edits_key(admin: &Admin, entry: &config::KeyEntry) -> bool {
     admin.may(Permission::IssueKeys) && admin.covers_entry(entry)
 }
 
 /// Whether the person holds every right an admin key gives, so may make one or change one.
-fn full_admin(admin: &Admin) -> bool {
+pub(crate) fn full_admin(admin: &Admin) -> bool {
     !admin.confined() && Permission::ALL.iter().all(|p| admin.may(*p))
 }
 
 // ---------------------------------------------------------------- key fields
 
-fn entry_of(console: &Console, sha256: &str) -> Option<config::KeyEntry> {
+pub(crate) fn entry_of(console: &Console, sha256: &str) -> Option<config::KeyEntry> {
     let keys = &console.config().keys;
     let text = store::attached(keys)
         .map(|s| s.keys_text())
@@ -720,362 +717,6 @@ fn entry_of(console: &Console, sha256: &str) -> Option<config::KeyEntry> {
         .ok()?
         .into_iter()
         .find(|e| e.sha256 == sha256)
-}
-
-async fn key_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let query = Form::of(&uri);
-    match entry_of(&console, query.get("sha256")) {
-        Some(entry) if edits_key(&admin, &entry) => {
-            page(StatusCode::OK, key_body(&admin, &query, &entry, None, ""))
-        }
-        _ => redirect("/console/people"),
-    }
-}
-
-/// The form of a key's fields. `typed` is what a refused form sent, to show it again as it was.
-fn key_body(
-    admin: &Admin,
-    query: &Form,
-    entry: &config::KeyEntry,
-    typed: Option<&Form>,
-    error: &str,
-) -> String {
-    let title = "People and workloads";
-    let value = |name: &str, now: String| typed.map_or(now, |f| f.get(name).to_string());
-    let (budget, per) = entry
-        .budget
-        .map_or((String::new(), "month".to_string()), |b| {
-            (b.usd.to_string(), b.per.word())
-        });
-    let per = value("per", per);
-    // A period the policy reads but this form does not offer (a week, 6h, a time zone) is kept as its own choice.
-    let other = if per == "day" || per == "month" {
-        String::new()
-    } else {
-        format!(
-            r#"<option value="{}" selected>a {}</option>"#,
-            esc(&per),
-            esc(&Period::from_word(&per).map_or_else(|| per.clone(), |p| p.describe()))
-        )
-    };
-    let admin_box = typed.map_or(entry.admin, |f| f.get("admin") == "1");
-    let expires = value("expires", entry.expires.clone().unwrap_or_default());
-    // The date picker of the issue form. An expiry with a time (a enterplace login key) stays text: a date input
-    // cannot show it and would send it back empty, ending the expiry.
-    let fields = field(&Field {
-        id: "key-expires",
-        name: "expires",
-        label: "Expires, optional",
-        value: &expires,
-        mono: true,
-        extra: if expires.len() <= 10 {
-            r#" type="date""#
-        } else {
-            ""
-        },
-        hint: "",
-        error: "",
-    }) + &format!(
-        r#"<div class="g-field"><label class="g-field__label t-tag g-caps" for="key-budget">Budget, USD, optional</label><div class="g-toolbar" style="flex-wrap: nowrap"><input class="g-input t-mono" style="flex: 1; min-width: 0" id="key-budget" name="budget" type="number" min="0" step="any" inputmode="decimal" value="{}"><div class="g-select-wrap"><select class="g-input g-select t-body" name="per" aria-label="Budget period"><option value="day"{}>a day</option><option value="month"{}>a month</option>{other}</select>{}</div></div><span class="g-field__hint t-small">Most the key may spend, on top of its rule's budget. Empty for none.</span></div>"#,
-        esc(&value("budget", budget)),
-        if per == "day" { " selected" } else { "" },
-        if per == "month" { " selected" } else { "" },
-        icon("down")
-    ) + &field(&Field {
-        id: "key-models",
-        name: "models",
-        label: "Models, optional",
-        value: &value(
-            "models",
-            entry.models.clone().unwrap_or_default().join(", "),
-        ),
-        mono: true,
-        extra: r#" autocomplete="off" placeholder="gpt-4o-mini, o3""#,
-        hint: "",
-        error: "",
-    }) + &field(&Field {
-        id: "key-tpm",
-        name: "tpm",
-        label: "Tokens per minute, optional",
-        value: &value("tpm", entry.tpm.map(|t| t.to_string()).unwrap_or_default()),
-        mono: true,
-        extra: r#" type="number" min="1" step="1" inputmode="numeric""#,
-        hint: "",
-        error: "",
-    }) + &format!(
-        r#"<label class="g-choice t-body"><input type="checkbox" name="admin" value="1"{}>Admin: may sign in to this console and use the admin API</label>"#,
-        if admin_box { " checked" } else { "" }
-    );
-    let error = if error.is_empty() {
-        String::new()
-    } else {
-        alert(&esc(error))
-    };
-    // Rotation is its own form: it makes a new key, where the form above changes what this one may do.
-    let rotate = if entry.options.replaced_by.is_some() {
-        format!(
-            r#"<div class="g-panel g-stack" style="max-width: 40rem"><p class="t-body" style="margin: 0">This key was rotated and replaced by key {}. It stops working at {}. Rotate the new key instead, or revoke this one.</p></div>"#,
-            esc(entry.options.replaced_by.as_deref().unwrap_or_default()),
-            esc(entry.expires.as_deref().unwrap_or_default())
-        )
-    } else {
-        format!(
-            r#"<div class="g-panel g-stack" style="max-width: 40rem">
-<h2 class="t-md" style="margin: 0">Rotate key</h2>
-<p class="t-small g-muted" style="margin: 0">Makes a new key with the same settings and shows it once.</p>
-<form class="g-stack" style="gap: var(--space-6)" method="post" action="/console/people/rotate"><input type="hidden" name="sha256" value="{}">{}<div class="g-dialog__actions">{}</div></form>
-</div>"#,
-            esc(&entry.sha256),
-            field(&Field {
-                id: "key-grace",
-                name: "grace",
-                label: "Old key works for",
-                value: &typed.map_or("24h".to_string(), |f| f.get("grace").to_string()),
-                mono: true,
-                extra: r#" autocomplete="off""#,
-                hint: "",
-                error: "",
-            }),
-            button("Rotate the key", "", "submit", "")
-        )
-    };
-    let main = format!(
-        r#"{}
-{error}
-<div class="g-panel g-stack" style="max-width: 40rem">
-{}
-<form class="g-stack" style="gap: var(--space-6)" method="post" action="/console/people/edit"><input type="hidden" name="sha256" value="{}">{fields}<div class="g-dialog__actions">{}{}</div></form>
-</div>
-{rotate}"#,
-        head(
-            &format!("Edit the key of {}", esc(&entry.name)),
-            "The key itself does not change and is never shown again: only what it may do. Every gateway uses the new fields within 2 seconds.",
-            &link(
-                "Revoke key",
-                "quiet",
-                &format!("/console/people?revoke={}", enc(&entry.sha256)),
-                false
-            )
-        ),
-        // Laid out as the fields below, label over value, so both start at the same edge.
-        [
-            ("Name", &entry.name),
-            ("Team", &entry.team),
-            ("Key hash", &entry.sha256[..8].to_string()),
-        ]
-        .iter()
-        .map(|(k, v)| format!(
-            r#"<div class="g-field"><span class="g-field__label t-tag g-caps">{k}</span><span class="t-mono" style="padding-left: var(--space-6)">{}</span></div>"#,
-            esc(v)
-        ))
-        .collect::<String>(),
-        esc(&entry.sha256),
-        link("Cancel", "quiet", "/console/people", false),
-        button("Save", "", "submit", "")
-    );
-    tool_page(
-        title,
-        &admin.label(),
-        "/console/people/edit",
-        query,
-        &main,
-        "",
-    )
-}
-
-async fn key_change(State(console): State<Console>, headers: HeaderMap, body: String) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let form = Form::parse(&body);
-    let Some(entry) = entry_of(&console, form.get("sha256")) else {
-        return redirect("/console/people");
-    };
-    let refuse = |error: &str| {
-        page(
-            StatusCode::BAD_REQUEST,
-            key_body(&admin, &Form(Vec::new()), &entry, Some(&form), error),
-        )
-    };
-    if !edits_key(&admin, &entry) {
-        read_only(&console, &admin, "edit_key").await;
-        return refuse("You are signed in read only: ask an admin to change keys.");
-    }
-    let text = |name: &str| Some(form.get(name).trim().to_string()).filter(|v| !v.is_empty());
-    let attributes = keyfile::Attributes {
-        admin: form.get("admin") == "1",
-        expires: text("expires"),
-        // Text that is not a number becomes NaN, which the edit refuses with the budget's own message.
-        budget: text("budget").map(|b| Budget {
-            usd: b.parse().unwrap_or(f64::NAN),
-            per: Period::from_word(form.get("per")).unwrap_or(Period::Month),
-        }),
-        models: text("models").map(|m| {
-            m.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        }),
-        tpm: match text("tpm").map(|t| t.parse::<u32>()) {
-            None => None,
-            Some(Ok(t)) => Some(t),
-            Some(Err(_)) => Some(0),
-        },
-        ..keyfile::Attributes::default()
-    };
-    // An admin key gives every right: only someone who holds them all may make one or change one.
-    if (entry.admin || attributes.admin) && !full_admin(&admin) {
-        read_only(&console, &admin, "edit_key").await;
-        return refuse(
-            "Only an admin of the whole install may change an admin key or make a key an admin.",
-        );
-    }
-    let act = Act {
-        action: "edit_key",
-        by: Some((&admin.name, &admin.team)),
-        key: None,
-        target: json!({
-            "name": entry.name, "team": entry.team, "sha256_prefix": &entry.sha256[..8],
-            "admin": attributes.admin, "expires": attributes.expires,
-            "budget": attributes.budget.map(|b| json!({ "usd": b.usd, "per": b.per.word() })),
-            "models": attributes.models, "tpm": attributes.tpm,
-        }),
-    };
-    // The last admin key keeps its admin: nobody could sign in again.
-    if entry.admin && !attributes.admin {
-        let keys = &console.config().keys;
-        let admins = store::attached(keys)
-            .map(|s| s.keys_text())
-            .or_else(|| config::read_keys(keys).ok().flatten())
-            .and_then(|t| config::key_entries(keys, &t).ok())
-            .map_or(0, |e| e.iter().filter(|e| e.admin).count());
-        if admins <= 1 {
-            let _ = record(&console, &act, Some("last_admin"), None).await;
-            return refuse(
-                "This is the only admin key. Make another key an admin first, so someone can still sign in.",
-            );
-        }
-    }
-    if record(&console, &act, None, None).await.is_err() {
-        return refuse(NOT_RECORDED);
-    }
-    let (keys, sha256) = (console.config().keys.clone(), entry.sha256.clone());
-    let done = tokio::task::spawn_blocking(move || keyfile::edit(&keys, &sha256, &attributes))
-        .await
-        .unwrap_or_else(|err| Err(format!("nothing was changed: {err}. Try again.")));
-    let error = match done {
-        Ok(Some(_)) => return redirect(&format!("/console/people?edited={}", enc(&entry.name))),
-        Ok(None) => {
-            "The key is no longer there: someone revoked it. Nothing was changed.".to_string()
-        }
-        Err(err) => sentence(&err),
-    };
-    let _ = record(&console, &act, Some("keys_file"), Some(&error)).await;
-    refuse(&error)
-}
-
-/// Rotates a key from its edit page: a new key with the same settings, shown once, and the old one ends after the
-/// grace. The same change as `POST /admin/keys/<prefix>/rotate`, recorded before it is made.
-async fn key_rotate(State(console): State<Console>, headers: HeaderMap, body: String) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let form = Form::parse(&body);
-    let Some(entry) = entry_of(&console, form.get("sha256")) else {
-        return redirect("/console/people");
-    };
-    let refuse = |error: &str| {
-        page(
-            StatusCode::BAD_REQUEST,
-            key_body(&admin, &Form(Vec::new()), &entry, Some(&form), error),
-        )
-    };
-    if !edits_key(&admin, &entry) {
-        read_only(&console, &admin, "rotate_key").await;
-        return refuse("You are signed in read only: ask an admin to rotate keys.");
-    }
-    let mut act = Act {
-        action: "rotate_key",
-        by: Some((&admin.name, &admin.team)),
-        key: None,
-        target: json!({ "name": entry.name, "team": entry.team, "sha256_prefix": &entry.sha256[..8] }),
-    };
-    // The new key carries the old one's rights and its issuer sees it: only someone who holds them all may make it.
-    if (entry.admin || entry.role.is_some()) && !full_admin(&admin) {
-        let _ = record(&console, &act, Some("not_permitted"), None).await;
-        return refuse(
-            "Only an admin of the whole install may rotate an admin key or a key with a role.",
-        );
-    }
-    if let Some(by) = &entry.options.replaced_by {
-        let _ = record(&console, &act, Some("already_rotated"), None).await;
-        return refuse(&format!(
-            "This key was already rotated and replaced by key {by}. Rotate the new key instead, or revoke this one."
-        ));
-    }
-    let grace = match form.get("grace").trim() {
-        "" => "24h",
-        typed => typed,
-    };
-    let wait = match keyfile::grace(grace) {
-        Ok(wait) => wait,
-        Err(problem) => {
-            let _ = record(&console, &act, Some("invalid_request"), None).await;
-            return refuse(&sentence(&problem));
-        }
-    };
-    let key = match enterplace_core::id::new_key() {
-        Ok(key) => key,
-        Err(err) => return refuse(&sentence(&format!("{err}. Try again"))),
-    };
-    let until = keyfile::rotation_end(&entry, wait);
-    act.target = json!({
-        "name": entry.name, "team": entry.team, "sha256_prefix": &entry.sha256[..8],
-        "replaced_by": &enterplace_core::id::sha256_hex(key.as_bytes())[..8], "old_key_until": until,
-    });
-    if record(&console, &act, None, None).await.is_err() {
-        return refuse(NOT_RECORDED);
-    }
-    let (keys, old, new, end) = (
-        console.config().keys.clone(),
-        entry.clone(),
-        key.clone(),
-        until.clone(),
-    );
-    let done = tokio::task::spawn_blocking(move || keyfile::rotate(&keys, &old, &new, &end))
-        .await
-        .unwrap_or_else(|err| Err(format!("nothing was changed: {err}. Try again.")));
-    match done {
-        Ok(_) => page(
-            StatusCode::OK,
-            people_body(
-                &console,
-                &admin,
-                &Form(Vec::new()),
-                pages::Dialog::Rotated {
-                    name: entry.name.clone(),
-                    team: entry.team.clone(),
-                    key,
-                    until,
-                },
-            ),
-        ),
-        Err(err) => {
-            let error = sentence(&err);
-            // The record above says it was allowed; this one says it did not happen.
-            let _ = record(&console, &act, Some("keys_file"), Some(&error)).await;
-            refuse(&error)
-        }
-    }
 }
 
 // ---------------------------------------------------------------- versions

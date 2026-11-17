@@ -11,7 +11,7 @@ function AlertDialogContent({ className, ...props }: React.ComponentProps<typeof
       <AlertDialogPrimitive.Overlay className="fixed inset-0 bg-overlay" />
       <AlertDialogPrimitive.Content
         className={cn(
-          "fixed top-1/2 left-1/2 grid w-[calc(100%-var(--space-8))] max-w-dialog -translate-x-1/2 -translate-y-1/2 gap-6 rounded-dialog border border-input bg-background p-10 text-foreground",
+          "fixed top-1/2 left-1/2 grid w-[calc(100%-var(--space-8))] max-w-dialog -translate-x-1/2 -translate-y-1/2 grid-cols-[minmax(0,1fr)] gap-6 rounded-dialog border border-input bg-background p-10 text-foreground",
           className,
         )}
         {...props}

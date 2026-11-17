@@ -125,12 +125,15 @@ audit: {{ path: enterplace-audit.jsonl }}
         for path, title in [("requests", "No requests yet"), ("analytics", "Nothing to rank yet"), ("spend", "No spend and no budgets yet"),
                             ("people", "Only your admin key so far"), ("teams", "No teams yet"), ("policy", "One rule lets everyone in"),
                             ("mcp/approvals", "No MCP servers yet"), ("audit", "Only setup records so far")]:
-            chrome.go(f"{base}/console/{path}")
-            check(title in chrome.js("document.body.innerText") and chrome.js("!!document.querySelector('.g-empty a.g-btn[href^=\"/console/start\"]')"),
+            # People moved to the console app: its old address lands there, and the page fills in after its first read.
+            chrome.go(f"{base}/console/{path}", f"{base}/console/app/#/people" if path == "people" else "")
+            chrome.wait(f"document.body.innerText.includes({title!r})", f"the {path} page")
+            check(title in chrome.js("document.body.innerText") and chrome.js("!!document.querySelector('.g-empty a.g-btn[href^=\"/console/start\"], main a[href^=\"/console/start\"]')"),
                   f"{path} says what fills it and opens the Start here step")
             chrome.shot(out / f"4-empty-{path.replace('/', '-')}.png")
         chrome.size(390, 844)
-        chrome.go(f"{base}/console/people")
+        chrome.go(f"{base}/console/people", f"{base}/console/app/#/people")
+        chrome.wait("document.body.innerText.includes('Only your admin key so far')", "the People page")
         chrome.shot(out / "4-empty-people-phone.png")
         chrome.size(1440)
 

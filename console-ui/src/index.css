@@ -61,6 +61,7 @@
   --container-measure: var(--measure);
   --container-wide: var(--measure-wide);
   --container-dialog: var(--col-lg);
+  --container-col-md: var(--col-md);
   --width-nav: var(--nav);
 }
 
