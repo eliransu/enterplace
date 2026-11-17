@@ -113,6 +113,9 @@ jobs:
           previous=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git rev-parse HEAD^)
           echo "previous: $previous"
           git worktree add ../previous "$previous"
+          # The rename to Enterplace changed the package, binary, env vars and schema names, so a version from
+          # before it cannot share a store with this one. Nothing to check against until a release follows it.
+          if [ ! -d ../previous/crates/enterplace-cli ]; then echo "previous is from before the rename: skipped"; exit 0; fi
           (cd ../previous && cargo build --release --locked -q -p enterplace-cli)
           cargo build --release --locked -q -p enterplace-cli
           python3 scripts/rollback_check.py ../previous/target/release/enterplace target/release/enterplace
