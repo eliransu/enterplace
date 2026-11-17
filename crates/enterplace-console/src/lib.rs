@@ -1246,6 +1246,37 @@ pub fn offer_start_link(admin: &str, any_address: bool) -> Option<String> {
 }
 
 /// Signs in with the one-time link `enterplace start` printed: recorded as a console sign-in, then the link is spent.
+/// Makes `name`'s own person token and keeps it for them this run, unless they have one already. Done when the first
+/// admin is made (setup link) and when `enterplace start`'s link signs them in, so the lines Start here hands them for
+/// a coding agent name them from the first request. The token reaches no model on its own; a failure here changes
+/// nothing else, and Start here offers Make my token.
+async fn mint_mine(console: &Console, name: &str, team: &str) {
+    if console.mine(name).is_some() {
+        return;
+    }
+    let Ok(token) = id::new_person_token() else {
+        return;
+    };
+    let act = Act {
+        action: "issue_key",
+        by: Some((name, team)),
+        key: None,
+        target: json!({ "name": name, "team": team, "sha256_prefix": &id::sha256_hex(token.as_bytes())[..8], "admin": false, "person_token": true }),
+    };
+    if record(console, &act, None, None).await.is_ok()
+        && keyfile::add_with(
+            name,
+            team,
+            &token,
+            &keyfile::Attributes::default(),
+            &console.config().keys,
+        )
+        .is_ok()
+    {
+        console.keep_mine(name, token);
+    }
+}
+
 async fn sign_in_link(
     State(console): State<Console>,
     Path(code): Path<String>,
@@ -1317,6 +1348,12 @@ async fn sign_in_link(
             );
         }
     };
+    let team = if entry.team.is_empty() {
+        "people"
+    } else {
+        entry.team.as_str()
+    };
+    mint_mine(&console, &entry.name, team).await;
     let mut response = redirect(HOME);
     set_cookie(
         &mut response,
@@ -3348,28 +3385,7 @@ async fn setup_done(
             );
         }
     };
-    // The first admin's own person token too, so the lines Start here hands them for Claude Code name them from the
-    // first request. It reaches no model; a failure here leaves the admin key standing and Start here offers one.
-    if let Ok(token) = id::new_person_token() {
-        let act = Act {
-            action: "issue_key",
-            by: Some((&name, &team)),
-            key: None,
-            target: json!({ "name": name, "team": team, "sha256_prefix": &id::sha256_hex(token.as_bytes())[..8], "admin": false, "person_token": true }),
-        };
-        if record(&console, &act, None, None).await.is_ok()
-            && keyfile::add_with(
-                &name,
-                &team,
-                &token,
-                &keyfile::Attributes::default(),
-                &console.config().keys,
-            )
-            .is_ok()
-        {
-            console.keep_mine(&name, token);
-        }
-    }
+    mint_mine(&console, &name, &team).await;
     let origin = headers
         .get("host")
         .and_then(|h| h.to_str().ok())
